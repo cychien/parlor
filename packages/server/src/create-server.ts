@@ -1,5 +1,5 @@
-import { ActionError, type ActionMap, type ActionSource } from "@fw/core";
-import { type ActionRegistry, invokeAction } from "@fw/core/registry";
+import { ActionError, type ActionMap, type ActionSource } from "@parlor/core";
+import { type ActionRegistry, invokeAction } from "@parlor/core/registry";
 import { H3, readBody } from "h3";
 
 import {

@@ -1,4 +1,4 @@
-import { useActionMutation, useActionQuery } from "@fw/client/react";
+import { useActionMutation, useActionQuery } from "@parlor/client/react";
 import { useState } from "react";
 
 export function App() {

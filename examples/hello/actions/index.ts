@@ -1,5 +1,5 @@
-import { defineAction } from "@fw/core";
-import { createRegistry } from "@fw/core/registry";
+import { defineAction } from "@parlor/core";
+import { createRegistry } from "@parlor/core/registry";
 import { z } from "zod";
 
 let count = 0;

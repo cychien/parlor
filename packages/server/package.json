@@ -1,5 +1,5 @@
 {
-  "name": "@fw/server",
+  "name": "@parlor/server",
   "version": "0.0.0",
   "files": [
     "dist"
@@ -22,7 +22,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@fw/core": "workspace:*",
+    "@parlor/core": "workspace:*",
     "h3": "catalog:",
     "zod": "catalog:"
   },

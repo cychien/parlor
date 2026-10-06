@@ -71,13 +71,13 @@ importers:
 
   examples/hello:
     dependencies:
-      '@fw/client':
+      '@parlor/client':
         specifier: workspace:*
         version: link:../../packages/client
-      '@fw/core':
+      '@parlor/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@fw/server':
+      '@parlor/server':
         specifier: workspace:*
         version: link:../../packages/server
       '@tanstack/react-query':
@@ -135,7 +135,7 @@ importers:
 
   packages/client:
     dependencies:
-      '@fw/core':
+      '@parlor/core':
         specifier: workspace:*
         version: link:../core
     devDependencies:
@@ -188,7 +188,7 @@ importers:
 
   packages/server:
     dependencies:
-      '@fw/core':
+      '@parlor/core':
         specifier: workspace:*
         version: link:../core
       h3:

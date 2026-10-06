@@ -1,5 +1,5 @@
 {
-  "name": "@fw/client",
+  "name": "@parlor/client",
   "version": "0.0.0",
   "files": [
     "dist"
@@ -27,7 +27,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@fw/core": "workspace:*"
+    "@parlor/core": "workspace:*"
   },
   "devDependencies": {
     "@tanstack/react-query": "catalog:",

@@ -5,6 +5,6 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
-    proxy: { "/_fw": "http://localhost:3000" },
+    proxy: { "/_parlor": "http://localhost:3000" },
   },
 });

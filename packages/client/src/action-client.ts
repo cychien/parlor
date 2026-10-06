@@ -3,10 +3,10 @@ import {
   type ActionInput,
   type ActionMap,
   type ActionOutput,
-} from "@fw/core";
+} from "@parlor/core";
 
-const DEFAULT_BASE_PATH = "/_fw";
-const SOURCE_HEADER = "x-fw-source";
+const DEFAULT_BASE_PATH = "/_parlor";
+const SOURCE_HEADER = "x-parlor-source";
 
 export type HeadersProvider = HeadersInit | (() => HeadersInit | Promise<HeadersInit>);
 

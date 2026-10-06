@@ -1,5 +1,5 @@
-import { createActionClient } from "@fw/client";
-import { FrameworkProvider } from "@fw/client/react";
+import { createActionClient } from "@parlor/client";
+import { FrameworkProvider } from "@parlor/client/react";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 

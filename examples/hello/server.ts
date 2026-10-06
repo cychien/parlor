@@ -1,4 +1,4 @@
-import { createServer } from "@fw/server";
+import { createServer } from "@parlor/server";
 import { serve } from "srvx";
 
 import { registry } from "./actions/index.js";

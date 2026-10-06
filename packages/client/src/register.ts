@@ -1,4 +1,4 @@
-import type { ActionMap } from "@fw/core";
+import type { ActionMap } from "@parlor/core";
 
 export interface Register {}
 

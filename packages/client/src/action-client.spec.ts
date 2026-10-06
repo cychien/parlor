@@ -1,4 +1,4 @@
-import { ActionError } from "@fw/core";
+import { ActionError } from "@parlor/core";
 import { describe, expect, it, vi } from "vitest";
 
 import { createActionClient } from "./action-client.js";
@@ -17,12 +17,12 @@ describe("createActionClient", () => {
     });
 
     const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe("https://api.test/_fw/actions/hello");
+    expect(url).toBe("https://api.test/_parlor/actions/hello");
     expect(init.method).toBe("POST");
     expect(init.body).toBe('{"name":"Ada"}');
     const headers = new Headers(init.headers);
     expect(headers.get("content-type")).toBe("application/json");
-    expect(headers.get("x-fw-source")).toBe("ui");
+    expect(headers.get("x-parlor-source")).toBe("ui");
   });
 
   it("merges static and async custom headers", async () => {

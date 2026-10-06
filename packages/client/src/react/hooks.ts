@@ -1,4 +1,4 @@
-import type { ActionError, ActionInput, ActionOutput } from "@fw/core";
+import type { ActionError, ActionInput, ActionOutput } from "@parlor/core";
 import {
   type UseMutationOptions,
   type UseMutationResult,

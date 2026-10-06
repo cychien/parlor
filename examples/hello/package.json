@@ -10,9 +10,9 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@fw/client": "workspace:*",
-    "@fw/core": "workspace:*",
-    "@fw/server": "workspace:*",
+    "@parlor/client": "workspace:*",
+    "@parlor/core": "workspace:*",
+    "@parlor/server": "workspace:*",
     "@tanstack/react-query": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
