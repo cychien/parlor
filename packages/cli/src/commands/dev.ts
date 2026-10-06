@@ -23,6 +23,10 @@ export const dev = defineCommand({
       default: "web",
     },
     port: { type: "string", description: "Override web.port from parlor.config.ts" },
+    device: {
+      type: "string",
+      description: "Simulator or device name for ios and android",
+    },
   },
   async run({ args }) {
     const target = parseTarget(args.target);
@@ -36,6 +40,7 @@ export const dev = defineCommand({
             ...loaded,
             config: { ...loaded.config, web: { ...loaded.config.web, port } },
           },
+      { device: args.device },
     );
   },
 });
