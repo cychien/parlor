@@ -1,0 +1,31 @@
+{
+  "name": "hello-example",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:server": "tsx watch server.ts",
+    "dev:web": "vite",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@fw/client": "workspace:*",
+    "@fw/core": "workspace:*",
+    "@fw/server": "workspace:*",
+    "@tanstack/react-query": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "srvx": "^1.0.5",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "tsx": "^4.23.15",
+    "typescript": "catalog:",
+    "vite": "catalog:"
+  }
+}
