@@ -1,0 +1,41 @@
+{
+  "name": "@parlor/cli",
+  "version": "0.0.0",
+  "bin": {
+    "parlor": "./bin/parlor-dev.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "bin": {
+      "parlor": "./dist/main.js"
+    },
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@parlor/config": "workspace:*",
+    "@parlor/shell-web": "workspace:*",
+    "citty": "^0.2.2",
+    "tsx": "^4.23.15"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
