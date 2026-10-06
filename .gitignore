@@ -1,0 +1,16 @@
+# 設計討論文件，本機參考用，不進 repo
+docs/
+
+node_modules/
+dist/
+.output/
+.nitro/
+.fw/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+coverage/
+playwright-report/
+test-results/
