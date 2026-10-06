@@ -4,6 +4,7 @@ import { defineCapability } from "../capability.js";
 import type { DeepLink } from "./interface.js";
 
 export type { DeepLink, DeepLinkHandler } from "./interface.js";
+export { capacitorDeepLink, type CapacitorAppModule } from "./capacitor.js";
 export { tauriDeepLink, type TauriDeepLinkModule } from "./tauri.js";
 export { webDeepLink } from "./web.js";
 

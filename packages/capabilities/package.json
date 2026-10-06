@@ -8,6 +8,7 @@
   "imports": {
     "#adapters": {
       "parlor-tauri": "./src/adapters/tauri.ts",
+      "parlor-capacitor": "./src/adapters/capacitor.ts",
       "default": "./src/adapters/web.ts"
     }
   },
@@ -18,6 +19,7 @@
     "imports": {
       "#adapters": {
         "parlor-tauri": "./dist/adapters/tauri.js",
+        "parlor-capacitor": "./dist/adapters/capacitor.js",
         "default": "./dist/adapters/web.js"
       }
     },
@@ -34,6 +36,8 @@
     "test": "vitest run"
   },
   "devDependencies": {
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/local-notifications": "^8.3.1",
     "@tauri-apps/api": "^2.12.1",
     "@tauri-apps/plugin-deep-link": "^2.6.1",
     "@tauri-apps/plugin-notification": "^2.5.1",
@@ -43,6 +47,8 @@
     "vitest": "catalog:"
   },
   "peerDependencies": {
+    "@capacitor/app": ">=8",
+    "@capacitor/local-notifications": ">=8",
     "@tauri-apps/api": ">=2",
     "@tauri-apps/plugin-deep-link": ">=2",
     "@tauri-apps/plugin-notification": ">=2"
@@ -55,6 +61,12 @@
       "optional": true
     },
     "@tauri-apps/plugin-notification": {
+      "optional": true
+    },
+    "@capacitor/app": {
+      "optional": true
+    },
+    "@capacitor/local-notifications": {
       "optional": true
     }
   }

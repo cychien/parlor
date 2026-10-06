@@ -1,9 +1,6 @@
 {
-  "name": "@parlor/cli",
+  "name": "@parlor/shell-mobile",
   "version": "0.0.0",
-  "bin": {
-    "parlor": "./bin/parlor-dev.mjs"
-  },
   "files": [
     "dist"
   ],
@@ -12,9 +9,6 @@
     ".": "./src/index.ts"
   },
   "publishConfig": {
-    "bin": {
-      "parlor": "./dist/main.js"
-    },
     "exports": {
       ".": {
         "types": "./dist/index.d.ts",
@@ -28,12 +22,14 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.2",
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/cli": "^8.5.2",
+    "@capacitor/core": "^8.5.2",
+    "@capacitor/ios": "^8.5.2",
+    "@capacitor/local-notifications": "^8.0.0",
     "@parlor/config": "workspace:*",
-    "@parlor/shell-desktop": "workspace:*",
-    "@parlor/shell-mobile": "workspace:*",
-    "@parlor/shell-web": "workspace:*",
-    "citty": "^0.2.2",
-    "tsx": "^4.23.15"
+    "@parlor/shell-web": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "catalog:",

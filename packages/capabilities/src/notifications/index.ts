@@ -9,6 +9,7 @@ export type {
   NotificationPermission,
   Notifications,
 } from "./interface.js";
+export { capacitorNotifications, type CapacitorNotificationModule } from "./capacitor.js";
 export { tauriNotifications, type TauriNotificationModule } from "./tauri.js";
 export { webNotifications } from "./web.js";
 
