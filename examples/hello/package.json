@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev:server": "tsx watch server.ts",
-    "dev:web": "vite",
+    "dev": "parlor dev",
+    "build": "parlor build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests"
   },
@@ -20,11 +20,11 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@parlor/cli": "workspace:*",
+    "@parlor/config": "workspace:*",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
-    "@vitejs/plugin-react": "catalog:",
-    "tsx": "^4.23.15",
     "typescript": "catalog:",
     "vite": "catalog:"
   }
