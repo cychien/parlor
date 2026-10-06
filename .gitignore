@@ -5,7 +5,7 @@ node_modules/
 dist/
 .output/
 .nitro/
-.fw/
+.parlor/
 *.log
 .DS_Store
 .env

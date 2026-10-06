@@ -57,10 +57,10 @@ Make every decision to a staff engineer's standard. Weigh quality, simplicity, r
 - pnpm workspace, strict TypeScript, ESM.
 - oxlint and oxfmt. Vitest for unit tests, Playwright for E2E.
 - Packages: `core`, `server`, `client`, `capabilities`, `shell-web`, `shell-mobile`, `shell-desktop`, `cli`.
-- Framework HTTP routes are prefixed `/_fw/`.
+- Framework HTTP routes are prefixed `/_parlor/`.
 - A capability is always: one interface, three adapters (web, capacitor, tauri), one availability query, tests per adapter.
 - The CLI only orchestrates Vite, Capacitor, Tauri, and Nitro CLIs. It compiles nothing itself.
-- `.fw/` in a user project is generated output. Never hand-edit it.
+- `.parlor/` in a user project is generated output. Never hand-edit it.
 
 ## Adding a feature
 
