@@ -27,6 +27,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@parlor/capabilities": "workspace:*",
     "@parlor/core": "workspace:*"
   },
   "devDependencies": {

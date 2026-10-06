@@ -59,6 +59,7 @@ Make every decision to a staff engineer's standard. Weigh quality, simplicity, r
 - Packages: `core`, `server`, `client`, `capabilities`, `config`, `shell-web`, `shell-mobile`, `shell-desktop`, `cli`.
 - Framework HTTP routes are prefixed `/_parlor/`.
 - A capability is always: one interface, three adapters (web, capacitor, tauri), one availability query, tests per adapter.
+- Platform adapters are picked at build time through the `#adapters` package import and its conditions (`parlor-tauri`, later `parlor-capacitor`), never by runtime checks in application code.
 - The CLI only orchestrates Vite, Capacitor, Tauri, and Nitro CLIs. It compiles nothing itself.
 - `.parlor/` in a user project is generated output. Never hand-edit it.
 

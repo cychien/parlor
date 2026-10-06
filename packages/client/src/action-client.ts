@@ -8,6 +8,11 @@ import {
 const DEFAULT_BASE_PATH = "/_parlor";
 const SOURCE_HEADER = "x-parlor-source";
 
+function injectedServerUrl(): string {
+  const env = (import.meta as { env?: { PARLOR_SERVER_URL?: string } }).env;
+  return env?.PARLOR_SERVER_URL ?? "";
+}
+
 export type HeadersProvider = HeadersInit | (() => HeadersInit | Promise<HeadersInit>);
 
 export interface ActionClientOptions {
@@ -50,7 +55,11 @@ async function toActionError(response: Response): Promise<ActionError> {
 export function createActionClient<T extends ActionMap>(
   options: ActionClientOptions = {},
 ): ActionClient<T> {
-  const { baseUrl = "", basePath = DEFAULT_BASE_PATH, headers } = options;
+  const {
+    baseUrl = injectedServerUrl(),
+    basePath = DEFAULT_BASE_PATH,
+    headers,
+  } = options;
   const fetchImpl = options.fetch ?? globalThis.fetch;
 
   return {

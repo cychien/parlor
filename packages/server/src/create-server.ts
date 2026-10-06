@@ -1,7 +1,8 @@
 import { ActionError, type ActionMap, type ActionSource } from "@parlor/core";
 import { type ActionRegistry, invokeAction } from "@parlor/core/registry";
-import { H3, readBody } from "h3";
+import { H3, type H3Event, readBody } from "h3";
 
+import { type CorsConfig, corsMiddleware } from "./cors.js";
 import {
   DEFAULT_BASE_PATH,
   type Manifest,
@@ -14,6 +15,7 @@ export interface ServerOptions<T extends ActionMap> {
   readonly actions: ActionRegistry<T>;
   readonly scope?: ScopeResolver | undefined;
   readonly basePath?: string | undefined;
+  readonly cors?: CorsConfig | false | undefined;
 }
 
 export interface FrameworkServer {
@@ -33,21 +35,27 @@ function sourceOf(request: Request): ActionSource {
   return header && SOURCES.has(header) ? (header as ActionSource) : "http";
 }
 
-function errorResponse(error: unknown): Response {
+function errorBody(event: H3Event, error: unknown) {
   const actionError =
     error instanceof ActionError
       ? error
       : new ActionError("internal", "Internal error", { cause: error });
-  return Response.json(actionError.toBody(), {
-    status: STATUS_BY_CODE[actionError.code],
-  });
+  event.res.status = STATUS_BY_CODE[actionError.code];
+  return actionError.toBody();
 }
 
 export function createServer<T extends ActionMap>(
   options: ServerOptions<T>,
 ): FrameworkServer {
-  const { actions, scope = defaultScope, basePath = DEFAULT_BASE_PATH } = options;
+  const {
+    actions,
+    scope = defaultScope,
+    basePath = DEFAULT_BASE_PATH,
+    cors = {},
+  } = options;
   const app = new H3();
+
+  if (cors !== false) app.use(corsMiddleware(cors));
 
   app.get(`${basePath}/manifest`, (): Manifest => ({
     protocol: PROTOCOL_VERSION,
@@ -68,7 +76,7 @@ export function createServer<T extends ActionMap>(
       const data = await invokeAction(actions, name, input, ctx);
       return { data };
     } catch (error) {
-      return errorResponse(error);
+      return errorBody(event, error);
     }
   });
 
