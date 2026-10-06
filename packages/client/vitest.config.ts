@@ -4,5 +4,6 @@ export default defineProject({
   test: {
     include: ["src/**/*.spec.ts", "src/**/*.spec.tsx"],
     environment: "happy-dom",
+    setupFiles: ["./vitest.setup.ts"],
   },
 });

@@ -5,10 +5,22 @@
     "dist"
   ],
   "type": "module",
+  "imports": {
+    "#adapters": {
+      "parlor-tauri": "./src/adapters/tauri.ts",
+      "default": "./src/adapters/web.ts"
+    }
+  },
   "exports": {
     ".": "./src/index.ts"
   },
   "publishConfig": {
+    "imports": {
+      "#adapters": {
+        "parlor-tauri": "./dist/adapters/tauri.js",
+        "default": "./dist/adapters/web.js"
+      }
+    },
     "exports": {
       ".": {
         "types": "./dist/index.d.ts",
@@ -22,9 +34,28 @@
     "test": "vitest run"
   },
   "devDependencies": {
+    "@tauri-apps/api": "^2.12.1",
+    "@tauri-apps/plugin-deep-link": "^2.6.1",
+    "@tauri-apps/plugin-notification": "^2.5.1",
     "@types/node": "catalog:",
     "happy-dom": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "@tauri-apps/api": ">=2",
+    "@tauri-apps/plugin-deep-link": ">=2",
+    "@tauri-apps/plugin-notification": ">=2"
+  },
+  "peerDependenciesMeta": {
+    "@tauri-apps/api": {
+      "optional": true
+    },
+    "@tauri-apps/plugin-deep-link": {
+      "optional": true
+    },
+    "@tauri-apps/plugin-notification": {
+      "optional": true
+    }
   }
 }

@@ -10,6 +10,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@parlor/capabilities": "workspace:*",
     "@parlor/client": "workspace:*",
     "@parlor/core": "workspace:*",
     "@parlor/server": "workspace:*",
