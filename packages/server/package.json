@@ -22,11 +22,13 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@modelcontextprotocol/server": "^2.3.1",
     "@parlor/core": "workspace:*",
     "h3": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "^2.3.1",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
