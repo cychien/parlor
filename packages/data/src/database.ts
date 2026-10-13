@@ -1,5 +1,5 @@
 import { PGlite } from "@electric-sql/pglite";
-import type { DataProvider } from "@parlor/core";
+import type { DataProvider, Unlisten } from "@parlor/core";
 import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
 import { migrate as migratePg } from "drizzle-orm/node-postgres/migrator";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
@@ -24,6 +24,7 @@ export interface DatabaseOptions {
 export interface DatabaseHandle extends DataProvider<Database> {
   readonly db: Database;
   readonly driver: "pglite" | "node-postgres";
+  listen(channel: string, handler: (payload: string) => void): Promise<Unlisten>;
   migrate(folder: string): Promise<void>;
   close(): Promise<void>;
 }
@@ -44,6 +45,10 @@ function pgliteHandle(dataDir: string): DatabaseHandle {
     driver: "pglite",
     read: () => db,
     transaction: (run) => db.transaction((tx) => run(tx)),
+    listen: async (channel, handler) => {
+      const unlisten = await client.listen(channel, handler);
+      return () => unlisten();
+    },
     migrate: (folder) => migratePglite(db, { migrationsFolder: folder }),
     close: () => client.close(),
   };
@@ -52,13 +57,32 @@ function pgliteHandle(dataDir: string): DatabaseHandle {
 function nodePostgresHandle(url: string): DatabaseHandle {
   const pool = new pg.Pool({ connectionString: url });
   const db = drizzlePg(pool);
+  const listeners = new Set<pg.Client>();
   return {
     db,
     driver: "node-postgres",
     read: () => db,
     transaction: (run) => db.transaction((tx) => run(tx)),
+    listen: async (channel, handler) => {
+      const client = new pg.Client({ connectionString: url });
+      await client.connect();
+      listeners.add(client);
+      client.on("notification", (message) => {
+        if (message.channel === channel) handler(message.payload ?? "");
+      });
+      const identifier = pg.escapeIdentifier(channel);
+      await client.query(`LISTEN ${identifier}`);
+      return async () => {
+        await client.query(`UNLISTEN ${identifier}`).catch(() => {});
+        await client.end();
+        listeners.delete(client);
+      };
+    },
     migrate: (folder) => migratePg(db, { migrationsFolder: folder }),
-    close: () => pool.end(),
+    close: async () => {
+      await Promise.all([...listeners].map((client) => client.end()));
+      await pool.end();
+    },
   };
 }
 

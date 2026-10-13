@@ -62,3 +62,38 @@ describe("tag derivation", () => {
     expect(readTagsFor(read, {})).toEqual([]);
   });
 });
+
+describe("writeTagsFor with results", () => {
+  const update = defineAction({
+    description: "update",
+    input: z.object({}),
+    writes: ["tasks"],
+    run: () => null,
+  });
+
+  it("emits primary-key tags when the result carries ids", () => {
+    expect(writeTagsFor(update, { id: "42", title: "x" })).toEqual([["tasks", "42"]]);
+    expect(writeTagsFor(update, [{ id: 1 }, { id: 2 }])).toEqual([
+      ["tasks", 1],
+      ["tasks", 2],
+    ]);
+  });
+
+  it("falls back to table-level tags without ids", () => {
+    expect(writeTagsFor(update, { count: 3 })).toEqual([["tasks"]]);
+    expect(writeTagsFor(update, undefined)).toEqual([["tasks"]]);
+  });
+});
+
+describe("tableName with Drizzle tables", () => {
+  it("reads the runtime symbol Drizzle stores the name under", () => {
+    const table = { [Symbol.for("drizzle:Name")]: "tasks" } as unknown as {
+      _: { name: string };
+    };
+    expect(tableName(table)).toBe("tasks");
+  });
+
+  it("rejects objects that are not tables", () => {
+    expect(() => tableName({} as never)).toThrow(/Drizzle tables/);
+  });
+});
