@@ -5,5 +5,7 @@ export default defineConfig({
     id: "dev.parlor.hello",
     name: "Hello",
     description: "Parlor hello example",
+    scheme: "hello",
   },
+  server: { url: "http://localhost:3000" },
 });

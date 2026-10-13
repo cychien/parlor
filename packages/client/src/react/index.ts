@@ -9,3 +9,4 @@ export {
   type FrameworkProviderProps,
   useActionClient,
 } from "./provider.js";
+export { type CapabilityState, useCapability } from "./use-capability.js";
