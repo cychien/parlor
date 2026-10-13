@@ -6,9 +6,12 @@ export interface DataRegister {}
 
 export type ParlorDatabase = DataRegister extends { database: infer D } ? D : unknown;
 
+export type Unlisten = () => Promise<void>;
+
 export interface DataProvider<TDb = unknown> {
   read(): TDb;
   transaction<T>(run: (tx: TDb) => Promise<T>): Promise<T>;
+  listen?(channel: string, handler: (payload: string) => void): Promise<Unlisten>;
 }
 
 export interface ActionContext {

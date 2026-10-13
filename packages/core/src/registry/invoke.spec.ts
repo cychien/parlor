@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import { defineAction } from "../action.js";
@@ -18,14 +18,14 @@ const registry = createRegistry({
 
 describe("invokeAction", () => {
   it("validates input, applies defaults, and passes the context through", async () => {
-    await expect(invokeAction(registry, "hello", undefined, ctx)).resolves.toEqual({
-      message: "Hello, world!",
-      scope: "test",
+    await expect(invokeAction(registry, "hello", undefined, ctx)).resolves.toMatchObject({
+      data: { message: "Hello, world!", scope: "test" },
+      reads: [],
     });
     await expect(
       invokeAction(registry, "hello", { name: "Ada" }, ctx),
     ).resolves.toMatchObject({
-      message: "Hello, Ada!",
+      data: { message: "Hello, Ada!" },
     });
   });
 
@@ -69,21 +69,33 @@ describe("invokeAction with a data provider", () => {
       description: "create",
       input: z.object({}),
       writes: ["tasks"],
-      run: (_, context) => context.db,
+      run: (_, context) => ({ id: "7", db: context.db }),
     }),
   });
 
-  it("gives read-only actions the plain database", async () => {
-    await expect(invokeAction(withData, "list", {}, ctx, { data })).resolves.toBe(
-      "read-db",
-    );
+  it("gives read-only actions the plain database and reports read tags", async () => {
+    await expect(invokeAction(withData, "list", {}, ctx, { data })).resolves.toEqual({
+      data: "read-db",
+      reads: [["tasks"]],
+      writes: [],
+    });
   });
 
-  it("runs mutating actions inside a transaction", async () => {
+  it("runs mutating actions inside a transaction and emits write tags before commit", async () => {
     log.length = 0;
-    await expect(invokeAction(withData, "create", {}, ctx, { data })).resolves.toBe(
-      "tx-db",
+    const onWrite = vi.fn(async () => {
+      log.push("event");
+    });
+    await expect(
+      invokeAction(withData, "create", {}, ctx, { data, onWrite }),
+    ).resolves.toEqual({
+      data: { id: "7", db: "tx-db" },
+      reads: [],
+      writes: [["tasks", "7"]],
+    });
+    expect(log).toEqual(["begin", "event", "commit"]);
+    expect(onWrite).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "create", tx: "tx-db", tags: [["tasks", "7"]] }),
     );
-    expect(log).toEqual(["begin", "commit"]);
   });
 });

@@ -51,6 +51,7 @@ describe("createServer", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       data: { message: "Hello, Ada!", scope: "default", source: "http" },
+      tags: [],
     });
   });
 
@@ -145,17 +146,14 @@ describe("database wiring", () => {
         }),
       }),
       database,
+      sync: false,
     });
     await expect(
       withDb.fetch(post("/_parlor/actions/read", {})).then((r) => r.json()),
-    ).resolves.toEqual({
-      data: { db: "db" },
-    });
+    ).resolves.toMatchObject({ data: { db: "db" } });
     await expect(
       withDb.fetch(post("/_parlor/actions/write", {})).then((r) => r.json()),
-    ).resolves.toEqual({
-      data: { db: "tx" },
-    });
+    ).resolves.toMatchObject({ data: { db: "tx" } });
     expect(log).toEqual(["tx"]);
   });
 });

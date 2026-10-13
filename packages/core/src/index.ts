@@ -9,6 +9,7 @@ export {
   type AnyAction,
   type DataProvider,
   type DataRegister,
+  type Unlisten,
   defineAction,
   isAction,
   isMutating,

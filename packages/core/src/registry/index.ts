@@ -1,4 +1,10 @@
-export { invokeAction, type InvokeContext, type InvokeOptions } from "./invoke.js";
+export {
+  invokeAction,
+  type InvokeContext,
+  type InvokeOptions,
+  type InvokeResult,
+  type WriteEvent,
+} from "./invoke.js";
 export {
   type ActionDescriptor,
   type ActionRegistry,

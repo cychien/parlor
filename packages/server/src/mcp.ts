@@ -5,15 +5,14 @@ import {
   type McpRequestContext,
   McpServer,
 } from "@modelcontextprotocol/server";
-import { ActionError, type ActionMap, type DataProvider, isMutating } from "@parlor/core";
-import { type ActionRegistry, invokeAction } from "@parlor/core/registry";
+import { ActionError, type ActionMap, isMutating } from "@parlor/core";
+import type { ActionRegistry } from "@parlor/core/registry";
 
-import { DEFAULT_SCOPE, type ScopeResolver } from "./scope.js";
+import type { ActionRunner } from "./actions.js";
 
 export interface McpOptions<T extends ActionMap> {
   readonly actions: ActionRegistry<T>;
-  readonly scope: ScopeResolver;
-  readonly database?: DataProvider | undefined;
+  readonly runner: ActionRunner;
   readonly name?: string | undefined;
   readonly version?: string | undefined;
 }
@@ -44,10 +43,9 @@ function toolError(error: unknown): CallToolResult {
 export function createMcpHandler<T extends ActionMap>(
   options: McpOptions<T>,
 ): McpHttpHandler {
-  const { actions, scope, database, name = "parlor", version = "0.0.0" } = options;
+  const { actions, runner, name = "parlor", version = "0.0.0" } = options;
 
-  const factory = async (ctx: McpRequestContext) => {
-    const resolvedScope = ctx.requestInfo ? await scope(ctx.requestInfo) : DEFAULT_SCOPE;
+  const factory = (ctx: McpRequestContext) => {
     const server = new McpServer({ name, version });
     for (const actionName of actions.names()) {
       const action = actions.get(actionName);
@@ -61,14 +59,8 @@ export function createMcpHandler<T extends ActionMap>(
         },
         async (args) => {
           try {
-            const result = await invokeAction(
-              actions,
-              actionName,
-              args,
-              { scope: resolvedScope, source: "mcp" },
-              { data: database },
-            );
-            return toolResult(result);
+            const result = await runner.run(actionName, args, ctx.requestInfo, "mcp");
+            return toolResult(result.data);
           } catch (error) {
             return toolError(error);
           }
