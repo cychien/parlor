@@ -19,7 +19,8 @@
     ],
     "import/no-cycle": "error",
     "react/react-in-jsx-scope": "off",
-    "eslint/no-underscore-dangle": "off"
+    "eslint/no-underscore-dangle": "off",
+    "import/no-named-as-default-member": "off"
   },
   "ignorePatterns": [
     "**/dist/**",

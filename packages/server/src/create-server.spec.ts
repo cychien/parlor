@@ -119,3 +119,43 @@ describe("createServer", () => {
     expect(response.status).toBe(200);
   });
 });
+
+describe("database wiring", () => {
+  it("hands the provider's database to actions and wraps writes in a transaction", async () => {
+    const log: string[] = [];
+    const database = {
+      read: () => "db",
+      transaction: async <T>(run: (tx: unknown) => Promise<T>) => {
+        log.push("tx");
+        return run("tx");
+      },
+    };
+    const withDb = createServer({
+      actions: createRegistry({
+        read: defineAction({
+          description: "r",
+          input: z.object({}),
+          run: (_, c) => ({ db: c.db }),
+        }),
+        write: defineAction({
+          description: "w",
+          input: z.object({}),
+          writes: ["t"],
+          run: (_, c) => ({ db: c.db }),
+        }),
+      }),
+      database,
+    });
+    await expect(
+      withDb.fetch(post("/_parlor/actions/read", {})).then((r) => r.json()),
+    ).resolves.toEqual({
+      data: { db: "db" },
+    });
+    await expect(
+      withDb.fetch(post("/_parlor/actions/write", {})).then((r) => r.json()),
+    ).resolves.toEqual({
+      data: { db: "tx" },
+    });
+    expect(log).toEqual(["tx"]);
+  });
+});

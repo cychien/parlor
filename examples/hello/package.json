@@ -7,14 +7,18 @@
     "dev": "parlor dev",
     "build": "parlor build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "db:generate": "parlor db generate",
+    "db:migrate": "parlor db migrate"
   },
   "dependencies": {
     "@parlor/capabilities": "workspace:*",
     "@parlor/client": "workspace:*",
     "@parlor/core": "workspace:*",
+    "@parlor/data": "workspace:*",
     "@parlor/server": "workspace:*",
     "@tanstack/react-query": "catalog:",
+    "drizzle-orm": "^0.45.4",
     "react": "catalog:",
     "react-dom": "catalog:",
     "srvx": "^1.0.5",

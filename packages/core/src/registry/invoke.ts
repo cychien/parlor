@@ -1,12 +1,20 @@
-import type { ActionContext } from "../action.js";
+import type { ActionContext, DataProvider } from "../action.js";
+import { isMutating } from "../action.js";
 import { ActionError } from "../errors.js";
 import type { ActionRegistry } from "./registry.js";
+
+export type InvokeContext = Omit<ActionContext, "db">;
+
+export interface InvokeOptions {
+  readonly data?: DataProvider | undefined;
+}
 
 export async function invokeAction(
   registry: ActionRegistry,
   name: string,
   rawInput: unknown,
-  ctx: ActionContext,
+  ctx: InvokeContext,
+  options: InvokeOptions = {},
 ): Promise<unknown> {
   const action = registry.get(name);
   if (!action) throw new ActionError("not_found", `Unknown action "${name}"`);
@@ -18,5 +26,12 @@ export async function invokeAction(
     });
   }
 
-  return action.run(parsed.data, ctx);
+  const { data } = options;
+  if (!data) return action.run(parsed.data, { ...ctx, db: undefined as never });
+  if (isMutating(action)) {
+    return data.transaction((tx) =>
+      Promise.resolve(action.run(parsed.data, { ...ctx, db: tx as never })),
+    );
+  }
+  return action.run(parsed.data, { ...ctx, db: data.read() as never });
 }
