@@ -8,6 +8,7 @@ import { type ActionRegistry, invokeAction } from "@parlor/core/registry";
 import { H3, type H3Event, readBody } from "h3";
 
 import { type CorsConfig, corsMiddleware } from "./cors.js";
+import { createMcpHandler } from "./mcp.js";
 import {
   DEFAULT_BASE_PATH,
   type Manifest,
@@ -22,6 +23,10 @@ export interface ServerOptions<T extends ActionMap> {
   readonly basePath?: string | undefined;
   readonly cors?: CorsConfig | false | undefined;
   readonly database?: DataProvider | undefined;
+  readonly mcp?:
+    | { readonly name?: string | undefined; readonly version?: string | undefined }
+    | false
+    | undefined;
 }
 
 export interface FrameworkServer {
@@ -59,6 +64,7 @@ export function createServer<T extends ActionMap>(
     basePath = DEFAULT_BASE_PATH,
     cors = {},
     database,
+    mcp = {},
   } = options;
   const app = new H3();
 
@@ -86,6 +92,11 @@ export function createServer<T extends ActionMap>(
       return errorBody(event, error);
     }
   });
+
+  if (mcp !== false) {
+    const handler = createMcpHandler({ actions, scope, database, ...mcp });
+    app.all(`${basePath}/mcp`, (event) => handler.fetch(event.req));
+  }
 
   return { fetch: (request) => Promise.resolve(app.fetch(request)) };
 }
