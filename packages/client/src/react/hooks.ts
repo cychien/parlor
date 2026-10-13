@@ -1,5 +1,6 @@
 import type { ActionError, ActionInput, ActionOutput } from "@parlor/core";
 import {
+  hashKey,
   type UseMutationOptions,
   type UseMutationResult,
   type UseQueryOptions,
@@ -11,7 +12,7 @@ import {
 
 import { ACTION_QUERY_PREFIX, actionQueryKey } from "../query-keys.js";
 import type { RegisteredActions } from "../register.js";
-import { useActionClient } from "./provider.js";
+import { useFramework } from "./provider.js";
 
 type Actions = RegisteredActions;
 type Name = keyof Actions & string;
@@ -26,11 +27,16 @@ export function useActionQuery<K extends Name>(
   input: ActionInput<Actions[K]>,
   options?: ActionQueryOptions<K>,
 ): UseQueryResult<ActionOutput<Actions[K]>, ActionError> {
-  const client = useActionClient();
+  const { client, readTags } = useFramework();
+  const queryKey = actionQueryKey(name, input);
   return useQuery({
     ...options,
-    queryKey: actionQueryKey(name, input),
-    queryFn: ({ signal }) => client.call(name, input, { signal }),
+    queryKey,
+    queryFn: async ({ signal }) => {
+      const envelope = await client.invoke(name, input, { signal });
+      readTags.record(hashKey(queryKey), envelope.tags);
+      return envelope.data;
+    },
   });
 }
 
@@ -43,7 +49,7 @@ export function useActionMutation<K extends Name>(
   name: K,
   options?: ActionMutationOptions<K>,
 ): UseMutationResult<ActionOutput<Actions[K]>, ActionError, ActionInput<Actions[K]>> {
-  const client = useActionClient();
+  const { client } = useFramework();
   const queryClient = useQueryClient();
   return useMutation({
     ...options,

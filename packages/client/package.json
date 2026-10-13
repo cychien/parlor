@@ -28,7 +28,8 @@
   },
   "dependencies": {
     "@parlor/capabilities": "workspace:*",
-    "@parlor/core": "workspace:*"
+    "@parlor/core": "workspace:*",
+    "@parlor/sync": "workspace:*"
   },
   "devDependencies": {
     "@tanstack/react-query": "catalog:",

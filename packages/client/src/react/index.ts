@@ -10,3 +10,4 @@ export {
   useActionClient,
 } from "./provider.js";
 export { type CapabilityState, useCapability } from "./use-capability.js";
+export { invalidateForEvents, ReadTagRegistry } from "./sync.js";
