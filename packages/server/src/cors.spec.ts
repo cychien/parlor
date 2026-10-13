@@ -53,9 +53,9 @@ describe("cors", () => {
     );
     expect(response.status).toBe(204);
     expect(response.headers.get("access-control-allow-origin")).toBe("tauri://localhost");
-    expect(response.headers.get("access-control-allow-headers")?.toLowerCase()).toContain(
-      "x-parlor-source",
-    );
+    const allowed = response.headers.get("access-control-allow-headers")?.toLowerCase();
+    expect(allowed).toContain("x-parlor-source");
+    expect(allowed).toContain("x-parlor-client");
   });
 
   it("adds the allow-origin header to successful and error responses", async () => {

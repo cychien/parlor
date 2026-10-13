@@ -73,3 +73,33 @@ describe("createActionClient", () => {
     expect(init.signal).toBe(controller.signal);
   });
 });
+
+describe("client identity and envelopes", () => {
+  it("sends a stable client id header and exposes the envelope with tags", async () => {
+    const fetch = fakeFetch(200, { data: { ok: true }, tags: [["tasks"]] });
+    const client = createActionClient({ fetch, clientId: "tab-1" });
+    const envelope = await client.invoke("listTasks", {});
+    expect(envelope).toEqual({ data: { ok: true }, tags: [["tasks"]] });
+    const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(new Headers(init.headers).get("x-parlor-client")).toBe("tab-1");
+    expect(client.clientId).toBe("tab-1");
+  });
+
+  it("generates a client id when none is given", () => {
+    expect(createActionClient({ fetch: fakeFetch(200, {}) }).clientId).toMatch(/.+/);
+  });
+
+  it("request() prefixes the base url and keeps framework headers", async () => {
+    const fetch = fakeFetch(200, {});
+    const client = createActionClient({
+      fetch,
+      baseUrl: "https://api.test",
+      clientId: "t",
+    });
+    await client.request("/_parlor/sync/token", { method: "POST" });
+    const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://api.test/_parlor/sync/token");
+    expect(init.method).toBe("POST");
+    expect(new Headers(init.headers).get("x-parlor-source")).toBe("ui");
+  });
+});

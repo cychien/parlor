@@ -1,6 +1,6 @@
 import { type H3Event, handleCors } from "h3";
 
-import { SOURCE_HEADER } from "./protocol.js";
+import { CLIENT_HEADER, SOURCE_HEADER } from "./protocol.js";
 
 export const SHELL_ORIGINS: readonly string[] = [
   "tauri://localhost",
@@ -34,7 +34,7 @@ export function corsMiddleware(config: CorsConfig = {}) {
     const preflight = handleCors(event, {
       origin: (origin) => isAllowedOrigin(origin, extra),
       methods: ["GET", "POST", "OPTIONS"],
-      allowHeaders: ["content-type", "authorization", SOURCE_HEADER],
+      allowHeaders: ["content-type", "authorization", SOURCE_HEADER, CLIENT_HEADER],
       credentials: true,
       exposeHeaders: ["content-type", "content-length"],
       preflight: { statusCode: 204 },

@@ -8,17 +8,22 @@ import { FrameworkProvider } from "./provider.js";
 
 function createFakeClient() {
   let count = 0;
-  const call = vi.fn(async (name: string, input: unknown) => {
-    if (name === "count") return { count };
+  const invoke = vi.fn(async (name: string, input: unknown) => {
+    if (name === "count") return { data: { count }, tags: [["counter"]] };
     if (name === "increment") {
       count += 1;
-      return { count };
+      return { data: { count }, tags: [] };
     }
     throw new Error(`unexpected ${name} ${JSON.stringify(input)}`);
   });
-  return { call } as unknown as ActionClient<Record<string, never>> & {
-    call: typeof call;
+  const client = {
+    clientId: "test-tab",
+    basePath: "/_parlor",
+    invoke,
+    call: async (name: string, input: unknown) => (await invoke(name, input)).data,
+    request: vi.fn(),
   };
+  return client as unknown as ActionClient<Record<string, never>> & typeof client;
 }
 
 function Counter() {
@@ -35,7 +40,7 @@ function Counter() {
 function renderCounter(client: ActionClient<Record<string, never>>) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <FrameworkProvider client={client} queryClient={queryClient}>
+    <FrameworkProvider client={client} queryClient={queryClient} sync={false}>
       <Counter />
     </FrameworkProvider>,
   );
@@ -47,14 +52,14 @@ describe("useActionQuery / useActionMutation", () => {
     renderCounter(client);
 
     await waitFor(() => expect(screen.getByRole("status").textContent).toBe("count:0"));
-    expect(client.call).toHaveBeenCalledWith("count", {}, expect.anything());
+    expect(client.invoke).toHaveBeenCalledWith("count", {}, expect.anything());
 
     await act(async () => {
       screen.getByRole("button").click();
     });
 
     await waitFor(() => expect(screen.getByRole("status").textContent).toBe("count:1"));
-    expect(client.call).toHaveBeenCalledWith("increment", {});
+    expect(client.invoke).toHaveBeenCalledWith("increment", {});
   });
 
   it("throws a clear error when used outside the provider", () => {
