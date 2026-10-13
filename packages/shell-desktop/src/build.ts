@@ -11,7 +11,10 @@ import { runTauri } from "./tauri-cli.js";
 export async function buildDesktop(loaded: LoadedConfig): Promise<string> {
   assertRustToolchain();
   const projectDir = await ensureTauriProject(loaded);
-  await buildWeb(loaded, { conditions: [TAURI_CONDITION] });
+  await buildWeb(loaded, {
+    conditions: [TAURI_CONDITION],
+    serverUrl: loaded.config.server.url,
+  });
   await runTauri(["build"], { cwd: projectDir });
   return join(projectDir, "src-tauri", "target", "release", "bundle");
 }

@@ -9,7 +9,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "db:generate": "parlor db generate",
-    "db:migrate": "parlor db migrate"
+    "db:migrate": "parlor db migrate",
+    "deploy": "parlor deploy"
   },
   "dependencies": {
     "@parlor/capabilities": "workspace:*",
@@ -21,7 +22,6 @@
     "drizzle-orm": "^0.45.4",
     "react": "catalog:",
     "react-dom": "catalog:",
-    "srvx": "^1.0.5",
     "zod": "catalog:"
   },
   "devDependencies": {

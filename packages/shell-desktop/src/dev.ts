@@ -17,7 +17,10 @@ export async function startDesktopDev(
 ): Promise<void> {
   assertRustToolchain();
   const projectDir = await ensureTauriProject(loaded);
-  const web = await startWebDev(loaded, { conditions: [TAURI_CONDITION] });
+  const web = await startWebDev(loaded, {
+    conditions: [TAURI_CONDITION],
+    serverUrl: loaded.config.server.url,
+  });
   const devUrl = `http://localhost:${loaded.config.web.port}`;
   try {
     await runTauri(["dev", "--config", JSON.stringify({ build: { devUrl } })], {

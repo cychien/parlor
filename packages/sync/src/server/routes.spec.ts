@@ -113,3 +113,13 @@ describe("sync routes", () => {
     expect(frames.join("")).not.toContain('"elsewhere"');
   });
 });
+
+describe("transportFromEnv", () => {
+  it("accepts only sse or poll", async () => {
+    const { transportFromEnv } = await import("./routes.js");
+    expect(transportFromEnv({ PARLOR_SYNC_TRANSPORT: "poll" })).toBe("poll");
+    expect(transportFromEnv({ PARLOR_SYNC_TRANSPORT: "sse" })).toBe("sse");
+    expect(transportFromEnv({ PARLOR_SYNC_TRANSPORT: "ws" })).toBeUndefined();
+    expect(transportFromEnv({})).toBeUndefined();
+  });
+});

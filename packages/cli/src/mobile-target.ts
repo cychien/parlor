@@ -43,7 +43,7 @@ export function mobileTarget(platform: MobilePlatform): TargetHandler {
         });
       });
     },
-    async build(loaded) {
+    async build(loaded, _options) {
       assertIosHost(platform);
       const projectDir = await surfaceCapacitorErrors(() =>
         buildMobile(loaded, platform),

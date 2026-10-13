@@ -12,10 +12,15 @@ export const build = defineCommand({
       description: "web | ios | android | mac | windows | linux",
       default: "web",
     },
+    preset: {
+      type: "string",
+      description:
+        "Server deploy preset for the web target: node-server, vercel, netlify, …",
+    },
   },
   async run({ args }) {
     const target = parseTarget(args.target);
     const handler = resolveHandler(handlers, target);
-    await handler.build(await loadParlorConfig());
+    await handler.build(await loadParlorConfig(), { preset: args.preset });
   },
 });

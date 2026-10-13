@@ -5,6 +5,7 @@ export {
   registerSyncRoutes,
   type SyncRouteOptions,
   type SyncTransport,
+  transportFromEnv,
 } from "./routes.js";
 export {
   ensureSyncTables,

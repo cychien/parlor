@@ -56,7 +56,8 @@ Make every decision to a staff engineer's standard. Weigh quality, simplicity, r
 
 - pnpm workspace, strict TypeScript, ESM.
 - oxlint and oxfmt. Vitest for unit tests, Playwright for E2E.
-- Packages: `core`, `server`, `client`, `capabilities`, `config`, `data`, `sync`, `shell-web`, `shell-mobile`, `shell-desktop`, `cli`.
+- Packages: `core`, `server`, `client`, `capabilities`, `config`, `data`, `sync`, `host`, `shell-web`, `shell-mobile`, `shell-desktop`, `cli`.
+- A user app's `server.ts` default-exports the `createServer` result. `parlor dev` serves it with srvx; `parlor build` wraps it in a Nitro server entry that also serves the web build and the SPA fallback.
 - Framework HTTP routes are prefixed `/_parlor/`.
 - A capability is always: one interface, three adapters (web, capacitor, tauri), one availability query, tests per adapter.
 - Platform adapters are picked at build time through the `#adapters` package import and its conditions (`parlor-tauri`, later `parlor-capacitor`), never by runtime checks in application code.

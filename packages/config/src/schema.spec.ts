@@ -10,6 +10,7 @@ describe("parseConfig", () => {
       web: { port: 5173, pwa: true, themeColor: "#ffffff", backgroundColor: "#ffffff" },
       desktop: { width: 1024, height: 768 },
       database: { schema: "schema", migrations: "migrations" },
+      deploy: {},
     });
   });
 

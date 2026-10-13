@@ -1,0 +1,59 @@
+export const DEPLOY_PRESETS = [
+  "node-server",
+  "vercel",
+  "netlify",
+  "cloudflare-module",
+  "aws-lambda",
+  "deno-deploy",
+  "bun",
+] as const;
+export type DeployPreset = (typeof DEPLOY_PRESETS)[number];
+
+const LONG_LIVED: ReadonlySet<DeployPreset> = new Set(["node-server", "bun"]);
+
+const CI_PRESETS: ReadonlyArray<readonly [string, DeployPreset]> = [
+  ["VERCEL", "vercel"],
+  ["NETLIFY", "netlify"],
+  ["CF_PAGES", "cloudflare-module"],
+];
+
+export class PresetError extends Error {
+  override readonly name = "PresetError";
+}
+
+export function isDeployPreset(value: string): value is DeployPreset {
+  return (DEPLOY_PRESETS as readonly string[]).includes(value);
+}
+
+export function detectCiPreset(
+  env: NodeJS.ProcessEnv = process.env,
+): DeployPreset | undefined {
+  return CI_PRESETS.find(([name]) => Boolean(env[name]))?.[1];
+}
+
+export function resolvePreset(
+  explicit: string | undefined,
+  configured: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): { preset: DeployPreset; reason: "flag" | "config" | "ci" | "default" } {
+  const pick = (value: string | undefined, reason: "flag" | "config") => {
+    if (value === undefined) return undefined;
+    if (!isDeployPreset(value)) {
+      throw new PresetError(
+        `Unknown deploy preset "${value}". Expected one of: ${DEPLOY_PRESETS.join(", ")}`,
+      );
+    }
+    return { preset: value, reason } as const;
+  };
+  return (
+    pick(explicit, "flag") ??
+    pick(configured, "config") ??
+    (detectCiPreset(env)
+      ? { preset: detectCiPreset(env)!, reason: "ci" as const }
+      : undefined) ?? { preset: "node-server", reason: "default" }
+  );
+}
+
+export function syncTransportFor(preset: DeployPreset): "sse" | "poll" {
+  return LONG_LIVED.has(preset) ? "sse" : "poll";
+}
