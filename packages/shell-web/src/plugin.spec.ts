@@ -51,3 +51,37 @@ describe("parlorWeb", () => {
     });
   });
 });
+
+describe("resolve conditions", () => {
+  it("appends shell conditions after Vite's defaults", async () => {
+    const resolved = await resolveConfig(
+      { configFile: false, plugins: parlorWeb(config, { conditions: ["parlor-tauri"] }) },
+      "build",
+    );
+    expect(resolved.resolve.conditions.at(-1)).toBe("parlor-tauri");
+    expect(resolved.resolve.conditions).toContain("browser");
+  });
+});
+
+describe("server url", () => {
+  it("injects server.url for the action client, empty when unset", async () => {
+    const withUrl = await resolveConfig(
+      {
+        configFile: false,
+        plugins: parlorWeb({
+          ...config,
+          server: { ...config.server, url: "https://api.test" },
+        }),
+      },
+      "build",
+    );
+    const without = await resolveConfig(
+      { configFile: false, plugins: parlorWeb(config) },
+      "build",
+    );
+    expect(withUrl.define?.["import.meta.env.PARLOR_SERVER_URL"]).toBe(
+      '"https://api.test"',
+    );
+    expect(without.define?.["import.meta.env.PARLOR_SERVER_URL"]).toBe('""');
+  });
+});

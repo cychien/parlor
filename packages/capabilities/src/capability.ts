@@ -3,7 +3,7 @@ import { detectPlatform, type Platform } from "./runtime.js";
 export interface CapabilityAdapter<T> {
   readonly platform: Platform;
   available(): boolean | Promise<boolean>;
-  create(): T;
+  create(): T | Promise<T>;
 }
 
 export interface CapabilityDefinition<T> {
@@ -34,7 +34,7 @@ export async function resolveCapability<T>(
 ): Promise<CapabilityHandle<T>> {
   for (const adapter of candidates(definition, platform)) {
     if (await adapter.available()) {
-      return { available: true, platform: adapter.platform, api: adapter.create() };
+      return { available: true, platform: adapter.platform, api: await adapter.create() };
     }
   }
   return {
