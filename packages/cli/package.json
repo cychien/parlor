@@ -30,6 +30,7 @@
   "dependencies": {
     "@parlor/config": "workspace:*",
     "@parlor/shell-desktop": "workspace:*",
+    "@parlor/shell-mobile": "workspace:*",
     "@parlor/shell-web": "workspace:*",
     "citty": "^0.2.2",
     "tsx": "^4.23.15"

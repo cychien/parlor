@@ -5,8 +5,12 @@ import { CliError } from "./errors.js";
 export const TARGETS = ["web", "ios", "android", "mac", "windows", "linux"] as const;
 export type Target = (typeof TARGETS)[number];
 
+export interface DevOptions {
+  readonly device?: string | undefined;
+}
+
 export interface TargetHandler {
-  dev(loaded: LoadedConfig): Promise<void>;
+  dev(loaded: LoadedConfig, options: DevOptions): Promise<void>;
   build(loaded: LoadedConfig): Promise<void>;
 }
 

@@ -36,6 +36,7 @@ export function corsMiddleware(config: CorsConfig = {}) {
       methods: ["GET", "POST", "OPTIONS"],
       allowHeaders: ["content-type", "authorization", SOURCE_HEADER],
       credentials: true,
+      exposeHeaders: ["content-type", "content-length"],
       preflight: { statusCode: 204 },
     });
     return preflight || undefined;
