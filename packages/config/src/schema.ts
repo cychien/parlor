@@ -39,6 +39,12 @@ export const parlorConfigSchema = z.object({
       height: z.number().int().positive().default(768),
     })
     .prefault({}),
+  database: z
+    .object({
+      schema: z.string().default("schema"),
+      migrations: z.string().default("migrations"),
+    })
+    .prefault({}),
 });
 
 export type ParlorConfigInput = z.input<typeof parlorConfigSchema>;

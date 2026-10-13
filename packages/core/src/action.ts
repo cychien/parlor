@@ -2,9 +2,19 @@ import type { z } from "zod";
 
 export type ActionSource = "ui" | "agent" | "http" | "mcp";
 
+export interface DataRegister {}
+
+export type ParlorDatabase = DataRegister extends { database: infer D } ? D : unknown;
+
+export interface DataProvider<TDb = unknown> {
+  read(): TDb;
+  transaction<T>(run: (tx: TDb) => Promise<T>): Promise<T>;
+}
+
 export interface ActionContext {
   readonly scope: string;
   readonly source: ActionSource;
+  readonly db: ParlorDatabase;
   readonly signal?: AbortSignal | undefined;
 }
 

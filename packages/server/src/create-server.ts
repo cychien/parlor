@@ -1,4 +1,9 @@
-import { ActionError, type ActionMap, type ActionSource } from "@parlor/core";
+import {
+  ActionError,
+  type ActionMap,
+  type ActionSource,
+  type DataProvider,
+} from "@parlor/core";
 import { type ActionRegistry, invokeAction } from "@parlor/core/registry";
 import { H3, type H3Event, readBody } from "h3";
 
@@ -16,6 +21,7 @@ export interface ServerOptions<T extends ActionMap> {
   readonly scope?: ScopeResolver | undefined;
   readonly basePath?: string | undefined;
   readonly cors?: CorsConfig | false | undefined;
+  readonly database?: DataProvider | undefined;
 }
 
 export interface FrameworkServer {
@@ -52,6 +58,7 @@ export function createServer<T extends ActionMap>(
     scope = defaultScope,
     basePath = DEFAULT_BASE_PATH,
     cors = {},
+    database,
   } = options;
   const app = new H3();
 
@@ -73,7 +80,7 @@ export function createServer<T extends ActionMap>(
         source: sourceOf(event.req),
         signal: event.req.signal,
       };
-      const data = await invokeAction(actions, name, input, ctx);
+      const data = await invokeAction(actions, name, input, ctx, { data: database });
       return { data };
     } catch (error) {
       return errorBody(event, error);
