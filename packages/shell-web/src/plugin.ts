@@ -7,6 +7,7 @@ export const FRAMEWORK_ROUTE_PREFIX = "/_parlor";
 
 export interface WebOptions {
   readonly conditions?: readonly string[] | undefined;
+  readonly serverUrl?: string | undefined;
 }
 
 export function webManifest(config: ParlorConfig) {
@@ -33,7 +34,7 @@ export function parlorWeb(
       name: "parlor:web",
       config: () => ({
         define: {
-          "import.meta.env.PARLOR_SERVER_URL": JSON.stringify(config.server.url ?? ""),
+          "import.meta.env.PARLOR_SERVER_URL": JSON.stringify(options.serverUrl ?? ""),
         },
         resolve: { conditions: [...defaultClientConditions, ...conditions] },
         server: {

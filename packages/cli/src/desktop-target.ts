@@ -44,7 +44,7 @@ export function desktopTarget(target: Target): TargetHandler {
         await startDesktopDev(loaded, { signal: controller.signal });
       });
     },
-    async build(loaded) {
+    async build(loaded, _options) {
       assertHostMatches(target);
       const bundleDir = await surfaceTauriErrors(() => buildDesktop(loaded));
       console.log(`desktop bundles written to ${bundleDir}`);

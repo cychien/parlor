@@ -23,6 +23,7 @@ export const parlorConfigSchema = z.object({
       entry: z.string().default("server.ts"),
       port: z.number().int().positive().default(3000),
       url: z.url().optional(),
+      sync: z.object({ transport: z.enum(["sse", "poll"]).optional() }).optional(),
     })
     .prefault({}),
   web: z
@@ -45,6 +46,7 @@ export const parlorConfigSchema = z.object({
       migrations: z.string().default("migrations"),
     })
     .prefault({}),
+  deploy: z.object({ preset: z.string().optional() }).prefault({}),
 });
 
 export type ParlorConfigInput = z.input<typeof parlorConfigSchema>;

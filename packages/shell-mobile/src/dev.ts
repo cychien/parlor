@@ -33,7 +33,10 @@ export async function startMobileDev(
   const projectDir = await ensureCapacitorProject(loaded, { devUrl });
   await ensurePlatform(projectDir, platform);
   if (platform === "ios") await applyIosScheme(projectDir, loaded.config);
-  const web = await startWebDev(loaded, { conditions: [CAPACITOR_CONDITION] });
+  const web = await startWebDev(loaded, {
+    conditions: [CAPACITOR_CONDITION],
+    serverUrl: loaded.config.server.url,
+  });
   try {
     await runCapacitor(runArgs(platform, options.device), {
       cwd: projectDir,

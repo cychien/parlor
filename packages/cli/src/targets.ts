@@ -9,9 +9,13 @@ export interface DevOptions {
   readonly device?: string | undefined;
 }
 
+export interface BuildOptions {
+  readonly preset?: string | undefined;
+}
+
 export interface TargetHandler {
   dev(loaded: LoadedConfig, options: DevOptions): Promise<void>;
-  build(loaded: LoadedConfig): Promise<void>;
+  build(loaded: LoadedConfig, options: BuildOptions): Promise<void>;
 }
 
 export class TargetError extends CliError {

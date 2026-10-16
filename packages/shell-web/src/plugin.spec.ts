@@ -64,14 +64,11 @@ describe("resolve conditions", () => {
 });
 
 describe("server url", () => {
-  it("injects server.url for the action client, empty when unset", async () => {
+  it("injects the shell server url for the action client, empty for same-origin web", async () => {
     const withUrl = await resolveConfig(
       {
         configFile: false,
-        plugins: parlorWeb({
-          ...config,
-          server: { ...config.server, url: "https://api.test" },
-        }),
+        plugins: parlorWeb(config, { serverUrl: "https://api.test" }),
       },
       "build",
     );

@@ -17,7 +17,10 @@ export async function buildMobile(
   const projectDir = await ensureCapacitorProject(loaded);
   await ensurePlatform(projectDir, platform);
   if (platform === "ios") await applyIosScheme(projectDir, loaded.config);
-  await buildWeb(loaded, { conditions: [CAPACITOR_CONDITION] });
+  await buildWeb(loaded, {
+    conditions: [CAPACITOR_CONDITION],
+    serverUrl: loaded.config.server.url,
+  });
   await runCapacitor(["sync", platform], { cwd: projectDir });
   return join(projectDir, platform);
 }

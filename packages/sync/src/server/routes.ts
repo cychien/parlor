@@ -28,6 +28,13 @@ export interface SyncRouteOptions {
 export const DEFAULT_POLL_INTERVAL_MS = 2000;
 const DEFAULT_KEEPALIVE_MS = 25_000;
 
+export function transportFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): SyncTransport | undefined {
+  const value = env.PARLOR_SYNC_TRANSPORT;
+  return value === "sse" || value === "poll" ? value : undefined;
+}
+
 function batch(events: SyncEvent[], since: string): SyncBatch {
   const last = events.at(-1);
   return { events, cursor: last ? encodeCursor(cursorOf(last)) : since };
@@ -35,7 +42,8 @@ function batch(events: SyncEvent[], since: string): SyncBatch {
 
 export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
   const { basePath, data, hub, scope } = options;
-  const transport: SyncTransport = options.transport ?? (hub.canPush ? "sse" : "poll");
+  const transport: SyncTransport =
+    options.transport ?? transportFromEnv() ?? (hub.canPush ? "sse" : "poll");
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const keepAliveMs = options.keepAliveMs ?? DEFAULT_KEEPALIVE_MS;
   const db = () => data.read() as SyncDatabase;
