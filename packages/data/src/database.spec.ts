@@ -27,6 +27,20 @@ describe("resolveDatabaseUrl", () => {
 });
 
 describe("createDatabase with PGlite", () => {
+  it("creates missing parent directories of a file data dir", async () => {
+    const root = await mkdtemp(join(tmpdir(), "parlor-data-"));
+    const dataDir = join(root, ".parlor", "pglite");
+    const first = await createDatabase({ dataDir });
+    await first.db.execute(sql`create table kept (n int)`);
+    await first.db.execute(sql`insert into kept values (7)`);
+    await first.close();
+
+    const reopened = await createDatabase({ dataDir });
+    handles.push(reopened);
+    const rows = await reopened.db.execute(sql`select n from kept`);
+    expect((rows as unknown as { rows: { n: number }[] }).rows).toEqual([{ n: 7 }]);
+  });
+
   it("runs SQL, commits transactions, and rolls back on error", async () => {
     const handle = await memoryDatabase();
     expect(handle.driver).toBe("pglite");
