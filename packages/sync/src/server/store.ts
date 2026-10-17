@@ -13,6 +13,7 @@ export type SyncDatabase = PgDatabase<PgQueryResultHKT>;
 
 export const RETENTION_MS = 24 * 60 * 60 * 1000;
 export const PRUNE_LOCK_KEY = 7_311_207;
+export const NOTIFY_PAYLOAD_LIMIT_BYTES = 8000;
 const MAX_BATCH = 500;
 
 async function rows<T>(query: Promise<unknown>): Promise<T[]> {
@@ -76,9 +77,23 @@ export async function recordSyncEvent(
     tags: input.tags,
     source: input.source,
   };
-  const payload = JSON.stringify({ scope: input.scope, event });
-  await tx.execute(sql`select pg_notify(${SYNC_CHANNEL}, ${payload})`);
+  await tx.execute(
+    sql`select pg_notify(${SYNC_CHANNEL}, ${notifyPayload(input.scope, event)})`,
+  );
   return event;
+}
+
+// pg_notify rejects payloads of 8000 bytes or more; the row keeps the full tags.
+export function notifyPayload(scope: string, event: SyncEvent): string {
+  const full = JSON.stringify({ scope, event });
+  if (new TextEncoder().encode(full).length < NOTIFY_PAYLOAD_LIMIT_BYTES) return full;
+  return JSON.stringify({ scope, event: { ...event, tags: tableTags(event.tags) } });
+}
+
+function tableTags(tags: readonly Tag[]): Tag[] {
+  const tables = new Set<string | number>();
+  for (const tag of tags) if (tag[0] !== undefined) tables.add(tag[0]);
+  return [...tables].map((table) => [table]);
 }
 
 interface EventRow {
