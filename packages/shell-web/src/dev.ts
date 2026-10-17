@@ -10,7 +10,7 @@ export async function startWebDev(
   const server = await createServer({
     root: rootDir,
     configFile: false,
-    plugins: parlorWeb(config, options),
+    plugins: parlorWeb(config, { ...options, root: rootDir }),
   });
   await server.listen();
   server.printUrls();

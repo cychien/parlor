@@ -33,6 +33,7 @@
   },
   "devDependencies": {
     "@tanstack/react-query": "catalog:",
+    "@tanstack/react-router": "catalog:",
     "@testing-library/react": "catalog:",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
@@ -45,6 +46,12 @@
   },
   "peerDependencies": {
     "@tanstack/react-query": ">=5",
+    "@tanstack/react-router": ">=1.170",
     "react": ">=19"
+  },
+  "peerDependenciesMeta": {
+    "@tanstack/react-router": {
+      "optional": true
+    }
   }
 }

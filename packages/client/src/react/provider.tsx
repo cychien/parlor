@@ -1,5 +1,6 @@
 import { createSyncClient, type SyncClient } from "@parlor/sync/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { AnyRouter } from "@tanstack/react-router";
 import { createContext, type ReactNode, useContext, useEffect, useState } from "react";
 
 import type { ActionClient } from "../action-client.js";
@@ -17,6 +18,7 @@ export interface FrameworkProviderProps {
   readonly client: ActionClient<RegisteredActions>;
   readonly queryClient?: QueryClient | undefined;
   readonly sync?: boolean | undefined;
+  readonly router?: AnyRouter | undefined;
   readonly children: ReactNode;
 }
 

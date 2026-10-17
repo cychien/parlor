@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@parlor/config": "workspace:*",
+    "@tanstack/router-plugin": "catalog:",
     "@vitejs/plugin-react": "catalog:",
     "vite": "catalog:",
     "vite-plugin-pwa": "^2.0.0",

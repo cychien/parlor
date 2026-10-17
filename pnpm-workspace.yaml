@@ -7,6 +7,9 @@ allowBuilds:
 
 catalog:
   "@tanstack/react-query": ^5.104.1
+  "@tanstack/react-router": ^1.170.45
+  "@tanstack/router-core": ^1.171.38
+  "@tanstack/router-plugin": ^1.168.47
   "@testing-library/react": ^16.3.3
   "@types/node": ^24.14.0
   "@types/react": ^19.3.0
@@ -64,3 +67,7 @@ minimumReleaseAgeExclude:
   - oxlint@1.87.0
   - vite@8.3.3
   - "@electric-sql/pglite@0.5.9"
+  - "@tanstack/react-router@1.170.45"
+  - "@tanstack/router-core@1.171.38"
+  - "@tanstack/router-generator@1.167.45"
+  - "@tanstack/router-plugin@1.168.47"

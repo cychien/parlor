@@ -7,3 +7,9 @@ declare module "@parlor/client" {
     actions: ActionsOf<typeof registry>;
   }
 }
+
+declare module "@tanstack/react-router" {
+  interface StaticDataRouteOption {
+    readonly description?: string | undefined;
+  }
+}

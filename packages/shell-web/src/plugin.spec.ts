@@ -1,3 +1,7 @@
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { parseConfig } from "@parlor/config";
 import { resolveConfig } from "vite";
 import { describe, expect, it } from "vitest";
@@ -80,5 +84,48 @@ describe("server url", () => {
       '"https://api.test"',
     );
     expect(without.define?.["import.meta.env.PARLOR_SERVER_URL"]).toBe('""');
+  });
+});
+
+describe("file routes", () => {
+  const routerPlugins = async (root: string, web = config.web) => {
+    const resolved = await resolveConfig(
+      { root, configFile: false, plugins: parlorWeb({ ...config, web }, { root }) },
+      "build",
+    );
+    return resolved.plugins.map((p) => p.name).filter((n) => n.startsWith("tanstack:"));
+  };
+
+  it("adds the TanStack Router generator only when the routes directory exists", async () => {
+    const root = await mkdtemp(join(tmpdir(), "parlor-routes-"));
+    expect(await routerPlugins(root)).toEqual([]);
+    await mkdir(join(root, "src", "routes"), { recursive: true });
+    expect(await routerPlugins(root)).toContain("tanstack:router-generator");
+  });
+
+  it("looks for routes next to a configured route tree", async () => {
+    const root = await mkdtemp(join(tmpdir(), "parlor-routes-"));
+    await mkdir(join(root, "app", "routes"), { recursive: true });
+    const web = { ...config.web, routeTree: "app/routeTree.gen.ts" };
+    expect(await routerPlugins(root, web)).toContain("tanstack:router-generator");
+  });
+
+  it("generates the route tree from src/routes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "parlor-routes-"));
+    await mkdir(join(root, "src", "routes"), { recursive: true });
+    await writeFile(
+      join(root, "src", "routes", "__root.tsx"),
+      'import { createRootRoute } from "@tanstack/react-router";\nexport const Route = createRootRoute({});\n',
+    );
+    await writeFile(
+      join(root, "src", "routes", "settings.tsx"),
+      'import { createFileRoute } from "@tanstack/react-router";\nexport const Route = createFileRoute("/settings")({});\n',
+    );
+    await resolveConfig(
+      { root, configFile: false, plugins: parlorWeb(config, { root }) },
+      "build",
+    );
+    const tree = await readFile(join(root, "src", "routeTree.gen.ts"), "utf8");
+    expect(tree).toContain('path: "/settings"');
   });
 });

@@ -1,4 +1,4 @@
-import { defineAction } from "@parlor/core";
+import { ActionError, defineAction } from "@parlor/core";
 import { createRegistry } from "@parlor/core/registry";
 import { asc, eq } from "drizzle-orm";
 import { z } from "zod";
@@ -16,6 +16,16 @@ export const registry = createRegistry({
     input: z.object({}),
     reads: [tasks],
     run: (_, { db }) => db.select().from(tasks).orderBy(asc(tasks.createdAt)),
+  }),
+  getTask: defineAction({
+    description: "Get one task by id.",
+    input: z.object({ id: z.string() }),
+    reads: ({ id }) => [["tasks", id]],
+    run: async ({ id }, { db }) => {
+      const [task] = await db.select().from(tasks).where(eq(tasks.id, id));
+      if (!task) throw new ActionError("not_found", `No task ${id}`);
+      return task;
+    },
   }),
   createTask: defineAction({
     description: "Create a task with the given title.",

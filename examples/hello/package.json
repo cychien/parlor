@@ -19,6 +19,7 @@
     "@parlor/data": "workspace:*",
     "@parlor/server": "workspace:*",
     "@tanstack/react-query": "catalog:",
+    "@tanstack/react-router": "catalog:",
     "drizzle-orm": "^0.45.4",
     "react": "catalog:",
     "react-dom": "catalog:",

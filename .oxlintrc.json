@@ -27,6 +27,7 @@
     "**/node_modules/**",
     "**/.output/**",
     "**/.parlor/**",
-    "docs/**"
+    "docs/**",
+    "**/routeTree.gen.ts"
   ]
 }
