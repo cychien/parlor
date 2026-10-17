@@ -4,6 +4,7 @@ import { createDatabase, type DatabaseHandle } from "@parlor/data";
 import { H3 } from "h3";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import type { SyncBatch } from "../protocol.js";
 import { SyncHub } from "./hub.js";
 import { registerSyncRoutes } from "./routes.js";
 import { ensureSyncTables, recordSyncEvent } from "./store.js";
@@ -113,6 +114,54 @@ describe("sync routes", () => {
     expect(frames[0]).toContain("event: handshake");
     expect(frames[1]).toContain(live.id);
     expect(frames.join("")).not.toContain('"elsewhere"');
+  });
+});
+
+describe("sync stream catch-up", () => {
+  it("delivers an event committed after the catch-up query ran but before its result was used", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let queried!: () => void;
+    const catchUpQueried = new Promise<void>((resolve) => (queried = resolve));
+    const gatedDb = new Proxy(handle.db, {
+      get(target, property, receiver) {
+        if (property !== "execute") return Reflect.get(target, property, receiver);
+        return async (...args: unknown[]) => {
+          const result = await (
+            target.execute as (...a: unknown[]) => Promise<unknown>
+          ).apply(target, args);
+          queried();
+          await gate;
+          return result;
+        };
+      },
+    });
+    const gated = new H3();
+    registerSyncRoutes(gated, {
+      basePath: "/_parlor",
+      data: { ...handle, read: () => gatedDb },
+      hub,
+      scope: () => "race",
+      keepAliveMs: 50,
+    });
+
+    const responsePromise = gated.fetch(
+      new Request("http://app.test/_parlor/sync/stream?since="),
+    );
+    await catchUpQueried;
+    const committed = await handle.transaction((tx) =>
+      recordSyncEvent(tx, { scope: "race", tags: [["tasks", "raced"]] }),
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    release();
+
+    const response = await responsePromise;
+    const frames = await readFrames(response.body!, 2, 1500);
+    const delivered = frames
+      .filter((f) => f.startsWith("data:"))
+      .flatMap((f) => (JSON.parse(f.slice("data:".length)) as SyncBatch).events)
+      .filter((e) => e.id === committed.id);
+    expect(delivered).toHaveLength(1);
   });
 });
 
