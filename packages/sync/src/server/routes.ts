@@ -2,6 +2,7 @@ import type { DataProvider } from "@parlor/core";
 import { createEventStream, getQuery, type H3, type H3Event } from "h3";
 
 import {
+  compareCursors,
   cursorOf,
   decodeCursor,
   encodeCursor,
@@ -68,29 +69,47 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
 
   app.get(`${basePath}/sync/stream`, async (event: H3Event) => {
     const currentScope = await scope(event.req);
-    const since = String(getQuery(event).since ?? "");
+    const sinceParam = String(getQuery(event).since ?? "");
     await hub.start();
-    const missed = await readSyncEvents(db(), currentScope, decodeCursor(since));
     const stream = createEventStream(event);
     const send = (payload: SyncBatch) => void stream.push(JSON.stringify(payload));
+    const sendLive = (syncEvent: SyncEvent) =>
+      send({ events: [syncEvent], cursor: encodeCursor(cursorOf(syncEvent)) });
+
+    let arrivedDuringCatchUp: SyncEvent[] | undefined = [];
+    const unsubscribe = hub.subscribe(currentScope, (syncEvent) => {
+      if (arrivedDuringCatchUp) arrivedDuringCatchUp.push(syncEvent);
+      else sendLive(syncEvent);
+    });
+    const keepAlive = setInterval(
+      () => void stream.pushComment("keep-alive"),
+      keepAliveMs,
+    );
+    const detach = () => {
+      clearInterval(keepAlive);
+      unsubscribe();
+    };
+    stream.onClosed(detach);
 
     void stream.push({
       event: "handshake",
       data: JSON.stringify({ protocol: SYNC_PROTOCOL_VERSION, capabilities: [] }),
     });
-    if (missed.length > 0) send(batch(missed, since));
-
-    const unsubscribe = hub.subscribe(currentScope, (syncEvent) =>
-      send({ events: [syncEvent], cursor: encodeCursor(cursorOf(syncEvent)) }),
+    const since = decodeCursor(sinceParam);
+    const missed = await readSyncEvents(db(), currentScope, since).catch(
+      (error: unknown) => {
+        detach();
+        throw error;
+      },
     );
-    const keepAlive = setInterval(
-      () => void stream.pushComment("keep-alive"),
-      keepAliveMs,
+    if (missed.length > 0) send(batch(missed, sinceParam));
+    const last = missed.at(-1);
+    const caughtUpTo = last ? cursorOf(last) : since;
+    const pending = arrivedDuringCatchUp.filter(
+      (syncEvent) => compareCursors(cursorOf(syncEvent), caughtUpTo) > 0,
     );
-    stream.onClosed(() => {
-      clearInterval(keepAlive);
-      unsubscribe();
-    });
+    arrivedDuringCatchUp = undefined;
+    for (const syncEvent of pending) sendLive(syncEvent);
     return stream.send();
   });
 }
