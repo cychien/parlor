@@ -24,59 +24,178 @@ export interface Selection {
 
 export type PresenceOutcome = "rejected" | "updated" | "registered";
 
+interface Entry {
+  client: ConnectedClient;
+  readonly connections: ChannelConnection[];
+}
+
 export class ClientDirectory {
+  readonly #now: () => number;
+  readonly #byId = new Map<string, Entry>();
+  readonly #byScope = new Map<string, Set<Entry>>();
+  readonly #unannounced = new Map<string, ChannelConnection[]>();
+
   constructor(now: () => number = Date.now) {
-    void now;
-    throw new Error("not implemented");
+    this.#now = now;
   }
 
   connect(connection: ChannelConnection): () => void {
-    void connection;
-    throw new Error("not implemented");
+    const { clientId } = connection;
+    if (clientId === undefined) return () => {};
+    this.#keepUnannounced(clientId, [
+      ...(this.#unannounced.get(clientId) ?? []),
+      connection,
+    ]);
+    return () => this.#disconnect(clientId, connection);
   }
 
   touch(clientId: string | undefined): void {
-    void clientId;
-    throw new Error("not implemented");
+    if (clientId === undefined) return;
+    const entry = this.#byId.get(clientId);
+    if (entry) entry.client = { ...entry.client, seenAt: this.#now() };
   }
 
   presence(clientId: string, scope: string, update: PresenceUpdate): PresenceOutcome {
-    void clientId;
-    void scope;
-    void update;
-    throw new Error("not implemented");
+    const announcing = this.#takeUnannounced(clientId, scope);
+    let entry = this.#byId.get(clientId);
+    if (entry && entry.client.scope !== scope) {
+      if (announcing.length === 0) return "rejected";
+      this.#forget(entry);
+      entry = undefined;
+    }
+    if (!entry && announcing.length === 0) return "rejected";
+    const client: ConnectedClient = {
+      id: clientId,
+      scope,
+      platform: update.platform,
+      buildId: update.buildId,
+      focused: update.focused,
+      visible: update.visible,
+      seenAt: this.#now(),
+    };
+    if (entry) {
+      entry.client = client;
+    } else {
+      entry = { client, connections: [] };
+      this.#byId.set(clientId, entry);
+      this.#scopeSet(scope).add(entry);
+    }
+    entry.connections.push(...announcing);
+    return announcing.length > 0 ? "registered" : "updated";
   }
 
   leave(clientId: string, scope: string): boolean {
-    void clientId;
-    void scope;
-    throw new Error("not implemented");
+    this.#takeUnannounced(clientId, scope);
+    const entry = this.#byId.get(clientId);
+    if (!entry || entry.client.scope !== scope) return false;
+    entry.connections.length = 0;
+    this.#forget(entry);
+    return true;
   }
 
   connected(scope: string, clientId: string): boolean {
-    void scope;
-    void clientId;
-    throw new Error("not implemented");
+    return this.#byId.get(clientId)?.client.scope === scope;
   }
 
   target(clientId: string): ClientTarget | undefined {
-    void clientId;
-    throw new Error("not implemented");
+    const entry = this.#byId.get(clientId);
+    return entry && this.#targetOf(entry);
   }
 
   select(scope: string, clientId?: string): Selection | undefined {
-    void scope;
-    void clientId;
-    throw new Error("not implemented");
+    const entries = [...(this.#byScope.get(scope) ?? [])];
+    if (entries.length === 0) return undefined;
+    const explicit = clientId === undefined ? undefined : this.#byId.get(clientId);
+    if (explicit && explicit.client.scope === scope) {
+      return { target: this.#targetOf(explicit), tied: [] };
+    }
+    const focused = entries.filter((e) => e.client.focused);
+    if (focused.length > 0) return this.#mostRecent(focused, () => true);
+    const visible = entries.filter((e) => e.client.visible);
+    const pool = visible.length > 0 ? visible : entries;
+    return this.#mostRecent(pool, (a, b) => a.client.seenAt === b.client.seenAt);
   }
 
   summaries(scope: string): ClientSummary[] {
-    void scope;
-    throw new Error("not implemented");
+    return [...(this.#byScope.get(scope) ?? [])].map((entry) =>
+      this.summary(entry.client),
+    );
   }
 
   summary(client: ConnectedClient): ClientSummary {
-    void client;
-    throw new Error("not implemented");
+    return {
+      id: client.id,
+      platform: client.platform,
+      ...(client.buildId === undefined ? {} : { buildId: client.buildId }),
+      focused: client.focused,
+      visible: client.visible,
+      seenAgoMs: Math.max(0, this.#now() - client.seenAt),
+    };
+  }
+
+  #mostRecent(pool: Entry[], ties: (a: Entry, b: Entry) => boolean): Selection {
+    let best = pool[0]!;
+    for (const entry of pool) if (entry.client.seenAt >= best.client.seenAt) best = entry;
+    const tied = pool.filter((entry) => entry !== best && ties(entry, best));
+    return { target: this.#targetOf(best), tied: tied.map((entry) => entry.client) };
+  }
+
+  #targetOf(entry: Entry): ClientTarget {
+    return {
+      client: entry.client,
+      send: (data) => {
+        const connection = entry.connections.at(-1);
+        if (!connection) return false;
+        connection.send(data);
+        return true;
+      },
+    };
+  }
+
+  #takeUnannounced(clientId: string, scope: string): ChannelConnection[] {
+    const waiting = this.#unannounced.get(clientId) ?? [];
+    this.#keepUnannounced(
+      clientId,
+      waiting.filter((connection) => connection.scope !== scope),
+    );
+    return waiting.filter((connection) => connection.scope === scope);
+  }
+
+  #keepUnannounced(clientId: string, connections: ChannelConnection[]): void {
+    if (connections.length > 0) this.#unannounced.set(clientId, connections);
+    else this.#unannounced.delete(clientId);
+  }
+
+  #disconnect(clientId: string, connection: ChannelConnection): void {
+    const waiting = this.#unannounced.get(clientId);
+    if (waiting?.includes(connection)) {
+      this.#keepUnannounced(
+        clientId,
+        waiting.filter((candidate) => candidate !== connection),
+      );
+      return;
+    }
+    const entry = this.#byId.get(clientId);
+    const index = entry?.connections.indexOf(connection) ?? -1;
+    if (!entry || index === -1) return;
+    entry.connections.splice(index, 1);
+    if (entry.connections.length === 0) this.#forget(entry);
+  }
+
+  #forget(entry: Entry): void {
+    if (this.#byId.get(entry.client.id) !== entry) return;
+    this.#byId.delete(entry.client.id);
+    const peers = this.#byScope.get(entry.client.scope);
+    peers?.delete(entry);
+    if (peers?.size === 0) this.#byScope.delete(entry.client.scope);
+  }
+
+  #scopeSet(scope: string): Set<Entry> {
+    let set = this.#byScope.get(scope);
+    if (!set) {
+      set = new Set();
+      this.#byScope.set(scope, set);
+    }
+    return set;
   }
 }

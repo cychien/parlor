@@ -50,6 +50,8 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const keepAliveMs = options.keepAliveMs ?? DEFAULT_KEEPALIVE_MS;
   const db = () => data.read() as SyncDatabase;
+  const channels = options.channels ?? [];
+  const capabilities = channels.map((channel) => channel.event);
 
   app.post(`${basePath}/sync/token`, (): SyncNegotiation => ({
     protocol: SYNC_PROTOCOL_VERSION,
@@ -87,16 +89,33 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
       () => void stream.pushComment("keep-alive"),
       keepAliveMs,
     );
+    const disconnects: (() => void)[] = [];
+    let detached = false;
     const detach = () => {
+      if (detached) return;
+      detached = true;
       clearInterval(keepAlive);
       unsubscribe();
+      for (const disconnect of disconnects) disconnect();
     };
     stream.onClosed(detach);
 
     void stream.push({
       event: "handshake",
-      data: JSON.stringify({ protocol: SYNC_PROTOCOL_VERSION, capabilities: [] }),
+      data: JSON.stringify({ protocol: SYNC_PROTOCOL_VERSION, capabilities }),
     });
+    const clientId = options.clientId?.(event.req);
+    for (const channel of channels) {
+      disconnects.push(
+        channel.connect({
+          clientId,
+          scope: currentScope,
+          send: (frame) => {
+            if (!detached) void stream.push({ event: channel.event, data: frame });
+          },
+        }),
+      );
+    }
     const since = decodeCursor(sinceParam);
     const missed = await readSyncEvents(db(), currentScope, since).catch(
       (error: unknown) => {

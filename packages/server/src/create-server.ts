@@ -1,10 +1,14 @@
-import type { AgentUiOptions } from "@parlor/agent-ui/server";
+import {
+  type AgentUiOptions,
+  createAgentUi,
+  registerAgentUiRoutes,
+} from "@parlor/agent-ui/server";
 import { ActionError, type ActionMap, type DataProvider } from "@parlor/core";
 import type { ActionRegistry } from "@parlor/core/registry";
 import { registerSyncRoutes, SyncHub, type SyncTransport } from "@parlor/sync/server";
 import { H3, type H3Event, readBody } from "h3";
 
-import { createActionRunner, sourceOf } from "./actions.js";
+import { clientOf, createActionRunner, sourceOf } from "./actions.js";
 import { type CorsConfig, corsMiddleware } from "./cors.js";
 import { createMcpHandler } from "./mcp.js";
 import { DEFAULT_BASE_PATH, type Manifest, PROTOCOL_VERSION } from "./protocol.js";
@@ -57,11 +61,20 @@ export function createServer<T extends ActionMap>(
     database,
     mcp = {},
     sync = {},
+    agentUi: agentUiOptions = {},
   } = options;
   const app = new H3();
   const syncOptions = sync === false ? undefined : sync;
   const syncEnabled = syncOptions !== undefined && database !== undefined;
-  const runner = createActionRunner({ actions, scope, database, sync: syncEnabled });
+  const agentUi =
+    agentUiOptions === false ? undefined : createAgentUi({ ...agentUiOptions, scope });
+  const runner = createActionRunner({
+    actions,
+    scope,
+    database,
+    sync: syncEnabled,
+    onClient: agentUi?.touch,
+  });
   const hub = database ? new SyncHub(database) : undefined;
 
   if (cors !== false) app.use(corsMiddleware(cors));
@@ -85,7 +98,7 @@ export function createServer<T extends ActionMap>(
   });
 
   if (mcp !== false) {
-    const handler = createMcpHandler({ actions, runner, ...mcp });
+    const handler = createMcpHandler({ actions, runner, agentUi, ...mcp });
     app.all(`${basePath}/mcp`, (event) => handler.fetch(event.req));
   }
 
@@ -100,12 +113,18 @@ export function createServer<T extends ActionMap>(
       scope,
       transport: syncOptions?.transport,
       pollIntervalMs: syncOptions?.pollIntervalMs,
+      channels: agentUi ? [agentUi.channel] : [],
+      clientId: clientOf,
     });
   }
+
+  if (agentUi)
+    registerAgentUiRoutes(app, { basePath, agentUi, scope, clientId: clientOf });
 
   return {
     fetch: (request) => Promise.resolve(app.fetch(request)),
     close: async () => {
+      agentUi?.close();
       await hub?.stop();
     },
   };

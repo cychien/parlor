@@ -34,14 +34,17 @@ export function defineAgentView<
   S extends ViewSchema,
   const K extends boolean = false,
 >(config: AgentViewConfig<N, S, K>): AgentViewDefinition<N, S, K> {
-  void config;
-  void kView;
-  throw new Error("not implemented");
+  return {
+    name: config.name,
+    description: config.description,
+    schema: config.schema,
+    keyed: (config.keyed ?? false) as K,
+    [kView]: true,
+  };
 }
 
 export function isAgentView(value: unknown): value is AnyAgentView {
-  void value;
-  throw new Error("not implemented");
+  return typeof value === "object" && value !== null && kView in value;
 }
 
 export type ViewValue<D extends AnyAgentView> = StandardSchemaV1.InferOutput<D["schema"]>;

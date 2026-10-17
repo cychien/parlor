@@ -172,7 +172,54 @@ export type ParsedUiRequest =
   | { readonly ok: true; readonly request: UiRequest }
   | { readonly ok: false; readonly id: string | undefined };
 
+type Fields = { readonly [key: string]: unknown };
+
+const isFields = (value: unknown): value is Fields =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isString = (value: unknown): value is string => typeof value === "string";
+
+const isPositiveInteger = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+
+const absentOr = <T>(
+  value: unknown,
+  guard: (value: unknown) => value is T,
+): value is T | undefined => value === undefined || guard(value);
+
+function originOf(value: unknown): AgentOrigin | undefined {
+  if (!isFields(value)) return undefined;
+  const { via, name } = value;
+  if (via !== "mcp" && via !== "agent") return undefined;
+  if (!absentOr(name, isString)) return undefined;
+  return name === undefined ? { via } : { via, name };
+}
+
+function requestOf(json: unknown): UiRequest | undefined {
+  if (!isFields(json)) return undefined;
+  const { id, op, input, timeoutMs } = json;
+  const origin = originOf(json.origin);
+  if (!isString(id) || id === "" || !origin || !isPositiveInteger(timeoutMs)) {
+    return undefined;
+  }
+  const envelope = { id, origin, timeoutMs };
+  switch (op) {
+    case "screen":
+      return isFields(input) ? { ...envelope, op, input: {} } : undefined;
+    default:
+      return undefined;
+  }
+}
+
 export function parseUiRequest(data: string): ParsedUiRequest {
-  void data;
-  throw new Error("not implemented");
+  let json: unknown;
+  try {
+    json = JSON.parse(data);
+  } catch {
+    return { ok: false, id: undefined };
+  }
+  const request = requestOf(json);
+  if (request) return { ok: true, request };
+  const id = isFields(json) ? json.id : undefined;
+  return { ok: false, id: isString(id) && id !== "" ? id : undefined };
 }

@@ -46,6 +46,17 @@ const DEFAULTS = {
   reconnectMaxMs: 30_000,
 };
 
+function advertised(handshake: string): readonly string[] {
+  try {
+    const { capabilities } = JSON.parse(handshake) as { capabilities?: unknown };
+    return Array.isArray(capabilities)
+      ? capabilities.filter((c): c is string => typeof c === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 export function createSyncClient(options: SyncClientOptions): SyncClient {
   const basePath = options.basePath ?? "/_parlor";
   const settings = {
@@ -62,6 +73,14 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
   const cancel: (id: ReturnType<typeof setTimeout>) => void =
     options.clearTimeout ?? ((id) => globalThis.clearTimeout(id));
   const isHidden = options.isHidden ?? (() => false);
+  const channels = new Map((options.channels ?? []).map((c) => [c.event, c]));
+  const guarded = (run: () => void) => {
+    try {
+      run();
+    } catch (error) {
+      settings.onError?.(error);
+    }
+  };
 
   let cursor: SyncCursor = INITIAL_CURSOR;
   let transport: "sse" | "poll" | undefined;
@@ -139,17 +158,35 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
       throw new Error(`sync stream failed with HTTP ${response.status}`);
     }
     reconnectDelay = settings.reconnectBaseMs;
-    await readSse(
-      response.body,
-      (frame) => {
-        if (frame.event !== "message") return;
-        const batch = JSON.parse(frame.data) as SyncBatch;
-        accept(batch.events);
-        const parsed = decodeCursor(batch.cursor);
-        if (compareCursors(parsed, cursor) > 0) cursor = parsed;
-      },
-      controller.signal,
-    );
+    const open = new Set<ClientChannel>();
+    try {
+      await readSse(
+        response.body,
+        (frame) => {
+          if (frame.event === "message") {
+            const batch = JSON.parse(frame.data) as SyncBatch;
+            accept(batch.events);
+            const parsed = decodeCursor(batch.cursor);
+            if (compareCursors(parsed, cursor) > 0) cursor = parsed;
+            return;
+          }
+          if (frame.event === "handshake") {
+            for (const event of advertised(frame.data)) {
+              const channel = channels.get(event);
+              if (!channel || open.has(channel)) continue;
+              open.add(channel);
+              guarded(() => channel.opened());
+            }
+            return;
+          }
+          const channel = channels.get(frame.event);
+          if (channel && open.has(channel)) guarded(() => channel.receive(frame.data));
+        },
+        controller.signal,
+      );
+    } finally {
+      for (const channel of open) guarded(() => channel.closed());
+    }
   };
 
   const runSse = async (endpoint: string) => {

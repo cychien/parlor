@@ -35,6 +35,7 @@ export interface ActionRunnerOptions<T extends ActionMap> {
   readonly scope: ScopeResolver;
   readonly database?: DataProvider | undefined;
   readonly sync: boolean;
+  readonly onClient?: ((clientId: string | undefined) => void) | undefined;
 }
 
 export interface ActionRunner {
@@ -50,7 +51,7 @@ export interface ActionRunner {
 export function createActionRunner<T extends ActionMap>(
   options: ActionRunnerOptions<T>,
 ): ActionRunner {
-  const { actions, scope, database, sync } = options;
+  const { actions, scope, database, sync, onClient } = options;
   const pruner = sync && database ? createPruner(database) : undefined;
   let prepared: Promise<void> | undefined;
   const ready = () => {
@@ -67,6 +68,7 @@ export function createActionRunner<T extends ActionMap>(
       await ready();
       const resolvedScope = request ? await scope(request) : "default";
       const client = request ? clientOf(request) : undefined;
+      onClient?.(client);
       const result = await invokeAction(
         actions,
         name,

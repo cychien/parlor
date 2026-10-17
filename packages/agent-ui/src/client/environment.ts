@@ -33,5 +33,22 @@ export interface BrowserEnvironment {
 }
 
 export function browserEnvironment(): BrowserEnvironment {
-  throw new Error("not implemented");
+  const window = typeof globalThis.window === "undefined" ? undefined : globalThis.window;
+  return {
+    document: window?.document,
+    window,
+    observeIntersections: (callback) =>
+      typeof IntersectionObserver === "undefined"
+        ? undefined
+        : new IntersectionObserver((entries) => callback(entries)),
+    rect: (element) => element.getBoundingClientRect(),
+    viewport: () => ({
+      width: window?.innerWidth ?? 0,
+      height: window?.innerHeight ?? 0,
+    }),
+    now: () => Date.now(),
+    nextTask: () => new Promise((resolve) => globalThis.setTimeout(resolve, 0)),
+    setTimeout: globalThis.setTimeout.bind(globalThis),
+    clearTimeout: globalThis.clearTimeout.bind(globalThis),
+  };
 }
