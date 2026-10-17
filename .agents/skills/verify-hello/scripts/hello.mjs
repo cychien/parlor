@@ -911,6 +911,20 @@ match ? String(match.kCGWindowNumber) : "";`;
   return run("osascript", ["-l", "JavaScript", "-e", script]).stdout.trim();
 }
 
+// macOS cannot capture a hidden, minimized, or other-Space window, so bring the app forward first.
+async function revealMacApp(pid) {
+  run("osascript", [
+    "-e",
+    `tell application "System Events" to tell (first process whose unix id is ${pid}) to set {visible, frontmost} to {true, true}`,
+  ]);
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const window = macWindowId(pid);
+    if (window) return window;
+    await new Promise((settle) => setTimeout(settle, 100));
+  }
+  return "";
+}
+
 async function cmdScreenshot([id, file]) {
   const state = readState(id);
   if (!file) fail("usage: screenshot ID FILE");
@@ -921,7 +935,7 @@ async function cmdScreenshot([id, file]) {
   } else if (state.target === "mac") {
     const app = shellProcess(state, processTable());
     if (!app) fail("parlor_app is not running");
-    const window = macWindowId(app.pid);
+    const window = macWindowId(app.pid) || (await revealMacApp(app.pid));
     if (!window) fail(`no on-screen window for parlor_app pid ${app.pid}`);
     run("screencapture", ["-x", "-o", `-l${window}`, path]);
   } else {
