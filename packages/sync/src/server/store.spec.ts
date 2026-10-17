@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { INITIAL_CURSOR } from "../protocol.js";
 import {
   ensureSyncTables,
+  type NotifyPayload,
   pruneSyncEvents,
   readSyncEvents,
   recordSyncEvent,
@@ -66,6 +67,27 @@ describe("sync store", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     await unlisten();
     expect(received.map((p) => JSON.parse(p))).toContainEqual({ scope: "acme", event });
+  });
+
+  it("keeps a bulk write's NOTIFY under the pg_notify limit by collapsing to table tags", async () => {
+    const received: string[] = [];
+    const unlisten = await handle.listen("parlor_sync", (payload) => {
+      received.push(payload);
+    });
+    const tags = Array.from({ length: 300 }, () => ["tasks", crypto.randomUUID()]);
+    const event = await handle.transaction((tx) =>
+      recordSyncEvent(tx, { scope: "bulk", tags }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await unlisten();
+
+    const stored = await readSyncEvents(handle.db, "bulk", INITIAL_CURSOR);
+    expect(stored[0]?.tags).toEqual(tags);
+    const notified = received
+      .map((p) => JSON.parse(p) as NotifyPayload)
+      .find((p) => p.scope === "bulk");
+    expect(notified?.event).toEqual({ ...event, tags: [["tasks"]] });
+    expect(received.every((p) => new TextEncoder().encode(p).length < 8000)).toBe(true);
   });
 
   it("prunes only events older than the retention window", async () => {
