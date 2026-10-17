@@ -118,7 +118,7 @@ describe("UiBroker", () => {
     const a = target("a");
     const b = target("b");
     const first = broker.request(a.target, "screen", {}, origin);
-    const second = broker.request(a.target, "screen", {}, origin);
+    const second = broker.request(a.target, "navigate", { to: "/settings" }, origin);
     const third = broker.request(a.target, "screen", {}, origin);
     const other = broker.request(b.target, "screen", {}, origin);
     expect(a.frames.map((f) => JSON.parse(f).id)).toEqual(["r1"]);
@@ -127,10 +127,10 @@ describe("UiBroker", () => {
       broker.reply("a", { type: "reply", id: "r1", ok: true, result: screen }),
     ).toEqual({
       accepted: true,
-      next: '{"id":"r2","op":"screen","input":{},"origin":{"via":"mcp"},"timeoutMs":1000}',
+      next: '{"id":"r2","op":"navigate","input":{"to":"/settings"},"origin":{"via":"mcp"},"timeoutMs":1000}',
     });
     expect(
-      broker.reply("a", { type: "reply", id: "r2", ok: true, result: screen }),
+      broker.reply("a", { type: "reply", id: "r2", ok: true, result: { screen } }),
     ).toEqual({
       accepted: true,
       next: '{"id":"r3","op":"screen","input":{},"origin":{"via":"mcp"},"timeoutMs":1000}',
@@ -144,7 +144,7 @@ describe("UiBroker", () => {
     expect(a.frames).toHaveLength(1);
     await expect(Promise.all([first, second, third, other])).resolves.toEqual([
       screen,
-      screen,
+      { screen },
       screen,
       screen,
     ]);
@@ -165,11 +165,11 @@ describe("UiBroker", () => {
     await expect(second).resolves.toEqual(screen);
   });
 
-  it("reports a request still waiting its turn at the deadline as never received", async () => {
+  it("reports a navigation still waiting its turn at the deadline as never received", async () => {
     const broker = brokerWith();
     const a = target("a");
     const first = failure(broker.request(a.target, "screen", {}, origin));
-    const second = failure(broker.request(a.target, "screen", {}, origin));
+    const second = failure(broker.request(a.target, "navigate", { to: "/" }, origin));
     await vi.advanceTimersByTimeAsync(1000);
     await expect(first).resolves.toMatchObject({ code: "timeout" });
     await expect(second).resolves.toEqual({

@@ -2,11 +2,20 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 
-import type { LoadedConfig } from "@parlor/config";
+import type { LoadedConfig, ParlorConfig } from "@parlor/config";
 
 import { onShutdown } from "./shutdown.js";
 
 const require = createRequire(import.meta.url);
+
+export function serverEnv(
+  config: ParlorConfig,
+  base?: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  void config;
+  void base;
+  throw new Error("not implemented");
+}
 
 export function startServerProcess({ config, rootDir }: LoadedConfig): ChildProcess {
   const tsxBin = require.resolve("tsx/cli");

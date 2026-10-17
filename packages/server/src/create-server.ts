@@ -2,6 +2,7 @@ import {
   type AgentUiOptions,
   createAgentUi,
   registerAgentUiRoutes,
+  type UiManifestSource,
 } from "@parlor/agent-ui/server";
 import { ActionError, type ActionMap, type DataProvider } from "@parlor/core";
 import type { ActionRegistry } from "@parlor/core/registry";
@@ -34,6 +35,7 @@ export interface ServerOptions<T extends ActionMap> {
 }
 
 export interface FrameworkServer {
+  readonly installUiManifest?: ((source: UiManifestSource) => void) | undefined;
   readonly fetch: (request: Request) => Promise<Response>;
   readonly close: () => Promise<void>;
 }

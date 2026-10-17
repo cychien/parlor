@@ -10,8 +10,10 @@ import { type UiBroker, UiFailure } from "./broker.js";
 import type { ClientDirectory, Selection } from "./directory.js";
 import { uiOpInputs } from "./schemas.js";
 
-export const UI_TOOLS = ["ui_screen"] as const;
+export const UI_TOOLS = ["ui_screen", "ui_navigate"] as const;
 export type UiToolName = (typeof UI_TOOLS)[number];
+
+export const UI_MANIFEST_RESOURCE = "parlor://manifest";
 
 export interface AgentToolContext {
   readonly scope: string;
@@ -33,6 +35,11 @@ export interface ScreenToolResult extends ScreenSnapshot {
   readonly client: ClientSummary;
   readonly otherClients: readonly ClientSummary[];
   readonly tiedWith?: readonly string[] | undefined;
+}
+
+export interface NavigateToolResult {
+  readonly client: ClientSummary;
+  readonly screen: ScreenSnapshot;
 }
 
 export interface UnreachableResult {

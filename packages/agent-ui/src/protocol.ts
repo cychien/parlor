@@ -6,17 +6,25 @@ export const UI_CHANNEL = "ui";
 
 export interface UiOpInputs {
   readonly screen: Readonly<Record<string, never>>;
+  readonly navigate: {
+    readonly to: string;
+    readonly params?: Readonly<Record<string, string>> | undefined;
+    readonly search?: Readonly<Record<string, unknown>> | undefined;
+    readonly replace?: boolean | undefined;
+  };
 }
 
 export type UiOp = keyof UiOpInputs;
 
 export const uiOpReadOnly: { readonly [O in UiOp]: boolean } = {
   screen: true,
+  navigate: false,
 };
 export type UiOpInput<O extends UiOp> = UiOpInputs[O];
 
 export interface UiOpResults {
   readonly screen: ScreenSnapshot;
+  readonly navigate: { readonly screen: ScreenSnapshot };
 }
 
 export interface AgentOrigin {
@@ -35,6 +43,7 @@ export type UiRequest = {
 }[UiOp];
 
 export type UiErrorCode =
+  | "unknown_route"
   | "unknown_client"
   | "ambiguous_client"
   | "busy"
@@ -195,6 +204,11 @@ function originOf(value: unknown): AgentOrigin | undefined {
   return name === undefined ? { via } : { via, name };
 }
 
+function navigateInputOf(value: unknown): UiOpInput<"navigate"> | undefined {
+  void value;
+  throw new Error("not implemented");
+}
+
 function requestOf(json: unknown): UiRequest | undefined {
   if (!isFields(json)) return undefined;
   const { id, op, input, timeoutMs } = json;
@@ -206,6 +220,10 @@ function requestOf(json: unknown): UiRequest | undefined {
   switch (op) {
     case "screen":
       return isFields(input) ? { ...envelope, op, input: {} } : undefined;
+    case "navigate": {
+      const navigate = navigateInputOf(input);
+      return navigate ? { ...envelope, op, input: navigate } : undefined;
+    }
     default:
       return undefined;
   }

@@ -22,6 +22,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@parlor/agent-ui": "workspace:*",
     "@parlor/config": "workspace:*",
     "@parlor/shell-web": "workspace:*",
     "nitro": "3.0.260903-beta"

@@ -4,6 +4,7 @@ export interface EntryOptions {
 }
 
 export const INDEX_HTML_PLACEHOLDER = "__PARLOR_INDEX_HTML__";
+export const UI_MANIFEST_PLACEHOLDER = "__PARLOR_UI_MANIFEST__";
 
 export function hostEntrySource({ serverEntry, basePath }: EntryOptions): string {
   return `import app from ${JSON.stringify(serverEntry)};

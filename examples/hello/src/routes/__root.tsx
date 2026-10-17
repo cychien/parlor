@@ -36,9 +36,11 @@ const LINGER_MS = 2000;
 
 const DOING: Record<NonNullable<AgentActivity["last"]>["op"], string> = {
   screen: "Agent is reading this screen",
+  navigate: "Agent is opening a page",
 };
 const DONE: Record<NonNullable<AgentActivity["last"]>["op"], string> = {
   screen: "Agent read this screen",
+  navigate: "Agent opened this page",
 };
 
 function AgentIndicator() {

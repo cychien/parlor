@@ -1,4 +1,15 @@
 export {
+  type AgentRouteData,
+  type JsonSchema,
+  type ManifestBuild,
+  type RouteEntry,
+  routeHref,
+  type UiAppInfo,
+  UI_MANIFEST_FILE,
+  type UiManifest,
+  type ViewEntry,
+} from "./manifest.js";
+export {
   type AgentOrigin,
   type AttentionSnapshot,
   type ClientMessage,

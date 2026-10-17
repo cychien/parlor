@@ -55,3 +55,35 @@ describe("parseUiRequest", () => {
     expect(parseUiRequest("not json")).toEqual({ ok: false, id: undefined });
   });
 });
+
+describe("parseUiRequest navigate", () => {
+  it("reads a navigate request with its optional fields", () => {
+    const input = {
+      to: "/tasks/$taskId",
+      params: { taskId: "t1" },
+      search: { tab: "notes", page: 2 },
+      replace: true,
+    };
+    expect(parse({ ...envelope, op: "navigate", input: { ...input, extra: 1 } })).toEqual(
+      { ok: true, request: { ...envelope, op: "navigate", input } },
+    );
+    expect(parse({ ...envelope, op: "navigate", input: { to: "/" } })).toEqual({
+      ok: true,
+      request: { ...envelope, op: "navigate", input: { to: "/" } },
+    });
+  });
+
+  it.each([
+    ["a missing path", {}],
+    ["a non-string path", { to: 1 }],
+    ["non-string params", { to: "/", params: { taskId: 1 } }],
+    ["array params", { to: "/", params: ["t1"] }],
+    ["a non-object search", { to: "/", search: "tab=notes" }],
+    ["a non-boolean replace", { to: "/", replace: "yes" }],
+  ])("rejects %s", (_, input) => {
+    expect(parse({ ...envelope, op: "navigate", input })).toEqual({
+      ok: false,
+      id: "r1",
+    });
+  });
+});

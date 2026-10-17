@@ -17,6 +17,7 @@ describe("hostEntrySource", () => {
     });
     expect(source).toContain('import app from "/app/server.ts"');
     expect(source).toContain("__PARLOR_INDEX_HTML__");
+    expect(source).toContain("app.installUiManifest?.(() => UI_MANIFEST)");
     expect(source).toContain("app.fetch(request)");
   });
 });
@@ -28,7 +29,11 @@ describe("buildServer", () => {
       join(rootDir, "server.ts"),
       [
         'const transport = (value = process.env.PARLOR_SYNC_TRANSPORT) => value ?? "unset";',
-        "export default { fetch: (request: Request) => Response.json({ path: new URL(request.url).pathname, transport: transport() }) };",
+        "let ui: (() => unknown) | undefined;",
+        "export default {",
+        "  installUiManifest: (source: () => unknown) => { ui = source; },",
+        "  fetch: (request: Request) => Response.json({ path: new URL(request.url).pathname, transport: transport(), ui: ui?.() ?? null }),",
+        "};",
       ].join("\n"),
     );
     await mkdir(join(rootDir, ".parlor", "web", "assets"), { recursive: true });
@@ -37,6 +42,10 @@ describe("buildServer", () => {
       "<!doctype html><title>spa</title>",
     );
     await writeFile(join(rootDir, ".parlor", "web", "assets", "a.js"), "console.log(1)");
+    await writeFile(
+      join(rootDir, ".parlor", "ui-manifest.json"),
+      JSON.stringify({ protocol: 1, routes: [{ path: "/settings" }] }),
+    );
     const config = parseConfig({ app: { id: "dev.parlor.host", name: "Host" } });
 
     const result = await buildServer(
@@ -71,6 +80,7 @@ describe("buildServer", () => {
       await expect(api.json()).resolves.toEqual({
         path: "/_parlor/ping",
         transport: "sse",
+        ui: { protocol: 1, routes: [{ path: "/settings" }] },
       });
       const asset = await fetch(`http://localhost:${port}/assets/a.js`);
       await expect(asset.text()).resolves.toBe("console.log(1)");

@@ -21,4 +21,7 @@ test("the server parses client messages into exactly the wire type", () => {
 test("the server's op input schemas parse into exactly the wire types", () => {
   expectTypeOf<keyof typeof uiOpInputs>().toEqualTypeOf<UiOp>();
   expectTypeOf<Frozen<Parsed<"screen">>>().toEqualTypeOf<Frozen<UiOpInput<"screen">>>();
+  expectTypeOf<Frozen<Parsed<"navigate">>>().toEqualTypeOf<
+    Frozen<UiOpInput<"navigate">>
+  >();
 });

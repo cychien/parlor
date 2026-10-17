@@ -1,8 +1,10 @@
 import type { ServerChannel } from "@parlor/sync";
 
+import type { UiManifest } from "../manifest.js";
 import { type AgentOrigin, type ClientMessage, UI_CHANNEL } from "../protocol.js";
 import { UiBroker, type UiReceipt } from "./broker.js";
 import { ClientDirectory } from "./directory.js";
+import type { UiManifestSource } from "./manifest-source.js";
 import {
   type AgentTool,
   type AgentToolContext,
@@ -19,6 +21,7 @@ export interface AgentUiOptions {
 
 export interface AgentUiDependencies {
   readonly scope: (request: Request) => string | Promise<string>;
+  readonly webOrigin?: string | undefined;
 }
 
 export interface AgentUi {
@@ -32,10 +35,17 @@ export interface AgentUi {
     signal?: AbortSignal,
   ): Promise<AgentToolContext>;
   instructions(surface: "mcp" | "agent"): string | undefined;
+  manifest(): UiManifest | undefined;
+  install(source: UiManifestSource): void;
   close(): void;
 }
 
 export const DEFAULT_UI_TIMEOUT_MS = 10_000;
+
+export function webOriginFromEnv(value?: string | undefined): string | undefined {
+  void value;
+  throw new Error("not implemented");
+}
 
 export function createAgentUi(options: AgentUiOptions & AgentUiDependencies): AgentUi {
   const external = options.external ?? true;
@@ -82,6 +92,13 @@ export function createAgentUi(options: AgentUiOptions & AgentUiDependencies): Ag
       };
     },
     instructions: (surface) => (tools(surface).length > 0 ? uiInstructions() : undefined),
+    manifest() {
+      throw new Error("not implemented");
+    },
+    install(source) {
+      void source;
+      throw new Error("not implemented");
+    },
     close: () => broker.close(),
   };
 }

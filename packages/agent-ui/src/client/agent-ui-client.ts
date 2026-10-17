@@ -31,6 +31,7 @@ export interface AgentUiClientOptions {
   readonly buildId?: string | undefined;
   readonly environment?: BrowserEnvironment | undefined;
   readonly limits?: Partial<ScreenLimits> | undefined;
+  readonly settleMs?: number | undefined;
   readonly dev?: boolean | undefined;
 }
 
@@ -148,6 +149,8 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
       switch (request.op) {
         case "screen":
           return { type: "reply", id: request.id, ok: true, result: await screen() };
+        case "navigate":
+          throw new Error("not implemented");
       }
     } catch (error) {
       return {
