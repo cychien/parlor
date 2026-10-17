@@ -37,3 +37,4 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 - [Live sync from an external writer](./live-sync.md) covers writes from HTTP, MCP, or another window appearing without a reload, on web, mac, and iOS.
 - [MCP tools](./mcp-tools.md) covers tool discovery and calls from Claude Code headless and a raw MCP client.
 - [Notifications and deep link panels](./capability-panels.md) covers the platform each panel reports, sending a notification, and receiving a deep link.
+- [Agent UI](./agent-ui.md) covers `ui_screen` and `ui_navigate`: what the agent sees, resolving "this task", navigation, the no-app link, client targeting, the route catalog, the external policy, and the activity pill.
