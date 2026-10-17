@@ -1,0 +1,57 @@
+import { describe, expect, it } from "vitest";
+
+import { parseUiRequest } from "./protocol.js";
+
+const envelope = { id: "r1", origin: { via: "mcp" }, timeoutMs: 1000 };
+const parse = (value: unknown) => parseUiRequest(JSON.stringify(value));
+
+describe("parseUiRequest", () => {
+  it("reads a screen request and keeps only the fields the protocol defines", () => {
+    expect(
+      parse({
+        ...envelope,
+        op: "screen",
+        input: { extra: 1 },
+        origin: { via: "agent", name: "helper", extra: true },
+        extra: "dropped",
+      }),
+    ).toEqual({
+      ok: true,
+      request: {
+        id: "r1",
+        op: "screen",
+        input: {},
+        origin: { via: "agent", name: "helper" },
+        timeoutMs: 1000,
+      },
+    });
+  });
+
+  it.each([
+    ["an unknown op", { ...envelope, op: "explode", input: {} }],
+    ["a missing input", { ...envelope, op: "screen" }],
+    ["an array input", { ...envelope, op: "screen", input: [] }],
+    ["an unknown origin", { ...envelope, op: "screen", input: {}, origin: { via: "x" } }],
+    [
+      "a non-string origin name",
+      { ...envelope, op: "screen", input: {}, origin: { via: "mcp", name: 1 } },
+    ],
+    ["a fractional timeout", { ...envelope, op: "screen", input: {}, timeoutMs: 1.5 }],
+    ["a zero timeout", { ...envelope, op: "screen", input: {}, timeoutMs: 0 }],
+  ])("rejects %s and still reports the request id", (_, value) => {
+    expect(parse(value)).toEqual({ ok: false, id: "r1" });
+  });
+
+  it("rejects a request without a usable id and reports no id", () => {
+    expect(parse({ ...envelope, id: "", op: "screen", input: {} })).toEqual({
+      ok: false,
+      id: undefined,
+    });
+    expect(parse({ ...envelope, id: 7, op: "screen", input: {} })).toEqual({
+      ok: false,
+      id: undefined,
+    });
+    expect(parse(null)).toEqual({ ok: false, id: undefined });
+    expect(parseUiRequest("not json")).toEqual({ ok: false, id: undefined });
+  });
+});

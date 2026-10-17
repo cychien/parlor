@@ -1,0 +1,178 @@
+import type { ActionSource } from "@parlor/core";
+
+import type { ViewRef } from "./view.js";
+
+export const UI_CHANNEL = "ui";
+
+export interface UiOpInputs {
+  readonly screen: Readonly<Record<string, never>>;
+}
+
+export type UiOp = keyof UiOpInputs;
+
+export const uiOpReadOnly: { readonly [O in UiOp]: boolean } = {
+  screen: true,
+};
+export type UiOpInput<O extends UiOp> = UiOpInputs[O];
+
+export interface UiOpResults {
+  readonly screen: ScreenSnapshot;
+}
+
+export interface AgentOrigin {
+  readonly via: Extract<ActionSource, "mcp" | "agent">;
+  readonly name?: string | undefined;
+}
+
+export type UiRequest = {
+  readonly [O in UiOp]: {
+    readonly id: string;
+    readonly op: O;
+    readonly input: UiOpInput<O>;
+    readonly origin: AgentOrigin;
+    readonly timeoutMs: number;
+  };
+}[UiOp];
+
+export type UiErrorCode =
+  | "unknown_client"
+  | "ambiguous_client"
+  | "busy"
+  | "timeout"
+  | "outcome_unknown"
+  | "internal";
+
+export interface UiError {
+  readonly code: UiErrorCode;
+  readonly message: string;
+  readonly issues?:
+    | readonly { readonly path: string; readonly message: string }[]
+    | undefined;
+}
+
+export type UiReply =
+  | {
+      readonly type: "reply";
+      readonly id: string;
+      readonly ok: true;
+      readonly result: unknown;
+    }
+  | {
+      readonly type: "reply";
+      readonly id: string;
+      readonly ok: false;
+      readonly error: UiError;
+    };
+
+export interface PresenceUpdate {
+  readonly type: "presence";
+  readonly focused: boolean;
+  readonly visible: boolean;
+  readonly platform: string;
+  readonly buildId?: string | undefined;
+}
+
+export interface LeaveNotice {
+  readonly type: "leave";
+}
+
+export type ClientMessage = UiReply | PresenceUpdate | LeaveNotice;
+
+export type JsonObject = { readonly [key: string]: unknown };
+
+export interface TruncatedValue {
+  readonly truncated: true;
+  readonly bytes: number;
+}
+
+export interface MatchedRouteSnapshot {
+  readonly notFound: false;
+  readonly path: string;
+  readonly params: Readonly<Record<string, string>>;
+  readonly search: JsonObject;
+  readonly url: string;
+}
+
+export interface NotFoundRouteSnapshot {
+  readonly notFound: true;
+  readonly url: string;
+}
+
+export type RouteSnapshot = MatchedRouteSnapshot | NotFoundRouteSnapshot;
+
+export type QueryStatus = "pending" | "error" | "success";
+
+export interface QuerySnapshot {
+  readonly action: string;
+  readonly input: unknown;
+  readonly status: QueryStatus;
+}
+
+export interface SingleViewSnapshot {
+  readonly value: JsonObject | TruncatedValue;
+  readonly shown?: number | undefined;
+}
+
+export interface ItemSnapshot {
+  readonly key: string;
+  readonly value: JsonObject | TruncatedValue;
+  readonly shown: number;
+}
+
+export interface KeyedViewSnapshot {
+  readonly items: readonly ItemSnapshot[];
+  readonly offscreen: number;
+}
+
+export type ViewSnapshot = SingleViewSnapshot | KeyedViewSnapshot;
+
+export interface RecentRef extends ViewRef {
+  readonly agoMs: number;
+}
+
+export interface FocusSnapshot {
+  readonly view?: string | undefined;
+  readonly key?: string | undefined;
+  readonly field?: string | undefined;
+  readonly label?: string | undefined;
+}
+
+export interface SelectionSnapshot {
+  readonly text: string;
+  readonly within: ViewRef;
+  readonly truncated: boolean;
+}
+
+export interface AttentionSnapshot {
+  readonly focus: FocusSnapshot | null;
+  readonly selection: SelectionSnapshot | null;
+  readonly lastInteracted: RecentRef | null;
+  readonly lastEntered: RecentRef | null;
+  readonly focal: ViewRef | null;
+}
+
+export interface ScreenSnapshot {
+  readonly route: RouteSnapshot | null;
+  readonly queries: readonly QuerySnapshot[];
+  readonly views: Readonly<Record<string, ViewSnapshot>>;
+  readonly attention: AttentionSnapshot;
+  readonly truncated: boolean;
+}
+
+export interface ClientSummary {
+  readonly id: string;
+  readonly platform: string;
+  readonly buildId?: string | undefined;
+  readonly focused: boolean;
+  readonly visible: boolean;
+  readonly seenAgoMs: number;
+}
+
+export type ParsedUiRequest =
+  | { readonly ok: true; readonly request: UiRequest }
+  | { readonly ok: false; readonly id: string | undefined };
+
+export function parseUiRequest(data: string): ParsedUiRequest {
+  void data;
+  throw new Error("not implemented");
+}

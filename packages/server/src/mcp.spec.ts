@@ -27,6 +27,7 @@ const actions = createRegistry({
 const server = createServer({
   actions,
   scope: (request) => request.headers.get("x-org") ?? "default",
+  agentUi: false,
 });
 
 let client: Client | undefined;

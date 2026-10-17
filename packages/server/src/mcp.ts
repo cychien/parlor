@@ -5,6 +5,7 @@ import {
   type McpRequestContext,
   McpServer,
 } from "@modelcontextprotocol/server";
+import type { AgentUi } from "@parlor/agent-ui/server";
 import { ActionError, type ActionMap, isMutating } from "@parlor/core";
 import type { ActionRegistry } from "@parlor/core/registry";
 
@@ -15,6 +16,7 @@ export interface McpOptions<T extends ActionMap> {
   readonly runner: ActionRunner;
   readonly name?: string | undefined;
   readonly version?: string | undefined;
+  readonly agentUi?: AgentUi | undefined;
 }
 
 function toolResult(result: unknown): CallToolResult {

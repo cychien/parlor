@@ -1,0 +1,406 @@
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { type ActionMap, defineAction } from "@parlor/core";
+import { createRegistry } from "@parlor/core/registry";
+import { createDatabase, type DatabaseHandle } from "@parlor/data";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { z } from "zod";
+
+import {
+  createServer,
+  type FrameworkServer,
+  type ServerOptions,
+} from "./create-server.js";
+
+const actions = createRegistry({
+  hello: defineAction({
+    description: "Say hello.",
+    input: z.object({}),
+    run: () => ({ message: "hi" }),
+  }),
+});
+
+const screen = (path: string) => ({
+  route: { notFound: false, path, params: {}, search: {}, url: path },
+  queries: [{ action: "hello", input: {} }],
+  views: {},
+  attention: {
+    focus: null,
+    selection: null,
+    lastInteracted: null,
+    lastEntered: null,
+    focal: null,
+  },
+  truncated: false,
+});
+
+let database: DatabaseHandle;
+let server: FrameworkServer;
+const closers: (() => Promise<void> | void)[] = [];
+
+beforeAll(async () => {
+  database = await createDatabase({ dataDir: "memory://" });
+  server = createServer({ actions, database, agentUi: { timeoutMs: 2000 } });
+});
+afterEach(async () => {
+  for (const close of closers.splice(0)) await close();
+});
+afterAll(async () => {
+  await server.close();
+  await database.close();
+});
+
+function post(target: FrameworkServer, path: string, body: unknown, clientId?: string) {
+  return target.fetch(
+    new Request(`http://app.test${path}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(clientId ? { "x-parlor-client": clientId } : {}),
+      },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    }),
+  );
+}
+
+async function openBrowser(
+  id: string,
+  path: string,
+  target = server,
+  answering: Promise<void> = Promise.resolve(),
+) {
+  const controller = new AbortController();
+  const response = await target.fetch(
+    new Request("http://app.test/_parlor/sync/stream?since=", {
+      headers: { "x-parlor-client": id, accept: "text/event-stream" },
+      signal: controller.signal,
+    }),
+  );
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  const requests: unknown[] = [];
+  const via: ("stream" | "reply")[] = [];
+  let buffer = "";
+  let handshake!: () => void;
+  const ready = new Promise<void>((resolve) => (handshake = resolve));
+  const answer = async (data: string, channel: "stream" | "reply"): Promise<void> => {
+    const request = JSON.parse(data) as { id: string };
+    requests.push(request);
+    via.push(channel);
+    await answering;
+    const answered = await post(
+      target,
+      "/_parlor/ui",
+      { type: "reply", id: request.id, ok: true, result: screen(path) },
+      id,
+    );
+    if (answered.status === 200) await answer(await answered.text(), "reply");
+  };
+  const pump = (async () => {
+    for (;;) {
+      const { value, done } = await reader
+        .read()
+        .catch(() => ({ value: undefined, done: true }));
+      if (done) return;
+      buffer += decoder.decode(value, { stream: true });
+      let end: number;
+      while ((end = buffer.indexOf("\n\n")) !== -1) {
+        const frame = buffer.slice(0, end);
+        buffer = buffer.slice(end + 2);
+        if (frame.startsWith("event: handshake")) handshake();
+        if (!frame.startsWith("event: ui\n")) continue;
+        await answer(frame.slice(frame.indexOf("data:") + 5), "stream");
+      }
+    }
+  })();
+  await ready;
+  closers.push(async () => {
+    controller.abort();
+    await reader.cancel().catch(() => {});
+    await pump;
+  });
+  return {
+    requests,
+    via,
+    presence: (focused: boolean, visible: boolean, platform = "web") =>
+      post(target, "/_parlor/ui", { type: "presence", focused, visible, platform }, id),
+    leave: () => post(target, "/_parlor/ui", { type: "leave" }, id),
+  };
+}
+
+async function openStream(id: string) {
+  const controller = new AbortController();
+  const response = await server.fetch(
+    new Request("http://app.test/_parlor/sync/stream?since=", {
+      headers: { "x-parlor-client": id, accept: "text/event-stream" },
+      signal: controller.signal,
+    }),
+  );
+  const reader = response.body!.getReader();
+  await reader.read();
+  closers.push(async () => {
+    controller.abort();
+    await reader.cancel().catch(() => {});
+  });
+}
+
+async function openSilentBrowser(id: string) {
+  await openStream(id);
+  const presence = { type: "presence", focused: true, visible: true, platform: "web" };
+  await post(server, "/_parlor/ui", presence, id);
+  return { leave: () => post(server, "/_parlor/ui", { type: "leave" }, id) };
+}
+
+async function mcp(target = server) {
+  const client = new Client({ name: "test", version: "0.0.0" });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL("http://app.test/_parlor/mcp"), {
+      fetch: (input, init) => target.fetch(new Request(input, init)),
+    }),
+  );
+  closers.push(() => client.close());
+  return client;
+}
+
+describe("agent UI over MCP", () => {
+  it("lists ui_screen as a read-only tool next to the actions", async () => {
+    const { tools } = await (await mcp()).listTools();
+    expect(tools.map((t) => t.name)).toEqual(["hello", "ui_screen"]);
+    const uiScreen = tools.find((t) => t.name === "ui_screen");
+    expect(uiScreen?.annotations?.readOnlyHint).toBe(true);
+    expect(uiScreen?.inputSchema).toMatchObject({
+      type: "object",
+      properties: { clientId: { type: "string" } },
+    });
+  });
+
+  it("explains the conventions in the server instructions", async () => {
+    const client = await mcp();
+    expect(client.getInstructions()).toContain("attention");
+  });
+
+  it("answers no_client without an error when no app is open", async () => {
+    const result = await (await mcp()).callTool({ name: "ui_screen", arguments: {} });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toEqual({ reachable: false, reason: "no_client" });
+  });
+
+  it("asks the connected browser for its screen and names the client", async () => {
+    const tab = await openBrowser("tab-a", "/");
+    await tab.presence(false, true);
+    const result = await (await mcp()).callTool({ name: "ui_screen", arguments: {} });
+    expect(result.structuredContent).toMatchObject({
+      ...screen("/"),
+      client: { id: "tab-a", platform: "web", focused: false, visible: true },
+      otherClients: [],
+    });
+    expect(tab.requests).toEqual([
+      expect.objectContaining({ op: "screen", input: {}, origin: { via: "mcp" } }),
+    ]);
+  });
+
+  it("hands concurrent requests to one client one at a time, each in the previous reply's response", async () => {
+    let release!: () => void;
+    const tab = await openBrowser(
+      "tab-c",
+      "/",
+      server,
+      new Promise<void>((resolve) => (release = resolve)),
+    );
+    await tab.presence(true, true);
+    const client = await mcp();
+    const calls = Array.from({ length: 5 }, () =>
+      client.callTool({ name: "ui_screen", arguments: {} }),
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    expect(tab.via).toEqual(["stream"]);
+    release();
+    const results = await Promise.all(calls);
+    expect(results.map((result) => result.isError ?? false)).toEqual([
+      false,
+      false,
+      false,
+      false,
+      false,
+    ]);
+    expect(tab.via).toEqual(["stream", "reply", "reply", "reply", "reply"]);
+  });
+
+  it("prefers the focused client and honours an explicit client id", async () => {
+    const a = await openBrowser("tab-a", "/");
+    const b = await openBrowser("tab-b", "/settings");
+    await a.presence(false, true);
+    await b.presence(true, true);
+    const client = await mcp();
+    const auto = await client.callTool({ name: "ui_screen", arguments: {} });
+    expect(auto.structuredContent).toMatchObject({
+      route: { path: "/settings" },
+      client: { id: "tab-b" },
+      otherClients: [{ id: "tab-a" }],
+    });
+    const explicit = await client.callTool({
+      name: "ui_screen",
+      arguments: { clientId: "tab-a" },
+    });
+    expect(explicit.structuredContent).toMatchObject({
+      route: { path: "/" },
+      client: { id: "tab-a" },
+    });
+  });
+
+  it("treats an action call from a client as that client being seen", async () => {
+    const a = await openBrowser("tab-a", "/");
+    const b = await openBrowser("tab-b", "/settings");
+    await a.presence(false, false);
+    await new Promise((r) => setTimeout(r, 5));
+    await b.presence(false, false);
+    await new Promise((r) => setTimeout(r, 5));
+    await post(server, "/_parlor/actions/hello", {}, "tab-a");
+    const result = await (await mcp()).callTool({ name: "ui_screen", arguments: {} });
+    expect(result.structuredContent).toMatchObject({ client: { id: "tab-a" } });
+  });
+});
+
+describe("clients built without agent UI", () => {
+  it("never targets a stream that did not announce agent UI, even after it runs an action", async () => {
+    const tab = await openBrowser("tab-new", "/settings");
+    await tab.presence(false, false);
+    await openStream("old-desktop");
+    await new Promise((r) => setTimeout(r, 5));
+    await post(server, "/_parlor/actions/hello", {}, "old-desktop");
+    const client = await mcp();
+    const started = Date.now();
+    const result = await client.callTool({ name: "ui_screen", arguments: {} });
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(result.structuredContent).toMatchObject({
+      route: { path: "/settings" },
+      client: { id: "tab-new" },
+      otherClients: [],
+    });
+    const explicit = await client.callTool({
+      name: "ui_screen",
+      arguments: { clientId: "old-desktop" },
+    });
+    expect(JSON.parse((explicit.content as { text: string }[])[0]!.text)).toMatchObject({
+      error: { code: "unknown_client" },
+    });
+  });
+
+  it("answers no_client at once when only such a stream is open", async () => {
+    await openStream("old-desktop");
+    await post(server, "/_parlor/actions/hello", {}, "old-desktop");
+    const started = Date.now();
+    const result = await (await mcp()).callTool({ name: "ui_screen", arguments: {} });
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(result.structuredContent).toEqual({ reachable: false, reason: "no_client" });
+  });
+});
+
+describe("clients that are gone", () => {
+  it("drops a client that announced it is leaving even while its stream stays open", async () => {
+    const live = await openBrowser("tab-live", "/");
+    const gone = await openBrowser("tab-gone", "/settings");
+    await live.presence(false, false);
+    await new Promise((r) => setTimeout(r, 5));
+    await gone.presence(true, true);
+    expect((await gone.leave()).status).toBe(204);
+    const client = await mcp();
+    const result = await client.callTool({ name: "ui_screen", arguments: {} });
+    expect(result.structuredContent).toMatchObject({
+      client: { id: "tab-live" },
+      otherClients: [],
+    });
+  });
+
+  it("fails a request waiting on a client the moment it leaves", async () => {
+    const quiet = await openSilentBrowser("tab-quiet");
+    const started = Date.now();
+    const pending = (await mcp()).callTool({ name: "ui_screen", arguments: {} });
+    await new Promise((r) => setTimeout(r, 100));
+    await quiet.leave();
+    const result = await pending;
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(JSON.parse((result.content as { text: string }[])[0]!.text)).toMatchObject({
+      error: { code: "timeout" },
+    });
+  });
+
+  it("refuses a client id that is not connected instead of picking another client", async () => {
+    const tab = await openBrowser("tab-real", "/");
+    await tab.presence(false, true);
+    const client = await mcp();
+    for (const [name, args] of [["ui_screen", { clientId: "does-not-exist" }]] as const) {
+      const result = await client.callTool({ name, arguments: args });
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toBeUndefined();
+      expect(JSON.parse((result.content as { text: string }[])[0]!.text)).toEqual({
+        error: {
+          code: "unknown_client",
+          message:
+            "No app client does-not-exist is connected. Connected clients: tab-real.",
+          issues: [{ path: "clientId", message: "tab-real" }],
+        },
+      });
+    }
+    expect(tab.requests).toEqual([]);
+  });
+});
+
+describe("reconnecting clients", () => {
+  it("re-sends a waiting request on the stream a client announces after reconnecting", async () => {
+    await openSilentBrowser("tab-r");
+    const pending = (await mcp()).callTool({ name: "ui_screen", arguments: {} });
+    await new Promise((r) => setTimeout(r, 50));
+    const reopened = await openBrowser("tab-r", "/settings");
+    await new Promise((r) => setTimeout(r, 50));
+    expect(reopened.requests).toEqual([]);
+    await reopened.presence(true, true);
+    const result = await pending;
+    expect(result.structuredContent).toMatchObject({
+      route: { path: "/settings" },
+      client: { id: "tab-r" },
+    });
+    expect(reopened.requests).toHaveLength(1);
+  });
+});
+
+describe("POST /_parlor/ui", () => {
+  it("accepts presence from a connected client", async () => {
+    const tab = await openBrowser("tab-p", "/");
+    expect((await tab.presence(true, true)).status).toBe(204);
+  });
+
+  it("rejects missing client ids, malformed bodies, unknown clients and unknown requests", async () => {
+    await openBrowser("tab-q", "/");
+    const presence = { type: "presence", focused: true, visible: true, platform: "web" };
+    expect((await post(server, "/_parlor/ui", presence)).status).toBe(400);
+    expect((await post(server, "/_parlor/ui", "{nope", "tab-q")).status).toBe(400);
+    expect((await post(server, "/_parlor/ui", { type: "other" }, "tab-q")).status).toBe(
+      400,
+    );
+    expect((await post(server, "/_parlor/ui", presence, "ghost")).status).toBe(404);
+    const reply = { type: "reply", id: "unknown", ok: true, result: null };
+    expect((await post(server, "/_parlor/ui", reply, "tab-q")).status).toBe(404);
+  });
+
+  it("refuses bodies over 256 KB", async () => {
+    const huge = { type: "reply", id: "x", ok: true, result: "x".repeat(300 * 1024) };
+    expect((await post(server, "/_parlor/ui", huge, "tab-q")).status).toBe(413);
+  });
+});
+
+describe("external agent policy", () => {
+  const toolNames = async (agentUi: ServerOptions<ActionMap>["agentUi"]) => {
+    const target = createServer({ actions, agentUi });
+    closers.push(() => target.close());
+    const { tools } = await (await mcp(target)).listTools();
+    return tools.map((t) => t.name);
+  };
+
+  it("exposes UI tools by default, read-only tools for read-only, and none when off", async () => {
+    expect(await toolNames(undefined)).toEqual(["hello", "ui_screen"]);
+    expect(await toolNames({ external: true })).toEqual(["hello", "ui_screen"]);
+    expect(await toolNames({ external: "read-only" })).toEqual(["hello", "ui_screen"]);
+    expect(await toolNames({ external: false })).toEqual(["hello"]);
+    expect(await toolNames(false)).toEqual(["hello"]);
+  });
+});

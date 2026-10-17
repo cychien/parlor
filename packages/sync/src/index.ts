@@ -1,3 +1,4 @@
+export type { ChannelConnection, ClientChannel, ServerChannel } from "./channel.js";
 export {
   compareCursors,
   cursorOf,

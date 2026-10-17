@@ -27,6 +27,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@parlor/agent-ui": "workspace:*",
     "@parlor/capabilities": "workspace:*",
     "@parlor/core": "workspace:*",
     "@parlor/sync": "workspace:*"
@@ -42,7 +43,9 @@
     "react": "catalog:",
     "react-dom": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vite": "catalog:",
+    "vitest": "catalog:",
+    "zod": "catalog:"
   },
   "peerDependencies": {
     "@tanstack/react-query": ">=5",

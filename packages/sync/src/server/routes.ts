@@ -1,6 +1,7 @@
 import type { DataProvider } from "@parlor/core";
 import { createEventStream, getQuery, type H3, type H3Event } from "h3";
 
+import type { ServerChannel } from "../channel.js";
 import {
   compareCursors,
   cursorOf,
@@ -24,6 +25,8 @@ export interface SyncRouteOptions {
   readonly transport?: SyncTransport | undefined;
   readonly pollIntervalMs?: number | undefined;
   readonly keepAliveMs?: number | undefined;
+  readonly channels?: readonly ServerChannel[] | undefined;
+  readonly clientId?: ((request: Request) => string | undefined) | undefined;
 }
 
 export const DEFAULT_POLL_INTERVAL_MS = 2000;

@@ -1,3 +1,4 @@
+import type { ClientChannel } from "../channel.js";
 import {
   compareCursors,
   cursorOf,
@@ -27,6 +28,7 @@ export interface SyncClientOptions {
   readonly isHidden?: (() => boolean) | undefined;
   readonly setTimeout?: typeof globalThis.setTimeout | undefined;
   readonly clearTimeout?: typeof globalThis.clearTimeout | undefined;
+  readonly channels?: readonly ClientChannel[] | undefined;
 }
 
 export interface SyncClient {

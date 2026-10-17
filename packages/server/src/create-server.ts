@@ -1,3 +1,4 @@
+import type { AgentUiOptions } from "@parlor/agent-ui/server";
 import { ActionError, type ActionMap, type DataProvider } from "@parlor/core";
 import type { ActionRegistry } from "@parlor/core/registry";
 import { registerSyncRoutes, SyncHub, type SyncTransport } from "@parlor/sync/server";
@@ -25,6 +26,7 @@ export interface ServerOptions<T extends ActionMap> {
     | false
     | undefined;
   readonly sync?: SyncOptions | false | undefined;
+  readonly agentUi?: AgentUiOptions | false | undefined;
 }
 
 export interface FrameworkServer {
