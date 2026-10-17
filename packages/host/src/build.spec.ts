@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -26,7 +26,10 @@ describe("buildServer", () => {
     const rootDir = await mkdtemp(join(tmpdir(), "parlor-host-"));
     await writeFile(
       join(rootDir, "server.ts"),
-      `export default { fetch: (request: Request) => Response.json({ path: new URL(request.url).pathname, transport: process.env.PARLOR_SYNC_TRANSPORT ?? "unset" }) };`,
+      [
+        'const transport = (value = process.env.PARLOR_SYNC_TRANSPORT) => value ?? "unset";',
+        "export default { fetch: (request: Request) => Response.json({ path: new URL(request.url).pathname, transport: transport() }) };",
+      ].join("\n"),
     );
     await mkdir(join(rootDir, ".parlor", "web", "assets"), { recursive: true });
     await writeFile(
@@ -41,6 +44,8 @@ describe("buildServer", () => {
       { preset: "node-server" },
     );
     expect(result.syncTransport).toBe("sse");
+    const bundle = await readFile(join(result.outputDir, "server", "index.mjs"), "utf8");
+    expect(bundle).not.toContain("PARLOR_SYNC_TRANSPORT");
 
     const port = 3900 + Math.floor(Math.random() * 100);
     const child = spawn(

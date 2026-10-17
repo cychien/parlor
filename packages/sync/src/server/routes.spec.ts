@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+
 import { createDatabase, type DatabaseHandle } from "@parlor/data";
 import { H3 } from "h3";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -117,9 +119,14 @@ describe("sync routes", () => {
 describe("transportFromEnv", () => {
   it("accepts only sse or poll", async () => {
     const { transportFromEnv } = await import("./routes.js");
-    expect(transportFromEnv({ PARLOR_SYNC_TRANSPORT: "poll" })).toBe("poll");
-    expect(transportFromEnv({ PARLOR_SYNC_TRANSPORT: "sse" })).toBe("sse");
-    expect(transportFromEnv({ PARLOR_SYNC_TRANSPORT: "ws" })).toBeUndefined();
-    expect(transportFromEnv({})).toBeUndefined();
+    expect(transportFromEnv("poll")).toBe("poll");
+    expect(transportFromEnv("sse")).toBe("sse");
+    expect(transportFromEnv("ws")).toBeUndefined();
+    expect(transportFromEnv(undefined)).toBeUndefined();
+  });
+
+  it("reads the literal process.env.PARLOR_SYNC_TRANSPORT so a build can bake it", async () => {
+    const source = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
+    expect(source).toContain("= process.env.PARLOR_SYNC_TRANSPORT");
   });
 });

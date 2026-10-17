@@ -29,9 +29,8 @@ export const DEFAULT_POLL_INTERVAL_MS = 2000;
 const DEFAULT_KEEPALIVE_MS = 25_000;
 
 export function transportFromEnv(
-  env: NodeJS.ProcessEnv = process.env,
+  value: string | undefined = process.env.PARLOR_SYNC_TRANSPORT,
 ): SyncTransport | undefined {
-  const value = env.PARLOR_SYNC_TRANSPORT;
   return value === "sse" || value === "poll" ? value : undefined;
 }
 
