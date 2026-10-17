@@ -81,10 +81,14 @@ export function createServer<T extends ActionMap>(
 
   if (cors !== false) app.use(corsMiddleware(cors));
 
-  app.get(`${basePath}/manifest`, (): Manifest => ({
-    protocol: PROTOCOL_VERSION,
-    actions: actions.describe(),
-  }));
+  app.get(`${basePath}/manifest`, (): Manifest => {
+    const ui = agentUi?.manifest();
+    return {
+      protocol: PROTOCOL_VERSION,
+      actions: actions.describe(),
+      ...(ui ? { ui } : {}),
+    };
+  });
 
   app.post(`${basePath}/actions/:name`, async (event) => {
     const name = event.context.params?.name ?? "";
@@ -124,6 +128,9 @@ export function createServer<T extends ActionMap>(
     registerAgentUiRoutes(app, { basePath, agentUi, scope, clientId: clientOf });
 
   return {
+    ...(agentUi
+      ? { installUiManifest: (source: UiManifestSource) => agentUi.install(source) }
+      : {}),
     fetch: (request) => Promise.resolve(app.fetch(request)),
     close: async () => {
       agentUi?.close();

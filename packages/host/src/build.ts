@@ -1,12 +1,17 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { UI_MANIFEST_FILE } from "@parlor/agent-ui";
 import { GENERATED_DIR, type LoadedConfig } from "@parlor/config";
 import { webOutDir } from "@parlor/shell-web";
 import { build, copyPublicAssets, createNitro, prepare } from "nitro/builder";
 import type { NitroConfig } from "nitro/types";
 
-import { hostEntrySource, INDEX_HTML_PLACEHOLDER } from "./entry.js";
+import {
+  hostEntrySource,
+  INDEX_HTML_PLACEHOLDER,
+  UI_MANIFEST_PLACEHOLDER,
+} from "./entry.js";
 import { type DeployPreset, syncTransportFor } from "./presets.js";
 
 export const SYNC_TRANSPORT_ENV = "PARLOR_SYNC_TRANSPORT";
@@ -41,6 +46,13 @@ export async function buildServer(
   const indexHtml = await readFile(join(webOutDir(rootDir), "index.html"), "utf8").catch(
     () => "",
   );
+  const uiManifest = await readFile(
+    join(rootDir, GENERATED_DIR, UI_MANIFEST_FILE),
+    "utf8",
+  ).then(
+    (text) => JSON.stringify(JSON.parse(text)),
+    () => "undefined",
+  );
 
   await mkdir(hostRoot, { recursive: true });
   const entryPath = join(hostRoot, "entry.mjs");
@@ -59,6 +71,7 @@ export async function buildServer(
     traceDeps: [...TRACED_DEPENDENCIES],
     replace: {
       [INDEX_HTML_PLACEHOLDER]: JSON.stringify(indexHtml),
+      [UI_MANIFEST_PLACEHOLDER]: uiManifest,
       [`process.env.${SYNC_TRANSPORT_ENV}`]: JSON.stringify(syncTransport),
     },
   });

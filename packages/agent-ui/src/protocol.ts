@@ -188,8 +188,13 @@ const isFields = (value: unknown): value is Fields =>
 
 const isString = (value: unknown): value is string => typeof value === "string";
 
+const isBoolean = (value: unknown): value is boolean => typeof value === "boolean";
+
 const isPositiveInteger = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+
+const isStringFields = (value: unknown): value is Readonly<Record<string, string>> =>
+  isFields(value) && Object.values(value).every(isString);
 
 const absentOr = <T>(
   value: unknown,
@@ -205,8 +210,21 @@ function originOf(value: unknown): AgentOrigin | undefined {
 }
 
 function navigateInputOf(value: unknown): UiOpInput<"navigate"> | undefined {
-  void value;
-  throw new Error("not implemented");
+  if (!isFields(value) || !isString(value.to)) return undefined;
+  const { to, params, search, replace } = value;
+  if (
+    !absentOr(params, isStringFields) ||
+    !absentOr(search, isFields) ||
+    !absentOr(replace, isBoolean)
+  ) {
+    return undefined;
+  }
+  return {
+    to,
+    ...(params === undefined ? {} : { params }),
+    ...(search === undefined ? {} : { search }),
+    ...(replace === undefined ? {} : { replace }),
+  };
 }
 
 function requestOf(json: unknown): UiRequest | undefined {

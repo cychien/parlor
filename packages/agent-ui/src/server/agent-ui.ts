@@ -42,18 +42,22 @@ export interface AgentUi {
 
 export const DEFAULT_UI_TIMEOUT_MS = 10_000;
 
-export function webOriginFromEnv(value?: string | undefined): string | undefined {
-  void value;
-  throw new Error("not implemented");
+export function webOriginFromEnv(
+  value: string | undefined = process.env.PARLOR_WEB_ORIGIN,
+): string | undefined {
+  return value && /^https?:\/\//.test(value) ? value : undefined;
 }
 
 export function createAgentUi(options: AgentUiOptions & AgentUiDependencies): AgentUi {
   const external = options.external ?? true;
+  const webOrigin = "webOrigin" in options ? options.webOrigin : webOriginFromEnv();
   const directory = new ClientDirectory();
   const broker = new UiBroker({ timeoutMs: options.timeoutMs ?? DEFAULT_UI_TIMEOUT_MS });
-  const allTools = createUiTools({ directory, broker });
+  const toolsFor = createUiTools({ directory, broker });
+  let source: UiManifestSource = () => undefined;
 
   const tools = (surface: "mcp" | "agent") => {
+    const allTools = toolsFor(source());
     if (surface === "agent" || external === true) return allTools;
     if (external === "read-only") return allTools.filter((tool) => tool.readOnly);
     return [];
@@ -88,16 +92,13 @@ export function createAgentUi(options: AgentUiOptions & AgentUiDependencies): Ag
         scope: request ? await options.scope(request) : "default",
         origin,
         signal,
-        webOrigin: request ? new URL(request.url).origin : undefined,
+        webOrigin: webOrigin ?? (request ? new URL(request.url).origin : undefined),
       };
     },
     instructions: (surface) => (tools(surface).length > 0 ? uiInstructions() : undefined),
-    manifest() {
-      throw new Error("not implemented");
-    },
-    install(source) {
-      void source;
-      throw new Error("not implemented");
+    manifest: () => source(),
+    install(next) {
+      source = next;
     },
     close: () => broker.close(),
   };

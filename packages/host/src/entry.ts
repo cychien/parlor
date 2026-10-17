@@ -10,7 +10,10 @@ export function hostEntrySource({ serverEntry, basePath }: EntryOptions): string
   return `import app from ${JSON.stringify(serverEntry)};
 
 const INDEX_HTML = ${INDEX_HTML_PLACEHOLDER};
+const UI_MANIFEST = ${UI_MANIFEST_PLACEHOLDER};
 const BASE_PATH = ${JSON.stringify(basePath)};
+
+app.installUiManifest?.(() => UI_MANIFEST);
 
 function wantsDocument(request) {
   if (request.method !== "GET") return false;

@@ -55,8 +55,21 @@ export function routeHref(
   params: Readonly<Record<string, string>> | undefined,
   search: Readonly<Record<string, unknown>> | undefined,
 ): string {
-  void route;
-  void params;
-  void search;
-  throw new Error("not implemented");
+  const path = route.path
+    .split("/")
+    .map((segment) => {
+      if (!segment.startsWith("$")) return segment;
+      const value = params?.[segment === "$" ? "_splat" : segment.slice(1)] ?? "";
+      return segment === "$"
+        ? value.split("/").map(encodeURIComponent).join("/")
+        : encodeURIComponent(value);
+    })
+    .join("/");
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(search ?? {})) {
+    if (value === undefined) continue;
+    query.set(key, typeof value === "string" ? value : JSON.stringify(value));
+  }
+  const queryString = query.toString();
+  return queryString ? `${path}?${queryString}` : path;
 }

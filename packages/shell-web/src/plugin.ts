@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
+import { agentManifest, DEFAULT_ROUTE_TREE } from "@parlor/agent-ui/vite";
 import { GENERATED_DIR, type ParlorConfig } from "@parlor/config";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
@@ -8,7 +9,7 @@ import { defaultClientConditions, type PluginOption } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
 export const FRAMEWORK_ROUTE_PREFIX = "/_parlor";
-export const DEFAULT_ROUTE_TREE = "src/routeTree.gen.ts";
+export { DEFAULT_ROUTE_TREE };
 
 export interface WebOptions {
   readonly conditions?: readonly string[] | undefined;
@@ -59,6 +60,15 @@ export function parlorWeb(
   const plugins: PluginOption[] = [
     ...fileRoutes(config, options.root ?? process.cwd()),
     react(),
+    agentManifest({
+      app: {
+        id: config.app.id,
+        name: config.app.name,
+        ...(config.app.description ? { description: config.app.description } : {}),
+        ...(config.app.scheme ? { scheme: config.app.scheme } : {}),
+      },
+      routeTree: routeTreeFile(config),
+    }),
     {
       name: "parlor:web",
       config: () => ({
@@ -69,6 +79,7 @@ export function parlorWeb(
         server: {
           port: config.web.port,
           strictPort: true,
+          watch: { ignored: [`**/${GENERATED_DIR}/**`] },
           proxy: {
             [FRAMEWORK_ROUTE_PREFIX]: `http://localhost:${config.server.port}`,
           },
