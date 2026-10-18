@@ -202,3 +202,59 @@ describe("registry user input", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 });
+
+describe("registry quietly", () => {
+  const interactions = () => {
+    const browser = fakeBrowser();
+    const registry = createViewRegistry(browser.env);
+    const element = browser.document.createElement("div");
+    const input = browser.document.createElement("input");
+    element.appendChild(input);
+    browser.document.body.appendChild(element);
+    const slot = registry.track(note, { get: () => ({ text: "" }) });
+    slot.ref(element);
+    slot.mount(undefined);
+    const fire = (type: string) =>
+      input.dispatchEvent(
+        new browser.window.Event(type, { bubbles: true }) as unknown as Event,
+      );
+    return { browser, registry, element, fire };
+  };
+
+  it("does not record a focus as the user's interaction while the act runs, but does after", async () => {
+    const { registry, fire } = interactions();
+    await registry.quietly(async () => {
+      fire("focusin");
+    });
+    expect(registry.lastInteracted()).toBeUndefined();
+    fire("focusin");
+    expect(registry.lastInteracted()?.view.view.name).toBe("note");
+  });
+
+  it("still records a pointer press, which is always the user", async () => {
+    const { registry, fire } = interactions();
+    await registry.quietly(async () => fire("pointerdown"));
+    expect(registry.lastInteracted()?.view.view.name).toBe("note");
+  });
+
+  it("does not record an element entering the viewport while the act runs", async () => {
+    const { browser, registry, element } = interactions();
+    browser.intersect(element, false);
+    await registry.quietly(async () => browser.intersect(element, true));
+    expect(registry.lastEntered()).toBeUndefined();
+    browser.intersect(element, false);
+    browser.intersect(element, true);
+    expect(registry.lastEntered()?.view.view.name).toBe("note");
+  });
+
+  it("resumes recording when the act throws", async () => {
+    const { registry, fire } = interactions();
+    await expect(
+      registry.quietly(async () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+    fire("focusin");
+    expect(registry.lastInteracted()).toBeDefined();
+  });
+});

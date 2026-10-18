@@ -472,6 +472,26 @@ describe("agent writes in FrameworkProvider", () => {
     expect([filled("Title"), filled("Notes")]).toEqual([false, false]);
   });
 
+  it("points at a field: focuses it and marks it for the app's styling", async () => {
+    const posts = renderForm(
+      agentRequest("h1", "highlight", { view: "composeTask", field: "notes" }),
+    );
+    await waitFor(() =>
+      expect(posts).toContainEqual({
+        type: "reply",
+        id: "h1",
+        ok: true,
+        result: { shown: expect.any(Number) },
+      }),
+    );
+    const notes = screen.getByLabelText("Notes");
+    expect(document.activeElement).toBe(notes);
+    expect(notes.hasAttribute("data-parlor-highlight")).toBe(true);
+    expect(screen.getByLabelText("Title").hasAttribute("data-parlor-highlight")).toBe(
+      false,
+    );
+  });
+
   it("refuses a field the schema rejects and leaves the form alone", async () => {
     const posts = renderForm(write({ title: 42 }));
     await waitFor(() =>

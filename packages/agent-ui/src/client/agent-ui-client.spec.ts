@@ -271,6 +271,31 @@ describe("createAgentUiClient writes", () => {
   });
 });
 
+describe("createAgentUiClient highlight", () => {
+  it("answers a highlight request with how much of the view shows after scrolling", async () => {
+    const { browser, client, replies } = setup();
+    const element = browser.document.createElement("section");
+    browser.document.body.appendChild(element);
+    browser.setRect(element, 2000, 100);
+    browser.onScroll((scrolled) => browser.setRect(scrolled, 250, 100));
+    const slot = client.views.track(note, { get: () => ({ text: "draft" }) });
+    slot.ref(element);
+    slot.mount(undefined);
+    client.receive(request("h1", "highlight", { view: "note" }));
+    await vi.waitFor(() => expect(replies()).toHaveLength(1));
+    expect(replies()).toEqual([
+      { type: "reply", id: "h1", ok: true, result: { shown: 1 } },
+    ]);
+  });
+
+  it("answers not_mounted for a view that is not on screen", async () => {
+    const { client, replies, settle } = setup();
+    client.receive(request("h1", "highlight", { view: "nope" }));
+    await settle();
+    expect(replies()[0]).toMatchObject({ ok: false, error: { code: "not_mounted" } });
+  });
+});
+
 describe("createAgentUiClient activity", () => {
   it("is busy while a request runs and remembers the last operation", async () => {
     const { client, settle } = setup();

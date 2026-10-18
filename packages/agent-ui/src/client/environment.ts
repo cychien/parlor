@@ -30,6 +30,16 @@ export interface BrowserEnvironment {
   readonly nextTask: () => Promise<void>;
   readonly setTimeout: typeof globalThis.setTimeout;
   readonly clearTimeout: typeof globalThis.clearTimeout;
+  readonly scrollIntoView: (element: Element) => Promise<void>;
+}
+
+export const SCROLL_SETTLE_CAP_MS = 900;
+
+export function scrollIntoCenter(
+  _window: (Window & typeof globalThis) | undefined,
+  _element: Element,
+): Promise<void> {
+  throw new Error("not implemented");
 }
 
 export function browserEnvironment(): BrowserEnvironment {
@@ -58,5 +68,6 @@ export function browserEnvironment(): BrowserEnvironment {
       }),
     setTimeout: globalThis.setTimeout.bind(globalThis),
     clearTimeout: globalThis.clearTimeout.bind(globalThis),
+    scrollIntoView: (element) => scrollIntoCenter(window, element),
   };
 }

@@ -116,3 +116,35 @@ describe("parseUiRequest set", () => {
     });
   });
 });
+
+describe("parseUiRequest highlight", () => {
+  it("reads a highlight request with its optional key and field", () => {
+    const input = { view: "task", key: "t1", field: "notes" };
+    expect(
+      parse({ ...envelope, op: "highlight", input: { ...input, extra: 1 } }),
+    ).toEqual({
+      ok: true,
+      request: { ...envelope, op: "highlight", input },
+    });
+    expect(parse({ ...envelope, op: "highlight", input: { view: "form" } })).toEqual({
+      ok: true,
+      request: { ...envelope, op: "highlight", input: { view: "form" } },
+    });
+  });
+
+  it.each([
+    ["a missing view", { field: "notes" }],
+    ["a non-string view", { view: 1 }],
+    ["a non-string key", { view: "f", key: 1 }],
+    ["a non-string field", { view: "f", field: 1 }],
+  ])("rejects %s while reading the same request with a valid input", (_, input) => {
+    expect(parse({ ...envelope, op: "highlight", input })).toEqual({
+      ok: false,
+      id: "r1",
+    });
+    expect(parse({ ...envelope, op: "highlight", input: { view: "f" } })).toEqual({
+      ok: true,
+      request: { ...envelope, op: "highlight", input: { view: "f" } },
+    });
+  });
+});

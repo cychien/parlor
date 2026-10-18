@@ -17,6 +17,11 @@ export interface UiOpInputs {
     readonly key?: string | undefined;
     readonly value: JsonObject;
   };
+  readonly highlight: {
+    readonly view: string;
+    readonly key?: string | undefined;
+    readonly field?: string | undefined;
+  };
 }
 
 export type UiOp = keyof UiOpInputs;
@@ -27,6 +32,7 @@ export interface UiOpResults {
   readonly screen: ScreenSnapshot;
   readonly navigate: { readonly screen: ScreenSnapshot };
   readonly set: { readonly value: JsonObject; readonly agentFields: readonly string[] };
+  readonly highlight: { readonly shown: number };
 }
 
 interface UiOpSpec<O extends UiOp> {
@@ -38,6 +44,7 @@ export const uiOps: { readonly [O in UiOp]: UiOpSpec<O> } = {
   screen: { readOnly: true, input: (value) => (isFields(value) ? {} : undefined) },
   navigate: { readOnly: false, input: (value) => navigateInputOf(value) },
   set: { readOnly: false, input: (value) => setInputOf(value) },
+  highlight: { readOnly: false, input: () => undefined },
 };
 
 export const UI_OPS = Object.keys(uiOps) as readonly UiOp[];
@@ -46,6 +53,7 @@ export const uiOpReadOnly: { readonly [O in UiOp]: boolean } = {
   screen: uiOps.screen.readOnly,
   navigate: uiOps.navigate.readOnly,
   set: uiOps.set.readOnly,
+  highlight: uiOps.highlight.readOnly,
 };
 
 export interface AgentOrigin {

@@ -137,7 +137,9 @@ async function openBrowser(
               value: request.input.value,
               agentFields: Object.keys(request.input.value ?? {}),
             }
-          : screen(path);
+          : request.op === "highlight"
+            ? { shown: 1 }
+            : screen(path);
     const answered = await post(
       target,
       "/_parlor/ui",
@@ -220,6 +222,7 @@ describe("agent UI over MCP", () => {
       "ui_screen",
       "ui_navigate",
       "ui_set",
+      "ui_highlight",
     ]);
     const uiScreen = tools.find((t) => t.name === "ui_screen");
     expect(uiScreen?.annotations?.readOnlyHint).toBe(true);
@@ -282,11 +285,24 @@ describe("agent UI over MCP", () => {
       "ui_screen",
       "ui_navigate",
       "ui_set",
+      "ui_highlight",
     ]);
     const description = tools.find((t) => t.name === "ui_set")?.description;
     expect(description).toContain("- profile: A profile. Fields: name.");
     expect(description).not.toContain("- form:");
     expect((await client.callTool({ name: "hello", arguments: {} })).isError).toBeFalsy();
+  });
+
+  it("describes ui_highlight and keeps it out of the read-only set", async () => {
+    const { tools } = await (await mcp()).listTools();
+    const uiHighlight = tools.find((t) => t.name === "ui_highlight");
+    expect(uiHighlight?.annotations?.readOnlyHint).toBe(false);
+    expect(uiHighlight?.description).toContain("into the middle of the screen");
+    expect(uiHighlight?.description).toContain("for two seconds");
+    expect(uiHighlight?.inputSchema).toMatchObject({
+      required: ["view"],
+      properties: { field: { type: "string" }, key: { type: "string" } },
+    });
   });
 
   it("serves the full manifest as an MCP resource and over HTTP", async () => {
@@ -367,6 +383,35 @@ describe("agent UI over MCP", () => {
         input: { view: "newTask", value: { title: "Buy stamps" } },
       }),
     ]);
+  });
+
+  it("points at a view on the selected client and refuses to guess between tied clients", async () => {
+    const client = await mcp();
+    const tab = await openBrowser("tab-h", "/");
+    await tab.presence(true, true);
+    const result = await client.callTool({
+      name: "ui_highlight",
+      arguments: { view: "task", key: "t1", field: "notes" },
+    });
+    expect(result.structuredContent).toEqual({
+      client: expect.objectContaining({ id: "tab-h" }),
+      shown: 1,
+    });
+    expect(tab.requests).toEqual([
+      expect.objectContaining({
+        op: "highlight",
+        input: { view: "task", key: "t1", field: "notes" },
+      }),
+    ]);
+    const other = await openBrowser("tab-i", "/");
+    await other.presence(true, true);
+    const tied = await client.callTool({
+      name: "ui_highlight",
+      arguments: { view: "task" },
+    });
+    expect(JSON.parse((tied.content as { text: string }[])[0]!.text)).toMatchObject({
+      error: { code: "ambiguous_client" },
+    });
   });
 
   it("refuses to write to one of several tied clients and answers no_client when none is open", async () => {
@@ -650,7 +695,7 @@ describe("external agent policy", () => {
   };
 
   it("exposes UI tools by default, read-only tools for read-only, and none when off", async () => {
-    const all = ["hello", "ui_screen", "ui_navigate", "ui_set"];
+    const all = ["hello", "ui_screen", "ui_navigate", "ui_set", "ui_highlight"];
     expect(await toolNames(undefined)).toEqual(all);
     expect(await toolNames({ external: true })).toEqual(all);
     expect(await toolNames({ external: "read-only" })).toEqual(["hello", "ui_screen"]);

@@ -18,6 +18,7 @@ import {
 } from "../protocol.js";
 import { type AnyAgentView } from "../view.js";
 import { type BrowserEnvironment, browserEnvironment } from "./environment.js";
+import { createHighlightMarks, highlightView } from "./highlight.js";
 import { createViewRegistry, type ViewRegistry, type ViewSlot } from "./registry.js";
 import { captureScreen, DEFAULT_SCREEN_LIMITS, type ScreenLimits } from "./screen.js";
 import { setView } from "./write.js";
@@ -130,6 +131,7 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
     },
   };
   const activity = createActivityStore();
+  const marks = createHighlightMarks(env);
   const replies = new Map<string, UiReply>();
   const queued = new Set<string>();
   const queue: UiRequest[] = [];
@@ -244,6 +246,10 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
         }
         case "set": {
           const outcome = await setView(registry, request.input, env);
+          return "code" in outcome ? fail(outcome) : ok(outcome);
+        }
+        case "highlight": {
+          const outcome = await highlightView(registry, request.input, env, marks);
           return "code" in outcome ? fail(outcome) : ok(outcome);
         }
       }
@@ -394,6 +400,7 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
       registry.resume();
       return () => {
         registry.dispose();
+        marks.dispose();
         detachPresence();
       };
     },

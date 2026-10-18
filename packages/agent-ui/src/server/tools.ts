@@ -51,6 +51,10 @@ export interface NavigateToolResult {
 
 export type SetToolResult = UiOpResults["set"] & { readonly client: ClientSummary };
 
+export type HighlightToolResult = UiOpResults["highlight"] & {
+  readonly client: ClientSummary;
+};
+
 export interface UnreachableResult {
   readonly reachable: false;
   readonly reason: "no_client";
@@ -305,7 +309,22 @@ export function createUiTools(
       },
     });
 
-    const byOp: { readonly [O in UiOp]: AgentTool } = { screen, navigate, set };
+    const highlight = defineTool({
+      name: toolName("highlight"),
+      description: "",
+      input: uiOpInputs.highlight.extend({ clientId: clientIdInput }),
+      readOnly: uiOpReadOnly.highlight,
+      async run(_input, _ctx) {
+        throw new Error("not implemented");
+      },
+    });
+
+    const byOp: { readonly [O in UiOp]: AgentTool } = {
+      screen,
+      navigate,
+      set,
+      highlight,
+    };
     return UI_OPS.map((op) => byOp[op]);
   };
 

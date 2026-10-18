@@ -26,6 +26,14 @@ export const uiOpInputs = {
       .record(z.string(), z.unknown())
       .describe("The fields to write; others keep their current value."),
   }),
+  highlight: z.object({
+    view: z.string().describe("A view's name, as ui_screen reports it."),
+    key: z.string().optional().describe("The item's key, for a keyed view."),
+    field: z
+      .string()
+      .optional()
+      .describe("A field inside the view to focus, by its input name."),
+  }),
 };
 
 const errorSchema = z.object({

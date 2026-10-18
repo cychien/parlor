@@ -57,6 +57,7 @@ export interface RegistryReader {
 
 export interface ViewRegistryRuntime extends ViewRegistry, RegistryReader {
   remember(mounted: MountedView, values: Readonly<Record<string, unknown>>): void;
+  quietly<T>(act: () => Promise<T>): Promise<T>;
   restore(mounted: MountedView, writes: AgentWrites): void;
   awaitingObserver(): boolean;
   observed(): Promise<void>;
@@ -248,6 +249,9 @@ export function createViewRegistry(env: BrowserEnvironment): ViewRegistryRuntime
       );
       if (entries.length === 0) return;
       replaceWrites(target, new Map([...target.writes, ...entries]));
+    },
+    quietly() {
+      throw new Error("not implemented");
     },
     restore: (mounted, writes) => replaceWrites(mounted as Mounted, writes),
     *singles() {

@@ -43,7 +43,7 @@ interface Measured {
 const encoder = new TextEncoder();
 const bytesOf = (json: string) => encoder.encode(json).byteLength;
 
-function measure(
+export function measure(
   element: Element,
   env: BrowserEnvironment,
 ): { shown: number; score: number } {
