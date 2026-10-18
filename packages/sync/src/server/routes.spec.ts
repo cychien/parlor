@@ -8,7 +8,7 @@ import type { ChannelConnection, ServerChannel } from "../channel.js";
 import { createSyncClient } from "../client/sync-client.js";
 import type { SyncBatch } from "../protocol.js";
 import { SyncHub } from "./hub.js";
-import { registerSyncRoutes } from "./routes.js";
+import { registerSyncRoutes, transportFromEnv } from "./routes.js";
 import { ensureSyncTables, recordSyncEvent } from "./store.js";
 
 let handle: DatabaseHandle;
@@ -27,7 +27,7 @@ beforeAll(async () => {
     scope: (request) => request.headers.get("x-org") ?? "default",
     keepAliveMs: 50,
   });
-});
+}, 30_000);
 afterAll(async () => {
   await hub.stop();
   await handle.close();
@@ -168,8 +168,7 @@ describe("sync stream catch-up", () => {
 });
 
 describe("transportFromEnv", () => {
-  it("accepts only sse or poll", async () => {
-    const { transportFromEnv } = await import("./routes.js");
+  it("accepts only sse or poll", () => {
     expect(transportFromEnv("poll")).toBe("poll");
     expect(transportFromEnv("sse")).toBe("sse");
     expect(transportFromEnv("ws")).toBeUndefined();

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { parsePort } from "./commands/dev.js";
 import { parseTarget, resolveHandler, type TargetHandler } from "./targets.js";
 
 describe("parseTarget", () => {
@@ -30,8 +31,7 @@ describe("resolveHandler", () => {
 });
 
 describe("parsePort", () => {
-  it("accepts a valid port and rejects garbage", async () => {
-    const { parsePort } = await import("./commands/dev.js");
+  it("accepts a valid port and rejects garbage", () => {
     expect(parsePort(undefined)).toBeUndefined();
     expect(parsePort("5188")).toBe(5188);
     expect(() => parsePort("abc")).toThrow(/Invalid --port/);
