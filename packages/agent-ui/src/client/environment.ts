@@ -31,6 +31,7 @@ export interface BrowserEnvironment {
   readonly setTimeout: typeof globalThis.setTimeout;
   readonly clearTimeout: typeof globalThis.clearTimeout;
   readonly scrollIntoView: (element: Element) => Promise<void>;
+  readonly hasFinePointer: () => boolean;
 }
 
 export const SCROLL_SETTLE_CAP_MS = 900;
@@ -102,5 +103,6 @@ export function browserEnvironment(): BrowserEnvironment {
     setTimeout: globalThis.setTimeout.bind(globalThis),
     clearTimeout: globalThis.clearTimeout.bind(globalThis),
     scrollIntoView: (element) => scrollIntoCenter(window, element),
+    hasFinePointer: () => true,
   };
 }

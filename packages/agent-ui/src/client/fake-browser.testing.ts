@@ -16,6 +16,7 @@ export interface FakeBrowser {
   scrolled(): readonly Element[];
   onScroll(handler: (element: Element) => void | Promise<void>): void;
   tick(ms: number): void;
+  setFinePointer(fine: boolean): void;
 }
 
 export function fakeBrowser(viewport = { width: 800, height: 600 }): FakeBrowser {
@@ -27,6 +28,7 @@ export function fakeBrowser(viewport = { width: 800, height: 600 }): FakeBrowser
   let scrollHandler: ((element: Element) => void | Promise<void>) | undefined;
   let callback: ((entries: readonly IntersectionEntryLike[]) => void) | undefined;
   let now = 10_000;
+  let finePointer = true;
   const env: BrowserEnvironment = {
     document,
     window: window as unknown as Window & typeof globalThis,
@@ -49,6 +51,7 @@ export function fakeBrowser(viewport = { width: 800, height: 600 }): FakeBrowser
       scrolled.push(element);
       await scrollHandler?.(element);
     },
+    hasFinePointer: () => finePointer,
   };
   return {
     env,
@@ -74,6 +77,9 @@ export function fakeBrowser(viewport = { width: 800, height: 600 }): FakeBrowser
     },
     tick(ms) {
       now += ms;
+    },
+    setFinePointer(fine) {
+      finePointer = fine;
     },
   };
 }

@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { SCROLL_SETTLE_CAP_MS, scrollIntoCenter } from "./environment.js";
+import {
+  browserEnvironment,
+  SCROLL_SETTLE_CAP_MS,
+  scrollIntoCenter,
+} from "./environment.js";
 
 type Frame = () => void;
 
@@ -81,5 +85,31 @@ describe("scrollIntoCenter", () => {
     await frame(SCROLL_SETTLE_CAP_MS);
     await done;
     expect(settled()).toBe(true);
+  });
+});
+
+describe("browserEnvironment hasFinePointer", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const withPointer = (pointer: "fine" | "coarse" | "none") => {
+    vi.stubGlobal("window", {
+      matchMedia: (query: string) => ({ matches: query === `(pointer: ${pointer})` }),
+    });
+    return browserEnvironment().hasFinePointer();
+  };
+
+  it("is true for a mouse or trackpad", () => {
+    expect(withPointer("fine")).toBe(true);
+  });
+
+  it.each(["coarse", "none"] as const)(
+    "is false when the primary pointer is %s",
+    (pointer) => {
+      expect(withPointer(pointer)).toBe(false);
+    },
+  );
+
+  it("is false without a window", () => {
+    expect(browserEnvironment().hasFinePointer()).toBe(false);
   });
 });

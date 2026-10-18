@@ -6,11 +6,13 @@ import { defineAgentView } from "../view.js";
 import { fakeBrowser } from "./fake-browser.testing.js";
 import { createHighlightMarks, HIGHLIGHT_ATTRIBUTE, highlightView } from "./highlight.js";
 import { createViewRegistry } from "./registry.js";
+import { setView } from "./write.js";
 
 const form = defineAgentView({
   name: "form",
   description: "A form.",
   schema: z.object({ title: z.string(), notes: z.string() }),
+  writable: ["title", "notes"],
 });
 const row = defineAgentView({
   name: "row",
@@ -37,9 +39,13 @@ function setup() {
     element.append(title, notes);
     browser.document.body.appendChild(element);
     browser.setRect(element, 300, 100);
+    const state = { value: { title: "", notes: "" } };
     const slot = registry.track(view, {
       ...(key === undefined ? {} : { key }),
-      get: () => ({ title: "", notes: "" }),
+      get: () => state.value,
+      set: (next) => {
+        state.value = next as typeof state.value;
+      },
     });
     slot.ref(element);
     slot.mount(key);
@@ -98,6 +104,16 @@ describe("highlightView", () => {
     expect(browser.document.activeElement).toBe(notes);
     expect(notes.hasAttribute(HIGHLIGHT_ATTRIBUTE)).toBe(true);
     expect(element.hasAttribute(HIGHLIGHT_ATTRIBUTE)).toBe(false);
+    expect(browser.scrolled()).toEqual([notes]);
+  });
+
+  it("points at a field without focusing it when the primary pointer is not fine, so no software keyboard opens", async () => {
+    const { browser, mount, run } = setup();
+    const { notes } = mount(form);
+    browser.setFinePointer(false);
+    expect(await run({ view: "form", field: "notes" })).toEqual({ shown: 0 });
+    expect(browser.document.activeElement).not.toBe(notes);
+    expect(notes.hasAttribute(HIGHLIGHT_ATTRIBUTE)).toBe(true);
     expect(browser.scrolled()).toEqual([notes]);
   });
 
@@ -206,6 +222,71 @@ describe("highlightView", () => {
     expect(registry.lastEntered()).toBeUndefined();
     notes.dispatchEvent(new browser.window.FocusEvent("focusin", { bubbles: true }));
     expect(registry.lastInteracted()).toBeDefined();
+  });
+});
+
+describe("the focus ui_highlight places", () => {
+  async function pointAtNotes() {
+    const world = setup();
+    const mounted = world.mount(form);
+    vi.spyOn(world.browser.document, "hasFocus").mockReturnValue(true);
+    await world.run({ view: "form", field: "notes" });
+    const write = (value: Record<string, unknown>) =>
+      setView(world.registry, { view: "form", value }, world.browser.env);
+    return { ...world, ...mounted, write };
+  }
+
+  it("is not the user typing: the agent can fill the fields it pointed at", async () => {
+    const { write } = await pointAtNotes();
+    expect(
+      await write({ title: "After pointing", notes: "written after pointing" }),
+    ).toEqual({
+      value: { title: "After pointing", notes: "written after pointing" },
+      agentFields: ["title", "notes"],
+    });
+  });
+
+  it("is not the user typing: the agent can point at another field next", async () => {
+    const { browser, run, title } = await pointAtNotes();
+    expect(await run({ view: "form", field: "title" })).toEqual({ shown: 0 });
+    expect(browser.document.activeElement).toBe(title);
+  });
+
+  it.each(["pointerdown", "keydown", "input"])(
+    "becomes the user's once they %s in it, and the agent is refused again",
+    async (type) => {
+      const { browser, run, notes, write } = await pointAtNotes();
+      notes.dispatchEvent(new browser.window.Event(type, { bubbles: true }));
+      expect(await write({ notes: "agent again" })).toMatchObject({
+        code: "user_editing",
+        issues: [{ path: "notes" }],
+      });
+      expect(await run({ view: "form", field: "title" })).toMatchObject({
+        code: "user_editing",
+      });
+    },
+  );
+
+  it("does not take over the field the user is already typing in", async () => {
+    const { browser, run, notes, write } = await pointAtNotes();
+    notes.dispatchEvent(new browser.window.Event("keydown", { bubbles: true }));
+    expect(await run({ view: "form", field: "notes" })).toEqual({ shown: 0 });
+    expect(await write({ notes: "agent again" })).toMatchObject({ code: "user_editing" });
+  });
+
+  it("stays the agent's when the user touches another element", async () => {
+    const { browser, title, write } = await pointAtNotes();
+    title.dispatchEvent(new browser.window.Event("pointerdown", { bubbles: true }));
+    expect(await write({ notes: "still fine" })).toMatchObject({
+      agentFields: ["notes"],
+    });
+  });
+
+  it("becomes the user's when they move focus to it themselves", async () => {
+    const { title, notes, write } = await pointAtNotes();
+    title.focus();
+    notes.focus();
+    expect(await write({ notes: "agent again" })).toMatchObject({ code: "user_editing" });
   });
 });
 
