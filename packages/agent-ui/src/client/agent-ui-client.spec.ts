@@ -348,8 +348,20 @@ describe("createAgentUiClient presence", () => {
     browser.window.dispatchEvent(new browser.window.Event("blur"));
     await settle();
     expect(sent).toEqual([
-      { type: "presence", focused: false, visible: true, platform: "web" },
-      { type: "presence", focused: true, visible: true, platform: "web" },
+      {
+        type: "presence",
+        focused: false,
+        visible: true,
+        platform: "web",
+        ops: ["screen", "navigate", "set", "highlight"],
+      },
+      {
+        type: "presence",
+        focused: true,
+        visible: true,
+        platform: "web",
+        ops: ["screen", "navigate", "set", "highlight"],
+      },
     ]);
   });
 });

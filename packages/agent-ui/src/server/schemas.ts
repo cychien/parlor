@@ -61,6 +61,7 @@ export const clientMessageSchema = z.union([
     visible: z.boolean(),
     platform: z.string(),
     buildId: z.string().optional(),
+    ops: z.array(z.string()).optional(),
   }),
   z.object({ type: z.literal("leave") }),
 ]);

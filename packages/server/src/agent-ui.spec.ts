@@ -33,6 +33,8 @@ const screen = (path: string) => ({
   truncated: false,
 });
 
+const ALL_OPS = ["screen", "navigate", "set", "highlight"];
+
 let database: DatabaseHandle;
 let server: FrameworkServer;
 const closers: (() => Promise<void> | void)[] = [];
@@ -174,8 +176,18 @@ async function openBrowser(
   return {
     requests,
     via,
-    presence: (focused: boolean, visible: boolean, platform = "web") =>
-      post(target, "/_parlor/ui", { type: "presence", focused, visible, platform }, id),
+    presence: (
+      focused: boolean,
+      visible: boolean,
+      platform = "web",
+      ops: readonly string[] | null = ALL_OPS,
+    ) =>
+      post(
+        target,
+        "/_parlor/ui",
+        { type: "presence", focused, visible, platform, ...(ops ? { ops } : {}) },
+        id,
+      ),
     leave: () => post(target, "/_parlor/ui", { type: "leave" }, id),
   };
 }
@@ -382,6 +394,42 @@ describe("agent UI over MCP", () => {
         op: "set",
         input: { view: "newTask", value: { title: "Buy stamps" } },
       }),
+    ]);
+  });
+
+  it("refuses ui_set and ui_highlight with unsupported_op for an app that predates them, and keeps screen and navigate working", async () => {
+    const tab = await openBrowser("old-tab", "/");
+    await tab.presence(true, true, "tauri", null);
+    const client = await mcp();
+    const refusals = await Promise.all([
+      client.callTool({
+        name: "ui_set",
+        arguments: { view: "newTask", value: { title: "x" } },
+      }),
+      client.callTool({ name: "ui_highlight", arguments: { view: "newTask" } }),
+    ]);
+    const errors = refusals.map((result) => {
+      expect(result.isError).toBe(true);
+      const text = (result.content as { text: string }[])[0]!.text;
+      return (JSON.parse(text) as { error: { code: string; message: string } }).error;
+    });
+    expect(errors.map((error) => error.code)).toEqual([
+      "unsupported_op",
+      "unsupported_op",
+    ]);
+    expect(errors[0]!.message).toContain("ui_set");
+    expect(errors[1]!.message).toContain("ui_highlight");
+    for (const error of errors) expect(error.message).toContain("old-tab");
+    const read = await client.callTool({ name: "ui_screen", arguments: {} });
+    expect(read.isError).toBeFalsy();
+    const navigated = await client.callTool({
+      name: "ui_navigate",
+      arguments: { to: "/settings" },
+    });
+    expect(navigated.isError).toBeFalsy();
+    expect(tab.requests.map((request) => (request as { op: string }).op)).toEqual([
+      "screen",
+      "navigate",
     ]);
   });
 

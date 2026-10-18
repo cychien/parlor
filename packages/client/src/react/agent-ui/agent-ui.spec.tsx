@@ -148,6 +148,7 @@ describe("agent UI in FrameworkProvider", () => {
       focused: expect.any(Boolean),
       visible: true,
       platform: "web",
+      ops: ["screen", "navigate", "set", "highlight"],
     });
     await waitFor(() =>
       expect(screen.getByRole("status").textContent).toBe("agent did screen"),

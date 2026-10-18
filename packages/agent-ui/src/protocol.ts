@@ -115,6 +115,7 @@ export interface PresenceUpdate {
   readonly visible: boolean;
   readonly platform: string;
   readonly buildId?: string | undefined;
+  readonly ops?: readonly string[] | undefined;
 }
 
 export interface LeaveNotice {
