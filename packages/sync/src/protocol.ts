@@ -2,6 +2,14 @@ import type { Tag } from "@parlor/core";
 
 export const SYNC_PROTOCOL_VERSION = 1;
 export const SYNC_CHANNEL = "parlor_sync";
+export const DEFAULT_KEEP_ALIVE_MS = 10_000;
+export const LEGACY_KEEP_ALIVE_MS = 25_000;
+
+const STREAM_LIVENESS_MARGIN_MS = 5000;
+
+export function streamLivenessMs(keepAliveMs: number): number {
+  return keepAliveMs * 2 + STREAM_LIVENESS_MARGIN_MS;
+}
 
 export interface SyncEvent {
   readonly version: number;

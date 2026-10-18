@@ -5,10 +5,12 @@ import {
   decodeCursor,
   encodeCursor,
   INITIAL_CURSOR,
+  LEGACY_KEEP_ALIVE_MS,
   type SyncBatch,
   type SyncCursor,
   type SyncEvent,
   type SyncNegotiation,
+  streamLivenessMs,
 } from "../protocol.js";
 import { readSse } from "./sse.js";
 
@@ -46,14 +48,26 @@ const DEFAULTS = {
   reconnectMaxMs: 30_000,
 };
 
-function advertised(handshake: string): readonly string[] {
+interface Handshake {
+  readonly capabilities: readonly string[];
+  readonly keepAliveMs: number | undefined;
+}
+
+function parseHandshake(handshake: string): Handshake {
   try {
-    const { capabilities } = JSON.parse(handshake) as { capabilities?: unknown };
-    return Array.isArray(capabilities)
-      ? capabilities.filter((c): c is string => typeof c === "string")
-      : [];
+    const { capabilities, keepAliveMs } = JSON.parse(handshake) as {
+      capabilities?: unknown;
+      keepAliveMs?: unknown;
+    };
+    return {
+      capabilities: Array.isArray(capabilities)
+        ? capabilities.filter((c): c is string => typeof c === "string")
+        : [],
+      keepAliveMs:
+        typeof keepAliveMs === "number" && keepAliveMs > 0 ? keepAliveMs : undefined,
+    };
   } catch {
-    return [];
+    return { capabilities: [], keepAliveMs: undefined };
   }
 }
 
@@ -146,20 +160,32 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
   };
 
   const stream = async (endpoint: string) => {
-    controller = new AbortController();
-    const response = await options.request(
-      `${endpoint}?since=${encodeURIComponent(since())}`,
-      {
-        headers: { accept: "text/event-stream" },
-        signal: controller.signal,
-      },
-    );
-    if (!response.ok || !response.body) {
-      throw new Error(`sync stream failed with HTTP ${response.status}`);
-    }
-    reconnectDelay = settings.reconnectBaseMs;
+    const own = new AbortController();
+    controller = own;
+    let keepAliveMs = LEGACY_KEEP_ALIVE_MS;
+    let silent = false;
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    const rearm = () => {
+      if (watchdog !== undefined) cancel(watchdog);
+      watchdog = schedule(() => {
+        silent = true;
+        own.abort();
+      }, streamLivenessMs(keepAliveMs));
+    };
     const open = new Set<ClientChannel>();
+    rearm();
     try {
+      const response = await options.request(
+        `${endpoint}?since=${encodeURIComponent(since())}`,
+        {
+          headers: { accept: "text/event-stream" },
+          signal: own.signal,
+        },
+      );
+      if (!response.ok || !response.body) {
+        throw new Error(`sync stream failed with HTTP ${response.status}`);
+      }
+      reconnectDelay = settings.reconnectBaseMs;
       await readSse(
         response.body,
         (frame) => {
@@ -171,7 +197,10 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
             return;
           }
           if (frame.event === "handshake") {
-            for (const event of advertised(frame.data)) {
+            const handshake = parseHandshake(frame.data);
+            keepAliveMs = handshake.keepAliveMs ?? LEGACY_KEEP_ALIVE_MS;
+            rearm();
+            for (const event of handshake.capabilities) {
               const channel = channels.get(event);
               if (!channel || open.has(channel)) continue;
               open.add(channel);
@@ -182,9 +211,13 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
           const channel = channels.get(frame.event);
           if (channel && open.has(channel)) guarded(() => channel.receive(frame.data));
         },
-        controller.signal,
+        own.signal,
+        rearm,
       );
+    } catch (error) {
+      if (!silent) throw error;
     } finally {
+      if (watchdog !== undefined) cancel(watchdog);
       for (const channel of open) guarded(() => channel.closed());
     }
   };

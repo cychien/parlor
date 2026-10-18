@@ -6,6 +6,7 @@ import {
   compareCursors,
   cursorOf,
   decodeCursor,
+  DEFAULT_KEEP_ALIVE_MS,
   encodeCursor,
   type SyncBatch,
   type SyncEvent,
@@ -30,7 +31,6 @@ export interface SyncRouteOptions {
 }
 
 export const DEFAULT_POLL_INTERVAL_MS = 2000;
-const DEFAULT_KEEPALIVE_MS = 25_000;
 
 export function transportFromEnv(
   value: string | undefined = process.env.PARLOR_SYNC_TRANSPORT,
@@ -48,7 +48,7 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
   const transport: SyncTransport =
     options.transport ?? transportFromEnv() ?? (hub.canPush ? "sse" : "poll");
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
-  const keepAliveMs = options.keepAliveMs ?? DEFAULT_KEEPALIVE_MS;
+  const keepAliveMs = options.keepAliveMs ?? DEFAULT_KEEP_ALIVE_MS;
   const db = () => data.read() as SyncDatabase;
   const channels = options.channels ?? [];
   const capabilities = channels.map((channel) => channel.event);
@@ -102,7 +102,11 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
 
     void stream.push({
       event: "handshake",
-      data: JSON.stringify({ protocol: SYNC_PROTOCOL_VERSION, capabilities }),
+      data: JSON.stringify({
+        protocol: SYNC_PROTOCOL_VERSION,
+        capabilities,
+        keepAliveMs,
+      }),
     });
     const clientId = options.clientId?.(event.req);
     for (const channel of channels) {
