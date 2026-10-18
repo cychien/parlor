@@ -119,8 +119,26 @@ function navigateDescription(manifest: UiManifest | undefined): string {
   );
 }
 
-function setDescription(_manifest: UiManifest | undefined): string {
-  return "";
+function writableCatalog(manifest: UiManifest | undefined): string {
+  const lines = (manifest?.views ?? [])
+    .filter((view) => view.writable.length > 0)
+    .map(
+      (view) =>
+        `- ${view.name}${view.keyed ? " (keyed)" : ""}: ${sentence(view.description)} Fields: ${view.writable.join(", ")}.`,
+    );
+  return lines.length === 0 ? "" : `\n\nForms you can fill:\n${lines.join("\n")}`;
+}
+
+function setDescription(manifest: UiManifest | undefined): string {
+  return (
+    [
+      "Fill fields of a form the user sees, as a proposal: the user reviews it and submits it themselves. Call the matching action instead only when the user explicitly asks you to submit.",
+      "value is merged into the view's current value field by field; fields you omit keep what the user typed.",
+      "Returns the view's value read back from the screen and agentFields, the fields that still hold what you wrote; a field missing from agentFields was changed by the user.",
+      "Refuses with not_mounted, not_writable, user_editing (the user is typing in that field: wait or ask), invalid_value (issues name the fields), or ambiguous_client.",
+      "Returns reachable: false when the app is not open.",
+    ].join(" ") + writableCatalog(manifest)
+  );
 }
 
 function routeEnum(manifest: UiManifest | undefined) {
@@ -169,6 +187,22 @@ export function createUiTools(
   deps: UiToolDeps,
 ): (manifest: UiManifest | undefined) => readonly AgentTool[] {
   const { directory, broker } = deps;
+  const refuseTie = (selection: Selection) => {
+    if (selection.tied.length === 0) return;
+    const candidates = [selection.target.client, ...selection.tied];
+    throw new UiFailure({
+      code: "ambiguous_client",
+      message:
+        "The user has several app clients open and none stands out. Ask which one, then retry with clientId.",
+      issues: candidates.map((client) => {
+        const summary = directory.summary(client);
+        return {
+          path: "clientId",
+          message: `${summary.id} (${summary.platform}, ${summary.focused ? "focused" : "not focused"}, ${summary.visible ? "visible" : "hidden"}, seen ${summary.seenAgoMs} ms ago)`,
+        };
+      }),
+    });
+  };
   const select = (ctx: AgentToolContext, clientId: string | undefined) => {
     const wanted = clientId ?? ctx.clientId;
     if (wanted !== undefined && !directory.connected(ctx.scope, wanted)) {
@@ -225,21 +259,7 @@ export function createUiTools(
           );
           return { ...UNREACHABLE, href: hrefFor(href, ctx.webOrigin) };
         }
-        if (selection.tied.length > 0) {
-          const candidates = [selection.target.client, ...selection.tied];
-          throw new UiFailure({
-            code: "ambiguous_client",
-            message:
-              "The user has several app clients open and none stands out. Ask which one, then retry with clientId.",
-            issues: candidates.map((client) => {
-              const summary = directory.summary(client);
-              return {
-                path: "clientId",
-                message: `${summary.id} (${summary.platform}, ${summary.focused ? "focused" : "not focused"}, ${summary.visible ? "visible" : "hidden"}, seen ${summary.seenAgoMs} ms ago)`,
-              };
-            }),
-          });
-        }
+        refuseTie(selection);
         const input = {
           to,
           ...(params ? { params } : {}),
@@ -266,8 +286,22 @@ export function createUiTools(
       description: setDescription(manifest),
       input: uiOpInputs.set.extend({ clientId: clientIdInput }),
       readOnly: uiOpReadOnly.set,
-      async run(_input, _ctx) {
-        throw new Error("not implemented");
+      async run({ view, key, value, clientId }, ctx) {
+        const selection = select(ctx, clientId);
+        if (!selection) return UNREACHABLE;
+        refuseTie(selection);
+        const result = await broker.request(
+          selection.target,
+          "set",
+          { view, ...(key === undefined ? {} : { key }), value },
+          ctx.origin,
+          ctx.signal,
+        );
+        const written: SetToolResult = {
+          client: directory.summary(selection.target.client),
+          ...result,
+        };
+        return written;
       },
     });
 
@@ -294,6 +328,7 @@ export function uiInstructions(): string {
     "A keyed view's key is the entity id that the app's actions take, so pass it straight to the action.",
     "Do the work through actions; the screen updates by itself.",
     "To show the user a page, call ui_navigate with a path from its list.",
+    "You fill forms and the user submits them: use ui_set to fill a form, and call the action that submits it only when the user explicitly asks you to.",
     "If a ui_ tool returns reachable: false, the app is not open: tell the user, and for navigation hand them the href.",
   ].join("\n");
 }

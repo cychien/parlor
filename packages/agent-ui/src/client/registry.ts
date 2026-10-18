@@ -4,6 +4,7 @@ import type {
   IntersectionEntryLike,
   IntersectionObserverLike,
 } from "./environment.js";
+import { jsonEqual } from "./json-equal.js";
 
 export interface AnyViewBinding {
   readonly key?: string | undefined;
@@ -125,6 +126,7 @@ export function createViewRegistry(env: BrowserEnvironment): ViewRegistryRuntime
     listening = true;
     env.document.addEventListener("pointerdown", onInteraction, true);
     env.document.addEventListener("focusin", onInteraction, true);
+    env.document.addEventListener("input", onInput);
   };
 
   const observe = (mounted: Mounted) => {
@@ -178,6 +180,21 @@ export function createViewRegistry(env: BrowserEnvironment): ViewRegistryRuntime
     return undefined;
   }
 
+  const replaceWrites = (mounted: Mounted, writes: AgentWrites) => {
+    mounted.writes = writes;
+    for (const listener of mounted.writeListeners) listener();
+  };
+
+  const onInput = (event: Event) => {
+    const target = event.target as Element | null;
+    const mounted = owner(target) as Mounted | undefined;
+    if (!mounted || mounted.writes.size === 0) return;
+    const name = target?.getAttribute?.("name");
+    const remaining = new Map(mounted.writes);
+    if (name) remaining.delete(name);
+    replaceWrites(mounted, remaining.size === 0 ? NO_AGENT_WRITES : remaining);
+  };
+
   const current = (moment: Moment | undefined) =>
     moment && live.has(moment.view as Mounted) ? moment : undefined;
 
@@ -218,15 +235,21 @@ export function createViewRegistry(env: BrowserEnvironment): ViewRegistryRuntime
         writes: () => mounted.writes,
       };
     },
-    find() {
-      throw new Error("not implemented");
+    find(ref) {
+      return (
+        ref.key === undefined ? singles.get(ref.view) : keyed.get(ref.view)?.get(ref.key)
+      )?.at(-1);
     },
-    remember() {
-      throw new Error("not implemented");
+    remember(mounted, values) {
+      const target = mounted as Mounted;
+      const entries = Object.entries(values).filter(
+        ([field, value]) =>
+          !target.writes.has(field) || !jsonEqual(target.writes.get(field), value),
+      );
+      if (entries.length === 0) return;
+      replaceWrites(target, new Map([...target.writes, ...entries]));
     },
-    restore() {
-      throw new Error("not implemented");
-    },
+    restore: (mounted, writes) => replaceWrites(mounted as Mounted, writes),
     *singles() {
       for (const stack of singles.values()) yield stack.at(-1)!;
     },
@@ -258,6 +281,7 @@ export function createViewRegistry(env: BrowserEnvironment): ViewRegistryRuntime
       if (listening && env.document) {
         env.document.removeEventListener("pointerdown", onInteraction, true);
         env.document.removeEventListener("focusin", onInteraction, true);
+        env.document.removeEventListener("input", onInput);
       }
       listening = false;
     },

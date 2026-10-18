@@ -11,7 +11,14 @@ export type UiManifestInput = Omit<UiManifest, "views"> & {
 export type UiManifestSource = () => UiManifestInput | undefined;
 
 export function normalizeManifest(manifest: UiManifestInput): UiManifest {
-  return manifest as UiManifest;
+  return {
+    ...manifest,
+    views: manifest.views.map((view) => ({ ...view, writable: view.writable ?? [] })),
+  };
+}
+
+function readManifest(path: string): UiManifest {
+  return normalizeManifest(JSON.parse(readFileSync(path, "utf8")) as UiManifestInput);
 }
 
 export function fileManifestSource(path: string): UiManifestSource {
@@ -28,7 +35,7 @@ export function fileManifestSource(path: string): UiManifestSource {
     }
     if (stat.mtimeMs === mtimeMs) return manifest;
     try {
-      manifest = JSON.parse(readFileSync(path, "utf8")) as UiManifest;
+      manifest = readManifest(path);
       mtimeMs = stat.mtimeMs;
     } catch {
       return manifest;

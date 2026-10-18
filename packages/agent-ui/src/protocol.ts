@@ -37,7 +37,7 @@ interface UiOpSpec<O extends UiOp> {
 export const uiOps: { readonly [O in UiOp]: UiOpSpec<O> } = {
   screen: { readOnly: true, input: (value) => (isFields(value) ? {} : undefined) },
   navigate: { readOnly: false, input: (value) => navigateInputOf(value) },
-  set: { readOnly: false, input: () => undefined },
+  set: { readOnly: false, input: (value) => setInputOf(value) },
 };
 
 export const UI_OPS = Object.keys(uiOps) as readonly UiOp[];
@@ -253,6 +253,17 @@ function navigateInputOf(value: unknown): UiOpInput<"navigate"> | undefined {
     ...(search === undefined ? {} : { search }),
     ...(replace === undefined ? {} : { replace }),
   };
+}
+
+function setInputOf(value: unknown): UiOpInput<"set"> | undefined {
+  if (!isFields(value) || !isString(value.view) || !isFields(value.value)) {
+    return undefined;
+  }
+  if (!absentOr(value.key, isString)) return undefined;
+  const { view, key } = value;
+  return key === undefined
+    ? { view, value: value.value }
+    : { view, key, value: value.value };
 }
 
 const isUiOp = (value: unknown): value is UiOp =>

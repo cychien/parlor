@@ -4,7 +4,11 @@ import type { UiManifest } from "../manifest.js";
 import { type AgentOrigin, type ClientMessage, UI_CHANNEL } from "../protocol.js";
 import { UiBroker, type UiReceipt } from "./broker.js";
 import { ClientDirectory } from "./directory.js";
-import { normalizeManifest, type UiManifestSource } from "./manifest-source.js";
+import {
+  normalizeManifest,
+  type UiManifestInput,
+  type UiManifestSource,
+} from "./manifest-source.js";
 import {
   type AgentTool,
   type AgentToolContext,
@@ -55,9 +59,14 @@ export function createAgentUi(options: AgentUiOptions & AgentUiDependencies): Ag
   const broker = new UiBroker({ timeoutMs: options.timeoutMs ?? DEFAULT_UI_TIMEOUT_MS });
   const toolsFor = createUiTools({ directory, broker });
   let source: UiManifestSource = () => undefined;
+  let normalized: { input: UiManifestInput; manifest: UiManifest } | undefined;
   const manifest = (): UiManifest | undefined => {
     const input = source();
-    return input && normalizeManifest(input);
+    if (!input) return undefined;
+    if (normalized?.input !== input) {
+      normalized = { input, manifest: normalizeManifest(input) };
+    }
+    return normalized.manifest;
   };
 
   const tools = (surface: "mcp" | "agent") => {
