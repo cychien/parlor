@@ -67,22 +67,21 @@ function takesTyping(element: Element): boolean {
 }
 
 function typingElsewhere(
+  registry: Pick<ViewRegistryRuntime, "agentFocus">,
   env: Pick<BrowserEnvironment, "document">,
   target: Element,
 ): Element | undefined {
   const document = env.document;
   if (!document?.hasFocus()) return undefined;
   const active = document.activeElement;
-  return active && active !== target && takesTyping(active) ? active : undefined;
+  return active &&
+    active !== target &&
+    active !== registry.agentFocus() &&
+    takesTyping(active)
+    ? active
+    : undefined;
 }
 
-/**
- * `ui_highlight`: bring a view, or one named field inside it, to the middle of the screen
- * and mark it. A field is focused, unless the user is typing in another element: then it
- * refuses with user_editing before anything moves. Neither the focus nor the scroll counts as the user's
- * attention. The mark is set after the scroll settles so it shows for its full two seconds
- * where the user is looking, and `shown` is measured then too.
- */
 export async function highlightView(
   registry: ViewRegistryRuntime,
   input: UiOpInput<"highlight">,
@@ -102,7 +101,7 @@ export async function highlightView(
       issues: [{ path: "field", message: input.field! }],
     };
   }
-  const typing = typingElsewhere(env, element);
+  const typing = typingElsewhere(registry, env, element);
   if (typing) {
     const name = typing.getAttribute("name") ?? typing.tagName.toLowerCase();
     return {
@@ -112,8 +111,9 @@ export async function highlightView(
     };
   }
   await registry.quietly(async () => {
-    if (input.field !== undefined)
-      (element as HTMLElement).focus({ preventScroll: true });
+    if (input.field !== undefined && env.hasFinePointer()) {
+      registry.placeFocus(element as HTMLElement);
+    }
     await env.scrollIntoView(element);
     await env.nextTask();
     await env.nextTask();

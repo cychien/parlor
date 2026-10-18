@@ -103,6 +103,6 @@ export function browserEnvironment(): BrowserEnvironment {
     setTimeout: globalThis.setTimeout.bind(globalThis),
     clearTimeout: globalThis.clearTimeout.bind(globalThis),
     scrollIntoView: (element) => scrollIntoCenter(window, element),
-    hasFinePointer: () => true,
+    hasFinePointer: () => window?.matchMedia("(pointer: fine)").matches ?? false,
   };
 }

@@ -147,7 +147,7 @@ function setDescription(manifest: UiManifest | undefined): string {
 
 function highlightDescription(): string {
   return [
-    "Point at something on the user's screen: scrolls a view (a keyed item by key) or one field inside it into the middle of the screen, focuses the field, and marks it for two seconds.",
+    "Point at something on the user's screen: scrolls a view (a keyed item by key) or one field inside it into the middle of the screen, focuses the field (not on a touch screen, where that opens the keyboard), and marks it for two seconds.",
     "Use it to show the user what you mean or to ask which one they meant.",
     "Returns shown, the visible fraction after scrolling, or not_mounted when it is not on screen, or reachable: false when the app is not open.",
     "Refuses with user_editing when the user is typing in another field: wait or ask, and it moves nothing.",
