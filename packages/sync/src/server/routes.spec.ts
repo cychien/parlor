@@ -2,8 +2,10 @@ import { readFile } from "node:fs/promises";
 
 import { createDatabase, type DatabaseHandle } from "@parlor/data";
 import { H3 } from "h3";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+import type { ChannelConnection, ServerChannel } from "../channel.js";
+import { createSyncClient } from "../client/sync-client.js";
 import type { SyncBatch } from "../protocol.js";
 import { SyncHub } from "./hub.js";
 import { registerSyncRoutes } from "./routes.js";
@@ -177,5 +179,104 @@ describe("transportFromEnv", () => {
   it("reads the literal process.env.PARLOR_SYNC_TRANSPORT so a build can bake it", async () => {
     const source = await readFile(new URL("./routes.ts", import.meta.url), "utf8");
     expect(source).toContain("= process.env.PARLOR_SYNC_TRANSPORT");
+  });
+});
+
+describe("sync stream channels", () => {
+  function recordingChannel(event: string) {
+    const log: string[] = [];
+    let current: ChannelConnection | undefined;
+    const channel: ServerChannel = {
+      event,
+      connect(connection) {
+        current = connection;
+        log.push(`open ${connection.clientId ?? "-"} ${connection.scope}`);
+        connection.send(`hello ${connection.clientId}`);
+        return () => log.push("close");
+      },
+    };
+    return { channel, log, send: (data: string) => current?.send(data) };
+  }
+
+  function channelApp(...channels: ServerChannel[]) {
+    const channelled = new H3();
+    registerSyncRoutes(channelled, {
+      basePath: "/_parlor",
+      data: handle,
+      hub,
+      scope: () => "channels",
+      keepAliveMs: 50,
+      channels,
+      clientId: (request) => request.headers.get("x-parlor-client") ?? undefined,
+    });
+    return channelled;
+  }
+
+  it("advertises channel events, opens each channel with the client id and scope, and routes its frames", async () => {
+    const ui = recordingChannel("ui");
+    const response = await channelApp(ui.channel).fetch(
+      new Request("http://app.test/_parlor/sync/stream?since=", {
+        headers: { "x-parlor-client": "tab-1" },
+      }),
+    );
+    ui.send('{"op":"screen"}');
+    const frames = await readFrames(response.body!, 3);
+    expect(frames[0]).toBe(
+      'event: handshake\ndata: {"protocol":1,"capabilities":["ui"]}',
+    );
+    expect(frames.slice(1)).toEqual([
+      "event: ui\ndata: hello tab-1",
+      'event: ui\ndata: {"op":"screen"}',
+    ]);
+    expect(ui.log.slice(0, 1)).toEqual(["open tab-1 channels"]);
+  });
+
+  it("closes each channel exactly once when the stream closes", async () => {
+    const ui = recordingChannel("ui");
+    const response = await channelApp(ui.channel).fetch(
+      new Request("http://app.test/_parlor/sync/stream?since="),
+    );
+    await readFrames(response.body!, 2);
+    await new Promise((r) => setTimeout(r, 150));
+    expect(ui.log).toEqual(["open - channels", "close"]);
+  });
+
+  it("advertises no capabilities without channels", async () => {
+    const response = await channelApp().fetch(
+      new Request("http://app.test/_parlor/sync/stream?since="),
+    );
+    const frames = await readFrames(response.body!, 1);
+    expect(frames[0]).toBe('event: handshake\ndata: {"protocol":1,"capabilities":[]}');
+  });
+
+  it("delivers server channel frames to the matching client channel end to end", async () => {
+    const ui = recordingChannel("ui");
+    const server = channelApp(ui.channel);
+    const received: string[] = [];
+    const lifecycle: string[] = [];
+    const client = createSyncClient({
+      request: (path, init) => {
+        const headers = new Headers(init?.headers);
+        headers.set("x-parlor-client", "tab-2");
+        return server.fetch(new Request(`http://app.test${path}`, { ...init, headers }));
+      },
+      clientId: "tab-2",
+      onEvents: () => {},
+      channels: [
+        {
+          event: "ui",
+          opened: () => lifecycle.push("opened"),
+          receive: (data) => received.push(data),
+          closed: () => lifecycle.push("closed"),
+        },
+      ],
+    });
+    client.start();
+    await vi.waitFor(() => expect(received).toEqual(["hello tab-2"]));
+    ui.send("second");
+    await vi.waitFor(() => expect(received).toEqual(["hello tab-2", "second"]));
+    client.stop();
+    await vi.waitFor(() => expect(lifecycle).toEqual(["opened", "closed"]));
+    await vi.waitFor(() => expect(ui.log.at(-1)).toBe("close"));
   });
 });

@@ -1,6 +1,8 @@
-import { useActionMutation, useActionQuery } from "@parlor/client/react";
+import { useActionMutation, useActionQuery, useAgentView } from "@parlor/client/react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
+
+import { task as taskView } from "../views.js";
 
 export const Route = createFileRoute("/")({
   staticData: {
@@ -62,26 +64,42 @@ function Tasks() {
       </form>
       <ul data-testid="tasks" style={{ paddingLeft: 0, listStyle: "none" }}>
         {(list.data ?? []).map((task) => (
-          <li key={task.id} style={{ padding: "4px 0" }}>
-            <input
-              type="checkbox"
-              aria-label={task.title}
-              checked={task.done}
-              onChange={() => toggle.mutate({ id: task.id })}
-            />{" "}
-            <Link
-              to="/tasks/$taskId"
-              params={{ taskId: task.id }}
-              style={{
-                color: "inherit",
-                textDecoration: task.done ? "line-through" : "none",
-              }}
-            >
-              {task.title}
-            </Link>
-          </li>
+          <TaskRow
+            key={task.id}
+            task={task}
+            onToggle={() => toggle.mutate({ id: task.id })}
+          />
         ))}
       </ul>
     </section>
+  );
+}
+
+interface TaskRowProps {
+  readonly task: { readonly id: string; readonly title: string; readonly done: boolean };
+  readonly onToggle: () => void;
+}
+
+function TaskRow({ task, onToggle }: TaskRowProps) {
+  const { ref } = useAgentView(taskView, {
+    key: task.id,
+    get: () => ({ title: task.title, done: task.done }),
+  });
+  return (
+    <li ref={ref} style={{ padding: "4px 0" }}>
+      <input
+        type="checkbox"
+        aria-label={task.title}
+        checked={task.done}
+        onChange={onToggle}
+      />{" "}
+      <Link
+        to="/tasks/$taskId"
+        params={{ taskId: task.id }}
+        style={{ color: "inherit", textDecoration: task.done ? "line-through" : "none" }}
+      >
+        {task.title}
+      </Link>
+    </li>
   );
 }

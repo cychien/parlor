@@ -1,3 +1,6 @@
+export type { AgentActivity } from "@parlor/agent-ui/client";
+export { useAgentActivity } from "./agent-ui/use-agent-activity.js";
+export { type AgentViewHandle, useAgentView } from "./agent-ui/use-agent-view.js";
 export {
   type ActionMutationOptions,
   type ActionQueryOptions,

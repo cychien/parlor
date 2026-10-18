@@ -5,6 +5,7 @@ import {
   type McpRequestContext,
   McpServer,
 } from "@modelcontextprotocol/server";
+import { type AgentUi, UiFailure } from "@parlor/agent-ui/server";
 import { ActionError, type ActionMap, isMutating } from "@parlor/core";
 import type { ActionRegistry } from "@parlor/core/registry";
 
@@ -15,6 +16,7 @@ export interface McpOptions<T extends ActionMap> {
   readonly runner: ActionRunner;
   readonly name?: string | undefined;
   readonly version?: string | undefined;
+  readonly agentUi?: AgentUi | undefined;
 }
 
 function toolResult(result: unknown): CallToolResult {
@@ -28,6 +30,12 @@ function toolResult(result: unknown): CallToolResult {
 }
 
 function toolError(error: unknown): CallToolResult {
+  if (error instanceof UiFailure) {
+    return {
+      isError: true,
+      content: [{ type: "text", text: JSON.stringify({ error: error.error }, null, 2) }],
+    };
+  }
   const message =
     error instanceof ActionError
       ? [
@@ -43,10 +51,11 @@ function toolError(error: unknown): CallToolResult {
 export function createMcpHandler<T extends ActionMap>(
   options: McpOptions<T>,
 ): McpHttpHandler {
-  const { actions, runner, name = "parlor", version = "0.0.0" } = options;
+  const { actions, runner, agentUi, name = "parlor", version = "0.0.0" } = options;
 
   const factory = (ctx: McpRequestContext) => {
-    const server = new McpServer({ name, version });
+    const instructions = agentUi?.instructions("mcp");
+    const server = new McpServer({ name, version }, instructions ? { instructions } : {});
     for (const actionName of actions.names()) {
       const action = actions.get(actionName);
       if (!action) continue;
@@ -62,6 +71,30 @@ export function createMcpHandler<T extends ActionMap>(
             const result = await runner.run(actionName, args, ctx.requestInfo, "mcp");
             return toolResult(result.data);
           } catch (error) {
+            return toolError(error);
+          }
+        },
+      );
+    }
+    for (const tool of agentUi?.tools("mcp") ?? []) {
+      server.registerTool(
+        tool.name,
+        {
+          description: tool.description,
+          inputSchema: tool.input,
+          annotations: { readOnlyHint: tool.readOnly },
+        },
+        async (args, toolCtx) => {
+          try {
+            const context = await agentUi!.contextFor(
+              ctx.requestInfo,
+              { via: "mcp" },
+              toolCtx.mcpReq.signal,
+            );
+            return toolResult(await tool.run(args, context));
+          } catch (error) {
+            if (!(error instanceof UiFailure))
+              console.error("[parlor] UI tool failed:", error);
             return toolError(error);
           }
         },

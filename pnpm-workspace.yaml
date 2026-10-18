@@ -6,6 +6,7 @@ allowBuilds:
   esbuild: true
 
 catalog:
+  "@standard-schema/spec": ^1.1.0
   "@tanstack/react-query": ^5.104.1
   "@tanstack/react-router": ^1.170.45
   "@tanstack/router-core": ^1.171.38

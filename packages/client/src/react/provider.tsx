@@ -1,3 +1,4 @@
+import type { AgentUiClient } from "@parlor/agent-ui/client";
 import { createSyncClient, type SyncClient } from "@parlor/sync/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AnyRouter } from "@tanstack/react-router";
@@ -5,11 +6,13 @@ import { createContext, type ReactNode, useContext, useEffect, useState } from "
 
 import type { ActionClient } from "../action-client.js";
 import type { RegisteredActions } from "../register.js";
+import { createAgentUiRuntime } from "./agent-ui/runtime.js";
 import { invalidateForEvents, ReadTagRegistry } from "./sync.js";
 
 interface FrameworkContextValue {
   readonly client: ActionClient<RegisteredActions>;
   readonly readTags: ReadTagRegistry;
+  readonly agentUi: AgentUiClient;
 }
 
 const FrameworkContext = createContext<FrameworkContextValue | null>(null);
@@ -26,15 +29,33 @@ export function FrameworkProvider({
   client,
   queryClient,
   sync = true,
+  router,
   children,
 }: FrameworkProviderProps) {
   const [ownQueryClient] = useState(() => queryClient ?? new QueryClient());
   const [value] = useState<FrameworkContextValue>(() => ({
     client,
     readTags: new ReadTagRegistry(),
+    agentUi: createAgentUiRuntime({ client, queryClient: ownQueryClient, router }),
   }));
 
   useEffect(() => value.readTags.attach(ownQueryClient), [value, ownQueryClient]);
+
+  useEffect(() => value.agentUi.start(), [value]);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    let uninstall: (() => void) | undefined;
+    let active = true;
+    void import("./agent-ui/dev.js").then(({ installAgentUiDevtools }) => {
+      if (active)
+        uninstall = installAgentUiDevtools(value.agentUi, value.client.clientId);
+    });
+    return () => {
+      active = false;
+      uninstall?.();
+    };
+  }, [value]);
 
   useEffect(() => {
     if (!sync) return;
@@ -45,6 +66,7 @@ export function FrameworkProvider({
       onEvents: (events) =>
         void invalidateForEvents(ownQueryClient, value.readTags, events),
       isHidden: () => globalThis.document?.visibilityState === "hidden",
+      channels: [value.agentUi],
     });
     syncClient.start();
     return () => syncClient.stop();

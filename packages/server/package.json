@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.3.1",
+    "@parlor/agent-ui": "workspace:*",
     "@parlor/core": "workspace:*",
     "@parlor/sync": "workspace:*",
     "h3": "catalog:",
