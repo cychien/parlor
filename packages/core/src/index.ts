@@ -13,11 +13,17 @@ export {
   defineAction,
   isAction,
   isMutating,
+  needsConfirmation,
   type ParlorDatabase,
   type ReadTags,
   type TableLike,
   type Tag,
   type TagSource,
 } from "./action.js";
-export { ActionError, type ActionErrorBody, type ActionErrorCode } from "./errors.js";
+export {
+  ACTION_ERROR_CODES,
+  ActionError,
+  type ActionErrorBody,
+  type ActionErrorCode,
+} from "./errors.js";
 export { readTagsFor, tableName, tagsOverlap, writeTagsFor } from "./tags.js";

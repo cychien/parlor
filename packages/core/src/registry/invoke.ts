@@ -14,9 +14,17 @@ export interface WriteEvent {
   readonly tx: unknown;
 }
 
+export interface PreparedCall {
+  readonly action: AnyAction;
+  readonly name: string;
+  readonly input: unknown;
+  readonly ctx: InvokeContext;
+}
+
 export interface InvokeOptions {
   readonly data?: DataProvider | undefined;
   readonly onWrite?: ((event: WriteEvent) => Promise<void>) | undefined;
+  readonly confirm?: ((call: PreparedCall) => Promise<void>) | undefined;
 }
 
 export interface InvokeResult {

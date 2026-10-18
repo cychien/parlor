@@ -4,7 +4,12 @@ import {
   registerAgentUiRoutes,
   type UiManifestSource,
 } from "@parlor/agent-ui/server";
-import { ActionError, type ActionMap, type DataProvider } from "@parlor/core";
+import {
+  ActionError,
+  type ActionErrorCode,
+  type ActionMap,
+  type DataProvider,
+} from "@parlor/core";
 import type { ActionRegistry } from "@parlor/core/registry";
 import { registerSyncRoutes, SyncHub, type SyncTransport } from "@parlor/sync/server";
 import { H3, type H3Event, readBody } from "h3";
@@ -40,7 +45,14 @@ export interface FrameworkServer {
   readonly close: () => Promise<void>;
 }
 
-const STATUS_BY_CODE = { not_found: 404, invalid_input: 400, internal: 500 } as const;
+const STATUS_BY_CODE = {
+  not_found: 404,
+  invalid_input: 400,
+  declined: 403,
+  confirmation_timeout: 504,
+  confirmation_unavailable: 503,
+  internal: 500,
+} as const satisfies Record<ActionErrorCode, number>;
 
 function errorBody(event: H3Event, error: unknown) {
   if (!(error instanceof ActionError)) console.error("[parlor] action failed:", error);
@@ -76,6 +88,7 @@ export function createServer<T extends ActionMap>(
     database,
     sync: syncEnabled,
     onClient: agentUi?.touch,
+    confirm: agentUi?.confirm,
   });
   const hub = database ? new SyncHub(database) : undefined;
   const inflight = new Set<Promise<unknown>>();

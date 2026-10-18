@@ -122,13 +122,36 @@ export interface PresenceUpdate {
   readonly platform: string;
   readonly buildId?: string | undefined;
   readonly ops?: readonly string[] | undefined;
+  readonly canConfirm?: boolean | undefined;
 }
 
 export interface LeaveNotice {
   readonly type: "leave";
 }
 
-export type ClientMessage = UiReply | PresenceUpdate | LeaveNotice;
+export interface ConfirmationAnswer {
+  readonly type: "answer";
+  readonly id: string;
+  readonly approve: boolean;
+}
+
+export type ClientMessage = UiReply | PresenceUpdate | LeaveNotice | ConfirmationAnswer;
+
+export interface ConfirmationPrompt {
+  readonly id: string;
+  readonly action: string;
+  readonly description: string;
+  readonly input: unknown;
+  readonly origin: AgentOrigin;
+  readonly expiresInMs: number;
+}
+
+export interface ConfirmationsFrame {
+  readonly type: "confirmations";
+  readonly items: readonly ConfirmationPrompt[];
+}
+
+export type UiFrame = UiRequest | ConfirmationsFrame;
 
 export type JsonObject = { readonly [key: string]: unknown };
 
@@ -222,6 +245,10 @@ export interface ClientSummary {
 
 export type ParsedUiRequest =
   | { readonly ok: true; readonly request: UiRequest }
+  | { readonly ok: false; readonly id: string | undefined };
+
+export type ParsedUiFrame =
+  | { readonly ok: true; readonly frame: UiFrame }
   | { readonly ok: false; readonly id: string | undefined };
 
 type Fields = { readonly [key: string]: unknown };
@@ -318,4 +345,8 @@ export function parseUiRequest(data: string): ParsedUiRequest {
   if (request) return { ok: true, request };
   const id = isFields(json) ? json.id : undefined;
   return { ok: false, id: isString(id) && id !== "" ? id : undefined };
+}
+
+export function parseUiFrame(_data: string): ParsedUiFrame {
+  throw new Error("not implemented");
 }

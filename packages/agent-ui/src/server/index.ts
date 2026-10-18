@@ -8,6 +8,11 @@ export {
   webOriginFromEnv,
 } from "./agent-ui.js";
 export {
+  type ConfirmationOutcome,
+  type ConfirmationRequest,
+  DEFAULT_CONFIRM_TIMEOUT_MS,
+} from "./confirmations.js";
+export {
   fileManifestSource,
   type UiManifestInput,
   type UiManifestSource,

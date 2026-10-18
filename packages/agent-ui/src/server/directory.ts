@@ -16,6 +16,7 @@ export interface ConnectedClient {
   readonly focused: boolean;
   readonly visible: boolean;
   readonly ops: readonly UiOp[];
+  readonly canConfirm: boolean;
   readonly seenAt: number;
 }
 
@@ -31,6 +32,14 @@ export interface Selection {
 
 export type PresenceOutcome = "rejected" | "updated" | "registered";
 
+export type DirectoryChange = "joined" | "updated" | "left";
+
+export type DirectoryListener = (
+  scope: string,
+  clientId: string,
+  change: DirectoryChange,
+) => void;
+
 interface Entry {
   client: ConnectedClient;
   readonly connections: ChannelConnection[];
@@ -42,8 +51,15 @@ export class ClientDirectory {
   readonly #byScope = new Map<string, Set<Entry>>();
   readonly #unannounced = new Map<string, ChannelConnection[]>();
 
+  readonly #listeners = new Set<DirectoryListener>();
+
   constructor(now: () => number = Date.now) {
     this.#now = now;
+  }
+
+  subscribe(listener: DirectoryListener): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
   }
 
   connect(connection: ChannelConnection): () => void {
@@ -79,6 +95,7 @@ export class ClientDirectory {
       focused: update.focused,
       visible: update.visible,
       ops: update.ops ? update.ops.filter(isUiOp) : LEGACY_UI_OPS,
+      canConfirm: false,
       seenAt: this.#now(),
     };
     if (entry) {
@@ -106,6 +123,10 @@ export class ClientDirectory {
 
   connected(scope: string, clientId: string): boolean {
     return this.#byId.get(clientId)?.client.scope === scope;
+  }
+
+  targets(_scope: string): readonly ClientTarget[] {
+    throw new Error("not implemented");
   }
 
   target(clientId: string): ClientTarget | undefined {

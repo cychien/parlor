@@ -35,6 +35,12 @@ export interface ActionConfig<TInput extends z.ZodType, TOutput> {
   readonly input: TInput;
   readonly reads?: ReadTags<z.output<TInput>> | undefined;
   readonly writes?: readonly TagSource[] | undefined;
+  /**
+   * Ask the user to approve each call from an agent (source `mcp` or `agent`) in the app
+   * before it runs. Calls from the app's own UI and plain HTTP never ask. A UX guard, not a
+   * security boundary: the source is self-declared until auth exists.
+   */
+  readonly confirm?: boolean | undefined;
   readonly run: (
     input: z.output<TInput>,
     ctx: ActionContext,
@@ -65,6 +71,10 @@ export function isAction(value: unknown): value is AnyAction {
 
 export function isMutating(action: AnyAction): boolean {
   return (action.writes?.length ?? 0) > 0;
+}
+
+export function needsConfirmation(_action: AnyAction, _source: ActionSource): boolean {
+  return false;
 }
 
 export type ActionInput<A> =

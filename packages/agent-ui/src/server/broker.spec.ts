@@ -10,6 +10,7 @@ const client = (id: string): ConnectedClient => ({
   buildId: undefined,
   focused: true,
   visible: true,
+  canConfirm: false,
   seenAt: 0,
 });
 

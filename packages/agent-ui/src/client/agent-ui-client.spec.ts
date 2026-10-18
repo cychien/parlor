@@ -296,6 +296,90 @@ describe("createAgentUiClient highlight", () => {
   });
 });
 
+describe("createAgentUiClient confirmations", () => {
+  const frame = (...ids: string[]) =>
+    JSON.stringify({
+      type: "confirmations",
+      items: ids.map((id) => ({
+        id,
+        action: "deleteTask",
+        description: "Delete a task.",
+        input: { id: "t1" },
+        origin: { via: "mcp", name: "Claude Code" },
+        expiresInMs: 59_000,
+      })),
+    });
+
+  it("shows the server's list through the confirmation store and never queues it as a request", async () => {
+    const { client, replies, settle } = setup();
+    client.receive(frame("c1"));
+    await settle();
+    expect(client.confirmations.get().map((c) => c.id)).toEqual(["c1"]);
+    expect(replies()).toEqual([]);
+    client.receive(frame());
+    expect(client.confirmations.get()).toEqual([]);
+  });
+
+  it("answers over the channel when the user approves or declines", async () => {
+    const { client, sent, settle } = setup();
+    client.receive(frame("c1", "c2"));
+    client.confirmations.get()[0]!.approve();
+    client.confirmations.get()[0]!.decline();
+    await settle();
+    expect(sent).toEqual([
+      { type: "answer", id: "c1", approve: true },
+      { type: "answer", id: "c2", approve: false },
+    ]);
+  });
+
+  it("does not wait behind a card: a screen request runs while one is showing", async () => {
+    const { client, replies, settle } = setup();
+    client.receive(frame("c1"));
+    client.receive(request("r1"));
+    await settle();
+    expect(client.confirmations.get().map((item) => item.id)).toEqual(["c1"]);
+    expect(replies().map((r) => r.id)).toEqual(["r1"]);
+  });
+
+  it("is busy and says it is asking for confirmation while a card shows, idle once it leaves", () => {
+    const { client } = setup();
+    client.receive(frame("c1"));
+    expect(client.activity.get()).toEqual({
+      busy: true,
+      last: { op: "confirm", origin: { via: "mcp", name: "Claude Code" }, at: 10_000 },
+    });
+    client.receive(frame());
+    expect(client.activity.get()).toMatchObject({ busy: false, last: { op: "confirm" } });
+  });
+
+  it("stays busy for a card while a request finishes, and for the request while a card waits", async () => {
+    const { client, settle } = setup();
+    client.receive(frame("c1"));
+    client.receive(request("r1"));
+    await settle();
+    expect(client.activity.get().busy).toBe(true);
+    expect(client.activity.get().last?.op).toBe("screen");
+    client.receive(frame());
+    expect(client.activity.get().busy).toBe(false);
+  });
+
+  it("reports that it can confirm only while something renders the cards", async () => {
+    const { browser, client, sent, settle } = setup();
+    vi.spyOn(browser.document, "hasFocus").mockReturnValue(true);
+    client.opened();
+    await settle();
+    const off = client.confirmations.subscribe(() => {});
+    await settle();
+    off();
+    await settle();
+    expect(
+      sent
+        .filter((m) => m.type === "presence")
+        .map((m) => (m as { canConfirm?: boolean }).canConfirm),
+    ).toEqual([false, true, false]);
+  });
+});
+
 describe("createAgentUiClient activity", () => {
   it("is busy while a request runs and remembers the last operation", async () => {
     const { client, settle } = setup();
@@ -354,6 +438,7 @@ describe("createAgentUiClient presence", () => {
         visible: true,
         platform: "web",
         ops: ["screen", "navigate", "set", "highlight"],
+        canConfirm: false,
       },
       {
         type: "presence",
@@ -361,6 +446,7 @@ describe("createAgentUiClient presence", () => {
         visible: true,
         platform: "web",
         ops: ["screen", "navigate", "set", "highlight"],
+        canConfirm: false,
       },
     ]);
   });

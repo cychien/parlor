@@ -18,6 +18,7 @@ import type { ActionClient } from "../../action-client.js";
 import { useActionQuery } from "../hooks.js";
 import { FrameworkProvider } from "../provider.js";
 import { useAgentActivity } from "./use-agent-activity.js";
+import { useAgentConfirmations } from "./use-agent-confirmations.js";
 import { useAgentView } from "./use-agent-view.js";
 
 const greeting = defineAgentView({
@@ -149,6 +150,7 @@ describe("agent UI in FrameworkProvider", () => {
       visible: true,
       platform: "web",
       ops: ["screen", "navigate", "set", "highlight"],
+      canConfirm: false,
     });
     await waitFor(() =>
       expect(screen.getByRole("status").textContent).toBe("agent did screen"),
@@ -506,6 +508,89 @@ describe("agent writes in FrameworkProvider", () => {
     );
     expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("");
     expect(filled("Title")).toBe(false);
+  });
+});
+
+function Cards() {
+  const confirmations = useAgentConfirmations();
+  const { busy, last } = useAgentActivity();
+  return (
+    <section>
+      <output>{busy ? `agent ${last?.op}` : "idle"}</output>
+      {confirmations.map((c) => (
+        <div key={c.id} role="alertdialog" aria-label={`Confirm ${c.action}`}>
+          <p>
+            {c.origin.name} wants to run {c.action}
+          </p>
+          <button type="button" onClick={c.approve}>
+            Approve
+          </button>
+          <button type="button" onClick={c.decline}>
+            Decline
+          </button>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+describe("confirmation cards in FrameworkProvider", () => {
+  const card = (id: string) =>
+    JSON.stringify({
+      type: "confirmations",
+      items: [
+        {
+          id,
+          action: "deleteTask",
+          description: "Delete a task.",
+          input: { id: "t1" },
+          origin: { via: "mcp", name: "Claude Code" },
+          expiresInMs: 59_000,
+        },
+      ],
+    });
+  const renderCards = (strict: boolean) => {
+    const { client, posts } = fakeClient({ request: card("c1") });
+    const tree = (
+      <FrameworkProvider
+        client={client}
+        queryClient={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+      >
+        <Cards />
+      </FrameworkProvider>
+    );
+    render(strict ? <StrictMode>{tree}</StrictMode> : tree);
+    return posts;
+  };
+
+  it.each([false, true])(
+    "draws the card the server pushes, says it can, and posts the answer on Approve (StrictMode %s)",
+    async (strict) => {
+      const posts = renderCards(strict);
+      const dialog = await screen.findByRole("alertdialog", {
+        name: "Confirm deleteTask",
+      });
+      expect(dialog.textContent).toContain("Claude Code wants to run deleteTask");
+      expect(screen.getByRole("status").textContent).toBe("agent confirm");
+      await waitFor(() =>
+        expect(posts).toContainEqual(
+          expect.objectContaining({ type: "presence", canConfirm: true }),
+        ),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      await waitFor(() =>
+        expect(posts).toContainEqual({ type: "answer", id: "c1", approve: true }),
+      );
+    },
+  );
+
+  it("posts a decline", async () => {
+    const posts = renderCards(false);
+    fireEvent.click(await screen.findByRole("button", { name: "Decline" }));
+    await waitFor(() =>
+      expect(posts).toContainEqual({ type: "answer", id: "c1", approve: false }),
+    );
   });
 });
 

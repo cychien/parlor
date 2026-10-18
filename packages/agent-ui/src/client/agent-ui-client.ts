@@ -18,6 +18,7 @@ import {
   type UiRequest,
 } from "../protocol.js";
 import { type AnyAgentView } from "../view.js";
+import { type ConfirmationStore, createConfirmationStore } from "./confirmations.js";
 import { type BrowserEnvironment, browserEnvironment } from "./environment.js";
 import { createHighlightMarks, highlightView } from "./highlight.js";
 import { createViewRegistry, type ViewRegistry, type ViewSlot } from "./registry.js";
@@ -41,10 +42,18 @@ export interface AgentUiClientOptions {
   readonly dev?: boolean | undefined;
 }
 
+/** What an agent is doing on this screen: a UI op, or waiting for the user to confirm. */
+export type AgentActivityKind = UiOp | "confirm";
+
 export interface AgentActivity {
+  /** A request is running, or a confirmation card is waiting for the user on this client. */
   readonly busy: boolean;
   readonly last:
-    | { readonly op: UiOp; readonly origin: AgentOrigin; readonly at: number }
+    | {
+        readonly op: AgentActivityKind;
+        readonly origin: AgentOrigin;
+        readonly at: number;
+      }
     | undefined;
 }
 
@@ -56,6 +65,7 @@ export interface ActivityStore {
 export interface AgentUiClient extends ClientChannel {
   readonly views: ViewRegistry;
   readonly activity: ActivityStore;
+  readonly confirmations: ConfirmationStore;
   screen(): Promise<ScreenSnapshot>;
   start(): () => void;
 }
@@ -133,6 +143,12 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
   };
   const activity = createActivityStore();
   const marks = createHighlightMarks(env);
+  const confirmations = createConfirmationStore({
+    env,
+    answer: (id, approve) => post({ type: "answer", id, approve }),
+    onWatchedChange: () => schedulePresence(),
+    onChange: () => {},
+  });
   const replies = new Map<string, UiReply>();
   const queued = new Set<string>();
   const queue: UiRequest[] = [];
@@ -302,6 +318,7 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
       platform: options.platform,
       ...(options.buildId === undefined ? {} : { buildId: options.buildId }),
       ops: UI_OPS,
+      canConfirm: confirmations.watched(),
     };
   };
   const reportPresence = () => {
@@ -389,6 +406,7 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
     event: UI_CHANNEL,
     views,
     activity,
+    confirmations,
     screen,
     opened() {
       gone = false;
@@ -403,6 +421,7 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
       return () => {
         registry.dispose();
         marks.dispose();
+        confirmations.dispose();
         detachPresence();
       };
     },

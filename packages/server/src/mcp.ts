@@ -4,7 +4,9 @@ import {
   type McpHttpHandler,
   type McpRequestContext,
   McpServer,
+  type ServerContext,
 } from "@modelcontextprotocol/server";
+import type { AgentOrigin } from "@parlor/agent-ui";
 import { type AgentUi, UI_MANIFEST_RESOURCE, UiFailure } from "@parlor/agent-ui/server";
 import { ActionError, type ActionMap, isMutating } from "@parlor/core";
 import type { ActionRegistry } from "@parlor/core/registry";
@@ -46,6 +48,20 @@ function toolError(error: unknown): CallToolResult {
           .join("\n")
       : "Internal error";
   return { isError: true, content: [{ type: "text", text: message }] };
+}
+
+export const PROGRESS_INTERVAL_MS = 10_000;
+
+export function originOf(_ctx: ServerContext): AgentOrigin {
+  return { via: "mcp" };
+}
+
+export async function withProgress<T>(
+  _ctx: ServerContext,
+  work: () => Promise<T>,
+  _intervalMs: number = PROGRESS_INTERVAL_MS,
+): Promise<T> {
+  return work();
 }
 
 export function createMcpHandler<T extends ActionMap>(

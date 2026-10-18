@@ -1,4 +1,11 @@
-export { type ActionRunner, clientOf, createActionRunner, sourceOf } from "./actions.js";
+export {
+  type ActionRunner,
+  clientOf,
+  type Confirm,
+  createActionRunner,
+  type RunOptions,
+  sourceOf,
+} from "./actions.js";
 export { type CorsConfig, isAllowedOrigin, SHELL_ORIGINS } from "./cors.js";
 export {
   createServer,

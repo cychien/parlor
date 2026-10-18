@@ -3,6 +3,12 @@ import type { ServerChannel } from "@parlor/sync";
 import type { UiManifest } from "../manifest.js";
 import { type AgentOrigin, type ClientMessage, UI_CHANNEL } from "../protocol.js";
 import { UiBroker, type UiReceipt } from "./broker.js";
+import {
+  ConfirmationBoard,
+  type ConfirmationOutcome,
+  type ConfirmationRequest,
+  DEFAULT_CONFIRM_TIMEOUT_MS,
+} from "./confirmations.js";
 import { ClientDirectory } from "./directory.js";
 import {
   normalizeManifest,
@@ -21,6 +27,7 @@ export type ExternalUiPolicy = boolean | "read-only";
 export interface AgentUiOptions {
   readonly external?: ExternalUiPolicy | undefined;
   readonly timeoutMs?: number | undefined;
+  readonly confirmTimeoutMs?: number | undefined;
 }
 
 export interface AgentUiDependencies {
@@ -39,6 +46,7 @@ export interface AgentUi {
     signal?: AbortSignal,
   ): Promise<AgentToolContext>;
   instructions(surface: "mcp" | "agent"): string | undefined;
+  confirm(request: ConfirmationRequest): Promise<ConfirmationOutcome>;
   manifest(): UiManifest | undefined;
   install(source: UiManifestSource): void;
   close(): void;
@@ -56,6 +64,10 @@ export function createAgentUi(options: AgentUiOptions & AgentUiDependencies): Ag
   const external = options.external ?? true;
   const webOrigin = "webOrigin" in options ? options.webOrigin : webOriginFromEnv();
   const directory = new ClientDirectory();
+  const confirmations = new ConfirmationBoard({
+    directory,
+    timeoutMs: options.confirmTimeoutMs ?? DEFAULT_CONFIRM_TIMEOUT_MS,
+  });
   const broker = new UiBroker({ timeoutMs: options.timeoutMs ?? DEFAULT_UI_TIMEOUT_MS });
   const toolsFor = createUiTools({ directory, broker });
   let source: UiManifestSource = () => undefined;
@@ -97,6 +109,8 @@ export function createAgentUi(options: AgentUiOptions & AgentUiDependencies): Ag
         }
         case "reply":
           return broker.reply(clientId, message);
+        case "answer":
+          return { accepted: confirmations.answer(clientId, scope, message) };
       }
     },
     tools,
@@ -109,10 +123,14 @@ export function createAgentUi(options: AgentUiOptions & AgentUiDependencies): Ag
       };
     },
     instructions: (surface) => (tools(surface).length > 0 ? uiInstructions() : undefined),
+    confirm: (request) => confirmations.ask(request),
     manifest,
     install(next) {
       source = next;
     },
-    close: () => broker.close(),
+    close: () => {
+      broker.close();
+      confirmations.close();
+    },
   };
 }

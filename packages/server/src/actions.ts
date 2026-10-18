@@ -1,3 +1,5 @@
+import type { AgentOrigin } from "@parlor/agent-ui";
+import type { ConfirmationOutcome, ConfirmationRequest } from "@parlor/agent-ui/server";
 import type { ActionMap, ActionSource, DataProvider } from "@parlor/core";
 import {
   type ActionRegistry,
@@ -30,12 +32,20 @@ export function clientOf(request: Request): string | undefined {
   return request.headers.get(CLIENT_HEADER) ?? undefined;
 }
 
+export type Confirm = (request: ConfirmationRequest) => Promise<ConfirmationOutcome>;
+
 export interface ActionRunnerOptions<T extends ActionMap> {
   readonly actions: ActionRegistry<T>;
   readonly scope: ScopeResolver;
   readonly database?: DataProvider | undefined;
   readonly sync: boolean;
   readonly onClient?: ((clientId: string | undefined) => void) | undefined;
+  readonly confirm?: Confirm | undefined;
+}
+
+export interface RunOptions {
+  readonly signal?: AbortSignal | undefined;
+  readonly origin?: AgentOrigin | undefined;
 }
 
 export interface ActionRunner {
@@ -44,6 +54,7 @@ export interface ActionRunner {
     input: unknown,
     request: Request | undefined,
     source: ActionSource,
+    options?: RunOptions,
   ): Promise<InvokeResult>;
   ready(): Promise<void>;
 }
