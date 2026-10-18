@@ -24,13 +24,20 @@ const row = defineAgentView({
 const request = (id: string, op = "screen", input: unknown = {}) =>
   JSON.stringify({ id, op, input, origin: { via: "mcp" }, timeoutMs: 1000 });
 
-function setup(options: { dev?: boolean; next?: Record<string, string> } = {}) {
+function setup(
+  options: {
+    dev?: boolean;
+    next?: Record<string, string>;
+    hold?: (message: ClientMessage) => Promise<void> | undefined;
+  } = {},
+) {
   const browser = fakeBrowser();
   const sent: ClientMessage[] = [];
   const client = createAgentUiClient({
     queries: { active: () => [], settled: async () => {} },
     send: async (message) => {
       sent.push(message);
+      await options.hold?.(message);
       return message.type === "reply" ? options.next?.[message.id] : undefined;
     },
     platform: "web",
@@ -265,6 +272,56 @@ describe("createAgentUiClient leaving", () => {
     await settle();
     browser.window.dispatchEvent(new browser.window.Event("pagehide"));
     browser.window.dispatchEvent(new browser.window.Event("pageshow"));
+    await settle();
+    expect(sent.map((message) => message.type)).toEqual([
+      "presence",
+      "leave",
+      "presence",
+    ]);
+  });
+});
+
+describe("createAgentUiClient lifecycle ordering", () => {
+  it("sends the presence of a restored page only after the leave from before it went away was delivered", async () => {
+    let deliverLeave!: () => void;
+    const { browser, client, sent, settle } = setup({
+      hold: (message) =>
+        message.type === "leave"
+          ? new Promise<void>((resolve) => (deliverLeave = resolve))
+          : undefined,
+    });
+    client.opened();
+    await settle();
+    browser.window.dispatchEvent(new browser.window.Event("pagehide"));
+    browser.window.dispatchEvent(new browser.window.Event("pageshow"));
+    await settle();
+    expect(sent.map((message) => message.type)).toEqual(["presence", "leave"]);
+    deliverLeave();
+    await settle();
+    expect(sent.map((message) => message.type)).toEqual([
+      "presence",
+      "leave",
+      "presence",
+    ]);
+  });
+
+  it("sends presence after a leave that failed, once it has failed", async () => {
+    let failLeave!: () => void;
+    const { browser, client, sent, settle } = setup({
+      hold: (message) =>
+        message.type === "leave"
+          ? new Promise<void>(
+              (_, reject) => (failLeave = () => reject(new Error("offline"))),
+            )
+          : undefined,
+    });
+    client.opened();
+    await settle();
+    browser.window.dispatchEvent(new browser.window.Event("pagehide"));
+    browser.window.dispatchEvent(new browser.window.Event("pageshow"));
+    await settle();
+    expect(sent.map((message) => message.type)).toEqual(["presence", "leave"]);
+    failLeave();
     await settle();
     expect(sent.map((message) => message.type)).toEqual([
       "presence",
