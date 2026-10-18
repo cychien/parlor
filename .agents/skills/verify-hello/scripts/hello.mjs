@@ -9,6 +9,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -31,7 +32,11 @@ const LOCK_DIR = join(HOME, ".lock");
 const XCODE_DEVELOPER_DIR = "/Applications/Xcode.app/Contents/Developer";
 const DEFAULT_DEVICE = "iPhone 17 Pro";
 const TARGETS = ["web", "mac", "ios"];
-const PORT_RANGES = { server: [3300, 3399], web: [5300, 5399] };
+const PORT_RANGES = { server: [3300, 3399], web: [5300, 5399], cdp: [9300, 9399] };
+const MCP_CALL_TIMEOUT_MS = 180_000;
+const MCP_CALL_MAX_TOTAL_MS = 300_000;
+const FOCUS_SETTLE_MS = 5000;
+const FOCUS_PROBE = "__helloFocusProbe";
 const READY_TIMEOUT_MS = { web: 120_000, mac: 1_800_000, ios: 1_800_000 };
 const STOP_GRACE_MS = 10_000;
 const SNAPSHOT_EXCLUDES = [
@@ -62,13 +67,19 @@ const USAGE = `usage: hello.mjs <command> [args]
   sql ID QUERY            read-only SQL against the instance's PGlite (stops and restarts it)
   stop ID | start ID      stop or start the processes, keeping the snapshot and its data
   sync ID                 copy the current checkout into a running instance (tsx and Vite reload)
-  mcp ID tools            raw MCP tools/list against the instance
-  mcp ID call TOOL [JSON] raw MCP tools/call
+  mcp ID tools | resources
+                          raw MCP tools/list or resources/list against the instance
+  mcp ID resource URI     raw MCP resources/read, prints the contents; exit 1 on error
+  mcp ID call TOOL [JSON] [--out FILE]
+                          raw MCP tools/call; --out also writes {tool, input, startedAt, endedAt, ms,
+                          isError, result} (epoch ms) for a call started in the background with &
   agent ID --out DIR [--model M] PROMPT
                           Claude Code headless, MCP-only tools, transcript into DIR
   browser ID open [PATH] | click ROLE NAME | fill ROLE NAME TEXT | snapshot [FILE]
                           chrome-devtools-axi in this instance's own session, refs found by role and name;
                           any other axi command (screenshot FILE, wait TEXT, eval JS, console) passes through
+  browser ID focus on|off make the selected page report document.hasFocus() true or false, firing blur
+                          or focus; open, click, fill undo off, and after a click or fill off needs a fresh tab
   screenshot ID FILE      capture the mac window or the iOS simulator screen
   info ID | list          print one instance's state, or every instance
   down ID... | --all [--save-log FILE]
@@ -96,7 +107,9 @@ function run(command, args, options = {}) {
   const result = spawnSync(command, args, { encoding: "utf8", ...options });
   if (result.error) fail(`${command} failed: ${result.error.message}`);
   if (result.status !== 0 && !options.allowFailure) {
-    fail(`${command} ${args.join(" ")} exited ${result.status}\n${result.stderr ?? ""}`);
+    fail(
+      `${command} ${args.join(" ")} exited ${result.status}\n${result.stderr ?? ""}${result.stdout ?? ""}`,
+    );
   }
   return result;
 }
@@ -254,8 +267,16 @@ function pickPort([from, to], reserved) {
   return fail(`no free port in ${from}-${to}`);
 }
 
+function reservedPorts() {
+  return new Set(allStates().flatMap((s) => [s.ports.server, s.ports.web, s.cdpPort]));
+}
+
+function allocateCdpPort() {
+  return pickPort(PORT_RANGES.cdp, reservedPorts());
+}
+
 function allocatePorts() {
-  const reserved = new Set(allStates().flatMap((s) => [s.ports.server, s.ports.web]));
+  const reserved = reservedPorts();
   const server = pickPort(PORT_RANGES.server, reserved);
   reserved.add(server);
   return { server, web: pickPort(PORT_RANGES.web, reserved) };
@@ -619,6 +640,7 @@ async function cmdUp(args) {
       source,
       ...sourceRevision(source),
       ports: allocatePorts(),
+      cdpPort: allocateCdpPort(),
       simulator: sim ? { ...sim, bootedBefore: sim.booted } : undefined,
       createdAt: new Date().toISOString(),
     };
@@ -669,6 +691,7 @@ function printInfo(state) {
         dataDir: join(appDir(state), ".parlor", "pglite"),
         log: logPath(state),
         browserSession: browserSession(state),
+        browserCdpPort: state.cdpPort ?? null,
         simulator: state.simulator ?? null,
       },
       null,
@@ -807,14 +830,72 @@ async function withMcp(state, task) {
   }
 }
 
-async function cmdMcp([id, mode, tool, input]) {
-  const state = readState(id);
-  const result = await withMcp(state, (client) => {
-    if (mode === "tools") return client.listTools();
-    if (mode === "call" && tool)
-      return client.callTool({ name: tool, arguments: input ? JSON.parse(input) : {} });
-    return fail("usage: mcp ID tools | mcp ID call TOOL [JSON]");
+function writeJsonAtomic(file, value) {
+  const path = resolve(file);
+  mkdirSync(dirname(path), { recursive: true });
+  const partial = `${path}.${process.pid}.tmp`;
+  writeFileSync(partial, `${JSON.stringify(value, null, 2)}\n`);
+  renameSync(partial, path);
+}
+
+async function callTool(client, tool, input, out) {
+  const startedAt = Date.now();
+  const record = (outcome) => {
+    const endedAt = Date.now();
+    if (out)
+      writeJsonAtomic(out, {
+        tool,
+        input,
+        startedAt,
+        endedAt,
+        ms: endedAt - startedAt,
+        ...outcome,
+      });
+  };
+  let result;
+  try {
+    result = await client.callTool(
+      { name: tool, arguments: input },
+      {
+        timeout: MCP_CALL_TIMEOUT_MS,
+        maxTotalTimeout: MCP_CALL_MAX_TOTAL_MS,
+        resetTimeoutOnProgress: true,
+        onprogress: () => {},
+      },
+    );
+  } catch (error) {
+    record({ isError: true, result: { error: String(error?.message ?? error) } });
+    throw error;
+  }
+  record({ isError: Boolean(result.isError), result });
+  return result;
+}
+
+async function cmdMcp(args) {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { out: { type: "string" } },
   });
+  const [id, mode, subject, input] = positionals;
+  const usage =
+    "usage: mcp ID tools | resources | resource URI | call TOOL [JSON] [--out FILE]";
+  const state = readState(id);
+  if (values.out && mode !== "call") fail("--out applies to mcp ID call only");
+  let result;
+  try {
+    result = await withMcp(state, (client) => {
+      if (mode === "tools") return client.listTools();
+      if (mode === "resources") return client.listResources();
+      if (mode === "resource" && subject) return client.readResource({ uri: subject });
+      if (mode === "call" && subject)
+        return callTool(client, subject, input ? JSON.parse(input) : {}, values.out);
+      return fail(usage);
+    });
+  } catch (error) {
+    if (error instanceof CliError) throw error;
+    return fail(`mcp ${mode} failed: ${error?.message ?? error}`);
+  }
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   if (result.isError) process.exitCode = 1;
 }
@@ -945,8 +1026,16 @@ async function cmdScreenshot([id, file]) {
 }
 
 function axi(state, args, options = {}) {
+  const chromeArgs = [
+    process.env.CHROME_DEVTOOLS_AXI_CHROME_ARGS,
+    state.cdpPort && `--remote-debugging-port=${state.cdpPort}`,
+  ].filter(Boolean);
   return run("npx", ["-y", "chrome-devtools-axi", ...args], {
-    env: { ...process.env, CHROME_DEVTOOLS_AXI_SESSION: browserSession(state) },
+    env: {
+      ...process.env,
+      CHROME_DEVTOOLS_AXI_SESSION: browserSession(state),
+      CHROME_DEVTOOLS_AXI_CHROME_ARGS: chromeArgs.join(" "),
+    },
     maxBuffer: 64 * 1024 * 1024,
     ...options,
   });
@@ -978,6 +1067,7 @@ async function cmdBrowser([id, action, ...args]) {
       axi(state, ["fill", browserRef(state, args[0], args[1]), args[2] ?? ""]),
     );
   }
+  if (action === "focus") return setBrowserFocus(state, args[0]);
   if (action === "snapshot") {
     const result = axi(state, ["snapshot", "--full"]);
     if (args[0]) writeFileSync(resolve(args[0]), result.stdout);
@@ -985,13 +1075,124 @@ async function cmdBrowser([id, action, ...args]) {
   }
   if (!action)
     fail(
-      "usage: browser ID open [PATH] | click ROLE NAME | fill ROLE NAME TEXT | snapshot [FILE] | <axi command>",
+      "usage: browser ID open [PATH] | click ROLE NAME | fill ROLE NAME TEXT | snapshot [FILE] | focus on|off | <axi command>",
     );
   return print(axi(state, [action, ...args]));
 }
 
 function browserSession(state) {
   return `hello-${state.id}`;
+}
+
+async function cdpConnect(url) {
+  const socket = new WebSocket(url);
+  const pending = new Map();
+  let nextId = 0;
+  const closed = new Promise((done) => {
+    socket.onclose = done;
+  });
+  await new Promise((open, reject) => {
+    socket.onopen = open;
+    socket.onerror = () => reject(new Error(`cannot open ${url}`));
+  });
+  socket.onmessage = ({ data }) => {
+    const message = JSON.parse(data);
+    const request = pending.get(message.id);
+    if (!request) return;
+    pending.delete(message.id);
+    if (message.error) request.reject(new Error(message.error.message));
+    else request.resolve(message.result);
+  };
+  const send = (method, params = {}) =>
+    new Promise((settle, abort) => {
+      nextId += 1;
+      pending.set(nextId, { resolve: settle, reject: abort });
+      socket.send(JSON.stringify({ id: nextId, method, params }));
+    });
+  return {
+    closed,
+    send,
+    close: () => socket.close(),
+    evaluate: async (expression) =>
+      (await send("Runtime.evaluate", { expression, returnByValue: true })).result.value,
+  };
+}
+
+async function cdpPageTargets(state) {
+  if (!state.cdpPort) fail(`instance ${state.id} has no CDP port; recreate it with up`);
+  try {
+    const targets = await (
+      await fetch(`http://127.0.0.1:${state.cdpPort}/json/list`)
+    ).json();
+    return targets.filter((target) => target.type === "page");
+  } catch {
+    return fail(
+      `no browser on CDP port ${state.cdpPort}; run: hello.mjs browser ${state.id} stop, then browser ${state.id} open /`,
+    );
+  }
+}
+
+async function selectedPageTarget(state) {
+  const nonce = randomBytes(8).toString("hex");
+  axi(state, ["eval", `(window.${FOCUS_PROBE} = "${nonce}")`]);
+  for (const target of await cdpPageTargets(state)) {
+    const session = await cdpConnect(target.webSocketDebuggerUrl);
+    const found = await session.evaluate(`window.${FOCUS_PROBE}`);
+    if (found === nonce) {
+      await session.evaluate(`delete window.${FOCUS_PROBE}`);
+      session.close();
+      return target;
+    }
+    session.close();
+  }
+  return fail("could not find the selected page among the browser's targets");
+}
+
+async function pageFocusReport(page) {
+  return JSON.parse(
+    await page.evaluate(
+      "JSON.stringify({ hasFocus: document.hasFocus(), visibilityState: document.visibilityState })",
+    ),
+  );
+}
+
+async function setBrowserFocus(state, mode) {
+  if (mode !== "on" && mode !== "off") fail("usage: browser ID focus on|off");
+  const wanted = mode === "on";
+  const target = await selectedPageTarget(state);
+  const page = await cdpConnect(target.webSocketDebuggerUrl);
+  if ((await pageFocusReport(page)).hasFocus !== wanted) {
+    const { webSocketDebuggerUrl } = await (
+      await fetch(`http://127.0.0.1:${state.cdpPort}/json/version`)
+    ).json();
+    const browser = await cdpConnect(webSocketDebuggerUrl);
+    let frontId = target.id;
+    if (!wanted) {
+      // Enabling then disabling from this session drops the emulation axi applies to every page.
+      await page.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+      await page.send("Emulation.setFocusEmulationEnabled", { enabled: false });
+      const other = (await cdpPageTargets(state)).find(({ id }) => id !== target.id);
+      frontId =
+        other?.id ??
+        (await browser.send("Target.createTarget", { url: "about:blank" })).targetId;
+    }
+    await browser.send("Target.activateTarget", { targetId: frontId });
+    browser.close();
+  }
+  const deadline = Date.now() + FOCUS_SETTLE_MS;
+  let report = await pageFocusReport(page);
+  while (report.hasFocus !== wanted && Date.now() < deadline) {
+    await sleep(100);
+    report = await pageFocusReport(page);
+  }
+  page.close();
+  process.stdout.write(
+    `${JSON.stringify({ url: target.url, focus: mode, ...report })}\n`,
+  );
+  if (report.hasFocus !== wanted)
+    fail(
+      `page still reports hasFocus ${report.hasFocus} after focus ${mode}; a click or fill gives a tab real input focus that only a fresh tab sheds: hello.mjs browser ${state.id} closepage <id>, then newpage <url>, then focus ${mode}`,
+    );
 }
 
 async function cmdSeed([id, name]) {

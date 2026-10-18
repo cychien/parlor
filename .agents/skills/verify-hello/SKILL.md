@@ -21,10 +21,10 @@ The CLI drives the checkout it lives in. Pass `up --source <dir>` to drive anoth
 Read this before starting anything.
 
 - The server opens PGlite at `.parlor/pglite` relative to the app dir (hardcoded in `examples/hello/server.ts`), and PGlite is single-process. Two servers in one checkout would share and corrupt one database, and nothing else can open it while a server runs. So every instance is a snapshot: `up` rsyncs the checkout (without `.git`, `node_modules`, `.parlor`, `docs`, `.agents`, `.claude`) into `~/.cache/parlor-verify-hello/instances/<id>/repo`, runs `pnpm install --offline` there, and the server runs from that copy with its own data dir. Never run `pnpm dev` in the checkout itself while verifying.
-- Ports are chosen per instance: server from 3300-3399, web from 5300-5399, skipping any port `lsof` shows listening and any port another instance reserved. The copy's `parlor.config.ts` is replaced by an overlay that imports the real config (kept as `parlor.config.source.ts`) and overrides only `server.port`, `server.url`, and `web.port`.
+- Ports are chosen per instance: server from 3300-3399, web from 5300-5399, skipping any port `lsof` shows listening and any port another instance reserved. A third port from 9300-9399 is reserved for the instance's browser (`browserCdpPort` in `$H info <id>`): the session's Chrome is launched with `--remote-debugging-port` on it so the harness can reach CDP, which chrome-devtools-axi does not expose. An instance created before this port existed has none; recreate it. The copy's `parlor.config.ts` is replaced by an overlay that imports the real config (kept as `parlor.config.source.ts`) and overrides only `server.port`, `server.url`, and `web.port`.
 - A snapshot is frozen at `up`. After editing the checkout run `$H sync <id>`; doctor fails its `build` check until you do.
 - One iOS instance per simulator: the app id `dev.parlor.hello` is installed once per device, so `up` refuses a second instance on the same simulator. Pass `--device` to use another.
-- The harness changes focus and visibility. Pages driven over CDP never receive `blur` or `visibilitychange`, even in a background tab, so every page reports itself focused and visible. Anything that depends on which tab the user is looking at (agent UI client selection, presence ties) behaves differently from a real browser here; do not read that as an app defect without reproducing it in a real window.
+- Focus and visibility are not real here. chrome-devtools-mcp, which axi drives, emulates a focused page on every tab it manages, so by default every page reports `document.hasFocus()` true and `document.visibilityState` `visible` and never receives `blur`, even in a background tab (`selectpage` changes nothing). `$H browser <id> focus off|on` overrides that for the selected tab (see Drive). `visibilityState` cannot be changed at all: it stays `visible` in both states and `visibilitychange` never fires, in headless and in headed Chrome. Anything that depends on a hidden tab (agent UI client selection by visibility) cannot be reproduced here; do not read that as an app defect without a real window.
 - Starting a web instance takes about 6 seconds (measured: `up` copies the checkout and runs `pnpm install --offline` in the copy), so start one per isolation need without hesitation. A mac or iOS instance takes minutes because it builds the native app; reuse a running one across checks with `$H seed` and `$H sync` instead of starting a new one.
 - Browser sessions are per instance: `$H browser <id> ...` sets `CHROME_DEVTOOLS_AXI_SESSION=hello-<id>`. Never call chrome-devtools-axi without a session name, because the default session may belong to another agent.
 - Desktop builds share one cargo target dir, `~/.cache/parlor-verify-hello/cargo-target`, so only the first mac launch compiles Tauri from scratch. Concurrent mac launches wait on cargo's lock.
@@ -71,16 +71,58 @@ Because PGlite allows one process, `seed` and `sql` stop a running instance and 
 $H doctor <id>      # read-only, exit 1 on any FAIL
 ```
 
-It checks: processes alive in the instance tree; the snapshot fingerprint matches the checkout (`build`); both ports are listened on only by processes this instance started; the page, `/_parlor/manifest` (protocol 1 and the four actions), `/_parlor/sync/token` (transport), `listTasks` through the proxy (count and first titles), MCP `tools/list`; the server's working directory is the instance app dir (so PGlite is the instance's); for mac the `parlor_app` process; for iOS the app on the simulator; for both shells a connection to the server port from outside the dev tree. There is no auth: every request runs in the `default` scope. Run doctor first and whenever anything looks off.
+It checks: processes alive in the instance tree; the snapshot fingerprint matches the checkout (`build`); both ports are listened on only by processes this instance started; the page, `/_parlor/manifest` (protocol 1 and the five actions), `/_parlor/sync/token` (transport), `listTasks` through the proxy (count and first titles), MCP `tools/list`; the server's working directory is the instance app dir (so PGlite is the instance's); for mac the `parlor_app` process; for iOS the app on the simulator; for both shells a connection to the server port from outside the dev tree. There is no auth: every request runs in the `default` scope. Run doctor first and whenever anything looks off.
 
 ## Drive
 
 Feature recipes live in `features/README.md`. The surfaces:
 
-- **Web UI, chrome-devtools-axi.** `$H browser <id> open /` loads the page. `click ROLE NAME` and `fill ROLE NAME TEXT` find the element by ARIA role and accessible name in a fresh snapshot and fail unless exactly one matches, so refs never go stale. Handles: `textbox "New task"`, `button "Add"`, `checkbox "<task title>"` (its snapshot line shows `checked` when done), `textbox "Name"`, heading `Hello, <name>!`, `button "Notify"`, the texts `Notifications via <platform>` and `Deep links via <platform>`. Any other axi command passes through with the instance's session: `$H browser <id> wait "Call Amy"`, `screenshot FILE`, `eval "<js>"`, `console`.
+- **Web UI, chrome-devtools-axi.** `$H browser <id> open /` loads the page. `click ROLE NAME` and `fill ROLE NAME TEXT` find the element by ARIA role and accessible name in a fresh snapshot and fail unless exactly one matches, so refs never go stale. Handles: `textbox "New task"`, `button "Add"`, `checkbox "<task title>"` (its snapshot line shows `checked` when done), `textbox "Name"`, heading `Hello, <name>!`, `button "Notify"`, the texts `Notifications via <platform>` and `Deep links via <platform>`. Any other axi command passes through with the instance's session: `$H browser <id> wait "Call Amy"`, `screenshot FILE`, `eval "<js>"`, `console`, `pages`, `newpage <url>`, `selectpage <id>`, `closepage <id>`. axi prints its errors on stdout; the harness includes them in the failure message.
+- **Reading page state with `eval`.** `eval` runs in the selected page. A bare expression returns its value; statements need the function form. A missing value prints `undefined` (for `eval`) or `null`.
+
+  ```sh
+  $H browser <id> eval "document.activeElement?.name"                   # the focused field's name attribute: "title" after fill textbox "New task", undefined on the body
+  $H browser <id> eval "document.querySelector('[data-parlor-highlight]')?.getAttribute('data-parlor-highlight') ?? null"
+  $H browser <id> eval "[...document.querySelectorAll('[data-parlor-highlight]')].map(e => e.dataset.parlorHighlight)"
+  $H browser <id> eval "() => ({ hasFocus: document.hasFocus(), visibilityState: document.visibilityState })"
+  ```
+
+  `data-parlor-highlight` is the attribute the agent UI puts on the element an agent is pointing at; it is `null` until something highlights. The hello fields are named `name` and `title`. Proven here by setting the attribute by hand on the first `li` and reading `"task:seed-baseline-1"` back.
+
+- **Browser focus.** `$H browser <id> focus off` makes the selected tab report `document.hasFocus()` false and fires `blur`; `$H browser <id> focus on` makes it report true and fires `focus`. Each prints `{"url", "focus", "hasFocus", "visibilityState"}` read back from the page and exits 1 when the page does not match. Calling it in the state already reached does nothing. Read the effect from the page and from the app:
+
+  ```sh
+  $H browser <id> eval "() => { window.__ev = []; addEventListener('blur', () => __ev.push('blur')); addEventListener('focus', () => __ev.push('focus')); document.addEventListener('visibilitychange', () => __ev.push('vis:' + document.visibilityState)); return 1 }"
+  $H browser <id> focus off
+  $H browser <id> eval "() => ({ hasFocus: document.hasFocus(), visibilityState: document.visibilityState, events: __ev })"
+  $H mcp <id> call ui_screen '{}'          # client.focused is false, or the page is listed in otherClients with focused false
+  ```
+
+  | State                    | `document.hasFocus()` | `visibilityState` | window events | `ui_screen` `focused` / `visible` |
+  | ------------------------ | --------------------- | ----------------- | ------------- | --------------------------------- |
+  | default, after `open`    | true                  | `visible`         | none          | true / true                       |
+  | `focus off`              | false                 | `visible`         | `blur` once   | false / true                      |
+  | `focus on` (after `off`) | true                  | `visible`         | `focus` once  | true / true                       |
+
+  How it works: it drops axi's focus emulation from a second CDP session (enabling then disabling `Emulation.setFocusEmulationEnabled`) and activates another tab with `Target.activateTarget`, which removes the tab's real focus; `on` activates the selected tab again. It finds the selected tab by setting a probe on `window` through axi `eval` and looking for it over CDP. It reaches Chrome on the instance's `browserCdpPort`, so the browser session must have been started by `$H browser <id> ...`.
+
+  Limits, all observed on chrome-devtools-mcp 1.11.0 with chrome-devtools-axi 0.1.44: `open`, `click`, and `fill` put the tab back to focused, so run `focus off` after them. After a `click` or `fill` the tab holds real input focus that `focus off` cannot shed (it exits 1 with the recipe): close it and start a fresh tab, `$H browser <id> closepage <id>`, `$H browser <id> newpage <web url>`, then `focus off`. `focus` acts on the selected tab only; other tabs stay focused, and `selectpage` changes nothing about focus. With two app tabs open, `focus off` on one turns the `ambiguous_client` answer of `ui_navigate` into a pick of the other.
+
 - **MCP through a real agent.** `$H agent <id> --out <dir> "<prompt>"` runs `claude -p` with an MCP config pointing at `http://localhost:<server>/_parlor/mcp` (streamable HTTP), `--strict-mcp-config`, every built-in tool removed (`--tools ""`), only `mcp__hello` allowed, user settings and hooks skipped, no session saved. It writes `agent-mcp-config.json`, `agent-command.json`, `agent-transcript.jsonl` (stream-json), and `agent-summary.json` (MCP server status, every tool call with its input, final text) into `<dir>`. Add `--model M` to pick a model.
 - **Which MCP path.** Drive a check through `$H mcp` when it is about a tool's result: its fields, error codes, which client it picks, what it does under concurrency. It answers in milliseconds and spends no model. Use `$H agent` only when the check is whether an agent reads a plain request and picks the right tool and arguments, because each run costs a model turn per call and 30 to 90 seconds. The two send the same MCP requests, so the app cannot tell them apart; they differ in timing between calls (an agent pauses to think) and in which arguments get sent.
-- **MCP without a model.** `$H mcp <id> tools` and `$H mcp <id> call createTask '{"title":"X"}'` use `@modelcontextprotocol/client` from the snapshot. Tools: `hello`, `listTasks`, `createTask`, `toggleTask`; `readOnlyHint` is true for `hello` and `listTasks`.
+- **MCP without a model.** `$H mcp <id> tools` and `$H mcp <id> call createTask '{"title":"X"}'` use `@modelcontextprotocol/client` (2.3.1) from the snapshot. Tools: the actions `hello`, `listTasks`, `getTask`, `createTask`, `toggleTask`, plus `ui_screen` and `ui_navigate`; `readOnlyHint` is true for `hello`, `listTasks`, `getTask`, and `ui_screen`.
+- **MCP resources.** `$H mcp <id> resources` lists them; `$H mcp <id> resource parlor://manifest` reads one and prints the `resources/read` result (`contents[]` with `uri`, `mimeType`, `text`). An unknown URI prints `mcp resource failed: Resource not found: <uri>` and exits 1. To get the manifest itself: `$H mcp <id> resource parlor://manifest | jq -r '.contents[0].text | fromjson'`. `parlor://manifest` is the app's pages and views with their JSON schemas.
+- **A tool call in the background.** `$H mcp <id> call TOOL '{...}' --out FILE &` runs a call that may block, such as one waiting for a click in the browser, while the shell drives the page. FILE appears only when the call ends (written whole, never partial) as `{tool, input, startedAt, endedAt, ms, isError, result}` with epoch-millisecond timestamps from `Date.now()`; `result` is the tool result, or `{error}` when the request failed (for example an unknown tool), and the command still prints the result and exits 1 on error. A call may wait up to 180 s without progress, longer if the server sends progress notifications, and at most 300 s in total; these are explicit request options, not the SDK default of 60 s. Proven with a 75 s action: the call returned `ms: 75011`, `isError: false`.
+
+  ```sh
+  $H mcp <id> call SLOW_TOOL '{}' --out "$E/slow.json" > "$E/slow.stdout" &
+  # drive the browser meanwhile
+  wait %1                                  # or poll: until [ -f "$E/slow.json" ]; do sleep 1; done
+  jq '{isError, ms}' "$E/slow.json"
+  ```
+
+  `mcp ID tools` and `resources` take no `--out`. Right after `$H sync <id>` the server restarts and `mcp` answers `fetch failed` for a few seconds; retry.
+
 - **HTTP.** Actions take a JSON body and answer `{"data": ..., "tags": [...]}`; errors answer `{"error": {"code", "message", "issues"}}` with 400, 404, or 500.
 
   ```sh
