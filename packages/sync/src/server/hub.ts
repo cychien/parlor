@@ -33,7 +33,7 @@ export class SyncHub {
     for (const subscriber of this.#subscribers.get(scope) ?? []) subscriber(event);
   }
 
-  subscribe(scope: string, subscriber: SyncSubscriber): () => void {
+  subscribe(scope: string, subscriber: SyncSubscriber, _onStop?: () => void): () => void {
     const set = this.#subscribers.get(scope) ?? new Set();
     set.add(subscriber);
     this.#subscribers.set(scope, set);

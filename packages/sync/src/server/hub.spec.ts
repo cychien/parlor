@@ -38,4 +38,16 @@ describe("SyncHub", () => {
     const hub = new SyncHub({ read: () => ({}), transaction: async (run) => run({}) });
     expect(hub.canPush).toBe(false);
   });
+
+  it("tells subscribers to end when it stops", async () => {
+    const hub = new SyncHub({ read: () => ({}), transaction: async (run) => run({}) });
+    const onStop = vi.fn();
+    hub.subscribe("acme", vi.fn(), onStop);
+    hub.subscribe("other", vi.fn());
+
+    await hub.stop();
+
+    expect(onStop).toHaveBeenCalledOnce();
+    expect(hub.subscriberCount()).toBe(0);
+  });
 });
