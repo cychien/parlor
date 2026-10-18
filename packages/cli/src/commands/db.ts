@@ -15,6 +15,8 @@ export function drizzleKitArgs(schema: string, migrations: string): string[] {
   return ["generate", "--dialect", "postgresql", "--schema", schema, "--out", migrations];
 }
 
+const STACK_FRAME = /^\s+at \S/m;
+
 export interface DrizzleKitIo {
   readonly stdout: "inherit" | "ignore";
   readonly stderr: Writable;
@@ -29,13 +31,22 @@ export function runDrizzleKit(
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [bin, ...args], {
       cwd,
+      env: { ...process.env, NODE_NO_WARNINGS: "1" },
       stdio: ["inherit", io.stdout, "pipe"],
     });
-    child.stderr.on("data", (chunk: Buffer) => io.stderr.write(chunk));
+    let stderrText = "";
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderrText += chunk.toString();
+      io.stderr.write(chunk);
+    });
     child.once("error", reject);
-    child.once("exit", (code) => {
-      if (code === 0) resolve();
-      else reject(new CliError(`drizzle-kit ${args[0]} exited with code ${code}`));
+    child.once("close", (code) => {
+      if (code !== 0)
+        reject(new CliError(`drizzle-kit ${args[0]} failed with exit code ${code}`));
+      // drizzle-kit catches its own errors, prints the Error to stderr and still exits 0
+      else if (STACK_FRAME.test(stderrText))
+        reject(new CliError(`drizzle-kit ${args[0]} failed`));
+      else resolve();
     });
   });
 }
