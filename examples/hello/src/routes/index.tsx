@@ -8,6 +8,7 @@ export const Route = createFileRoute("/")({
   staticData: {
     description:
       "Home: a greeting and the task list, oldest first, to add and check off tasks.",
+    views: [taskView],
   },
   component: Home,
 });

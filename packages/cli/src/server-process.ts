@@ -2,11 +2,22 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 
-import type { LoadedConfig } from "@parlor/config";
+import type { LoadedConfig, ParlorConfig } from "@parlor/config";
 
 import { onShutdown } from "./shutdown.js";
 
 const require = createRequire(import.meta.url);
+
+export function serverEnv(
+  config: ParlorConfig,
+  base: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  return {
+    ...base,
+    PORT: String(config.server.port),
+    PARLOR_WEB_ORIGIN: `http://localhost:${config.web.port}`,
+  };
+}
 
 export function startServerProcess({ config, rootDir }: LoadedConfig): ChildProcess {
   const tsxBin = require.resolve("tsx/cli");
@@ -18,7 +29,7 @@ export function startServerProcess({ config, rootDir }: LoadedConfig): ChildProc
   const child = spawn(process.execPath, [tsxBin, "watch", runner, entry], {
     cwd: rootDir,
     stdio: "inherit",
-    env: { ...process.env, PORT: String(config.server.port) },
+    env: serverEnv(config),
   });
   onShutdown(() => {
     if (child.exitCode === null) child.kill("SIGTERM");

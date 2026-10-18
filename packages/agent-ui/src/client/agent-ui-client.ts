@@ -10,12 +10,15 @@ import {
   type RouteSnapshot,
   type ScreenSnapshot,
   UI_CHANNEL,
+  type UiError,
   type UiOp,
+  type UiOpInput,
   type UiReply,
   type UiRequest,
 } from "../protocol.js";
+import { type AnyAgentView } from "../view.js";
 import { type BrowserEnvironment, browserEnvironment } from "./environment.js";
-import { createViewRegistry, type ViewRegistry } from "./registry.js";
+import { createViewRegistry, type ViewRegistry, type ViewSlot } from "./registry.js";
 import { captureScreen, DEFAULT_SCREEN_LIMITS, type ScreenLimits } from "./screen.js";
 
 export interface QuerySource {
@@ -31,6 +34,7 @@ export interface AgentUiClientOptions {
   readonly buildId?: string | undefined;
   readonly environment?: BrowserEnvironment | undefined;
   readonly limits?: Partial<ScreenLimits> | undefined;
+  readonly settleMs?: number | undefined;
   readonly dev?: boolean | undefined;
 }
 
@@ -54,6 +58,7 @@ export interface AgentUiClient extends ClientChannel {
 }
 
 const REPLY_CACHE_SIZE = 64;
+const DEFAULT_SETTLE_MS = 1500;
 const OBSERVER_WAIT_MS = 100;
 
 export function routeSnapshot(router: AnyRouter): RouteSnapshot | null {
@@ -100,6 +105,29 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
   const env = options.environment ?? browserEnvironment();
   const limits = { ...DEFAULT_SCREEN_LIMITS, ...options.limits };
   const registry = createViewRegistry(env);
+  const unlistedWarned = new Set<string>();
+  const warnIfUnlisted = (view: AnyAgentView) => {
+    const router = options.router;
+    if (!options.dev || !router || unlistedWarned.has(view.name)) return;
+    const matches = router.state.matches;
+    if (matches.some((match) => match.staticData?.views?.includes(view))) return;
+    unlistedWarned.add(view.name);
+    console.warn(
+      `[parlor] The agent view "${view.name}" mounted on ${router.state.location.pathname}, but no matched route lists it in staticData.views, so the manifest cannot tell agents where it lives.`,
+    );
+  };
+  const views: ViewRegistry = {
+    track(view, binding) {
+      const slot = registry.track(view, binding);
+      return {
+        ...slot,
+        mount(key) {
+          warnIfUnlisted(view);
+          return slot.mount(key);
+        },
+      } satisfies ViewSlot;
+    },
+  };
   const activity = createActivityStore();
   const replies = new Map<string, UiReply>();
   const queued = new Set<string>();
@@ -143,22 +171,69 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
     );
   };
 
+  const settleMs = options.settleMs ?? DEFAULT_SETTLE_MS;
+
+  const navigate = async (
+    input: UiOpInput<"navigate">,
+  ): Promise<ScreenSnapshot | UiError> => {
+    const router = options.router;
+    if (!router) {
+      return {
+        code: "unknown_route",
+        message:
+          "This app did not give FrameworkProvider a router, so it cannot navigate.",
+      };
+    }
+    if (!Object.hasOwn(router.routesByPath, input.to)) {
+      return { code: "unknown_route", message: `This app has no route ${input.to}.` };
+    }
+    const deadline = env.now() + settleMs;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      router.navigate({
+        to: input.to,
+        ...(input.params ? { params: input.params } : {}),
+        ...(input.search ? { search: input.search } : {}),
+        ...(input.replace === undefined ? {} : { replace: input.replace }),
+      } as unknown as Parameters<AnyRouter["navigate"]>[0]),
+      new Promise<void>((resolve) => {
+        timer = env.setTimeout(resolve, settleMs);
+      }),
+    ]);
+    env.clearTimeout(timer);
+    await env.nextTask();
+    await options.queries.settled(Math.max(0, deadline - env.now()));
+    await env.nextTask();
+    return screen();
+  };
+
   const execute = async (request: UiRequest): Promise<UiReply> => {
+    const ok = (result: unknown): UiReply => ({
+      type: "reply",
+      id: request.id,
+      ok: true,
+      result,
+    });
+    const fail = (error: UiError): UiReply => ({
+      type: "reply",
+      id: request.id,
+      ok: false,
+      error,
+    });
     try {
       switch (request.op) {
         case "screen":
-          return { type: "reply", id: request.id, ok: true, result: await screen() };
+          return ok(await screen());
+        case "navigate": {
+          const outcome = await navigate(request.input);
+          return "code" in outcome ? fail(outcome) : ok({ screen: outcome });
+        }
       }
     } catch (error) {
-      return {
-        type: "reply",
-        id: request.id,
-        ok: false,
-        error: {
-          code: "internal",
-          message: error instanceof Error ? error.message : "The app failed to answer.",
-        },
-      };
+      return fail({
+        code: "internal",
+        message: error instanceof Error ? error.message : "The app failed to answer.",
+      });
     }
   };
 
@@ -274,7 +349,7 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
 
   return {
     event: UI_CHANNEL,
-    views: registry,
+    views,
     activity,
     screen,
     opened() {

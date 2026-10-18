@@ -22,6 +22,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@parlor/agent-ui": "workspace:*",
     "@parlor/config": "workspace:*",
     "@tanstack/router-plugin": "catalog:",
     "@vitejs/plugin-react": "catalog:",

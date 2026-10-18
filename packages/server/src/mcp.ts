@@ -5,7 +5,7 @@ import {
   type McpRequestContext,
   McpServer,
 } from "@modelcontextprotocol/server";
-import { type AgentUi, UiFailure } from "@parlor/agent-ui/server";
+import { type AgentUi, UI_MANIFEST_RESOURCE, UiFailure } from "@parlor/agent-ui/server";
 import { ActionError, type ActionMap, isMutating } from "@parlor/core";
 import type { ActionRegistry } from "@parlor/core/registry";
 
@@ -76,7 +76,29 @@ export function createMcpHandler<T extends ActionMap>(
         },
       );
     }
-    for (const tool of agentUi?.tools("mcp") ?? []) {
+    const uiTools = agentUi?.tools("mcp") ?? [];
+    const uiManifest = uiTools.length > 0 ? agentUi?.manifest() : undefined;
+    if (uiManifest) {
+      server.registerResource(
+        "ui-manifest",
+        UI_MANIFEST_RESOURCE,
+        {
+          description:
+            "The app's pages and the views they show, with full JSON schemas for each view's value.",
+          mimeType: "application/json",
+        },
+        (uri) => ({
+          contents: [
+            {
+              uri: uri.href,
+              mimeType: "application/json",
+              text: JSON.stringify(uiManifest, null, 2),
+            },
+          ],
+        }),
+      );
+    }
+    for (const tool of uiTools) {
       server.registerTool(
         tool.name,
         {

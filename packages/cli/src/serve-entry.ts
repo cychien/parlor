@@ -1,14 +1,24 @@
+import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { UI_MANIFEST_FILE } from "@parlor/agent-ui";
+import { fileManifestSource, type UiManifestSource } from "@parlor/agent-ui/server";
+import { GENERATED_DIR } from "@parlor/config";
 import { serve } from "srvx";
 
 const entry = process.argv[2];
 if (!entry) throw new Error("serve-entry needs the server entry path");
 
 const loaded = (await import(pathToFileURL(entry).href)) as {
-  default?: { fetch?: (request: Request) => Promise<Response> | Response };
+  default?: {
+    fetch?: (request: Request) => Promise<Response> | Response;
+    installUiManifest?: (source: UiManifestSource) => void;
+  };
 };
 const handler = loaded.default?.fetch;
+loaded.default?.installUiManifest?.(
+  fileManifestSource(resolve(GENERATED_DIR, UI_MANIFEST_FILE)),
+);
 
 if (handler) {
   const port = Number(process.env.PORT ?? 3000);

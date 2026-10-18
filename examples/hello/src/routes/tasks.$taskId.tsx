@@ -4,7 +4,10 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { task as taskView } from "../views.js";
 
 export const Route = createFileRoute("/tasks/$taskId")({
-  staticData: { description: "One task: its title and whether it is done." },
+  staticData: {
+    description: "One task: its title and whether it is done.",
+    views: [taskView],
+  },
   component: TaskDetail,
 });
 

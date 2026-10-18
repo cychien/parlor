@@ -47,7 +47,15 @@ export function browserEnvironment(): BrowserEnvironment {
       height: window?.innerHeight ?? 0,
     }),
     now: () => Date.now(),
-    nextTask: () => new Promise((resolve) => globalThis.setTimeout(resolve, 0)),
+    nextTask: () =>
+      new Promise((resolve) => {
+        const channel = new MessageChannel();
+        channel.port1.onmessage = () => {
+          channel.port1.close();
+          resolve();
+        };
+        channel.port2.postMessage(undefined);
+      }),
     setTimeout: globalThis.setTimeout.bind(globalThis),
     clearTimeout: globalThis.clearTimeout.bind(globalThis),
   };

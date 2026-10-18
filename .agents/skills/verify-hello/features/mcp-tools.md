@@ -4,7 +4,7 @@ Every action is an MCP tool at `/_parlor/mcp` (streamable HTTP), so an external 
 
 ## Sub-features
 
-- `mcp-list` lists `hello`, `listTasks`, `createTask`, `toggleTask` with descriptions and input schemas.
+- `mcp-list` lists the actions `hello`, `listTasks`, `getTask`, `createTask`, `toggleTask` with descriptions and input schemas, plus the agent UI tools covered in [Agent UI](./agent-ui.md).
 - `mcp-call` calls a tool and returns the action result as text and structured content.
 - `mcp-invalid` returns a tool error naming the bad field for invalid input.
 - `mcp-agent` lets Claude Code headless discover and use the tools from a plain-language request.
@@ -21,7 +21,7 @@ Preconditions:
 - An instance seeded with `baseline`, doctor clean (`mcp: tools ...`).
 - `claude` is on PATH and logged in, for the agent steps.
 
-- **List tools.** Run `$H mcp <id> tools > $E/tools.json`. Four tools; `listTasks` and `hello` have `annotations.readOnlyHint: true`, `createTask` and `toggleTask` false; `createTask` requires `title`.
+- **List tools.** Run `$H mcp <id> tools > $E/tools.json`. Five action tools plus `ui_screen` and `ui_navigate`; `listTasks`, `getTask` and `hello` have `annotations.readOnlyHint: true`, `createTask` and `toggleTask` false; `createTask` requires `title`.
 - **Call.** Run `$H mcp <id> call listTasks '{}'`. The text content is the three baseline tasks in order. Run `$H mcp <id> call hello '{"name":"Amy"}'`; `structuredContent.message` is `Hello, Amy!`.
 - **Invalid input.** Run `$H mcp <id> call createTask '{"title":""}'`. `isError` is true, the text names `title`, and the command exits 1. `$H sql` shows no new row.
 - **Agent.** Run `$H agent <id> --out $E/agent "Using the hello MCP tools, create a task titled 'Added by Claude', then list all tasks and reply with their titles in order."`. `agent-summary.json` shows server `hello` `connected`, tool calls `mcp__hello__createTask` with `{"title":"Added by Claude"}` then `mcp__hello__listTasks`, and `isError: false`.

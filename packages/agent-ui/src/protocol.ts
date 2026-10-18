@@ -6,17 +6,25 @@ export const UI_CHANNEL = "ui";
 
 export interface UiOpInputs {
   readonly screen: Readonly<Record<string, never>>;
+  readonly navigate: {
+    readonly to: string;
+    readonly params?: Readonly<Record<string, string>> | undefined;
+    readonly search?: Readonly<Record<string, unknown>> | undefined;
+    readonly replace?: boolean | undefined;
+  };
 }
 
 export type UiOp = keyof UiOpInputs;
 
 export const uiOpReadOnly: { readonly [O in UiOp]: boolean } = {
   screen: true,
+  navigate: false,
 };
 export type UiOpInput<O extends UiOp> = UiOpInputs[O];
 
 export interface UiOpResults {
   readonly screen: ScreenSnapshot;
+  readonly navigate: { readonly screen: ScreenSnapshot };
 }
 
 export interface AgentOrigin {
@@ -35,6 +43,7 @@ export type UiRequest = {
 }[UiOp];
 
 export type UiErrorCode =
+  | "unknown_route"
   | "unknown_client"
   | "ambiguous_client"
   | "busy"
@@ -179,8 +188,13 @@ const isFields = (value: unknown): value is Fields =>
 
 const isString = (value: unknown): value is string => typeof value === "string";
 
+const isBoolean = (value: unknown): value is boolean => typeof value === "boolean";
+
 const isPositiveInteger = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+
+const isStringFields = (value: unknown): value is Readonly<Record<string, string>> =>
+  isFields(value) && Object.values(value).every(isString);
 
 const absentOr = <T>(
   value: unknown,
@@ -195,6 +209,24 @@ function originOf(value: unknown): AgentOrigin | undefined {
   return name === undefined ? { via } : { via, name };
 }
 
+function navigateInputOf(value: unknown): UiOpInput<"navigate"> | undefined {
+  if (!isFields(value) || !isString(value.to)) return undefined;
+  const { to, params, search, replace } = value;
+  if (
+    !absentOr(params, isStringFields) ||
+    !absentOr(search, isFields) ||
+    !absentOr(replace, isBoolean)
+  ) {
+    return undefined;
+  }
+  return {
+    to,
+    ...(params === undefined ? {} : { params }),
+    ...(search === undefined ? {} : { search }),
+    ...(replace === undefined ? {} : { replace }),
+  };
+}
+
 function requestOf(json: unknown): UiRequest | undefined {
   if (!isFields(json)) return undefined;
   const { id, op, input, timeoutMs } = json;
@@ -206,6 +238,10 @@ function requestOf(json: unknown): UiRequest | undefined {
   switch (op) {
     case "screen":
       return isFields(input) ? { ...envelope, op, input: {} } : undefined;
+    case "navigate": {
+      const navigate = navigateInputOf(input);
+      return navigate ? { ...envelope, op, input: navigate } : undefined;
+    }
     default:
       return undefined;
   }

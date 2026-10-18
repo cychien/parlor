@@ -37,9 +37,33 @@ let database: DatabaseHandle;
 let server: FrameworkServer;
 const closers: (() => Promise<void> | void)[] = [];
 
+const uiManifest = {
+  protocol: 1 as const,
+  app: { id: "dev.parlor.test", name: "Test" },
+  routes: [
+    { path: "/", description: "Home with tasks.", params: [], views: ["task"] },
+    { path: "/settings", description: "App settings.", params: [], views: [] },
+    {
+      path: "/tasks/$taskId",
+      description: "One task.",
+      params: ["taskId"],
+      views: ["task"],
+    },
+  ],
+  views: [
+    {
+      name: "task",
+      description: "A task row; the key is the task id.",
+      keyed: true,
+      schema: { type: "object" },
+    },
+  ],
+};
+
 beforeAll(async () => {
   database = await createDatabase({ dataDir: "memory://" });
   server = createServer({ actions, database, agentUi: { timeoutMs: 2000 } });
+  server.installUiManifest?.(() => uiManifest);
 });
 afterEach(async () => {
   for (const close of closers.splice(0)) await close();
@@ -83,14 +107,22 @@ async function openBrowser(
   let handshake!: () => void;
   const ready = new Promise<void>((resolve) => (handshake = resolve));
   const answer = async (data: string, channel: "stream" | "reply"): Promise<void> => {
-    const request = JSON.parse(data) as { id: string };
+    const request = JSON.parse(data) as {
+      id: string;
+      op: string;
+      input: { to?: string };
+    };
     requests.push(request);
     via.push(channel);
     await answering;
+    const result =
+      request.op === "navigate"
+        ? { screen: screen(request.input.to ?? "") }
+        : screen(path);
     const answered = await post(
       target,
       "/_parlor/ui",
-      { type: "reply", id: request.id, ok: true, result: screen(path) },
+      { type: "reply", id: request.id, ok: true, result },
       id,
     );
     if (answered.status === 200) await answer(await answered.text(), "reply");
@@ -162,14 +194,106 @@ async function mcp(target = server) {
 }
 
 describe("agent UI over MCP", () => {
-  it("lists ui_screen as a read-only tool next to the actions", async () => {
+  it("lists the UI tools next to the actions", async () => {
     const { tools } = await (await mcp()).listTools();
-    expect(tools.map((t) => t.name)).toEqual(["hello", "ui_screen"]);
+    expect(tools.map((t) => t.name)).toEqual(["hello", "ui_screen", "ui_navigate"]);
     const uiScreen = tools.find((t) => t.name === "ui_screen");
     expect(uiScreen?.annotations?.readOnlyHint).toBe(true);
     expect(uiScreen?.inputSchema).toMatchObject({
       type: "object",
       properties: { clientId: { type: "string" } },
+    });
+  });
+
+  it("puts the view catalog in ui_screen and the route catalog in ui_navigate", async () => {
+    const { tools } = await (await mcp()).listTools();
+    const uiScreen = tools.find((t) => t.name === "ui_screen");
+    const uiNavigate = tools.find((t) => t.name === "ui_navigate");
+    expect(uiScreen?.description).toContain(
+      "- task (keyed): A task row; the key is the task id.",
+    );
+    expect(uiNavigate?.description).toContain("- / - Home with tasks. Views: task.");
+    expect(uiNavigate?.description).toContain("- /settings - App settings.");
+    expect(uiNavigate?.description).toContain(
+      "- /tasks/$taskId - One task. Views: task.",
+    );
+    expect(uiNavigate?.annotations?.readOnlyHint).toBe(false);
+    expect(uiNavigate?.inputSchema).toMatchObject({
+      properties: { to: { type: "string", enum: ["/", "/settings", "/tasks/$taskId"] } },
+      required: ["to"],
+    });
+  });
+
+  it("serves the full manifest as an MCP resource and over HTTP", async () => {
+    const client = await mcp();
+    const resource = await client.readResource({ uri: "parlor://manifest" });
+    expect(JSON.parse(String((resource.contents[0] as { text: string }).text))).toEqual(
+      uiManifest,
+    );
+    const response = await server.fetch(new Request("http://app.test/_parlor/manifest"));
+    expect(await response.json()).toMatchObject({
+      protocol: 1,
+      actions: [{ name: "hello" }],
+      ui: uiManifest,
+    });
+  });
+
+  it("navigates the selected client and returns the new screen", async () => {
+    const tab = await openBrowser("tab-n", "/");
+    await tab.presence(true, true);
+    const result = await (
+      await mcp()
+    ).callTool({
+      name: "ui_navigate",
+      arguments: { to: "/tasks/$taskId", params: { taskId: "t1" } },
+    });
+    expect(result.structuredContent).toMatchObject({
+      client: { id: "tab-n" },
+      screen: { route: { path: "/tasks/$taskId" } },
+    });
+    expect(tab.requests).toEqual([
+      expect.objectContaining({
+        op: "navigate",
+        input: { to: "/tasks/$taskId", params: { taskId: "t1" } },
+      }),
+    ]);
+  });
+
+  it("refuses to guess between tied clients and to navigate without params", async () => {
+    const a = await openBrowser("tab-x", "/");
+    const b = await openBrowser("tab-y", "/");
+    await Promise.all([a.presence(true, true), b.presence(true, true)]);
+    const client = await mcp();
+    const tied = await client.callTool({
+      name: "ui_navigate",
+      arguments: { to: "/settings" },
+    });
+    expect(tied.isError).toBe(true);
+    expect(JSON.parse((tied.content as { text: string }[])[0]!.text)).toMatchObject({
+      error: { code: "ambiguous_client" },
+    });
+    const missing = await client.callTool({
+      name: "ui_navigate",
+      arguments: { to: "/tasks/$taskId", clientId: "tab-x" },
+    });
+    expect(JSON.parse((missing.content as { text: string }[])[0]!.text)).toMatchObject({
+      error: { code: "unknown_route", issues: [{ path: "params.taskId" }] },
+    });
+    expect(a.requests).toEqual([]);
+  });
+
+  it("returns a link instead of navigating when no app is open", async () => {
+    const result = await (
+      await mcp()
+    ).callTool({
+      name: "ui_navigate",
+      arguments: { to: "/tasks/$taskId", params: { taskId: "t 1" } },
+    });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toEqual({
+      reachable: false,
+      reason: "no_client",
+      href: "http://app.test/tasks/t%201",
     });
   });
 
@@ -328,7 +452,10 @@ describe("clients that are gone", () => {
     const tab = await openBrowser("tab-real", "/");
     await tab.presence(false, true);
     const client = await mcp();
-    for (const [name, args] of [["ui_screen", { clientId: "does-not-exist" }]] as const) {
+    for (const [name, args] of [
+      ["ui_screen", { clientId: "does-not-exist" }],
+      ["ui_navigate", { to: "/settings", clientId: "does-not-exist" }],
+    ] as const) {
       const result = await client.callTool({ name, arguments: args });
       expect(result.isError).toBe(true);
       expect(result.structuredContent).toBeUndefined();
@@ -361,6 +488,21 @@ describe("reconnecting clients", () => {
     });
     expect(reopened.requests).toHaveLength(1);
   });
+});
+
+describe("unanswered requests", () => {
+  it("reports a navigation the app never answered as outcome_unknown", async () => {
+    await openSilentBrowser("tab-silent");
+    const result = await (
+      await mcp()
+    ).callTool({
+      name: "ui_navigate",
+      arguments: { to: "/settings" },
+    });
+    expect(JSON.parse((result.content as { text: string }[])[0]!.text)).toMatchObject({
+      error: { code: "outcome_unknown" },
+    });
+  }, 10_000);
 });
 
 describe("POST /_parlor/ui", () => {
@@ -397,8 +539,12 @@ describe("external agent policy", () => {
   };
 
   it("exposes UI tools by default, read-only tools for read-only, and none when off", async () => {
-    expect(await toolNames(undefined)).toEqual(["hello", "ui_screen"]);
-    expect(await toolNames({ external: true })).toEqual(["hello", "ui_screen"]);
+    expect(await toolNames(undefined)).toEqual(["hello", "ui_screen", "ui_navigate"]);
+    expect(await toolNames({ external: true })).toEqual([
+      "hello",
+      "ui_screen",
+      "ui_navigate",
+    ]);
     expect(await toolNames({ external: "read-only" })).toEqual(["hello", "ui_screen"]);
     expect(await toolNames({ external: false })).toEqual(["hello"]);
     expect(await toolNames(false)).toEqual(["hello"]);

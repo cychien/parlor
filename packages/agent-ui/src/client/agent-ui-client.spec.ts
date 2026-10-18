@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import * as zm from "zod/mini";
@@ -256,5 +257,132 @@ describe("createAgentUiClient leaving", () => {
     await settle();
     browser.window.dispatchEvent(new browser.window.Event("pagehide"));
     expect(sent.at(-1)).toEqual({ type: "leave" });
+  });
+});
+
+describe("createAgentUiClient navigate", () => {
+  async function routed(settled = async () => {}) {
+    const { createMemoryHistory, createRootRoute, createRoute, createRouter } =
+      await import("@tanstack/react-router");
+    const root = createRootRoute();
+    const listed = createRoute({
+      getParentRoute: () => root,
+      path: "/",
+      staticData: { views: [note] },
+    });
+    const settings = createRoute({ getParentRoute: () => root, path: "/settings" });
+    const detail = createRoute({ getParentRoute: () => root, path: "/tasks/$taskId" });
+    const router = createRouter({
+      routeTree: root.addChildren([listed, settings, detail]),
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+    });
+    router.history.subscribe(() => void router.load());
+    await router.load();
+    const browser = fakeBrowser();
+    const sent: ClientMessage[] = [];
+    const client = createAgentUiClient({
+      router,
+      queries: { active: () => [], settled },
+      send: async (message) => {
+        sent.push(message);
+        return undefined;
+      },
+      platform: "web",
+      environment: browser.env,
+      dev: true,
+    });
+    return {
+      browser,
+      client,
+      router,
+      sent,
+      settle: () => new Promise((r) => setTimeout(r, 20)),
+    };
+  }
+
+  it("navigates to a route with params and returns the new screen", async () => {
+    const settled = vi.fn(async () => {});
+    const { client, router, sent, settle } = await routed(settled);
+    client.receive(
+      request("n1", "navigate", { to: "/tasks/$taskId", params: { taskId: "t1" } }),
+    );
+    await settle();
+    expect(router.state.location.pathname).toBe("/tasks/t1");
+    expect(sent).toEqual([
+      {
+        type: "reply",
+        id: "n1",
+        ok: true,
+        result: {
+          screen: expect.objectContaining({
+            route: {
+              notFound: false,
+              path: "/tasks/$taskId",
+              params: { taskId: "t1" },
+              search: {},
+              url: "/tasks/t1",
+            },
+          }),
+        },
+      },
+    ]);
+    expect(settled).toHaveBeenCalledWith(expect.any(Number));
+  });
+
+  it("returns the new screen only after the observer reports the rows the page mounted", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { browser, client, sent, settle } = await routed();
+    const element = browser.document.createElement("li");
+    browser.document.body.appendChild(element);
+    browser.setRect(element, 0, 30);
+    const slot = client.views.track(row, { key: "r0", get: () => ({ n: 0 }) });
+    slot.ref(element);
+    slot.mount("r0");
+    client.receive(request("n3", "navigate", { to: "/settings" }));
+    await settle();
+    expect(sent).toEqual([]);
+    browser.intersect(element, true);
+    await settle();
+    expect(sent).toEqual([
+      {
+        type: "reply",
+        id: "n3",
+        ok: true,
+        result: {
+          screen: expect.objectContaining({
+            views: {
+              row: { items: [{ key: "r0", value: { n: 0 }, shown: 1 }], offscreen: 0 },
+            },
+          }),
+        },
+      },
+    ]);
+  });
+
+  it("refuses a path the router does not know", async () => {
+    const { client, router, sent, settle } = await routed();
+    client.receive(request("n2", "navigate", { to: "/nope" }));
+    await settle();
+    expect(router.state.location.pathname).toBe("/");
+    expect(sent).toEqual([
+      {
+        type: "reply",
+        id: "n2",
+        ok: false,
+        error: { code: "unknown_route", message: "This app has no route /nope." },
+      },
+    ]);
+  });
+
+  it("warns in dev when a view mounts on a route that does not list it", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { client, router } = await routed();
+    client.views.track(note, { get: () => ({ text: "" }) }).mount(undefined);
+    expect(warn).not.toHaveBeenCalled();
+    await router.navigate({ to: "/settings" });
+    client.views.track(note, { get: () => ({ text: "" }) }).mount(undefined);
+    client.views.track(note, { get: () => ({ text: "" }) }).mount(undefined);
+    expect(warn).toHaveBeenCalledOnce();
+    expect(String(warn.mock.calls[0]?.[0])).toContain('"note"');
   });
 });

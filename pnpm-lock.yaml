@@ -157,6 +157,9 @@ importers:
         specifier: 'catalog:'
         version: 4.6.5
     devDependencies:
+      '@tanstack/react-router':
+        specifier: 'catalog:'
+        version: 1.170.45(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@tanstack/router-core':
         specifier: 'catalog:'
         version: 1.171.38
@@ -166,9 +169,15 @@ importers:
       happy-dom:
         specifier: 'catalog:'
         version: 20.14.5
+      react:
+        specifier: 'catalog:'
+        version: 19.3.0
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
+      vite:
+        specifier: 'catalog:'
+        version: 8.3.3(@types/node@24.19.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)
       vitest:
         specifier: 'catalog:'
         version: 5.0.3(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.3(@types/node@24.19.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15))
@@ -205,6 +214,9 @@ importers:
 
   packages/cli:
     dependencies:
+      '@parlor/agent-ui':
+        specifier: workspace:*
+        version: link:../agent-ui
       '@parlor/config':
         specifier: workspace:*
         version: link:../config
@@ -366,6 +378,9 @@ importers:
 
   packages/host:
     dependencies:
+      '@parlor/agent-ui':
+        specifier: workspace:*
+        version: link:../agent-ui
       '@parlor/config':
         specifier: workspace:*
         version: link:../config
@@ -484,6 +499,9 @@ importers:
 
   packages/shell-web:
     dependencies:
+      '@parlor/agent-ui':
+        specifier: workspace:*
+        version: link:../agent-ui
       '@parlor/config':
         specifier: workspace:*
         version: link:../config

@@ -5,7 +5,9 @@ export {
   createAgentUi,
   DEFAULT_UI_TIMEOUT_MS,
   type ExternalUiPolicy,
+  webOriginFromEnv,
 } from "./agent-ui.js";
+export { fileManifestSource, type UiManifestSource } from "./manifest-source.js";
 export { type BrokerOptions, UiBroker, UiFailure, type UiReceipt } from "./broker.js";
 export {
   ClientDirectory,
@@ -23,7 +25,9 @@ export { parseClientMessage, uiOpInputs } from "./schemas.js";
 export {
   type AgentTool,
   type AgentToolContext,
+  type NavigateToolResult,
   type ScreenToolResult,
+  UI_MANIFEST_RESOURCE,
   UI_TOOLS,
   type UiToolName,
   type UnreachableResult,
