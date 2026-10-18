@@ -135,13 +135,26 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
   let draining = false;
   let warnedUnwatched = false;
 
-  const post = (message: ClientMessage) =>
-    void options.send(message).then(
+  const deliver = (message: ClientMessage): Promise<void> =>
+    options.send(message).then(
       (next) => {
         if (next !== undefined) receive(next);
       },
       () => {},
     );
+  const post = (message: ClientMessage) => void deliver(message);
+
+  let lifecycleTail: Promise<void> | undefined;
+  const postInOrder = (message: ClientMessage) => {
+    const delivered =
+      lifecycleTail === undefined
+        ? deliver(message)
+        : lifecycleTail.then(() => deliver(message));
+    const tail: Promise<void> = delivered.finally(() => {
+      if (lifecycleTail === tail) lifecycleTail = undefined;
+    });
+    lifecycleTail = tail;
+  };
 
   const observed = async () => {
     // A hidden page does not render, so its observer stays silent until it is shown.
@@ -284,7 +297,7 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
     const serialized = JSON.stringify(update);
     if (serialized === lastPresence) return;
     lastPresence = serialized;
-    post(update);
+    postInOrder(update);
   };
   const schedulePresence = () => {
     if (presenceTimer !== undefined) return;
@@ -298,7 +311,7 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
     lastPresence = undefined;
     if (presenceTimer !== undefined) env.clearTimeout(presenceTimer);
     presenceTimer = undefined;
-    post({ type: "leave" });
+    postInOrder({ type: "leave" });
   };
   const resume = () => {
     gone = false;
