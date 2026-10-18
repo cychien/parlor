@@ -243,10 +243,6 @@ export interface ClientSummary {
   readonly seenAgoMs: number;
 }
 
-export type ParsedUiRequest =
-  | { readonly ok: true; readonly request: UiRequest }
-  | { readonly ok: false; readonly id: string | undefined };
-
 export type ParsedUiFrame =
   | { readonly ok: true; readonly frame: UiFrame }
   | { readonly ok: false; readonly id: string | undefined };
@@ -334,19 +330,45 @@ function requestOf(json: unknown): UiRequest | undefined {
     : ({ id, origin, timeoutMs, op, input: parsed } as UiRequest);
 }
 
-export function parseUiRequest(data: string): ParsedUiRequest {
-  let json: unknown;
-  try {
-    json = JSON.parse(data);
-  } catch {
-    return { ok: false, id: undefined };
+const isNonNegativeInteger = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
+function promptOf(json: unknown): ConfirmationPrompt | undefined {
+  if (!isFields(json)) return undefined;
+  const { id, action, description, input, expiresInMs } = json;
+  const origin = originOf(json.origin);
+  if (!isString(id) || id === "" || !isString(action) || !isString(description)) {
+    return undefined;
   }
-  const request = requestOf(json);
-  if (request) return { ok: true, request };
-  const id = isFields(json) ? json.id : undefined;
-  return { ok: false, id: isString(id) && id !== "" ? id : undefined };
+  if (!origin || !isNonNegativeInteger(expiresInMs)) return undefined;
+  return { id, action, description, input, origin, expiresInMs };
 }
 
-export function parseUiFrame(_data: string): ParsedUiFrame {
-  throw new Error("not implemented");
+function confirmationsOf(json: Fields): ConfirmationsFrame | undefined {
+  if (!Array.isArray(json.items)) return undefined;
+  const items = json.items.flatMap((item) => promptOf(item) ?? []);
+  return { type: "confirmations", items };
+}
+
+function parseJson(data: string): unknown {
+  try {
+    return JSON.parse(data);
+  } catch {
+    return undefined;
+  }
+}
+
+const idOf = (json: unknown) => {
+  const id = isFields(json) ? json.id : undefined;
+  return isString(id) && id !== "" ? id : undefined;
+};
+
+export function parseUiFrame(data: string): ParsedUiFrame {
+  const json = parseJson(data);
+  if (isFields(json) && json.type === "confirmations") {
+    const frame = confirmationsOf(json);
+    return frame ? { ok: true, frame } : { ok: false, id: undefined };
+  }
+  const request = requestOf(json);
+  return request ? { ok: true, frame: request } : { ok: false, id: idOf(json) };
 }

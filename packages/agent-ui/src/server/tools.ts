@@ -385,6 +385,7 @@ export function uiInstructions(): string {
     "Do the work through actions; the screen updates by itself.",
     "To show the user a page, call ui_navigate with a path from its list.",
     "You fill forms and the user submits them: use ui_set to fill a form, and call the action that submits it only when the user explicitly asks you to.",
+    "Some actions ask the user to approve them in the app before they run: call them as usual and wait. If one fails with declined, do not retry unless the user asks again; if it fails with confirmation_unavailable, ask the user to do it in the app themselves.",
     "Use ui_highlight to point at what you mean, or at candidates when you need the user to pick one.",
     "If a ui_ tool returns reachable: false, the app is not open: tell the user, and for navigation hand them the href.",
   ].join("\n");

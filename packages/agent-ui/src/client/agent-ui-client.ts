@@ -4,7 +4,7 @@ import type { AnyRouter } from "@tanstack/router-core";
 import {
   type AgentOrigin,
   type ClientMessage,
-  parseUiRequest,
+  parseUiFrame,
   type PresenceUpdate,
   type QuerySnapshot,
   type RouteSnapshot,
@@ -93,12 +93,19 @@ export function routeSnapshot(router: AnyRouter): RouteSnapshot | null {
 function createActivityStore(): ActivityStore & {
   begin(request: UiRequest, at: number): void;
   end(): void;
+  confirming(
+    pending: number,
+    arrived: { readonly origin: AgentOrigin; readonly at: number } | undefined,
+  ): void;
   watched(): boolean;
 } {
   const listeners = new Set<() => void>();
+  let running = false;
+  let pending = 0;
+  let last: AgentActivity["last"];
   let state: AgentActivity = { busy: false, last: undefined };
-  const set = (next: AgentActivity) => {
-    state = next;
+  const publish = () => {
+    state = { busy: running || pending > 0, last };
     for (const listener of listeners) listener();
   };
   return {
@@ -107,9 +114,20 @@ function createActivityStore(): ActivityStore & {
       return () => listeners.delete(listener);
     },
     get: () => state,
-    begin: (request, at) =>
-      set({ busy: true, last: { op: request.op, origin: request.origin, at } }),
-    end: () => set({ ...state, busy: false }),
+    begin(request, at) {
+      running = true;
+      last = { op: request.op, origin: request.origin, at };
+      publish();
+    },
+    end() {
+      running = false;
+      publish();
+    },
+    confirming(count, arrived) {
+      pending = count;
+      if (arrived) last = { op: "confirm", origin: arrived.origin, at: arrived.at };
+      publish();
+    },
     watched: () => listeners.size > 0,
   };
 }
@@ -147,8 +165,17 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
     env,
     answer: (id, approve) => post({ type: "answer", id, approve }),
     onWatchedChange: () => schedulePresence(),
-    onChange: () => {},
+    onChange: () => {
+      const showing = confirmations.get();
+      const arrived = showing.filter((item) => !seenCards.has(item.id)).at(-1);
+      for (const item of showing) seenCards.add(item.id);
+      activity.confirming(
+        showing.length,
+        arrived && { origin: arrived.origin, at: env.now() },
+      );
+    },
   });
+  const seenCards = new Set<string>();
   const replies = new Map<string, UiReply>();
   const queued = new Set<string>();
   const queue: UiRequest[] = [];
@@ -374,7 +401,7 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
   };
 
   const receive = (data: string) => {
-    const parsed = parseUiRequest(data);
+    const parsed = parseUiFrame(data);
     if (!parsed.ok) {
       if (parsed.id !== undefined) {
         remember({
@@ -389,7 +416,11 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
       }
       return;
     }
-    const { request } = parsed;
+    const { frame: request } = parsed;
+    if (!("op" in request)) {
+      confirmations.replace(request.items);
+      return;
+    }
     const cached = replies.get(request.id);
     if (cached) {
       post(cached);

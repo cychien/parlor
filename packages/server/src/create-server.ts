@@ -54,8 +54,12 @@ const STATUS_BY_CODE = {
   internal: 500,
 } as const satisfies Record<ActionErrorCode, number>;
 
+const isAbort = (error: unknown) => error instanceof Error && error.name === "AbortError";
+
 function errorBody(event: H3Event, error: unknown) {
-  if (!(error instanceof ActionError)) console.error("[parlor] action failed:", error);
+  if (!(error instanceof ActionError) && !isAbort(error)) {
+    console.error("[parlor] action failed:", error);
+  }
   const actionError =
     error instanceof ActionError
       ? error

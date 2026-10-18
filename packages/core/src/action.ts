@@ -73,8 +73,10 @@ export function isMutating(action: AnyAction): boolean {
   return (action.writes?.length ?? 0) > 0;
 }
 
-export function needsConfirmation(_action: AnyAction, _source: ActionSource): boolean {
-  return false;
+const CONFIRMED_SOURCES: ReadonlySet<ActionSource> = new Set(["mcp", "agent"]);
+
+export function needsConfirmation(action: AnyAction, source: ActionSource): boolean {
+  return action.confirm === true && CONFIRMED_SOURCES.has(source);
 }
 
 export type ActionInput<A> =

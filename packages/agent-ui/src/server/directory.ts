@@ -75,7 +75,9 @@ export class ClientDirectory {
   touch(clientId: string | undefined): void {
     if (clientId === undefined) return;
     const entry = this.#byId.get(clientId);
-    if (entry) entry.client = { ...entry.client, seenAt: this.#now() };
+    if (!entry) return;
+    entry.client = { ...entry.client, seenAt: this.#now() };
+    this.#notify(entry.client, "updated");
   }
 
   presence(clientId: string, scope: string, update: PresenceUpdate): PresenceOutcome {
@@ -95,7 +97,7 @@ export class ClientDirectory {
       focused: update.focused,
       visible: update.visible,
       ops: update.ops ? update.ops.filter(isUiOp) : LEGACY_UI_OPS,
-      canConfirm: false,
+      canConfirm: update.canConfirm ?? false,
       seenAt: this.#now(),
     };
     if (entry) {
@@ -106,7 +108,9 @@ export class ClientDirectory {
       this.#scopeSet(scope).add(entry);
     }
     entry.connections.push(...announcing);
-    return announcing.length > 0 ? "registered" : "updated";
+    const outcome = announcing.length > 0 ? "registered" : "updated";
+    this.#notify(client, outcome === "registered" ? "joined" : "updated");
+    return outcome;
   }
 
   leave(clientId: string, scope: string): boolean {
@@ -125,8 +129,8 @@ export class ClientDirectory {
     return this.#byId.get(clientId)?.client.scope === scope;
   }
 
-  targets(_scope: string): readonly ClientTarget[] {
-    throw new Error("not implemented");
+  targets(scope: string): readonly ClientTarget[] {
+    return [...(this.#byScope.get(scope) ?? [])].map((entry) => this.#targetOf(entry));
   }
 
   target(clientId: string): ClientTarget | undefined {
@@ -220,6 +224,11 @@ export class ClientDirectory {
     const peers = this.#byScope.get(entry.client.scope);
     peers?.delete(entry);
     if (peers?.size === 0) this.#byScope.delete(entry.client.scope);
+    this.#notify(entry.client, "left");
+  }
+
+  #notify(client: ConnectedClient, change: DirectoryChange): void {
+    for (const listener of this.#listeners) listener(client.scope, client.id, change);
   }
 
   #scopeSet(scope: string): Set<Entry> {
