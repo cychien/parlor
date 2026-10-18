@@ -90,6 +90,7 @@ export function createViewRegistry(env: BrowserEnvironment): ViewRegistryRuntime
   let listening = false;
   let entered: Moment | undefined;
   let interacted: Moment | undefined;
+  let quiet = 0;
 
   const settle = () => {
     if (pending > 0) return;
@@ -110,7 +111,7 @@ export function createViewRegistry(env: BrowserEnvironment): ViewRegistryRuntime
       const mounted = byElement.get(entry.target);
       if (!mounted || !visibility.has(mounted)) continue;
       const previous = setVisibility(mounted, entry.isIntersecting ? "in" : "out");
-      if (entry.isIntersecting && previous === "out") {
+      if (entry.isIntersecting && previous === "out" && quiet === 0) {
         entered = { view: mounted, at: env.now() };
       }
     }
@@ -118,6 +119,7 @@ export function createViewRegistry(env: BrowserEnvironment): ViewRegistryRuntime
   };
 
   const onInteraction = (event: Event) => {
+    if (quiet > 0 && event.type === "focusin") return;
     const mounted = owner(event.target as Node | null);
     if (mounted) interacted = { view: mounted, at: env.now() };
   };
@@ -250,8 +252,13 @@ export function createViewRegistry(env: BrowserEnvironment): ViewRegistryRuntime
       if (entries.length === 0) return;
       replaceWrites(target, new Map([...target.writes, ...entries]));
     },
-    quietly() {
-      throw new Error("not implemented");
+    async quietly(act) {
+      quiet++;
+      try {
+        return await act();
+      } finally {
+        quiet--;
+      }
     },
     restore: (mounted, writes) => replaceWrites(mounted as Mounted, writes),
     *singles() {

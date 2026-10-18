@@ -35,11 +35,44 @@ export interface BrowserEnvironment {
 
 export const SCROLL_SETTLE_CAP_MS = 900;
 
+const NO_SCROLL_FRAMES = 6;
+const STILL_FRAMES = 2;
+
 export function scrollIntoCenter(
-  _window: (Window & typeof globalThis) | undefined,
-  _element: Element,
+  window: (Window & typeof globalThis) | undefined,
+  element: Element,
 ): Promise<void> {
-  throw new Error("not implemented");
+  if (!window) return Promise.resolve();
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const started = window.performance.now();
+  let last = element.getBoundingClientRect().top;
+  element.scrollIntoView({
+    block: "center",
+    inline: "nearest",
+    behavior: reduced ? "instant" : "smooth",
+  });
+  return new Promise((resolve) => {
+    let moved = false;
+    let still = 0;
+    let frames = 0;
+    const step = () => {
+      const { top } = element.getBoundingClientRect();
+      frames++;
+      if (top === last) still++;
+      else {
+        moved = true;
+        still = 0;
+        last = top;
+      }
+      const settled = moved ? still >= STILL_FRAMES : frames >= NO_SCROLL_FRAMES;
+      if (settled || window.performance.now() - started >= SCROLL_SETTLE_CAP_MS) {
+        resolve();
+        return;
+      }
+      window.requestAnimationFrame(step);
+    };
+    window.requestAnimationFrame(step);
+  });
 }
 
 export function browserEnvironment(): BrowserEnvironment {
