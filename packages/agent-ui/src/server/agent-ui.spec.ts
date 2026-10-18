@@ -40,6 +40,29 @@ describe("unreachable links", () => {
   });
 });
 
+describe("an installed manifest that predates writable views", () => {
+  const legacy = {
+    protocol: 1 as const,
+    app: { id: "dev.parlor.test", name: "Test" },
+    routes: [{ path: "/", params: [], views: ["form"] }],
+    views: [{ name: "form", description: "A form.", keyed: false }],
+  };
+
+  it("reads every view as read-only instead of failing the tools built from it", () => {
+    const agentUi = createAgentUi({ scope: () => "default" });
+    agentUi.install(() => legacy);
+    expect(agentUi.manifest()?.views).toEqual([{ ...legacy.views[0], writable: [] }]);
+    expect(agentUi.tools("mcp").map((tool) => tool.name)).toContain("ui_set");
+  });
+
+  it("hands out the same manifest object while the source keeps returning the same one", () => {
+    const agentUi = createAgentUi({ scope: () => "default" });
+    agentUi.install(() => legacy);
+    expect(agentUi.manifest()).toBe(agentUi.manifest());
+    expect(agentUi.manifest()?.views[0]?.writable).toEqual([]);
+  });
+});
+
 describe("webOriginFromEnv", () => {
   it("accepts only an http origin", () => {
     expect(webOriginFromEnv("http://localhost:5173")).toBe("http://localhost:5173");

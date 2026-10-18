@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { ClientMessage } from "../protocol.js";
+import { type ClientMessage, UI_ERROR_CODES } from "../protocol.js";
 
 export const uiOpInputs = {
   screen: z.object({}),
@@ -19,18 +19,17 @@ export const uiOpInputs = {
       .optional()
       .describe("Replace the current history entry instead of pushing one."),
   }),
+  set: z.object({
+    view: z.string().describe("A writable view's name, as listed."),
+    key: z.string().optional().describe("The item's key, for a keyed view."),
+    value: z
+      .record(z.string(), z.unknown())
+      .describe("The fields to write; others keep their current value."),
+  }),
 };
 
 const errorSchema = z.object({
-  code: z.enum([
-    "unknown_route",
-    "unknown_client",
-    "ambiguous_client",
-    "busy",
-    "timeout",
-    "outcome_unknown",
-    "internal",
-  ]),
+  code: z.enum(UI_ERROR_CODES),
   message: z.string(),
   issues: z.array(z.object({ path: z.string(), message: z.string() })).optional(),
 });

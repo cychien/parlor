@@ -61,6 +61,7 @@ export function describeView(view: AnyAgentView): ViewEntry {
     description: view.description,
     keyed: view.keyed,
     ...(schema ? { schema } : {}),
+    writable: [],
   };
 }
 

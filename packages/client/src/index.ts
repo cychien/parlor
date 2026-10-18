@@ -12,6 +12,7 @@ export {
   type AgentViewDefinition,
   type AnyAgentView,
   defineAgentView,
+  type WritableField,
 } from "@parlor/agent-ui";
 export { ACTION_QUERY_PREFIX, actionQueryKey } from "./query-keys.js";
 export type { Register, RegisteredActions } from "./register.js";

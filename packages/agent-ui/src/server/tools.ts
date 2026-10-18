@@ -5,14 +5,20 @@ import {
   type AgentOrigin,
   type ClientSummary,
   type ScreenSnapshot,
+  UI_OPS,
+  type UiOp,
+  type UiOpResults,
   uiOpReadOnly,
 } from "../protocol.js";
 import { type UiBroker, UiFailure } from "./broker.js";
 import type { ClientDirectory, Selection } from "./directory.js";
 import { uiOpInputs } from "./schemas.js";
 
-export const UI_TOOLS = ["ui_screen", "ui_navigate"] as const;
-export type UiToolName = (typeof UI_TOOLS)[number];
+export type UiToolName = `ui_${UiOp}`;
+
+const toolName = <O extends UiOp>(op: O): `ui_${O}` => `ui_${op}`;
+
+export const UI_TOOLS: readonly UiToolName[] = UI_OPS.map(toolName);
 
 export const UI_MANIFEST_RESOURCE = "parlor://manifest";
 
@@ -42,6 +48,8 @@ export interface NavigateToolResult {
   readonly client: ClientSummary;
   readonly screen: ScreenSnapshot;
 }
+
+export type SetToolResult = UiOpResults["set"] & { readonly client: ClientSummary };
 
 export interface UnreachableResult {
   readonly reachable: false;
@@ -109,6 +117,10 @@ function navigateDescription(manifest: UiManifest | undefined): string {
       "Returns reachable: false with an href to hand the user when the app is not open.",
     ].join(" ") + routeCatalog(manifest)
   );
+}
+
+function setDescription(_manifest: UiManifest | undefined): string {
+  return "";
 }
 
 function routeEnum(manifest: UiManifest | undefined) {
@@ -249,7 +261,18 @@ export function createUiTools(
       },
     });
 
-    return [screen, navigate];
+    const set = defineTool({
+      name: toolName("set"),
+      description: setDescription(manifest),
+      input: uiOpInputs.set.extend({ clientId: clientIdInput }),
+      readOnly: uiOpReadOnly.set,
+      async run(_input, _ctx) {
+        throw new Error("not implemented");
+      },
+    });
+
+    const byOp: { readonly [O in UiOp]: AgentTool } = { screen, navigate, set };
+    return UI_OPS.map((op) => byOp[op]);
   };
 
   let cachedFor: UiManifest | undefined;

@@ -1,5 +1,5 @@
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
-import { type ActionMap, defineAction } from "@parlor/core";
+import { type ActionMap, type DataProvider, defineAction } from "@parlor/core";
 import { createRegistry } from "@parlor/core/registry";
 import { createDatabase, type DatabaseHandle } from "@parlor/data";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -37,6 +37,12 @@ let database: DatabaseHandle;
 let server: FrameworkServer;
 const closers: (() => Promise<void> | void)[] = [];
 
+const lend = (owner: DatabaseHandle): DataProvider => ({
+  read: () => owner.read(),
+  transaction: (run) => owner.transaction(run),
+  listen: (channel, handler) => owner.listen(channel, handler),
+});
+
 const uiManifest = {
   protocol: 1 as const,
   app: { id: "dev.parlor.test", name: "Test" },
@@ -56,6 +62,14 @@ const uiManifest = {
       description: "A task row; the key is the task id.",
       keyed: true,
       schema: { type: "object" },
+      writable: [],
+    },
+    {
+      name: "newTask",
+      description: "The New task form.",
+      keyed: false,
+      schema: { type: "object" },
+      writable: ["title", "notes"],
     },
   ],
 };
@@ -110,7 +124,7 @@ async function openBrowser(
     const request = JSON.parse(data) as {
       id: string;
       op: string;
-      input: { to?: string };
+      input: { to?: string; value?: Record<string, unknown> };
     };
     requests.push(request);
     via.push(channel);
@@ -118,7 +132,12 @@ async function openBrowser(
     const result =
       request.op === "navigate"
         ? { screen: screen(request.input.to ?? "") }
-        : screen(path);
+        : request.op === "set"
+          ? {
+              value: request.input.value,
+              agentFields: Object.keys(request.input.value ?? {}),
+            }
+          : screen(path);
     const answered = await post(
       target,
       "/_parlor/ui",
@@ -196,7 +215,12 @@ async function mcp(target = server) {
 describe("agent UI over MCP", () => {
   it("lists the UI tools next to the actions", async () => {
     const { tools } = await (await mcp()).listTools();
-    expect(tools.map((t) => t.name)).toEqual(["hello", "ui_screen", "ui_navigate"]);
+    expect(tools.map((t) => t.name)).toEqual([
+      "hello",
+      "ui_screen",
+      "ui_navigate",
+      "ui_set",
+    ]);
     const uiScreen = tools.find((t) => t.name === "ui_screen");
     expect(uiScreen?.annotations?.readOnlyHint).toBe(true);
     expect(uiScreen?.inputSchema).toMatchObject({
@@ -222,6 +246,47 @@ describe("agent UI over MCP", () => {
       properties: { to: { type: "string", enum: ["/", "/settings", "/tasks/$taskId"] } },
       required: ["to"],
     });
+  });
+
+  it("describes ui_set with the forms it can fill and says the user submits them", async () => {
+    const { tools } = await (await mcp()).listTools();
+    const uiSet = tools.find((t) => t.name === "ui_set");
+    expect(uiSet?.annotations?.readOnlyHint).toBe(false);
+    expect(uiSet?.description).toContain("the user reviews it and submits it themselves");
+    expect(uiSet?.description).toContain(
+      "- newTask: The New task form. Fields: title, notes.",
+    );
+    expect(uiSet?.description).not.toContain("- task (keyed)");
+    expect(uiSet?.inputSchema).toMatchObject({
+      required: ["view", "value"],
+      properties: { view: { type: "string" }, key: { type: "string" } },
+    });
+  });
+
+  it("keeps serving MCP when the installed manifest predates writable views", async () => {
+    const target = createServer({ actions, database: lend(database) });
+    closers.push(() => target.close());
+    target.installUiManifest?.(() => ({
+      protocol: 1,
+      app: { id: "dev.parlor.test", name: "Test" },
+      routes: [{ path: "/", params: [], views: ["form", "profile"] }],
+      views: [
+        { name: "form", description: "A form.", keyed: false },
+        { name: "profile", description: "A profile.", keyed: false, writable: ["name"] },
+      ],
+    }));
+    const client = await mcp(target);
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name)).toEqual([
+      "hello",
+      "ui_screen",
+      "ui_navigate",
+      "ui_set",
+    ]);
+    const description = tools.find((t) => t.name === "ui_set")?.description;
+    expect(description).toContain("- profile: A profile. Fields: name.");
+    expect(description).not.toContain("- form:");
+    expect((await client.callTool({ name: "hello", arguments: {} })).isError).toBeFalsy();
   });
 
   it("serves the full manifest as an MCP resource and over HTTP", async () => {
@@ -282,6 +347,49 @@ describe("agent UI over MCP", () => {
     expect(a.requests).toEqual([]);
   });
 
+  it("writes to the selected client and returns what it read back with the client", async () => {
+    const tab = await openBrowser("tab-s", "/");
+    await tab.presence(true, true);
+    const result = await (
+      await mcp()
+    ).callTool({
+      name: "ui_set",
+      arguments: { view: "newTask", value: { title: "Buy stamps" } },
+    });
+    expect(result.structuredContent).toEqual({
+      client: expect.objectContaining({ id: "tab-s" }),
+      value: { title: "Buy stamps" },
+      agentFields: ["title"],
+    });
+    expect(tab.requests).toEqual([
+      expect.objectContaining({
+        op: "set",
+        input: { view: "newTask", value: { title: "Buy stamps" } },
+      }),
+    ]);
+  });
+
+  it("refuses to write to one of several tied clients and answers no_client when none is open", async () => {
+    const client = await mcp();
+    const none = await client.callTool({
+      name: "ui_set",
+      arguments: { view: "newTask", value: { title: "x" } },
+    });
+    expect(none.structuredContent).toEqual({ reachable: false, reason: "no_client" });
+    const a = await openBrowser("tab-p", "/");
+    const b = await openBrowser("tab-q", "/");
+    await Promise.all([a.presence(true, true), b.presence(true, true)]);
+    const tied = await client.callTool({
+      name: "ui_set",
+      arguments: { view: "newTask", value: { title: "x" } },
+    });
+    expect(tied.isError).toBe(true);
+    expect(JSON.parse((tied.content as { text: string }[])[0]!.text)).toMatchObject({
+      error: { code: "ambiguous_client" },
+    });
+    expect([...a.requests, ...b.requests]).toEqual([]);
+  });
+
   it("returns a link instead of navigating when no app is open", async () => {
     const result = await (
       await mcp()
@@ -300,6 +408,9 @@ describe("agent UI over MCP", () => {
   it("explains the conventions in the server instructions", async () => {
     const client = await mcp();
     expect(client.getInstructions()).toContain("attention");
+    expect(client.getInstructions()).toContain(
+      "You fill forms and the user submits them",
+    );
   });
 
   it("answers no_client without an error when no app is open", async () => {
@@ -539,12 +650,9 @@ describe("external agent policy", () => {
   };
 
   it("exposes UI tools by default, read-only tools for read-only, and none when off", async () => {
-    expect(await toolNames(undefined)).toEqual(["hello", "ui_screen", "ui_navigate"]);
-    expect(await toolNames({ external: true })).toEqual([
-      "hello",
-      "ui_screen",
-      "ui_navigate",
-    ]);
+    const all = ["hello", "ui_screen", "ui_navigate", "ui_set"];
+    expect(await toolNames(undefined)).toEqual(all);
+    expect(await toolNames({ external: true })).toEqual(all);
     expect(await toolNames({ external: "read-only" })).toEqual(["hello", "ui_screen"]);
     expect(await toolNames({ external: false })).toEqual(["hello"]);
     expect(await toolNames(false)).toEqual(["hello"]);

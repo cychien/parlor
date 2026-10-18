@@ -36,4 +36,18 @@ describe("fileManifestSource", () => {
     await rm(file);
     expect(source()).toBeUndefined();
   });
+
+  it("reads a manifest written before views were writable as read-only views", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "parlor-manifest-"));
+    const file = join(dir, "ui-manifest.json");
+    const old = {
+      ...manifest("Old"),
+      views: [{ name: "task", description: "A task.", keyed: true }],
+    };
+    await writeFile(file, JSON.stringify(old));
+    expect(fileManifestSource(file)()?.views).toEqual([
+      { name: "task", description: "A task.", keyed: true, writable: [] },
+    ]);
+    await rm(dir, { recursive: true });
+  });
 });

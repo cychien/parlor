@@ -87,3 +87,32 @@ describe("parseUiRequest navigate", () => {
     });
   });
 });
+
+describe("parseUiRequest set", () => {
+  it("reads a set request with its optional key and keeps only the fields the protocol defines", () => {
+    const input = { view: "newTask", value: { title: "Buy", done: false } };
+    expect(parse({ ...envelope, op: "set", input: { ...input, extra: 1 } })).toEqual({
+      ok: true,
+      request: { ...envelope, op: "set", input },
+    });
+    expect(parse({ ...envelope, op: "set", input: { ...input, key: "t1" } })).toEqual({
+      ok: true,
+      request: { ...envelope, op: "set", input: { ...input, key: "t1" } },
+    });
+  });
+
+  it.each([
+    ["a missing view", { value: {} }],
+    ["a non-string view", { view: 1, value: {} }],
+    ["a missing value", { view: "f" }],
+    ["a string value", { view: "f", value: "x" }],
+    ["an array value", { view: "f", value: [] }],
+    ["a non-string key", { view: "f", key: 1, value: {} }],
+  ])("rejects %s while reading the same request with a valid input", (_, input) => {
+    expect(parse({ ...envelope, op: "set", input })).toEqual({ ok: false, id: "r1" });
+    expect(parse({ ...envelope, op: "set", input: { view: "f", value: {} } })).toEqual({
+      ok: true,
+      request: { ...envelope, op: "set", input: { view: "f", value: {} } },
+    });
+  });
+});

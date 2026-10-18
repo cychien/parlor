@@ -35,6 +35,7 @@ export interface ViewEntry {
   readonly description: string;
   readonly keyed: boolean;
   readonly schema?: JsonSchema | undefined;
+  readonly writable: readonly string[];
 }
 
 export interface UiManifest {

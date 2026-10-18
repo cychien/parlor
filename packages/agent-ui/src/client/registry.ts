@@ -8,12 +8,22 @@ import type {
 export interface AnyViewBinding {
   readonly key?: string | undefined;
   get(): Readonly<Record<string, unknown>>;
+  set?(
+    next: Readonly<Record<string, unknown>>,
+    changed: readonly string[],
+  ): void | Promise<void>;
 }
+
+export type AgentWrites = ReadonlyMap<string, unknown>;
+
+export const NO_AGENT_WRITES: AgentWrites = new Map();
 
 export interface ViewSlot {
   readonly ref: (element: Element | null) => void;
   bind(binding: AnyViewBinding): void;
   mount(key: string | undefined): () => void;
+  readonly subscribeWrites: (listener: () => void) => () => void;
+  readonly writes: () => AgentWrites;
 }
 
 export interface ViewRegistry {
@@ -25,6 +35,7 @@ export interface MountedView {
   readonly key: string | undefined;
   readonly binding: AnyViewBinding;
   readonly element: Element | undefined;
+  readonly writes: AgentWrites;
 }
 
 export interface Moment {
@@ -33,6 +44,7 @@ export interface Moment {
 }
 
 export interface RegistryReader {
+  find(ref: ViewRef): MountedView | undefined;
   singles(): Iterable<MountedView>;
   onScreenCandidates(): Iterable<MountedView>;
   keyedCount(viewName: string): number;
@@ -43,6 +55,8 @@ export interface RegistryReader {
 }
 
 export interface ViewRegistryRuntime extends ViewRegistry, RegistryReader {
+  remember(mounted: MountedView, values: Readonly<Record<string, unknown>>): void;
+  restore(mounted: MountedView, writes: AgentWrites): void;
   awaitingObserver(): boolean;
   observed(): Promise<void>;
   resume(): void;
@@ -52,6 +66,8 @@ export interface ViewRegistryRuntime extends ViewRegistry, RegistryReader {
 class Mounted implements MountedView {
   element: Element | undefined;
   key: string | undefined;
+  writes: AgentWrites = NO_AGENT_WRITES;
+  readonly writeListeners = new Set<() => void>();
   constructor(
     readonly view: AnyAgentView,
     public binding: AnyViewBinding,
@@ -195,7 +211,21 @@ export function createViewRegistry(env: BrowserEnvironment): ViewRegistryRuntime
             live.delete(mounted);
           };
         },
+        subscribeWrites(listener) {
+          mounted.writeListeners.add(listener);
+          return () => mounted.writeListeners.delete(listener);
+        },
+        writes: () => mounted.writes,
       };
+    },
+    find() {
+      throw new Error("not implemented");
+    },
+    remember() {
+      throw new Error("not implemented");
+    },
+    restore() {
+      throw new Error("not implemented");
     },
     *singles() {
       for (const stack of singles.values()) yield stack.at(-1)!;

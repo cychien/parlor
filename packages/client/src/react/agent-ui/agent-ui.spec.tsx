@@ -8,9 +8,10 @@ import {
   Outlet,
   RouterProvider,
 } from "@tanstack/react-router";
-import { render, screen, waitFor } from "@testing-library/react";
-import { StrictMode, useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { type ReactElement, StrictMode, useCallback, useRef, useState } from "react";
+import { flushSync } from "react-dom";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import type { ActionClient } from "../../action-client.js";
@@ -37,18 +38,22 @@ function sse(frames: string[], later: string[] = []) {
   });
 }
 
-function agentRequest(id: string) {
+function agentRequest(id: string, op = "screen", input: unknown = {}) {
   return JSON.stringify({
     id,
-    op: "screen",
-    input: {},
+    op,
+    input,
     origin: { via: "mcp" },
     timeoutMs: 5000,
   });
 }
 
 function fakeClient(
-  options: { delayRequest?: boolean; next?: Record<string, string> } = {},
+  options: {
+    delayRequest?: boolean;
+    next?: Record<string, string>;
+    request?: string;
+  } = {},
 ) {
   const posts: unknown[] = [];
   const request = vi.fn(async (path: string, init?: RequestInit) => {
@@ -67,9 +72,11 @@ function fakeClient(
             'event: handshake\ndata: {"protocol":1,"capabilities":["ui"]}\n\n',
             ...(options.delayRequest
               ? []
-              : [`event: ui\ndata: ${agentRequest("r1")}\n\n`]),
+              : [`event: ui\ndata: ${options.request ?? agentRequest("r1")}\n\n`]),
           ],
-          options.delayRequest ? [`event: ui\ndata: ${agentRequest("r1")}\n\n`] : [],
+          options.delayRequest
+            ? [`event: ui\ndata: ${options.request ?? agentRequest("r1")}\n\n`]
+            : [],
         ),
       );
     }
@@ -187,6 +194,297 @@ describe("agent UI in FrameworkProvider", () => {
       { action: "broken", input: {}, status: "error" },
       { action: "waiting", input: {}, status: "pending" },
     ]);
+  });
+});
+
+const composeTask = defineAgentView({
+  name: "composeTask",
+  description: "The new task form.",
+  schema: z.object({ title: z.string(), notes: z.string() }),
+  writable: ["title", "notes"],
+});
+
+function ComposeTask() {
+  const [draft, setDraft] = useState({ title: "", notes: "" });
+  const { ref, agentFields } = useAgentView(composeTask, {
+    get: () => draft,
+    set: setDraft,
+  });
+  return (
+    <form ref={ref}>
+      <input
+        aria-label="Title"
+        name="title"
+        value={draft.title}
+        onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+        data-agent-filled={agentFields.has("title") || undefined}
+      />
+      <input
+        aria-label="Notes"
+        name="notes"
+        value={draft.notes}
+        onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
+        data-agent-filled={agentFields.has("notes") || undefined}
+      />
+      <button type="button" onClick={() => setDraft({ title: "", notes: "" })}>
+        Reset
+      </button>
+    </form>
+  );
+}
+
+function UncontrolledComposeTask() {
+  const form = useRef<HTMLFormElement | null>(null);
+  const { ref, agentFields } = useAgentView(composeTask, {
+    get: () =>
+      form.current
+        ? (Object.fromEntries(new FormData(form.current)) as {
+            title: string;
+            notes: string;
+          })
+        : { title: "", notes: "" },
+    set: (next) => {
+      for (const [name, value] of Object.entries(next)) {
+        (form.current!.elements.namedItem(name) as HTMLInputElement).value =
+          String(value);
+      }
+    },
+  });
+  const attach = useCallback(
+    (element: HTMLFormElement | null) => {
+      form.current = element;
+      ref(element);
+    },
+    [ref],
+  );
+  return (
+    <form ref={attach}>
+      <input
+        aria-label="Title"
+        name="title"
+        defaultValue=""
+        data-agent-filled={agentFields.has("title") || undefined}
+      />
+      <input
+        aria-label="Notes"
+        name="notes"
+        defaultValue=""
+        data-agent-filled={agentFields.has("notes") || undefined}
+      />
+    </form>
+  );
+}
+
+describe("agent writes to an uncontrolled form in FrameworkProvider", () => {
+  it("takes the marking off a field the user types over, though typing does not re-render the form", async () => {
+    const { client, posts } = fakeClient({
+      request: agentRequest("w1", "set", {
+        view: "composeTask",
+        value: { title: "Plan trip", notes: "book hotel" },
+      }),
+    });
+    render(
+      <FrameworkProvider
+        client={client}
+        queryClient={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+      >
+        <UncontrolledComposeTask />
+      </FrameworkProvider>,
+    );
+    const filled = (label: string) =>
+      screen.getByLabelText(label).hasAttribute("data-agent-filled");
+    await waitFor(() => expect(posts).toHaveLength(2));
+    expect([filled("Title"), filled("Notes")]).toEqual([true, true]);
+    fireEvent.input(screen.getByLabelText("Title"), { target: { value: "Plan trip!" } });
+    expect([filled("Title"), filled("Notes")]).toEqual([false, true]);
+  });
+});
+
+function runMicrotasksBetweenListeners() {
+  const targets = Object.getPrototypeOf(Node.prototype) as EventTarget;
+  const { addEventListener, removeEventListener } = targets;
+  const wrappers = new WeakMap<EventListener, EventListener>();
+  const wrap = (listener: EventListener) => {
+    let wrapper = wrappers.get(listener);
+    if (!wrapper) {
+      wrapper = function (this: unknown, event) {
+        try {
+          return listener.call(this, event);
+        } finally {
+          if (event.type === "input") flushSync(() => {});
+        }
+      };
+      wrappers.set(listener, wrapper);
+    }
+    return wrapper;
+  };
+  targets.addEventListener = function (type, listener, options) {
+    addEventListener.call(
+      this,
+      type,
+      typeof listener === "function" ? wrap(listener) : listener,
+      options,
+    );
+  };
+  targets.removeEventListener = function (type, listener, options) {
+    removeEventListener.call(
+      this,
+      type,
+      typeof listener === "function" ? wrap(listener) : listener,
+      options,
+    );
+  };
+  return () => Object.assign(targets, { addEventListener, removeEventListener });
+}
+
+describe("the user types into a form after an agent wrote to it", () => {
+  let restoreListeners: () => void;
+  beforeEach(() => {
+    restoreListeners = runMicrotasksBetweenListeners();
+  });
+  afterEach(() => restoreListeners());
+
+  const type = (label: string, text: string) => {
+    const input = screen.getByLabelText(label) as HTMLInputElement;
+    for (const typed of [...text].map((_, i) => text.slice(0, i + 1))) {
+      fireEvent.input(input, { target: { value: typed } });
+    }
+    return input;
+  };
+  const value = (label: string) =>
+    (screen.getByLabelText(label) as HTMLInputElement).value;
+  const filled = (label: string) =>
+    screen.getByLabelText(label).hasAttribute("data-agent-filled");
+  const renderWritten = async (form: ReactElement, written: unknown) => {
+    const { client, posts } = fakeClient({
+      request: agentRequest("w1", "set", { view: "composeTask", value: written }),
+    });
+    render(
+      <FrameworkProvider
+        client={client}
+        queryClient={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+      >
+        {form}
+      </FrameworkProvider>,
+    );
+    await waitFor(() => expect(posts).toHaveLength(2));
+  };
+
+  it("keeps every keystroke in a controlled field, written by the agent or not", async () => {
+    await renderWritten(<ComposeTask />, { notes: "n1" });
+    type("Title", "draft");
+    expect(value("Title")).toBe("draft");
+    type("Notes", "mine");
+    expect(value("Notes")).toBe("mine");
+    expect([filled("Title"), filled("Notes")]).toEqual([false, false]);
+  });
+
+  it("keeps every keystroke in an uncontrolled field", async () => {
+    await renderWritten(<UncontrolledComposeTask />, { notes: "n1" });
+    type("Title", "draft");
+    expect(value("Title")).toBe("draft");
+    type("Notes", "mine");
+    expect(value("Notes")).toBe("mine");
+    expect([filled("Title"), filled("Notes")]).toEqual([false, false]);
+  });
+
+  it.each([
+    ["controlled", <ComposeTask key="c" />],
+    ["uncontrolled", <UncontrolledComposeTask key="u" />],
+  ])(
+    "takes the marking off a %s field for good once the user edits it",
+    async (_, form) => {
+      await renderWritten(form, { title: "Plan trip", notes: "book hotel" });
+      expect([filled("Title"), filled("Notes")]).toEqual([true, true]);
+      type("Title", "Plan trip!");
+      expect([filled("Title"), filled("Notes")]).toEqual([false, true]);
+      type("Title", "Plan trip");
+      expect(filled("Title")).toBe(false);
+    },
+  );
+
+  it("lets the user type again after the form was reset", async () => {
+    await renderWritten(<ComposeTask />, { title: "Agent title" });
+    expect(filled("Title")).toBe(true);
+    fireEvent.click(screen.getByText("Reset"));
+    expect(value("Title")).toBe("");
+    expect(filled("Title")).toBe(false);
+    type("Title", "Mine");
+    expect(value("Title")).toBe("Mine");
+    expect(filled("Title")).toBe(false);
+  });
+});
+
+describe("agent writes in FrameworkProvider", () => {
+  const write = (value: unknown) =>
+    agentRequest("w1", "set", { view: "composeTask", value });
+  const renderForm = (request: string, strict = false) => {
+    const { client, posts } = fakeClient({ request });
+    const tree = (
+      <FrameworkProvider
+        client={client}
+        queryClient={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+      >
+        <ComposeTask />
+      </FrameworkProvider>
+    );
+    render(strict ? <StrictMode>{tree}</StrictMode> : tree);
+    return posts;
+  };
+  const filled = (label: string) =>
+    screen.getByLabelText(label).hasAttribute("data-agent-filled");
+
+  it.each([false, true])(
+    "fills the form, answers with the committed value, and marks the written fields (StrictMode %s)",
+    async (strict) => {
+      const posts = renderForm(
+        write({ title: "Buy stamps", notes: "for the tax letter" }),
+        strict,
+      );
+      await waitFor(() =>
+        expect(posts).toContainEqual({
+          type: "reply",
+          id: "w1",
+          ok: true,
+          result: {
+            value: { title: "Buy stamps", notes: "for the tax letter" },
+            agentFields: ["title", "notes"],
+          },
+        }),
+      );
+      expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe(
+        "Buy stamps",
+      );
+      expect((screen.getByLabelText("Notes") as HTMLInputElement).value).toBe(
+        "for the tax letter",
+      );
+      expect([filled("Title"), filled("Notes")]).toEqual([true, true]);
+    },
+  );
+
+  it("takes the marking off a field the user edits and off every field when the form resets", async () => {
+    const posts = renderForm(write({ title: "Plan trip", notes: "book hotel" }));
+    await waitFor(() => expect(filled("Notes")).toBe(true));
+    expect(posts).toHaveLength(2);
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Plan trip!" } });
+    expect([filled("Title"), filled("Notes")]).toEqual([false, true]);
+    fireEvent.click(screen.getByText("Reset"));
+    expect([filled("Title"), filled("Notes")]).toEqual([false, false]);
+  });
+
+  it("refuses a field the schema rejects and leaves the form alone", async () => {
+    const posts = renderForm(write({ title: 42 }));
+    await waitFor(() =>
+      expect(posts).toContainEqual(
+        expect.objectContaining({
+          id: "w1",
+          ok: false,
+          error: expect.objectContaining({ code: "invalid_value" }),
+        }),
+      ),
+    );
+    expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("");
+    expect(filled("Title")).toBe(false);
   });
 });
 
