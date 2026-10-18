@@ -266,6 +266,7 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
   };
 
   let lastPresence: string | undefined;
+  let gone = false;
   let presenceTimer: ReturnType<typeof setTimeout> | undefined;
   const presence = (): PresenceUpdate => {
     const visible = env.document?.visibilityState === "visible";
@@ -278,6 +279,7 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
     };
   };
   const reportPresence = () => {
+    if (gone) return;
     const update = presence();
     const serialized = JSON.stringify(update);
     if (serialized === lastPresence) return;
@@ -291,12 +293,22 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
       reportPresence();
     }, 0);
   };
-  const leave = () => post({ type: "leave" });
+  const leave = () => {
+    gone = true;
+    lastPresence = undefined;
+    if (presenceTimer !== undefined) env.clearTimeout(presenceTimer);
+    presenceTimer = undefined;
+    post({ type: "leave" });
+  };
+  const resume = () => {
+    gone = false;
+    schedulePresence();
+  };
   const presenceTargets = () =>
     [
       [env.window, "focus", schedulePresence],
       [env.window, "blur", schedulePresence],
-      [env.window, "pageshow", schedulePresence],
+      [env.window, "pageshow", resume],
       [env.window, "pagehide", leave],
       [env.document, "visibilitychange", schedulePresence],
     ] as const;
@@ -353,6 +365,7 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
     activity,
     screen,
     opened() {
+      gone = false;
       attachPresence();
       lastPresence = undefined;
       reportPresence();
