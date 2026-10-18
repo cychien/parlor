@@ -242,6 +242,28 @@ describe("ClientDirectory connections", () => {
     expect(directory.summaries("default").map((c) => c.id)).toEqual(["b"]);
   });
 
+  it("lets a client that left announce itself again over its open connection", () => {
+    const { directory, connect, presence } = setup();
+    const close = connect("a");
+    directory.presence("a", "default", presence(true, true));
+    expect(directory.leave("a", "default")).toBe(true);
+    expect(directory.select("default")).toBeUndefined();
+    expect(directory.presence("a", "default", presence(true, true))).toBe("registered");
+    expect(pick(directory)).toEqual({ id: "a", tied: [] });
+    expect(directory.target("a")?.send("x")).toBe(true);
+    close();
+    expect(directory.select("default")).toBeUndefined();
+  });
+
+  it("keeps rejecting a client that left and then lost its connection", () => {
+    const { directory, connect, presence } = setup();
+    const close = connect("a");
+    directory.presence("a", "default", presence(true, true));
+    directory.leave("a", "default");
+    close();
+    expect(directory.presence("a", "default", presence(true, true))).toBe("rejected");
+  });
+
   it("tells whether a client is connected in a scope once it announced agent UI", () => {
     const { directory, connect, presence } = setup();
     connect("a");

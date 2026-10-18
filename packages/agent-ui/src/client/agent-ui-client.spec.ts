@@ -258,6 +258,34 @@ describe("createAgentUiClient leaving", () => {
     browser.window.dispatchEvent(new browser.window.Event("pagehide"));
     expect(sent.at(-1)).toEqual({ type: "leave" });
   });
+
+  it("announces itself again when the page comes back from the back-forward cache", async () => {
+    const { browser, client, sent, settle } = setup();
+    client.opened();
+    await settle();
+    browser.window.dispatchEvent(new browser.window.Event("pagehide"));
+    browser.window.dispatchEvent(new browser.window.Event("pageshow"));
+    await settle();
+    expect(sent.map((message) => message.type)).toEqual([
+      "presence",
+      "leave",
+      "presence",
+    ]);
+  });
+});
+
+describe("createAgentUiClient after leaving", () => {
+  it("stays silent about presence while the page is gone, even when focus and visibility change after pagehide", async () => {
+    const { browser, client, sent, settle } = setup();
+    client.opened();
+    await settle();
+    browser.window.dispatchEvent(new browser.window.Event("pagehide"));
+    vi.spyOn(browser.document, "hasFocus").mockReturnValue(false);
+    browser.window.dispatchEvent(new browser.window.Event("blur"));
+    browser.document.dispatchEvent(new browser.window.Event("visibilitychange"));
+    await settle();
+    expect(sent.map((message) => message.type)).toEqual(["presence", "leave"]);
+  });
 });
 
 describe("createAgentUiClient navigate", () => {
