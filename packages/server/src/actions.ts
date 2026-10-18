@@ -106,6 +106,11 @@ function confirmationGate(gate: Gate): (call: PreparedCall) => Promise<void> {
           "confirmation_unavailable",
           `No open app can ask the user to confirm ${name}. Ask the user to do it in the app themselves.`,
         );
+      case "shutdown":
+        throw new ActionError(
+          "confirmation_unavailable",
+          `The server shut down before the user answered; ${name} did not run. Try again once it is back, or ask the user to do it in the app themselves.`,
+        );
       case "cancelled":
         throw (
           gate.signal?.reason ?? new DOMException("The call was cancelled.", "AbortError")

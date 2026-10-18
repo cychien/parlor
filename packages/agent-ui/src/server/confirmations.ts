@@ -93,6 +93,7 @@ export class ConfirmationBoard {
   readonly #byScope = new Map<string, Set<Pending>>();
   readonly #sent = new Map<string, { readonly scope: string; signature: string }>();
   readonly #forgetting = new Map<string, Timer>();
+  #closed = false;
 
   constructor(options: ConfirmationBoardOptions) {
     this.#directory = options.directory;
@@ -106,6 +107,7 @@ export class ConfirmationBoard {
 
   ask(request: ConfirmationRequest): Promise<ConfirmationOutcome> {
     const { scope, signal } = request;
+    if (this.#closed) return Promise.resolve("shutdown");
     if (signal?.aborted) return Promise.resolve("cancelled");
     if ((this.#byScope.get(scope)?.size ?? 0) >= this.#maxPerScope) {
       return Promise.resolve("unavailable");
@@ -150,7 +152,8 @@ export class ConfirmationBoard {
   }
 
   close(): void {
-    for (const pending of [...this.#pending.values()]) pending.settle("cancelled");
+    this.#closed = true;
+    for (const pending of [...this.#pending.values()]) pending.settle("shutdown");
     for (const timer of this.#forgetting.values()) clearTimeout(timer);
     this.#forgetting.clear();
   }
