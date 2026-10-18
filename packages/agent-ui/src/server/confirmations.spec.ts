@@ -364,15 +364,25 @@ describe("ConfirmationBoard deadline and cancellation", () => {
     expect(items("a")).toEqual([]);
   });
 
-  it("cancels every pending confirmation when the server closes", async () => {
+  it("ends every pending confirmation with shutdown when the server closes", async () => {
     const { board, join, request } = setup();
     join("a");
     const one = outcome(board.ask(request()));
     const two = outcome(board.ask(request()));
     board.close();
     await vi.advanceTimersByTimeAsync(0);
-    expect([one.value, two.value]).toEqual(["cancelled", "cancelled"]);
+    expect([one.value, two.value]).toEqual(["shutdown", "shutdown"]);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("answers shutdown at once to a confirmation asked after the server closed", async () => {
+    const { board, join, items, request } = setup();
+    join("a");
+    board.close();
+    const settled = outcome(board.ask(request()));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled.value).toBe("shutdown");
+    expect(items("a")).toEqual([]);
   });
 });
 

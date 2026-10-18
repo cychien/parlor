@@ -79,6 +79,7 @@ describe("the confirmation gate in the action runner", () => {
     ["declined", "declined"],
     ["timeout", "confirmation_timeout"],
     ["unavailable", "confirmation_unavailable"],
+    ["shutdown", "confirmation_unavailable"],
   ] as const)("maps a %s answer to %s and runs nothing", async (outcome, code) => {
     const error = await errorOf(
       runner(answering(outcome)).run("remove", { id: "n1" }, request(), "mcp"),
@@ -93,6 +94,13 @@ describe("the confirmation gate in the action runner", () => {
       runner(answering("unavailable")).run("remove", { id: "n1" }, request(), "mcp"),
     );
     expect((error as ActionError).message).toContain("Ask the user");
+  });
+
+  it("tells the agent the action did not run when the server shut down before the user answered", async () => {
+    const error = await errorOf(
+      runner(answering("shutdown")).run("remove", { id: "n1" }, request(), "mcp"),
+    );
+    expect((error as ActionError).message).toContain("remove did not run");
   });
 
   it("aborts the call, with the signal's reason, when the confirmation was cancelled", async () => {

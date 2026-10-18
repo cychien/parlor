@@ -23,16 +23,13 @@ export interface ConfirmationRequest {
   readonly signal?: AbortSignal | undefined;
 }
 
-/**
- * How a confirmation ended. `unavailable`: nobody can show the card (now, or for the grace
- * period mid-wait). `cancelled`: the agent gave up, or the server is shutting down.
- */
 export type ConfirmationOutcome =
   | "approved"
   | "declined"
   | "timeout"
   | "unavailable"
-  | "cancelled";
+  | "cancelled"
+  | "shutdown";
 
 export interface ConfirmationBoardOptions {
   readonly directory: ClientDirectory;

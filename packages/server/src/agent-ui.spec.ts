@@ -933,6 +933,23 @@ describe("actions that ask the user to confirm", () => {
     expect(ran).toEqual([]);
   });
 
+  it("tells the agent the action did not run when the server shuts down while the card waits", async () => {
+    const target = open();
+    const tab = await openBrowser("tab-1", "/", target);
+    await tab.presence(true, true);
+    const call = (await mcp(target)).callTool({
+      name: "removeNote",
+      arguments: { id: "n1" },
+    });
+    await vi.waitFor(() => expect(tab.shown()).toHaveLength(1));
+    await target.close();
+    const result = await call;
+    expect(result.isError).toBe(true);
+    expect(errorOf(result).code).toBe("confirmation_unavailable");
+    expect(errorOf(result).message).toContain("removeNote did not run");
+    expect(ran).toEqual([]);
+  });
+
   it("is unavailable when the open app does not render confirmations", async () => {
     const target = open();
     const tab = await openBrowser("tab-1", "/", target);
