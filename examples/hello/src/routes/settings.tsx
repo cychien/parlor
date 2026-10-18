@@ -38,7 +38,7 @@ function NotificationsPanel() {
     setStatus("sent");
   };
   return (
-    <section style={{ marginTop: 24 }}>
+    <section className="stack">
       <p data-testid="notifications">Notifications via {cap.platform}</p>
       <button onClick={() => void notify()}>Notify</button> <output>{status}</output>
     </section>
@@ -54,7 +54,7 @@ function DeepLinkPanel() {
   }, [cap]);
   if (cap.resolving) return null;
   return (
-    <section style={{ marginTop: 24 }}>
+    <section className="stack">
       <p data-testid="deeplink">Deep links via {cap.available ? cap.platform : "none"}</p>
       <ul>
         {urls.map((url) => (

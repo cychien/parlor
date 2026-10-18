@@ -1,30 +1,27 @@
-import { type AgentActivity, useAgentActivity } from "@parlor/client/react";
+import {
+  type AgentActivity,
+  type AgentActivityKind,
+  useAgentActivity,
+} from "@parlor/client/react";
 import { createRootRoute, Link, Outlet } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+
+import { ConfirmationCards } from "../confirmation-cards.js";
 
 export const Route = createRootRoute({
   staticData: { description: "The app shell: navigation to every page." },
   component: Layout,
 });
 
-const linkStyle = { color: "inherit", textDecoration: "none" };
-const activeLinkStyle = { ...linkStyle, fontWeight: 600, textDecoration: "underline" };
-
 function Layout() {
   return (
-    <div style={{ fontFamily: "system-ui", padding: 24, maxWidth: 480 }}>
-      <nav
-        aria-label="Main"
-        style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 8 }}
-      >
-        <Link to="/" style={linkStyle} activeProps={{ style: activeLinkStyle }}>
-          Tasks
-        </Link>
-        <Link to="/settings" style={linkStyle} activeProps={{ style: activeLinkStyle }}>
-          Settings
-        </Link>
+    <div className="shell">
+      <nav aria-label="Main" className="topbar">
+        <Link to="/">Tasks</Link>
+        <Link to="/settings">Settings</Link>
         <AgentIndicator />
       </nav>
+      <ConfirmationCards />
       <main>
         <Outlet />
       </main>
@@ -34,14 +31,14 @@ function Layout() {
 
 const LINGER_MS = 2000;
 
-const DOING: Record<NonNullable<AgentActivity["last"]>["op"], string> = {
+const DOING: Record<AgentActivityKind, string> = {
   screen: "Agent is reading this screen",
   navigate: "Agent is opening a page",
   set: "Agent is filling in a form",
   highlight: "Agent is pointing at something",
   confirm: "Agent is asking you to confirm",
 };
-const DONE: Record<NonNullable<AgentActivity["last"]>["op"], string> = {
+const DONE: Record<AgentActivityKind, string> = {
   screen: "Agent read this screen",
   navigate: "Agent opened this page",
   set: "Agent filled in a form",
@@ -51,32 +48,25 @@ const DONE: Record<NonNullable<AgentActivity["last"]>["op"], string> = {
 
 function AgentIndicator() {
   const { busy, last } = useAgentActivity();
-  const [faded, setFaded] = useState<number | undefined>();
+  const [faded, setFaded] = useState<AgentActivity["last"]>();
   useEffect(() => {
     if (busy || !last) return;
-    const timer = setTimeout(() => setFaded(last.at), LINGER_MS);
+    const timer = setTimeout(() => setFaded(last), LINGER_MS);
     return () => clearTimeout(timer);
   }, [busy, last]);
   const text = !last
     ? undefined
     : busy
       ? DOING[last.op]
-      : faded === last.at
+      : faded === last
         ? undefined
         : DONE[last.op];
   return (
     <span
       role="status"
       aria-live="polite"
-      style={{
-        marginLeft: "auto",
-        fontSize: 13,
-        padding: "2px 10px",
-        borderRadius: 999,
-        background: "#eef2ff",
-        color: "#3730a3",
-        visibility: text ? "visible" : "hidden",
-      }}
+      className="agent-status"
+      data-idle={text ? undefined : ""}
     >
       {text ?? "No agent activity"}
     </span>
