@@ -1,3 +1,6 @@
+import { mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
+
 import { PGlite } from "@electric-sql/pglite";
 import type { DataProvider, Unlisten } from "@parlor/core";
 import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
@@ -86,13 +89,18 @@ function nodePostgresHandle(url: string): DatabaseHandle {
   };
 }
 
+async function preparePgliteDir(dataDir: string): Promise<void> {
+  if (/^[a-z]+:\/\//i.test(dataDir)) return;
+  await mkdir(dirname(dataDir), { recursive: true });
+}
+
 export async function createDatabase(
   options: DatabaseOptions = {},
 ): Promise<DatabaseHandle> {
   const url = options.url ?? resolveDatabaseUrl();
-  const handle = url
-    ? nodePostgresHandle(url)
-    : pgliteHandle(options.dataDir ?? DEFAULT_PGLITE_DIR);
+  const dataDir = options.dataDir ?? DEFAULT_PGLITE_DIR;
+  if (!url) await preparePgliteDir(dataDir);
+  const handle = url ? nodePostgresHandle(url) : pgliteHandle(dataDir);
   if (options.migrationsFolder) await handle.migrate(options.migrationsFolder);
   return handle;
 }
