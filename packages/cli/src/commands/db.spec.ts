@@ -85,4 +85,32 @@ describe("runDrizzleKit", () => {
     );
     expect(second).toContain('ADD COLUMN "note" text');
   });
+
+  it("still succeeds when the node runtime writes its own notes to stderr", async () => {
+    await writeFile(join(projectDir, "schema", "tasks.ts"), tasksSchema(""));
+    const inherited = process.env.NODE_OPTIONS;
+    process.env.NODE_OPTIONS = "--inspect=0";
+    try {
+      await generate();
+    } finally {
+      if (inherited === undefined) delete process.env.NODE_OPTIONS;
+      else process.env.NODE_OPTIONS = inherited;
+    }
+
+    expect(stderrText).toContain("Debugger listening");
+    const sqlFiles = (await readdir(join(projectDir, "migrations"))).filter((file) =>
+      file.endsWith(".sql"),
+    );
+    expect(sqlFiles).toHaveLength(1);
+  });
+
+  it("rejects when drizzle-kit fails on an unreadable schema", async () => {
+    await writeFile(
+      join(projectDir, "schema", "tasks.ts"),
+      tasksSchema("\n  broken: text(,"),
+    );
+
+    await expect(generate()).rejects.toThrow("drizzle-kit generate failed");
+    expect(stderrText).toContain("Unexpected");
+  });
 });
