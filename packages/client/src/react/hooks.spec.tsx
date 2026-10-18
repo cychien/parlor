@@ -1,3 +1,4 @@
+import { ActionError } from "@parlor/core";
 import { QueryClient } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
@@ -60,6 +61,88 @@ describe("useActionQuery / useActionMutation", () => {
 
     await waitFor(() => expect(screen.getByRole("status").textContent).toBe("count:1"));
     expect(client.invoke).toHaveBeenCalledWith("increment", {});
+  });
+
+  describe("when a query fails", () => {
+    function Probe({ name }: { name: "probe" | "other" }) {
+      const query = useActionQuery(name, {}, { retryDelay: 0 });
+      return (
+        <output data-testid={name}>
+          {query.isError ? `error:${query.error.message}` : "waiting"}
+        </output>
+      );
+    }
+    const answers = (probe: () => Promise<unknown>, other = probe) => {
+      const client = createFakeClient();
+      client.invoke.mockImplementation(((name: string) =>
+        name === "other" ? other() : probe()) as never);
+      return client;
+    };
+    const renderProbes = (
+      client: ReturnType<typeof createFakeClient>,
+      queryClient?: QueryClient,
+    ) =>
+      render(
+        <FrameworkProvider client={client} queryClient={queryClient} sync={false}>
+          <Probe name="probe" />
+          <Probe name="other" />
+        </FrameworkProvider>,
+      );
+    const calls = (client: ReturnType<typeof createFakeClient>, name: string) =>
+      client.invoke.mock.calls.filter(([called]) => called === name).length;
+    const shown = (name: string) => screen.getByTestId(name).textContent;
+
+    it.each(["not_found", "invalid_input", "declined"] as const)(
+      "asks once for an action that answers %s",
+      async (code) => {
+        const client = answers(async () => {
+          throw new ActionError(code, `says ${code}`);
+        });
+        renderProbes(client);
+        await waitFor(() => expect(shown("probe")).toBe(`error:says ${code}`));
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(calls(client, "probe")).toBe(1);
+      },
+    );
+
+    it("asks again after a network failure and after an internal error, but not after not_found", async () => {
+      const outcomes = [
+        new TypeError("Failed to fetch"),
+        new ActionError("internal", "boom"),
+        new ActionError("not_found", "gone"),
+      ];
+      let asked = 0;
+      const client = answers(
+        async () => {
+          throw outcomes[Math.min(asked++, outcomes.length - 1)];
+        },
+        async () => ({ data: {}, tags: [] }),
+      );
+      renderProbes(client);
+      await waitFor(() => expect(shown("probe")).toBe("error:gone"));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(calls(client, "probe")).toBe(3);
+    });
+
+    it("leaves a retry setting on the query client in charge of the errors a retry can change", async () => {
+      const client = answers(
+        async () => {
+          throw new ActionError("internal", "boom");
+        },
+        async () => {
+          throw new ActionError("not_found", "gone");
+        },
+      );
+      renderProbes(
+        client,
+        new QueryClient({ defaultOptions: { queries: { retry: 1 } } }),
+      );
+      await waitFor(() => expect(shown("probe")).toBe("error:boom"));
+      await waitFor(() => expect(shown("other")).toBe("error:gone"));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(calls(client, "probe")).toBe(2);
+      expect(calls(client, "other")).toBe(1);
+    });
   });
 
   it("throws a clear error when used outside the provider", () => {
