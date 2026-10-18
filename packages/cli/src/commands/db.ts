@@ -12,16 +12,7 @@ import { CliError } from "../errors.js";
 const require = createRequire(import.meta.url);
 
 export function drizzleKitArgs(schema: string, migrations: string): string[] {
-  const root = process.cwd();
-  return [
-    "generate",
-    "--dialect",
-    "postgresql",
-    "--schema",
-    join(root, schema),
-    "--out",
-    join(root, migrations),
-  ];
+  return ["generate", "--dialect", "postgresql", "--schema", schema, "--out", migrations];
 }
 
 export interface DrizzleKitIo {
