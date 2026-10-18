@@ -15,6 +15,17 @@ const BASE_PATH = ${JSON.stringify(basePath)};
 
 app.installUiManifest?.(() => UI_MANIFEST);
 
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  globalThis.process?.once?.(signal, async () => {
+    try {
+      await app.close?.();
+    } catch (error) {
+      console.error("[parlor] shutdown failed:", error);
+    }
+    process.kill(process.pid, signal);
+  });
+}
+
 function wantsDocument(request) {
   if (request.method !== "GET") return false;
   const accept = request.headers.get("accept") ?? "";

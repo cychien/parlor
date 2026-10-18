@@ -12,6 +12,7 @@ export interface DataProvider<TDb = unknown> {
   read(): TDb;
   transaction<T>(run: (tx: TDb) => Promise<T>): Promise<T>;
   listen?(channel: string, handler: (payload: string) => void): Promise<Unlisten>;
+  close?(): Promise<void>;
 }
 
 export interface ActionContext {

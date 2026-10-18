@@ -81,10 +81,14 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
       send({ events: [syncEvent], cursor: encodeCursor(cursorOf(syncEvent)) });
 
     let arrivedDuringCatchUp: SyncEvent[] | undefined = [];
-    const unsubscribe = hub.subscribe(currentScope, (syncEvent) => {
-      if (arrivedDuringCatchUp) arrivedDuringCatchUp.push(syncEvent);
-      else sendLive(syncEvent);
-    });
+    const unsubscribe = hub.subscribe(
+      currentScope,
+      (syncEvent) => {
+        if (arrivedDuringCatchUp) arrivedDuringCatchUp.push(syncEvent);
+        else sendLive(syncEvent);
+      },
+      () => void stream.close(),
+    );
     const keepAlive = setInterval(
       () => void stream.pushComment("keep-alive"),
       keepAliveMs,
@@ -135,6 +139,10 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
     );
     arrivedDuringCatchUp = undefined;
     for (const syncEvent of pending) sendLive(syncEvent);
-    return stream.send();
+    const body = await stream.send();
+    if (event.req.headers.get("connection") === "keep-alive") {
+      event.res.headers.set("connection", "close");
+    }
+    return body;
   });
 }
