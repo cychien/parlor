@@ -10,6 +10,7 @@ import {
   type RouteSnapshot,
   type ScreenSnapshot,
   UI_CHANNEL,
+  UI_OPS,
   type UiError,
   type UiOp,
   type UiOpInput,
@@ -300,6 +301,7 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
       visible,
       platform: options.platform,
       ...(options.buildId === undefined ? {} : { buildId: options.buildId }),
+      ops: UI_OPS,
     };
   };
   const reportPresence = () => {

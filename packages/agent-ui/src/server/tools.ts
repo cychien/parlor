@@ -216,6 +216,14 @@ export function createUiTools(
       }),
     });
   };
+  const requireOp = (selection: Selection, op: UiOp) => {
+    const { client } = selection.target;
+    if (client.ops.includes(op)) return;
+    throw new UiFailure({
+      code: "unsupported_op",
+      message: `The app client ${client.id} (${client.platform}${client.buildId ? `, build ${client.buildId}` : ""}) is too old for ui_${op}. Ask the user to update the app; ui_screen and ui_navigate still work.`,
+    });
+  };
   const select = (ctx: AgentToolContext, clientId: string | undefined) => {
     const wanted = clientId ?? ctx.clientId;
     if (wanted !== undefined && !directory.connected(ctx.scope, wanted)) {
@@ -303,6 +311,7 @@ export function createUiTools(
         const selection = select(ctx, clientId);
         if (!selection) return UNREACHABLE;
         refuseTie(selection);
+        requireOp(selection, "set");
         const result = await broker.request(
           selection.target,
           "set",
@@ -327,6 +336,7 @@ export function createUiTools(
         const selection = select(ctx, clientId);
         if (!selection) return UNREACHABLE;
         refuseTie(selection);
+        requireOp(selection, "highlight");
         const result = await broker.request(
           selection.target,
           "highlight",

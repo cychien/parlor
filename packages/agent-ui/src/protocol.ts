@@ -49,6 +49,11 @@ export const uiOps: { readonly [O in UiOp]: UiOpSpec<O> } = {
 
 export const UI_OPS = Object.keys(uiOps) as readonly UiOp[];
 
+export const isUiOp = (value: unknown): value is UiOp =>
+  typeof value === "string" && Object.hasOwn(uiOps, value);
+
+export const LEGACY_UI_OPS: readonly UiOp[] = ["screen", "navigate"];
+
 export const uiOpReadOnly: { readonly [O in UiOp]: boolean } = {
   screen: uiOps.screen.readOnly,
   navigate: uiOps.navigate.readOnly,
@@ -79,6 +84,7 @@ export const UI_ERROR_CODES = [
   "not_writable",
   "invalid_value",
   "user_editing",
+  "unsupported_op",
   "busy",
   "timeout",
   "outcome_unknown",
@@ -286,9 +292,6 @@ function highlightInputOf(value: unknown): UiOpInput<"highlight"> | undefined {
     ...(field === undefined ? {} : { field }),
   };
 }
-
-const isUiOp = (value: unknown): value is UiOp =>
-  isString(value) && Object.hasOwn(uiOps, value);
 
 function requestOf(json: unknown): UiRequest | undefined {
   if (!isFields(json)) return undefined;
