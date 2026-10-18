@@ -1,13 +1,19 @@
-import type { ParlorConfig } from "@parlor/config";
+import { existsSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+
+import { GENERATED_DIR, type ParlorConfig } from "@parlor/config";
+import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
 import { defaultClientConditions, type PluginOption } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
 export const FRAMEWORK_ROUTE_PREFIX = "/_parlor";
+export const DEFAULT_ROUTE_TREE = "src/routeTree.gen.ts";
 
 export interface WebOptions {
   readonly conditions?: readonly string[] | undefined;
   readonly serverUrl?: string | undefined;
+  readonly root?: string | undefined;
 }
 
 export function webManifest(config: ParlorConfig) {
@@ -23,12 +29,35 @@ export function webManifest(config: ParlorConfig) {
   };
 }
 
+export function routeTreeFile(config: ParlorConfig): string {
+  return config.web.routeTree ?? DEFAULT_ROUTE_TREE;
+}
+
+export function routesDirectory(config: ParlorConfig): string {
+  return join(dirname(routeTreeFile(config)), "routes");
+}
+
+function fileRoutes(config: ParlorConfig, root: string): PluginOption[] {
+  if (!existsSync(resolve(root, routesDirectory(config)))) return [];
+  return [
+    tanstackRouter({
+      target: "react",
+      routesDirectory: routesDirectory(config),
+      generatedRouteTree: routeTreeFile(config),
+      tmpDir: resolve(root, GENERATED_DIR, "tanstack"),
+      quoteStyle: "double",
+      semicolons: true,
+    }),
+  ];
+}
+
 export function parlorWeb(
   config: ParlorConfig,
   options: WebOptions = {},
 ): PluginOption[] {
   const conditions = options.conditions ?? [];
   const plugins: PluginOption[] = [
+    ...fileRoutes(config, options.root ?? process.cwd()),
     react(),
     {
       name: "parlor:web",

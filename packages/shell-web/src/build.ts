@@ -17,7 +17,7 @@ export async function buildWeb(
   await build({
     root: rootDir,
     configFile: false,
-    plugins: parlorWeb(config, options),
+    plugins: parlorWeb(config, { ...options, root: rootDir }),
     build: { outDir, emptyOutDir: true },
     logLevel: "warn",
   });

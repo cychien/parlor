@@ -32,6 +32,7 @@ export const parlorConfigSchema = z.object({
       pwa: z.boolean().default(true),
       themeColor: z.string().default("#ffffff"),
       backgroundColor: z.string().default("#ffffff"),
+      routeTree: z.string().optional(),
     })
     .prefault({}),
   desktop: z
