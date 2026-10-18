@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -20,6 +21,21 @@ describe("hostEntrySource", () => {
     expect(source).toContain("app.fetch(request)");
   });
 });
+
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = createServer();
+    probe.once("error", reject);
+    probe.listen(0, () => {
+      const address = probe.address();
+      probe.close(() =>
+        typeof address === "object" && address
+          ? resolve(address.port)
+          : reject(new Error("no port assigned")),
+      );
+    });
+  });
+}
 
 describe("buildServer", () => {
   it("builds a node-server bundle that serves the app, static assets, and the SPA fallback", async () => {
@@ -47,7 +63,7 @@ describe("buildServer", () => {
     const bundle = await readFile(join(result.outputDir, "server", "index.mjs"), "utf8");
     expect(bundle).not.toContain("PARLOR_SYNC_TRANSPORT");
 
-    const port = 3900 + Math.floor(Math.random() * 100);
+    const port = await freePort();
     const child = spawn(
       process.execPath,
       [join(result.outputDir, "server", "index.mjs")],
