@@ -38,11 +38,13 @@ const DOING: Record<NonNullable<AgentActivity["last"]>["op"], string> = {
   screen: "Agent is reading this screen",
   navigate: "Agent is opening a page",
   set: "Agent is filling in a form",
+  highlight: "Agent is pointing at something",
 };
 const DONE: Record<NonNullable<AgentActivity["last"]>["op"], string> = {
   screen: "Agent read this screen",
   navigate: "Agent opened this page",
   set: "Agent filled in a form",
+  highlight: "Agent pointed at something",
 };
 
 function AgentIndicator() {

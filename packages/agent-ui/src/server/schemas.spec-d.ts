@@ -26,7 +26,9 @@ test("the phase 2 refusals are wire error codes", () => {
 });
 
 test("every op is a ui_ tool and an activity kind", () => {
-  expectTypeOf<UiToolName>().toEqualTypeOf<"ui_screen" | "ui_navigate" | "ui_set">();
+  expectTypeOf<UiToolName>().toEqualTypeOf<
+    "ui_screen" | "ui_navigate" | "ui_set" | "ui_highlight"
+  >();
   expectTypeOf<(typeof UI_TOOLS)[number]>().toEqualTypeOf<UiToolName>();
 });
 
@@ -37,4 +39,7 @@ test("the server's op input schemas parse into exactly the wire types", () => {
     Frozen<UiOpInput<"navigate">>
   >();
   expectTypeOf<Frozen<Parsed<"set">>>().toEqualTypeOf<Frozen<UiOpInput<"set">>>();
+  expectTypeOf<Frozen<Parsed<"highlight">>>().toEqualTypeOf<
+    Frozen<UiOpInput<"highlight">>
+  >();
 });

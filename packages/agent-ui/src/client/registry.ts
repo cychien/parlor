@@ -53,10 +53,13 @@ export interface RegistryReader {
   owner(node: Node | null): MountedView | undefined;
   lastEntered(): Moment | undefined;
   lastInteracted(): Moment | undefined;
+  agentFocus(): Element | undefined;
 }
 
 export interface ViewRegistryRuntime extends ViewRegistry, RegistryReader {
   remember(mounted: MountedView, values: Readonly<Record<string, unknown>>): void;
+  quietly<T>(act: () => Promise<T>): Promise<T>;
+  placeFocus(element: HTMLElement): void;
   restore(mounted: MountedView, writes: AgentWrites): void;
   awaitingObserver(): boolean;
   observed(): Promise<void>;
@@ -89,6 +92,8 @@ export function createViewRegistry(env: BrowserEnvironment): ViewRegistryRuntime
   let listening = false;
   let entered: Moment | undefined;
   let interacted: Moment | undefined;
+  let quiet = 0;
+  let agentFocus: Element | undefined;
 
   const settle = () => {
     if (pending > 0) return;
@@ -109,14 +114,21 @@ export function createViewRegistry(env: BrowserEnvironment): ViewRegistryRuntime
       const mounted = byElement.get(entry.target);
       if (!mounted || !visibility.has(mounted)) continue;
       const previous = setVisibility(mounted, entry.isIntersecting ? "in" : "out");
-      if (entry.isIntersecting && previous === "out") {
+      if (entry.isIntersecting && previous === "out" && quiet === 0) {
         entered = { view: mounted, at: env.now() };
       }
     }
     settle();
   };
 
+  const handBack = (event: Event) => {
+    if (event.target === agentFocus) agentFocus = undefined;
+  };
+
   const onInteraction = (event: Event) => {
+    if (quiet > 0 && event.type === "focusin") return;
+    if (event.type === "focusin") agentFocus = undefined;
+    else handBack(event);
     const mounted = owner(event.target as Node | null);
     if (mounted) interacted = { view: mounted, at: env.now() };
   };
@@ -126,6 +138,7 @@ export function createViewRegistry(env: BrowserEnvironment): ViewRegistryRuntime
     listening = true;
     env.document.addEventListener("pointerdown", onInteraction, true);
     env.document.addEventListener("focusin", onInteraction, true);
+    env.document.addEventListener("keydown", handBack, true);
     env.document.addEventListener("input", onInput);
   };
 
@@ -186,6 +199,7 @@ export function createViewRegistry(env: BrowserEnvironment): ViewRegistryRuntime
   };
 
   const onInput = (event: Event) => {
+    handBack(event);
     const target = event.target as Element | null;
     const mounted = owner(target) as Mounted | undefined;
     if (!mounted || mounted.writes.size === 0) return;
@@ -249,6 +263,24 @@ export function createViewRegistry(env: BrowserEnvironment): ViewRegistryRuntime
       if (entries.length === 0) return;
       replaceWrites(target, new Map([...target.writes, ...entries]));
     },
+    async quietly(act) {
+      quiet++;
+      try {
+        return await act();
+      } finally {
+        quiet--;
+      }
+    },
+    placeFocus(element) {
+      if (element.ownerDocument.activeElement === element) return;
+      quiet++;
+      try {
+        element.focus({ preventScroll: true });
+      } finally {
+        quiet--;
+      }
+      agentFocus = element;
+    },
     restore: (mounted, writes) => replaceWrites(mounted as Mounted, writes),
     *singles() {
       for (const stack of singles.values()) yield stack.at(-1)!;
@@ -263,6 +295,7 @@ export function createViewRegistry(env: BrowserEnvironment): ViewRegistryRuntime
     owner,
     lastEntered: () => current(entered),
     lastInteracted: () => current(interacted),
+    agentFocus: () => agentFocus,
     awaitingObserver: () => pending > 0 && observer !== undefined,
     observed() {
       if (pending === 0 || !observer) return Promise.resolve();
@@ -276,11 +309,13 @@ export function createViewRegistry(env: BrowserEnvironment): ViewRegistryRuntime
       observer?.disconnect();
       observer = undefined;
       visibility.clear();
+      agentFocus = undefined;
       pending = 0;
       settle();
       if (listening && env.document) {
         env.document.removeEventListener("pointerdown", onInteraction, true);
         env.document.removeEventListener("focusin", onInteraction, true);
+        env.document.removeEventListener("keydown", handBack, true);
         env.document.removeEventListener("input", onInput);
       }
       listening = false;

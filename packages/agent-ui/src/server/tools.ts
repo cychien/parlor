@@ -51,6 +51,10 @@ export interface NavigateToolResult {
 
 export type SetToolResult = UiOpResults["set"] & { readonly client: ClientSummary };
 
+export type HighlightToolResult = UiOpResults["highlight"] & {
+  readonly client: ClientSummary;
+};
+
 export interface UnreachableResult {
   readonly reachable: false;
   readonly reason: "no_client";
@@ -141,6 +145,15 @@ function setDescription(manifest: UiManifest | undefined): string {
   );
 }
 
+function highlightDescription(): string {
+  return [
+    "Point at something on the user's screen: scrolls a view (a keyed item by key) or one field inside it into the middle of the screen, focuses the field (not on a touch screen, where that opens the keyboard), and marks it for two seconds.",
+    "Use it to show the user what you mean or to ask which one they meant.",
+    "Returns shown, the visible fraction after scrolling, or not_mounted when it is not on screen, or reachable: false when the app is not open.",
+    "Refuses with user_editing when the user is typing in another field: wait or ask, and it moves nothing.",
+  ].join(" ");
+}
+
 function routeEnum(manifest: UiManifest | undefined) {
   const paths = manifest?.routes.map((route) => route.path) ?? [];
   const [first, ...rest] = paths;
@@ -201,6 +214,14 @@ export function createUiTools(
           message: `${summary.id} (${summary.platform}, ${summary.focused ? "focused" : "not focused"}, ${summary.visible ? "visible" : "hidden"}, seen ${summary.seenAgoMs} ms ago)`,
         };
       }),
+    });
+  };
+  const requireOp = (selection: Selection, op: UiOp) => {
+    const { client } = selection.target;
+    if (client.ops.includes(op)) return;
+    throw new UiFailure({
+      code: "unsupported_op",
+      message: `The app client ${client.id} (${client.platform}${client.buildId ? `, build ${client.buildId}` : ""}) is too old for ui_${op}. Ask the user to update the app; ui_screen and ui_navigate still work.`,
     });
   };
   const select = (ctx: AgentToolContext, clientId: string | undefined) => {
@@ -290,6 +311,7 @@ export function createUiTools(
         const selection = select(ctx, clientId);
         if (!selection) return UNREACHABLE;
         refuseTie(selection);
+        requireOp(selection, "set");
         const result = await broker.request(
           selection.target,
           "set",
@@ -305,7 +327,41 @@ export function createUiTools(
       },
     });
 
-    const byOp: { readonly [O in UiOp]: AgentTool } = { screen, navigate, set };
+    const highlight = defineTool({
+      name: toolName("highlight"),
+      description: highlightDescription(),
+      input: uiOpInputs.highlight.extend({ clientId: clientIdInput }),
+      readOnly: uiOpReadOnly.highlight,
+      async run({ view, key, field, clientId }, ctx) {
+        const selection = select(ctx, clientId);
+        if (!selection) return UNREACHABLE;
+        refuseTie(selection);
+        requireOp(selection, "highlight");
+        const result = await broker.request(
+          selection.target,
+          "highlight",
+          {
+            view,
+            ...(key === undefined ? {} : { key }),
+            ...(field === undefined ? {} : { field }),
+          },
+          ctx.origin,
+          ctx.signal,
+        );
+        const pointed: HighlightToolResult = {
+          client: directory.summary(selection.target.client),
+          ...result,
+        };
+        return pointed;
+      },
+    });
+
+    const byOp: { readonly [O in UiOp]: AgentTool } = {
+      screen,
+      navigate,
+      set,
+      highlight,
+    };
     return UI_OPS.map((op) => byOp[op]);
   };
 
@@ -329,6 +385,7 @@ export function uiInstructions(): string {
     "Do the work through actions; the screen updates by itself.",
     "To show the user a page, call ui_navigate with a path from its list.",
     "You fill forms and the user submits them: use ui_set to fill a form, and call the action that submits it only when the user explicitly asks you to.",
+    "Use ui_highlight to point at what you mean, or at candidates when you need the user to pick one.",
     "If a ui_ tool returns reachable: false, the app is not open: tell the user, and for navigation hand them the href.",
   ].join("\n");
 }

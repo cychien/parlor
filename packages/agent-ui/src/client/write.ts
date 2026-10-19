@@ -14,13 +14,8 @@ export function notMounted(input: { view: string; key?: string | undefined }): U
   };
 }
 
-/**
- * The fields of `changed` the user is typing in right now: the document has focus and the
- * active element, a named input inside `target`, is one of them. A window the user left
- * (terminal focused) never blocks, even with the caret still in a field.
- */
 export function userEditing(
-  registry: Pick<ViewRegistryRuntime, "owner">,
+  registry: Pick<ViewRegistryRuntime, "owner" | "agentFocus">,
   target: MountedView,
   changed: readonly string[],
   env: Pick<BrowserEnvironment, "document">,
@@ -28,7 +23,9 @@ export function userEditing(
   const document = env.document;
   if (!document?.hasFocus()) return [];
   const active = document.activeElement;
-  if (!active || registry.owner(active) !== target) return [];
+  if (!active || active === registry.agentFocus() || registry.owner(active) !== target) {
+    return [];
+  }
   const name = active.getAttribute("name");
   return name !== null && changed.includes(name) ? [name] : [];
 }

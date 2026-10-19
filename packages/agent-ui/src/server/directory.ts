@@ -1,6 +1,12 @@
 import type { ChannelConnection } from "@parlor/sync";
 
-import type { ClientSummary, PresenceUpdate } from "../protocol.js";
+import {
+  type ClientSummary,
+  isUiOp,
+  LEGACY_UI_OPS,
+  type PresenceUpdate,
+  type UiOp,
+} from "../protocol.js";
 
 export interface ConnectedClient {
   readonly id: string;
@@ -9,6 +15,7 @@ export interface ConnectedClient {
   readonly buildId: string | undefined;
   readonly focused: boolean;
   readonly visible: boolean;
+  readonly ops: readonly UiOp[];
   readonly seenAt: number;
 }
 
@@ -71,6 +78,7 @@ export class ClientDirectory {
       buildId: update.buildId,
       focused: update.focused,
       visible: update.visible,
+      ops: update.ops ? update.ops.filter(isUiOp) : LEGACY_UI_OPS,
       seenAt: this.#now(),
     };
     if (entry) {

@@ -303,3 +303,28 @@ describe("ClientDirectory connections", () => {
     expect(directory.presence("a", "default", presence(true, true))).toBe("rejected");
   });
 });
+
+describe("ClientDirectory ops", () => {
+  it("remembers the ops a client supports, drops ones it does not know, and assumes screen and navigate when a client lists none", () => {
+    const { directory, connect } = setup();
+    const announce = (id: string, ops?: readonly string[]) => {
+      connect(id);
+      directory.presence(id, "default", {
+        type: "presence",
+        focused: true,
+        visible: true,
+        platform: "web",
+        ...(ops ? { ops } : {}),
+      });
+    };
+    announce("new", ["screen", "navigate", "set", "highlight", "teleport"]);
+    announce("old");
+    expect(directory.target("new")?.client.ops).toEqual([
+      "screen",
+      "navigate",
+      "set",
+      "highlight",
+    ]);
+    expect(directory.target("old")?.client.ops).toEqual(["screen", "navigate"]);
+  });
+});

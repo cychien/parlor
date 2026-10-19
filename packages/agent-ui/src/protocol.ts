@@ -17,6 +17,11 @@ export interface UiOpInputs {
     readonly key?: string | undefined;
     readonly value: JsonObject;
   };
+  readonly highlight: {
+    readonly view: string;
+    readonly key?: string | undefined;
+    readonly field?: string | undefined;
+  };
 }
 
 export type UiOp = keyof UiOpInputs;
@@ -27,6 +32,7 @@ export interface UiOpResults {
   readonly screen: ScreenSnapshot;
   readonly navigate: { readonly screen: ScreenSnapshot };
   readonly set: { readonly value: JsonObject; readonly agentFields: readonly string[] };
+  readonly highlight: { readonly shown: number };
 }
 
 interface UiOpSpec<O extends UiOp> {
@@ -38,14 +44,21 @@ export const uiOps: { readonly [O in UiOp]: UiOpSpec<O> } = {
   screen: { readOnly: true, input: (value) => (isFields(value) ? {} : undefined) },
   navigate: { readOnly: false, input: (value) => navigateInputOf(value) },
   set: { readOnly: false, input: (value) => setInputOf(value) },
+  highlight: { readOnly: false, input: (value) => highlightInputOf(value) },
 };
 
 export const UI_OPS = Object.keys(uiOps) as readonly UiOp[];
+
+export const isUiOp = (value: unknown): value is UiOp =>
+  typeof value === "string" && Object.hasOwn(uiOps, value);
+
+export const LEGACY_UI_OPS: readonly UiOp[] = ["screen", "navigate"];
 
 export const uiOpReadOnly: { readonly [O in UiOp]: boolean } = {
   screen: uiOps.screen.readOnly,
   navigate: uiOps.navigate.readOnly,
   set: uiOps.set.readOnly,
+  highlight: uiOps.highlight.readOnly,
 };
 
 export interface AgentOrigin {
@@ -71,6 +84,7 @@ export const UI_ERROR_CODES = [
   "not_writable",
   "invalid_value",
   "user_editing",
+  "unsupported_op",
   "busy",
   "timeout",
   "outcome_unknown",
@@ -107,6 +121,7 @@ export interface PresenceUpdate {
   readonly visible: boolean;
   readonly platform: string;
   readonly buildId?: string | undefined;
+  readonly ops?: readonly string[] | undefined;
 }
 
 export interface LeaveNotice {
@@ -266,8 +281,17 @@ function setInputOf(value: unknown): UiOpInput<"set"> | undefined {
     : { view, key, value: value.value };
 }
 
-const isUiOp = (value: unknown): value is UiOp =>
-  isString(value) && Object.hasOwn(uiOps, value);
+function highlightInputOf(value: unknown): UiOpInput<"highlight"> | undefined {
+  if (!isFields(value) || !isString(value.view)) return undefined;
+  if (!absentOr(value.key, isString) || !absentOr(value.field, isString))
+    return undefined;
+  const { view, key, field } = value;
+  return {
+    view,
+    ...(key === undefined ? {} : { key }),
+    ...(field === undefined ? {} : { field }),
+  };
+}
 
 function requestOf(json: unknown): UiRequest | undefined {
   if (!isFields(json)) return undefined;

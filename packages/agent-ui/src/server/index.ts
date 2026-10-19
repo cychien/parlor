@@ -29,6 +29,7 @@ export { parseClientMessage, uiOpInputs } from "./schemas.js";
 export {
   type AgentTool,
   type AgentToolContext,
+  type HighlightToolResult,
   type NavigateToolResult,
   type ScreenToolResult,
   type SetToolResult,
