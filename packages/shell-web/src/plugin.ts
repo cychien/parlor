@@ -135,7 +135,18 @@ export function parlorWeb(
     },
   ];
   if (config.web.pwa) {
-    plugins.push(VitePWA({ registerType: "autoUpdate", manifest: webManifest(config) }));
+    plugins.push(
+      VitePWA({
+        registerType: "autoUpdate",
+        manifest: webManifest(config),
+        workbox: {
+          navigateFallbackDenylist: [
+            FRAMEWORK_ROUTE_PREFIX,
+            ...OAUTH_DISCOVERY_PREFIXES,
+          ].map((prefix) => new RegExp(`^${prefix.replaceAll(".", "\\.")}(/|$)`)),
+        },
+      }),
+    );
   }
   return plugins;
 }

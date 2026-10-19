@@ -112,6 +112,51 @@ describe("buildServer", () => {
   }, 120_000);
 });
 
+describe("buildServer app name", () => {
+  it("bakes config.app.name into the bundle as PARLOR_APP_NAME", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "parlor-host-name-"));
+    await writeFile(
+      join(rootDir, "server.ts"),
+      [
+        "export default {",
+        "  fetch: () => Response.json({ appName: process.env.PARLOR_APP_NAME ?? null }),",
+        "};",
+      ].join("\n"),
+    );
+    const config = parseConfig({ app: { id: "dev.parlor.host", name: "Host App" } });
+    const result = await buildServer(
+      { config, rootDir, configFile: "parlor.config.ts" },
+      { preset: "node-server" },
+    );
+
+    const port = await freePort();
+    const { PARLOR_APP_NAME: _name, ...env } = process.env;
+    const child = spawn(
+      process.execPath,
+      [join(result.outputDir, "server", "index.mjs")],
+      {
+        env: { ...env, PORT: String(port) },
+        stdio: "ignore",
+      },
+    );
+    try {
+      for (let i = 0; i < 50; i++) {
+        try {
+          const response = await fetch(`http://localhost:${port}/_parlor/name`);
+          await expect(response.json()).resolves.toEqual({ appName: "Host App" });
+          return;
+        } catch (error) {
+          if (error instanceof Error && error.name === "AssertionError") throw error;
+          await new Promise((r) => setTimeout(r, 100));
+        }
+      }
+      throw new Error("server did not start");
+    } finally {
+      child.kill();
+    }
+  }, 120_000);
+});
+
 const DEFAULT_POLICY =
   "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'";
 
