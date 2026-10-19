@@ -14,7 +14,16 @@ import type { ActionRegistry } from "@parlor/core/registry";
 import { registerSyncRoutes, SyncHub, type SyncTransport } from "@parlor/sync/server";
 import { H3, type H3Event, readBody } from "h3";
 
-import { clientOf, createActionRunner, sourceOf } from "./actions.js";
+import { admits, requireSurface, type Surface } from "./access.js";
+import { createActionRunner } from "./actions.js";
+import { AuthFailure, type AuthProvider } from "./auth.js";
+import {
+  type Caller,
+  type CallerResolver,
+  clientOf,
+  createCallerResolver,
+  sourceOf,
+} from "./caller.js";
 import { type CorsConfig, corsMiddleware } from "./cors.js";
 import { createMcpHandler } from "./mcp.js";
 import { DEFAULT_BASE_PATH, type Manifest, PROTOCOL_VERSION } from "./protocol.js";
@@ -28,6 +37,11 @@ export interface SyncOptions {
 export interface ServerOptions<T extends ActionMap> {
   readonly actions: ActionRegistry<T>;
   readonly scope?: ScopeResolver | undefined;
+  /**
+   * Without it every caller is anonymous, the action source is the `x-parlor-source`
+   * header, and confirmations are a UX guard.
+   */
+  readonly auth?: AuthProvider | undefined;
   readonly basePath?: string | undefined;
   readonly cors?: CorsConfig | false | undefined;
   readonly database?: DataProvider | undefined;
@@ -58,16 +72,42 @@ const STATUS_BY_CODE = {
 
 const isAbort = (error: unknown) => error instanceof Error && error.name === "AbortError";
 
+function toActionError(error: unknown): ActionError {
+  if (error instanceof ActionError) return error;
+  if (error instanceof AuthFailure)
+    return new ActionError("unauthenticated", error.message);
+  if (!isAbort(error)) console.error("[parlor] action failed:", error);
+  return new ActionError("internal", "Internal error", { cause: error });
+}
+
 function errorBody(event: H3Event, error: unknown) {
-  if (!(error instanceof ActionError) && !isAbort(error)) {
-    console.error("[parlor] action failed:", error);
-  }
-  const actionError =
-    error instanceof ActionError
-      ? error
-      : new ActionError("internal", "Internal error", { cause: error });
+  const actionError = toActionError(error);
   event.res.status = STATUS_BY_CODE[actionError.code];
   return actionError.toBody();
+}
+
+function errorResponse(error: unknown): Response {
+  const actionError = toActionError(error);
+  return Response.json(actionError.toBody(), {
+    status: STATUS_BY_CODE[actionError.code],
+  });
+}
+
+function guard(callers: CallerResolver, surface: Surface) {
+  return async (request: Request): Promise<Caller> =>
+    requireSurface(await callers(request), surface, callers.enforcing);
+}
+
+function refuseUnless(callers: CallerResolver, surface: Surface) {
+  const check = guard(callers, surface);
+  return async (event: H3Event): Promise<Response | undefined> => {
+    try {
+      await check(event.req);
+      return undefined;
+    } catch (error) {
+      return errorResponse(error);
+    }
+  };
 }
 
 export function createServer<T extends ActionMap>(
@@ -76,6 +116,7 @@ export function createServer<T extends ActionMap>(
   const {
     actions,
     scope = defaultScope,
+    auth,
     basePath = DEFAULT_BASE_PATH,
     cors = {},
     database,
@@ -86,11 +127,18 @@ export function createServer<T extends ActionMap>(
   const app = new H3();
   const syncOptions = sync === false ? undefined : sync;
   const syncEnabled = syncOptions !== undefined && database !== undefined;
+  const callers = createCallerResolver(auth, scope);
   const agentUi =
-    agentUiOptions === false ? undefined : createAgentUi({ ...agentUiOptions, scope });
+    agentUiOptions === false
+      ? undefined
+      : createAgentUi({
+          ...agentUiOptions,
+          audience: async (request) => (await callers(request)).audience,
+        });
   const runner = createActionRunner({
     actions,
     scope,
+    callers,
     database,
     sync: syncEnabled,
     onClient: agentUi?.touch,
@@ -101,6 +149,8 @@ export function createServer<T extends ActionMap>(
   let closing: Promise<void> | undefined;
 
   if (cors !== false) app.use(corsMiddleware(cors));
+
+  app.use(`${basePath}/manifest`, refuseUnless(callers, "manifest"));
 
   app.get(`${basePath}/manifest`, (): Manifest => {
     const ui = agentUi?.manifest();
@@ -117,6 +167,7 @@ export function createServer<T extends ActionMap>(
       const input = await readBody(event).catch(() => {
         throw new ActionError("invalid_input", "Request body must be JSON");
       });
+      await guard(callers, "actions")(event.req);
       const result = await runner.run(name, input, event.req, sourceOf(event.req));
       return { data: result.data, tags: result.reads };
     } catch (error) {
@@ -125,11 +176,23 @@ export function createServer<T extends ActionMap>(
   });
 
   if (mcp !== false) {
-    const handler = createMcpHandler({ actions, runner, agentUi, ...mcp });
-    app.all(`${basePath}/mcp`, (event) => handler.fetch(event.req));
+    const handler = createMcpHandler({ actions, runner, agentUi, callers, ...mcp });
+    const guardMcp = guard(callers, "mcp");
+    app.all(`${basePath}/mcp`, async (event) => {
+      try {
+        await guardMcp(event.req);
+      } catch (error) {
+        const refusal = toActionError(error);
+        return refusal.code === "unauthenticated" && auth
+          ? auth.challenge(event.req)
+          : errorResponse(refusal);
+      }
+      return handler.fetch(event.req);
+    });
   }
 
   if (syncEnabled && database && hub) {
+    app.use(`${basePath}/sync/**`, refuseUnless(callers, "sync"));
     app.use(`${basePath}/sync/**`, async () => {
       await runner.ready();
     });
@@ -137,7 +200,18 @@ export function createServer<T extends ActionMap>(
       basePath,
       data: database,
       hub,
-      scope,
+      scope: async (request) => (await callers(request)).scope,
+      authority: async (request) => {
+        const caller = await callers(request);
+        const { principal } = caller;
+        return {
+          principal,
+          channels: admits("channels", caller, callers.enforcing),
+          ...(auth && principal.kind !== "anonymous"
+            ? { revoked: auth.revoked(principal) }
+            : {}),
+        };
+      },
       transport: syncOptions?.transport,
       pollIntervalMs: syncOptions?.pollIntervalMs,
       channels: agentUi ? [agentUi.channel] : [],
@@ -145,8 +219,15 @@ export function createServer<T extends ActionMap>(
     });
   }
 
-  if (agentUi)
-    registerAgentUiRoutes(app, { basePath, agentUi, scope, clientId: clientOf });
+  if (agentUi) {
+    app.use(`${basePath}/ui`, refuseUnless(callers, "ui"));
+    registerAgentUiRoutes(app, {
+      basePath,
+      agentUi,
+      audience: async (request) => (await callers(request)).audience,
+      clientId: clientOf,
+    });
+  }
 
   return {
     ...(agentUi

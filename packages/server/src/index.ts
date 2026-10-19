@@ -1,11 +1,25 @@
 export {
+  type CallerOf,
+  type KindsOf,
+  requireSurface,
+  ROUTE_ACCESS,
+  type Surface,
+} from "./access.js";
+export {
   type ActionRunner,
-  clientOf,
   type Confirm,
   createActionRunner,
   type RunOptions,
-  sourceOf,
 } from "./actions.js";
+export { AuthFailure, type AuthFailureReason, type AuthProvider } from "./auth.js";
+export {
+  type Caller,
+  type CallerResolver,
+  clientOf,
+  createCallerResolver,
+  sourceFor,
+  sourceOf,
+} from "./caller.js";
 export { type CorsConfig, isAllowedOrigin, SHELL_ORIGINS } from "./cors.js";
 export {
   createServer,

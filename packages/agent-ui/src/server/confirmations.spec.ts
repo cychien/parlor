@@ -393,7 +393,7 @@ describe("ConfirmationBoard frames", () => {
     void board.ask(request());
     const sent = framesTo("a");
     expect(sent).toBeGreaterThan(0);
-    directory.touch("a");
+    directory.touch("a", "default");
     present("a", { focused: true });
     present("a", { focused: true });
     expect(framesTo("a")).toBe(sent);
@@ -402,7 +402,7 @@ describe("ConfirmationBoard frames", () => {
   it("sends nothing to a client while nothing is pending, so the action hot path stays quiet", () => {
     const { board, directory, join, framesTo, request } = setup();
     join("a");
-    directory.touch("a");
+    directory.touch("a", "default");
     expect(framesTo("a")).toBe(0);
     void board.ask(request());
     expect(framesTo("a")).toBe(1);

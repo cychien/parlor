@@ -1,4 +1,4 @@
-import type { DataProvider } from "@parlor/core";
+import type { DataProvider, Principal } from "@parlor/core";
 import { createEventStream, getQuery, type H3, type H3Event } from "h3";
 
 import type { ServerChannel } from "../channel.js";
@@ -28,6 +28,18 @@ export interface SyncRouteOptions {
   readonly keepAliveMs?: number | undefined;
   readonly channels?: readonly ServerChannel[] | undefined;
   readonly clientId?: ((request: Request) => string | undefined) | undefined;
+  /**
+   * Who holds a stream and until when. A stream closes when `revoked` aborts, and a
+   * stream without `channels` carries sync events only. Refusing a caller happens before
+   * these routes run.
+   */
+  readonly authority?: ((request: Request) => Promise<StreamAuthority>) | undefined;
+}
+
+export interface StreamAuthority {
+  readonly principal: Principal;
+  readonly revoked?: AbortSignal | undefined;
+  readonly channels: boolean;
 }
 
 export const DEFAULT_POLL_INTERVAL_MS = 2000;
@@ -73,6 +85,7 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
 
   app.get(`${basePath}/sync/stream`, async (event: H3Event) => {
     const currentScope = await scope(event.req);
+    const authority = await options.authority?.(event.req);
     const sinceParam = String(getQuery(event).since ?? "");
     await hub.start();
     const stream = createEventStream(event);
@@ -95,29 +108,35 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
     );
     const disconnects: (() => void)[] = [];
     let detached = false;
+    const revoked = authority?.revoked;
+    const closeRevoked = () => void stream.close();
     const detach = () => {
       if (detached) return;
       detached = true;
       clearInterval(keepAlive);
+      revoked?.removeEventListener("abort", closeRevoked);
       unsubscribe();
       for (const disconnect of disconnects) disconnect();
     };
     stream.onClosed(detach);
+    if (revoked?.aborted) closeRevoked();
+    else revoked?.addEventListener("abort", closeRevoked, { once: true });
 
     void stream.push({
       event: "handshake",
       data: JSON.stringify({
         protocol: SYNC_PROTOCOL_VERSION,
-        capabilities,
+        capabilities: authority?.channels === false ? [] : capabilities,
         keepAliveMs,
       }),
     });
     const clientId = options.clientId?.(event.req);
-    for (const channel of channels) {
+    for (const channel of authority?.channels === false ? [] : channels) {
       disconnects.push(
         channel.connect({
           clientId,
           scope: currentScope,
+          ...(authority ? { principal: authority.principal } : {}),
           send: (frame) => {
             if (!detached) void stream.push({ event: channel.event, data: frame });
           },

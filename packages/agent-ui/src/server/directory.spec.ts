@@ -1,6 +1,8 @@
+import { asId } from "@parlor/core";
 import { describe, expect, it } from "vitest";
 
 import type { PresenceUpdate } from "../protocol.js";
+import { audienceOf } from "./audience.js";
 import { ClientDirectory } from "./directory.js";
 
 function setup() {
@@ -112,8 +114,8 @@ describe("ClientDirectory selection", () => {
     tick(10);
     directory.presence("b", "default", presence(false, false));
     tick(10);
-    directory.touch("a");
-    directory.touch("unknown");
+    directory.touch("a", "default");
+    directory.touch("unknown", "default");
     expect(pick(directory)).toEqual({ id: "a", tied: [] });
   });
 
@@ -142,7 +144,7 @@ describe("ClientDirectory registration", () => {
     join("new-tab");
     connect("old-build");
     tick(10);
-    directory.touch("old-build");
+    directory.touch("old-build", "default");
     expect(pick(directory)).toEqual({ id: "new-tab", tied: [] });
     expect(pick(directory, "default", "old-build")).toEqual({ id: "new-tab", tied: [] });
     expect(directory.summaries("default").map((c) => c.id)).toEqual(["new-tab"]);
@@ -155,7 +157,7 @@ describe("ClientDirectory registration", () => {
   it("selects nothing when the only open stream never announced agent UI", () => {
     const { directory, connect } = setup();
     connect("old-build");
-    directory.touch("old-build");
+    directory.touch("old-build", "default");
     expect(directory.select("default")).toBeUndefined();
     expect(directory.summaries("default")).toEqual([]);
   });
@@ -320,7 +322,7 @@ describe("ClientDirectory changes", () => {
     expect(changes).toEqual([]);
     directory.presence("a", "default", presence(true, true));
     directory.presence("a", "default", presence(false, true));
-    directory.touch("a");
+    directory.touch("a", "default");
     expect(changes).toEqual([
       "default:a:joined",
       "default:a:updated",
@@ -352,11 +354,11 @@ describe("ClientDirectory changes", () => {
     connect("a");
     directory.presence("a", "default", presence(true, true));
     expect(changes).toEqual(["default:a:joined"]);
-    directory.touch("ghost");
+    directory.touch("ghost", "default");
     directory.presence("ghost", "default", presence(true, true));
     expect(changes).toEqual(["default:a:joined"]);
     off();
-    directory.touch("a");
+    directory.touch("a", "default");
     expect(changes).toEqual(["default:a:joined"]);
   });
 
@@ -409,5 +411,41 @@ describe("ClientDirectory ops", () => {
       "highlight",
     ]);
     expect(directory.target("old")?.client.ops).toEqual(["screen", "navigate"]);
+  });
+});
+
+describe("ClientDirectory audiences", () => {
+  const signedIn = (userId: string) =>
+    ({ kind: "user", userId: asId("user", userId), sessionId: userId }) as const;
+
+  it("groups a signed-in stream under its user within a shared scope", () => {
+    const { directory, presence } = setup();
+    directory.connect({
+      clientId: "alice-tab",
+      scope: "acme",
+      principal: signedIn("alice"),
+      send: () => {},
+    });
+    const alice = audienceOf("acme", signedIn("alice"));
+    expect(directory.presence("alice-tab", "acme", presence(true, true))).toBe(
+      "rejected",
+    );
+    expect(directory.presence("alice-tab", alice, presence(true, true))).toBe(
+      "registered",
+    );
+    expect(pick(directory, audienceOf("acme", signedIn("bob")))).toBeUndefined();
+    expect(pick(directory, alice)).toEqual({ id: "alice-tab", tied: [] });
+  });
+
+  it("ignores an action call that names a client of another audience", () => {
+    const { directory, join, tick } = setup();
+    join("a");
+    tick(10);
+    join("b");
+    tick(10);
+    directory.touch("a", "elsewhere");
+    expect(pick(directory)).toEqual({ id: "b", tied: [] });
+    directory.touch("a", "default");
+    expect(pick(directory)).toEqual({ id: "a", tied: [] });
   });
 });

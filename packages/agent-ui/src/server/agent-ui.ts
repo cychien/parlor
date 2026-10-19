@@ -31,14 +31,14 @@ export interface AgentUiOptions {
 }
 
 export interface AgentUiDependencies {
-  readonly scope: (request: Request) => string | Promise<string>;
+  readonly audience: (request: Request) => string | Promise<string>;
   readonly webOrigin?: string | undefined;
 }
 
 export interface AgentUi {
   readonly channel: ServerChannel;
-  touch(clientId: string | undefined): void;
-  receive(clientId: string, scope: string, message: ClientMessage): UiReceipt;
+  touch(clientId: string | undefined, audience: string): void;
+  receive(clientId: string, audience: string, message: ClientMessage): UiReceipt;
   tools(surface: "mcp" | "agent"): readonly AgentTool[];
   contextFor(
     request: Request | undefined,
@@ -93,30 +93,30 @@ export function createAgentUi(options: AgentUiOptions & AgentUiDependencies): Ag
       event: UI_CHANNEL,
       connect: (connection) => directory.connect(connection),
     },
-    touch: (clientId) => directory.touch(clientId),
-    receive(clientId, scope, message) {
+    touch: (clientId, audience) => directory.touch(clientId, audience),
+    receive(clientId, audience, message) {
       switch (message.type) {
         case "presence": {
-          const outcome = directory.presence(clientId, scope, message);
+          const outcome = directory.presence(clientId, audience, message);
           const target = directory.target(clientId);
           if (outcome === "registered" && target) broker.reconnected(target);
           return { accepted: outcome !== "rejected" };
         }
         case "leave": {
-          const left = directory.leave(clientId, scope);
+          const left = directory.leave(clientId, audience);
           if (left) broker.abandon(clientId);
           return { accepted: left };
         }
         case "reply":
           return broker.reply(clientId, message);
         case "answer":
-          return { accepted: confirmations.answer(clientId, scope, message) };
+          return { accepted: confirmations.answer(clientId, audience, message) };
       }
     },
     tools,
     async contextFor(request, origin, signal) {
       return {
-        scope: request ? await options.scope(request) : "default",
+        scope: request ? await options.audience(request) : "default",
         origin,
         signal,
         webOrigin: webOrigin ?? (request ? new URL(request.url).origin : undefined),
