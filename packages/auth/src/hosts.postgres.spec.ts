@@ -1,3 +1,6 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { asId, type HostPrincipal } from "@parlor/core";
 import { createDatabase, type DatabaseHandle } from "@parlor/data";
@@ -46,25 +49,54 @@ afterEach(async () => {
   for (const handle of handles.splice(0)) await handle.close();
 });
 
+const startedAt = performance.now();
+let scenario = "";
+const calls: {
+  scenario: string;
+  instance: string;
+  event: string;
+  atMs: number;
+  status: number;
+}[] = [];
+const names = new Map<TestApp, string>();
+
 afterAll(async () => {
   await scratch?.drop();
+  const directory = process.env.PARLOR_CHECK_EVIDENCE;
+  if (directory && calls.length > 0) {
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, "calls.json"), `${JSON.stringify(calls, null, 2)}\n`);
+  }
 });
 
-async function instance(): Promise<TestApp> {
+async function instance(name: string): Promise<TestApp> {
   const handle = await createDatabase({ url: scratch.url });
   handles.push(handle);
   const app = createTestApp(handle, { plugins: [probePlugin] });
   apps.push(app);
+  names.set(app, name);
   await callWith(app.server, "/_parlor/actions/ping", undefined);
   return app;
 }
 
-const hello = async (app: TestApp, computer: Computer) =>
-  callWith(
+const record = (app: TestApp, event: string, status: number) =>
+  calls.push({
+    scenario,
+    instance: names.get(app) ?? "?",
+    event,
+    atMs: Math.round(performance.now() - startedAt),
+    status,
+  });
+
+const hello = async (app: TestApp, computer: Computer) => {
+  const response = await callWith(
     app.server,
     HELLO,
     `ParlorHost ${await computer.assertion({ url: `${ORIGIN}${HELLO}` })}`,
   );
+  record(app, "assertion", response.status);
+  return response;
+};
 
 async function pairedOn(app: TestApp): Promise<{ alice: Browser; computer: Computer }> {
   const alice = await signUpAs(app.server, "Alice");
@@ -93,12 +125,13 @@ async function refusedWithin(
 describe.runIf(postgresUrl).each([
   { mode: "following", killListener: false },
   { mode: "checking", killListener: true },
-])("a revoked computer on a second instance, $mode", ({ killListener }) => {
+])("a revoked computer on a second instance, $mode", ({ mode, killListener }) => {
   it("is refused within 5 s and never accepted again", async () => {
-    const b = await instance();
+    scenario = mode;
+    const b = await instance("B");
     const listeners = await revocationListeners(scratch.url);
     expect(listeners).toHaveLength(1);
-    const a = await instance();
+    const a = await instance("A");
     const { alice, computer } = await pairedOn(a);
     expect((await hello(b, computer)).status).toBe(200);
 
@@ -106,6 +139,7 @@ describe.runIf(postgresUrl).each([
     const revoked = await alice.account("revokeHost", {
       hostId: computer.grant!.grant.hostId,
     });
+    record(a, "revokeHost", revoked.status);
     expect(revoked.status).toBe(200);
 
     const latency = await refusedWithin(
@@ -122,7 +156,7 @@ describe.runIf(postgresUrl).each([
 
 describe.runIf(postgresUrl)("revoking a computer", () => {
   it("commits the revocation and the key's removal together", async () => {
-    const a = await instance();
+    const a = await instance("A");
     const { alice, computer } = await pairedOn(a);
     const { id, hostId } = computer.grant!.grant;
     const state = async () =>
@@ -162,8 +196,8 @@ describe.runIf(postgresUrl)("a turn token across instances", () => {
     });
 
   it("minted on one instance is accepted on another, and refused there once revoked", async () => {
-    const a = await instance();
-    const b = await instance();
+    const a = await instance("A");
+    const b = await instance("B");
     const { alice, computer } = await pairedOn(a);
     const { token } = await turn(a, hostOf(computer));
 
@@ -193,8 +227,8 @@ describe.runIf(postgresUrl)("a turn token across instances", () => {
   });
 
   it("is signed by one key even when two instances start minting together", async () => {
-    const a = await instance();
-    const b = await instance();
+    const a = await instance("A");
+    const b = await instance("B");
     const { computer } = await pairedOn(a);
     const principal = hostOf(computer);
     const [fromA, fromB] = await Promise.all([turn(a, principal), turn(b, principal)]);

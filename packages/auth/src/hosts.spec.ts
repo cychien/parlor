@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { rowsOf } from "./database.js";
+import { AUTH_MIGRATIONS } from "./migrations.js";
 import {
   type Browser,
   createTestApp,
@@ -333,5 +334,47 @@ describe("the account's computers", () => {
       missing.body.error.message.replace("no-such-host", "X"),
     );
     expect(await list(alice)).toHaveLength(1);
+  });
+});
+
+describe("a database from before host grants", () => {
+  it("gains the host tables once and keeps what it had", async () => {
+    const old = await createDatabase({ dataDir: "memory://" });
+    try {
+      await old.db.execute(
+        sql`create table parlor_migrations (id text primary key, applied_at timestamptz not null default now())`,
+      );
+      for (const migration of AUTH_MIGRATIONS) {
+        await old.db.execute(sql.raw(migration.sql));
+        await old.db.execute(
+          sql`insert into parlor_migrations (id) values (${migration.id})`,
+        );
+      }
+      await old.db.execute(
+        sql`insert into parlor_auth_revocations (kind, id, revoked_at) values ('grant', 'oauth:u:c', now())`,
+      );
+
+      for (let start = 0; start < 2; start += 1) {
+        const upgraded = createTestApp(old);
+        const alice = await signUpAs(upgraded.server, "Alice");
+        await pair(upgraded.server, alice, new Computer(`Mac ${start}`));
+        await upgraded.server.close();
+      }
+
+      const ids = rowsOf<{ id: string }>(
+        await old.db.execute(sql`select id from parlor_migrations order by id`),
+      ).map((row) => row.id);
+      expect(ids).toEqual([
+        "auth/0001_revocations",
+        "auth/0002_revocations_revoked_at",
+        "auth/0003_hosts",
+        "auth/0005_turn_keys",
+      ]);
+      expect(
+        rowsOf(await old.db.execute(sql`select id from parlor_auth_revocations`)),
+      ).toEqual([{ id: "oauth:u:c" }]);
+    } finally {
+      await old.close();
+    }
   });
 });
