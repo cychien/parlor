@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { GENERATED_DIR, type LoadedConfig, type ParlorConfig } from "@parlor/config";
+import { appCsp, extendCsp, serializeCsp } from "@parlor/shell-web";
 
 const ICONS = [
   "32x32.png",
@@ -16,6 +17,13 @@ export const TAURI_CARGO_PACKAGE = "parlor_app";
 
 export function tauriProjectDir(rootDir: string): string {
   return join(rootDir, GENERATED_DIR, "tauri");
+}
+
+const TAURI_IPC_SOURCES = ["ipc:", "http://ipc.localhost"];
+
+function tauriCsp(config: ParlorConfig, dev: boolean): string {
+  const policy = appCsp(config, { serverOrigin: config.server.url, dev });
+  return serializeCsp(extendCsp(policy, { "connect-src": TAURI_IPC_SOURCES }));
 }
 
 export function tauriConfig(config: ParlorConfig): Record<string, unknown> {
@@ -34,7 +42,7 @@ export function tauriConfig(config: ParlorConfig): Record<string, unknown> {
           resizable: true,
         },
       ],
-      security: { csp: null },
+      security: { csp: tauriCsp(config, false), devCsp: tauriCsp(config, true) },
     },
     bundle: {
       active: true,

@@ -1,9 +1,10 @@
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { parseConfig } from "@parlor/config";
-import { resolveConfig } from "vite";
+import { createServer, resolveConfig, build } from "vite";
 import { describe, expect, it } from "vitest";
 
 import { parlorWeb, webManifest } from "./plugin.js";
@@ -132,4 +133,115 @@ describe("file routes", () => {
     const tree = await readFile(join(root, "src", "routeTree.gen.ts"), "utf8");
     expect(tree).toContain('path: "/settings"');
   });
+});
+
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = createNetServer();
+    probe.once("error", reject);
+    probe.listen(0, () => {
+      const address = probe.address();
+      probe.close(() =>
+        typeof address === "object" && address
+          ? resolve(address.port)
+          : reject(new Error("no port assigned")),
+      );
+    });
+  });
+}
+
+async function emptyApp(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "parlor-csp-"));
+  await writeFile(
+    join(root, "index.html"),
+    '<!doctype html><html><head><title>t</title></head><body><script type="module" src="/main.ts"></script></body></html>',
+  );
+  await writeFile(join(root, "main.ts"), "export {};");
+  return root;
+}
+
+describe("content security policy", () => {
+  it("serves the dev policy on pages and leaves framework routes to their own", async () => {
+    const root = await emptyApp();
+    const port = await freePort();
+    const server = await createServer({
+      root,
+      configFile: false,
+      logLevel: "silent",
+      plugins: parlorWeb(
+        {
+          ...config,
+          web: {
+            ...config.web,
+            port,
+            pwa: false,
+            csp: { "img-src": ["https://cdn.test"] },
+          },
+        },
+        { root, serverUrl: "http://localhost:3100" },
+      ),
+    });
+    await server.listen();
+    try {
+      const page = await fetch(`http://localhost:${port}/`);
+      expect(page.headers.get("content-security-policy")).toBe(
+        [
+          "default-src 'self'",
+          "script-src 'self' 'unsafe-inline'",
+          "style-src 'self' 'unsafe-inline'",
+          "img-src 'self' data: https://cdn.test",
+          "font-src 'self'",
+          "connect-src 'self' http://localhost:3100 ws:",
+          "worker-src 'self'",
+          "manifest-src 'self'",
+          "frame-src 'none'",
+          "frame-ancestors 'none'",
+          "object-src 'none'",
+          "base-uri 'self'",
+          "form-action 'self'",
+        ].join("; "),
+      );
+      const framework = await fetch(`http://localhost:${port}/_parlor/ping`);
+      expect(framework.headers.get("content-security-policy")).toBeNull();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("writes the build policy as a meta tag only when the shell asks, without frame-ancestors", async () => {
+    const built = async (cspMeta: boolean) => {
+      const root = await emptyApp();
+      const outDir = join(root, "out");
+      await build({
+        root,
+        configFile: false,
+        logLevel: "silent",
+        plugins: parlorWeb(
+          { ...config, web: { ...config.web, pwa: false } },
+          { root, serverUrl: "https://api.test", cspMeta },
+        ),
+        build: { outDir },
+      });
+      return readFile(join(outDir, "index.html"), "utf8");
+    };
+    const withMeta = await built(true);
+    const policy = [
+      "default-src 'self'",
+      "script-src 'self'",
+      "style-src 'self'",
+      "img-src 'self' data:",
+      "font-src 'self'",
+      "connect-src 'self' https://api.test",
+      "worker-src 'self'",
+      "manifest-src 'self'",
+      "frame-src 'none'",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+    ].join("; ");
+    expect(withMeta).toContain(
+      `<meta http-equiv="Content-Security-Policy" content="${policy.replaceAll("'", "&#39;")}">`,
+    );
+    expect(await built(false)).not.toContain("Content-Security-Policy");
+  }, 30_000);
 });

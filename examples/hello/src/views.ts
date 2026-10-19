@@ -20,6 +20,6 @@ export const newTask = defineAgentView({
 export const agentPanel = defineAgentView({
   name: "agentPanel",
   description:
-    "The agent panel: a dialog listing the requests agents wait on the user to approve. Read-only, it only says whether the panel is open.",
+    "The agent sidebar: the chat with the user's agent and the requests agents wait on the user to approve. Read-only, it only says whether the sidebar is open.",
   schema: z.object({ open: z.boolean() }),
 });

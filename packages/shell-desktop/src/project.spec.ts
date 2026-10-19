@@ -24,6 +24,20 @@ describe("tauriConfig", () => {
     });
   });
 
+  it("applies the default policy with the server origin and the Tauri ipc sources", () => {
+    const withServer = parseConfig({
+      app: { id: "dev.parlor.hello", name: "Hello" },
+      server: { url: "http://localhost:3000" },
+      web: { csp: { "img-src": ["https://cdn.example.com"] } },
+    });
+    const { security } = (tauriConfig(withServer) as { app: { security: unknown } }).app;
+    expect(security).toEqual({
+      csp: "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://cdn.example.com; font-src 'self'; connect-src 'self' http://localhost:3000 ipc: http://ipc.localhost; worker-src 'self'; manifest-src 'self'; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'",
+      devCsp:
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://cdn.example.com; font-src 'self'; connect-src 'self' http://localhost:3000 ws: ipc: http://ipc.localhost; worker-src 'self'; manifest-src 'self'; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'",
+    });
+  });
+
   it("registers no scheme when none is configured", () => {
     const plain = parseConfig({ app: { id: "dev.parlor.hello", name: "Hello" } });
     expect(tauriConfig(plain)).toMatchObject({

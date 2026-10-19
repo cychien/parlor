@@ -1,5 +1,21 @@
 import { z } from "zod";
 
+export const CSP_DIRECTIVES = [
+  "default-src",
+  "script-src",
+  "style-src",
+  "img-src",
+  "font-src",
+  "connect-src",
+  "worker-src",
+  "manifest-src",
+  "frame-src",
+  "frame-ancestors",
+  "object-src",
+  "base-uri",
+  "form-action",
+] as const;
+
 const APP_ID = /^[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)+$/;
 
 export const parlorConfigSchema = z.object({
@@ -33,6 +49,7 @@ export const parlorConfigSchema = z.object({
       themeColor: z.string().default("#ffffff"),
       backgroundColor: z.string().default("#ffffff"),
       routeTree: z.string().optional(),
+      csp: z.partialRecord(z.enum(CSP_DIRECTIVES), z.array(z.string())).optional(),
     })
     .prefault({}),
   desktop: z

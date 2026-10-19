@@ -89,6 +89,9 @@ importers:
       '@parlor/capabilities':
         specifier: workspace:*
         version: link:../../packages/capabilities
+      '@parlor/chat':
+        specifier: workspace:*
+        version: link:../../packages/chat
       '@parlor/client':
         specifier: workspace:*
         version: link:../../packages/client

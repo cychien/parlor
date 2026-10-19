@@ -8,7 +8,7 @@ import { AccountPanel } from "../account.js";
 export const Route = createFileRoute("/settings")({
   staticData: {
     description:
-      "App settings: the signed-in account, where it is signed in and which agents it connected, and notification and deep link support on this device.",
+      "App settings: the signed-in account, where it is signed in, which agents and computers it connected, and notification and deep link support on this device.",
   },
   component: Settings,
 });

@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { UI_MANIFEST_FILE } from "@parlor/agent-ui";
 import { GENERATED_DIR, type LoadedConfig } from "@parlor/config";
-import { webOutDir } from "@parlor/shell-web";
+import { appCsp, serializeCsp, webOutDir } from "@parlor/shell-web";
 import { build, copyPublicAssets, createNitro, prepare } from "nitro/builder";
 import type { NitroConfig } from "nitro/types";
 
@@ -68,6 +68,10 @@ export async function buildServer(
     serverEntry: entryPath,
     compatibilityDate: options.compatibilityDate ?? DEFAULT_COMPATIBILITY_DATE,
     publicAssets: [{ dir: webOutDir(rootDir), baseURL: "/", fallthrough: true }],
+    routeRules: {
+      "/**": { headers: { "content-security-policy": serializeCsp(appCsp(config, {})) } },
+      [`${basePath}/**`]: { headers: false },
+    },
     traceDeps: [...TRACED_DEPENDENCIES],
     replace: {
       [INDEX_HTML_PLACEHOLDER]: JSON.stringify(indexHtml),

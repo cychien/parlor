@@ -1,4 +1,4 @@
-import type { ConnectedAgent, SignedInSession } from "@parlor/auth";
+import type { ConnectedAgent, ConnectedHost, SignedInSession } from "@parlor/auth";
 import { useSession } from "@parlor/client/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -6,6 +6,7 @@ import { auth } from "./auth.js";
 
 const SESSIONS = ["account", "sessions"] as const;
 const AGENTS = ["account", "agents"] as const;
+const HOSTS = ["account", "hosts"] as const;
 
 const BROWSERS: readonly [RegExp, string][] = [
   [/Edg\//, "Edge"],
@@ -46,6 +47,7 @@ export function AccountPanel() {
       </p>
       <Sessions />
       <Agents />
+      <Computers />
     </section>
   );
 }
@@ -127,6 +129,52 @@ function Agents() {
                 disabled={revoke.isPending}
                 aria-label={`Revoke ${agent.name}`}
                 onClick={() => revoke.mutate(agent.clientId)}
+              >
+                Revoke
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
+}
+
+function Computers() {
+  const queryClient = useQueryClient();
+  const hosts = useQuery({
+    queryKey: HOSTS,
+    queryFn: () => auth.account.call("hosts", {}),
+  });
+  const revoke = useMutation({
+    mutationFn: (hostId: string) => auth.account.call("revokeHost", { hostId }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: HOSTS }),
+  });
+  const list = hosts.data ?? [];
+  return (
+    <>
+      <h3>Connected computers</h3>
+      {hosts.isSuccess && list.length === 0 ? (
+        <p className="row-meta">
+          No computers yet. A computer you connect runs the agents you chat with in the
+          Agent sidebar.
+        </p>
+      ) : (
+        <ul className="rows" aria-busy={hosts.isPending}>
+          {list.map((host: ConnectedHost) => (
+            <li key={host.hostId}>
+              <div>
+                <p>{host.name}</p>
+                <p className="row-meta">
+                  {host.platform} - connected {when.format(new Date(host.connectedAt))}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="danger"
+                disabled={revoke.isPending}
+                aria-label={`Revoke ${host.name}`}
+                onClick={() => revoke.mutate(host.hostId)}
               >
                 Revoke
               </button>
