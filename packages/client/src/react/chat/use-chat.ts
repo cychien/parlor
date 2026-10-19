@@ -1,8 +1,22 @@
+import { useMemo } from "react";
+
+import { useChatRuntime, useChatState } from "./context.js";
 import type { ChatCommands, ChatState } from "./runtime.js";
 
 /** The chat's state and commands, for what the primitives do not draw. */
 export function useChat(): ChatState & ChatCommands {
-  // TODO: runtime = useChatRuntime("useChat"); useSyncExternalStore(runtime.subscribe,
-  //   runtime.get) spread with the runtime's commands.
-  throw new Error("not implemented");
+  const runtime = useChatRuntime("useChat");
+  const state = useChatState("useChat");
+  return useMemo(
+    () => ({
+      ...state,
+      setDraft: runtime.setDraft,
+      send: runtime.send,
+      stop: runtime.stop,
+      answer: runtime.answer,
+      choose: runtime.choose,
+      openThread: runtime.openThread,
+    }),
+    [state, runtime],
+  );
 }
