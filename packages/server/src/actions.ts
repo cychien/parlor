@@ -86,11 +86,11 @@ function originOf(source: ActionSource, principal: Principal): AgentOrigin {
 
 function confirmationGate(gate: Gate): (call: PreparedCall) => Promise<void> {
   return async ({ action, name, input, ctx }) => {
-    // TODO(chat): pass `thread: { threadId, turnId }` from ctx.principal.turn, so an inline
-    //   agent's card reaches every client watching its thread.
+    const turn = ctx.principal?.kind === "agent" ? ctx.principal.turn : undefined;
     const outcome = await gate.confirm({
       scope: gate.scope,
-      clientId: gate.clientId,
+      clientId: turn?.clientId ?? gate.clientId,
+      ...(turn ? { thread: { threadId: turn.threadId, turnId: turn.turnId } } : {}),
       action: name,
       description: action.description,
       input,
