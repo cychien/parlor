@@ -1,9 +1,12 @@
 import { ActionError, defineAction } from "@parlor/core";
 import { createRegistry } from "@parlor/core/registry";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { z } from "zod";
 
 import { tasks } from "../schema/index.js";
+
+const owned = (id: string, scope: string) =>
+  and(eq(tasks.id, id), eq(tasks.scope, scope));
 
 export const registry = createRegistry({
   hello: defineAction({
@@ -15,14 +18,15 @@ export const registry = createRegistry({
     description: "List all tasks, oldest first.",
     input: z.object({}),
     reads: [tasks],
-    run: (_, { db }) => db.select().from(tasks).orderBy(asc(tasks.createdAt)),
+    run: (_, { db, scope }) =>
+      db.select().from(tasks).where(eq(tasks.scope, scope)).orderBy(asc(tasks.createdAt)),
   }),
   getTask: defineAction({
     description: "Get one task by id.",
     input: z.object({ id: z.string() }),
     reads: ({ id }) => [["tasks", id]],
-    run: async ({ id }, { db }) => {
-      const [task] = await db.select().from(tasks).where(eq(tasks.id, id));
+    run: async ({ id }, { db, scope }) => {
+      const [task] = await db.select().from(tasks).where(owned(id, scope));
       if (!task) throw new ActionError("not_found", `No task ${id}`);
       return task;
     },
@@ -34,10 +38,10 @@ export const registry = createRegistry({
       notes: z.string().optional().describe("Details, shown on the task's page"),
     }),
     writes: [tasks],
-    run: async ({ title, notes }, { db }) => {
+    run: async ({ title, notes }, { db, scope }) => {
       const [task] = await db
         .insert(tasks)
-        .values({ id: crypto.randomUUID(), title, notes: notes ?? null })
+        .values({ id: crypto.randomUUID(), scope, title, notes: notes ?? null })
         .returning();
       return task;
     },
@@ -46,13 +50,13 @@ export const registry = createRegistry({
     description: "Flip a task between done and not done.",
     input: z.object({ id: z.string() }),
     writes: [tasks],
-    run: async ({ id }, { db }) => {
-      const [current] = await db.select().from(tasks).where(eq(tasks.id, id));
-      if (!current) throw new Error(`No task ${id}`);
+    run: async ({ id }, { db, scope }) => {
+      const [current] = await db.select().from(tasks).where(owned(id, scope));
+      if (!current) throw new ActionError("not_found", `No task ${id}`);
       const [task] = await db
         .update(tasks)
         .set({ done: !current.done })
-        .where(eq(tasks.id, id))
+        .where(owned(id, scope))
         .returning();
       return task;
     },
@@ -62,8 +66,8 @@ export const registry = createRegistry({
     input: z.object({ id: z.string() }),
     writes: [tasks],
     confirm: true,
-    run: async ({ id }, { db }) => {
-      const [task] = await db.delete(tasks).where(eq(tasks.id, id)).returning();
+    run: async ({ id }, { db, scope }) => {
+      const [task] = await db.delete(tasks).where(owned(id, scope)).returning();
       if (!task) throw new ActionError("not_found", `No task ${id}`);
       return task;
     },

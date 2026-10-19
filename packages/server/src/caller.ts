@@ -50,12 +50,15 @@ export function sourceFor(
     : sourceOfPrincipal(caller.principal);
 }
 
+/** `prepare` runs before the provider sees a request, so its tables exist by then. */
 export function createCallerResolver(
   auth: AuthProvider | undefined,
   scope: ScopeResolver,
+  prepare?: () => Promise<void>,
 ): CallerResolver {
   const callers = new WeakMap<Request, Promise<Caller>>();
   const resolve = async (request: Request): Promise<Caller> => {
+    if (auth) await prepare?.();
     const principal = auth ? await auth.authenticate(request) : ANONYMOUS;
     const resolvedScope = await scope(request, principal);
     return {

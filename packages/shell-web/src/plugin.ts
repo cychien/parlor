@@ -9,6 +9,11 @@ import { defaultClientConditions, type PluginOption } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
 export const FRAMEWORK_ROUTE_PREFIX = "/_parlor";
+/** OAuth discovery lives at the origin root (RFC 8414, RFC 9728), outside the framework prefix. */
+export const OAUTH_DISCOVERY_PREFIXES = [
+  "/.well-known/oauth-protected-resource",
+  "/.well-known/oauth-authorization-server",
+] as const;
 export { DEFAULT_ROUTE_TREE };
 
 export interface WebOptions {
@@ -80,9 +85,12 @@ export function parlorWeb(
           port: config.web.port,
           strictPort: true,
           watch: { ignored: [`**/${GENERATED_DIR}/**`] },
-          proxy: {
-            [FRAMEWORK_ROUTE_PREFIX]: `http://localhost:${config.server.port}`,
-          },
+          proxy: Object.fromEntries(
+            [FRAMEWORK_ROUTE_PREFIX, ...OAUTH_DISCOVERY_PREFIXES].map((prefix) => [
+              prefix,
+              `http://localhost:${config.server.port}`,
+            ]),
+          ),
         },
       }),
     },

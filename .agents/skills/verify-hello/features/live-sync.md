@@ -20,7 +20,7 @@ Preconditions:
 - An instance seeded with `baseline`, doctor clean, page open and showing the three tasks.
 - `$H doctor <id>` reports `sync: transport sse`.
 
-- **HTTP writer.** Run `curl -s -X POST localhost:<server>/_parlor/actions/createTask -H 'content-type: application/json' -H 'x-parlor-client: verify' -d '{"title":"Written over HTTP"}'`, then `$H browser <id> wait "Written over HTTP"`. The wait succeeds without any `open` or reload in between.
+- **HTTP writer.** Run `curl -s -X POST localhost:<server>/_parlor/actions/createTask -H 'content-type: application/json' -H "authorization: Bearer $($H token <id>)" -H 'x-parlor-client: verify' -d '{"title":"Written over HTTP"}'`, then `$H browser <id> wait "Written over HTTP"`. The wait succeeds without any `open` or reload in between.
 - **MCP writer.** Run `$H agent <id> --out $E/agent "Create a task titled 'Added by Claude' with the hello tools."`, then `$H browser <id> wait "Added by Claude"`.
 - **Second window.** Run `$H browser <id> newpage <web>/`, click `checkbox "Call Amy"` there, then `$H browser <id> selectpage <first page id>` (ids from `$H browser <id> pages`) and confirm `checkbox "Call Amy" checked` in a snapshot.
 - **Shells.** For a `--target mac` or `--target ios` instance, take `$H screenshot <id> $E/before.png`, write over HTTP as above, wait two seconds, and take `$H screenshot <id> $E/after.png`. The after image shows the new title at the end of the list.

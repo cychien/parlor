@@ -61,6 +61,7 @@ describe("cors", () => {
   it("adds the allow-origin header to successful and error responses", async () => {
     const ok = await server.fetch(post("capacitor://localhost"));
     expect(ok.headers.get("access-control-allow-origin")).toBe("capacitor://localhost");
+    expect(ok.headers.get("access-control-expose-headers")).toContain("set-auth-token");
     const bad = await server.fetch(post("capacitor://localhost", "{nope"));
     expect(bad.status).toBe(400);
     expect(bad.headers.get("access-control-allow-origin")).toBe("capacitor://localhost");

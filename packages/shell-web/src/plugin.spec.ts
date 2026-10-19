@@ -22,7 +22,11 @@ describe("parlorWeb", () => {
     );
     expect(resolved.server.port).toBe(5200);
     expect(resolved.server.strictPort).toBe(true);
-    expect(resolved.server.proxy).toEqual({ "/_parlor": "http://localhost:3100" });
+    expect(resolved.server.proxy).toEqual({
+      "/_parlor": "http://localhost:3100",
+      "/.well-known/oauth-protected-resource": "http://localhost:3100",
+      "/.well-known/oauth-authorization-server": "http://localhost:3100",
+    });
   });
 
   it("registers the PWA plugin only when enabled", async () => {

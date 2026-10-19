@@ -2,10 +2,19 @@ import type { AgentUiClient } from "@parlor/agent-ui/client";
 import { createSyncClient, type SyncClient } from "@parlor/sync/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AnyRouter } from "@tanstack/react-router";
-import { createContext, type ReactNode, useContext, useEffect, useState } from "react";
+import {
+  createContext,
+  type ReactNode,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import type { ActionClient } from "../action-client.js";
 import type { RegisteredActions } from "../register.js";
+import type { SessionSnapshot, SessionSource } from "../session.js";
 import { createAgentUiRuntime } from "./agent-ui/runtime.js";
 import { invalidateForEvents, ReadTagRegistry } from "./sync.js";
 
@@ -13,6 +22,7 @@ interface FrameworkContextValue {
   readonly client: ActionClient<RegisteredActions>;
   readonly readTags: ReadTagRegistry;
   readonly agentUi: AgentUiClient;
+  readonly auth: SessionSource | undefined;
 }
 
 const FrameworkContext = createContext<FrameworkContextValue | null>(null);
@@ -22,7 +32,37 @@ export interface FrameworkProviderProps {
   readonly queryClient?: QueryClient | undefined;
   readonly sync?: boolean | undefined;
   readonly router?: AnyRouter | undefined;
+  /** When the signed-in user changes, cached queries reset and sync reconnects as them. */
+  readonly auth?: SessionSource | undefined;
   readonly children: ReactNode;
+}
+
+const SIGNED_OUT: SessionSnapshot = { status: "signed-out" };
+
+const NO_SESSION: SessionSource = {
+  current: () => SIGNED_OUT,
+  subscribe: () => () => {},
+};
+
+function identityOf(session: SessionSnapshot): string {
+  return session.status === "signed-in" ? `user:${session.user.id}` : session.status;
+}
+
+/** Counts changes of the signed-in user after the first settled answer. */
+function useIdentityEpoch(auth: SessionSource | undefined, onChange: () => void): number {
+  const source = auth ?? NO_SESSION;
+  const identity = identityOf(useSyncExternalStore(source.subscribe, source.current));
+  const settled = useRef<string | undefined>(undefined);
+  const [epoch, setEpoch] = useState(0);
+  useEffect(() => {
+    if (identity === "loading") return;
+    if (settled.current !== undefined && settled.current !== identity) {
+      onChange();
+      setEpoch((current) => current + 1);
+    }
+    settled.current = identity;
+  }, [identity, onChange]);
+  return epoch;
 }
 
 export function FrameworkProvider({
@@ -30,6 +70,7 @@ export function FrameworkProvider({
   queryClient,
   sync = true,
   router,
+  auth,
   children,
 }: FrameworkProviderProps) {
   const [ownQueryClient] = useState(() => queryClient ?? new QueryClient());
@@ -37,7 +78,10 @@ export function FrameworkProvider({
     client,
     readTags: new ReadTagRegistry(),
     agentUi: createAgentUiRuntime({ client, queryClient: ownQueryClient, router }),
+    auth,
   }));
+  const [resetQueries] = useState(() => () => void ownQueryClient.resetQueries());
+  const epoch = useIdentityEpoch(auth, resetQueries);
 
   useEffect(() => value.readTags.attach(ownQueryClient), [value, ownQueryClient]);
 
@@ -57,26 +101,40 @@ export function FrameworkProvider({
     };
   }, [value]);
 
+  return (
+    <FrameworkContext.Provider value={value}>
+      <QueryClientProvider client={ownQueryClient}>
+        {sync && (
+          <SyncConnection key={epoch} value={value} queryClient={ownQueryClient} />
+        )}
+        {children}
+      </QueryClientProvider>
+    </FrameworkContext.Provider>
+  );
+}
+
+/** One sync connection; remounted with a fresh cursor whenever the signed-in user changes. */
+function SyncConnection({
+  value,
+  queryClient,
+}: {
+  readonly value: FrameworkContextValue;
+  readonly queryClient: QueryClient;
+}) {
   useEffect(() => {
-    if (!sync) return;
+    const { client } = value;
     const syncClient: SyncClient = createSyncClient({
       request: (path, init) => client.request(path, init),
       basePath: client.basePath,
       clientId: client.clientId,
-      onEvents: (events) =>
-        void invalidateForEvents(ownQueryClient, value.readTags, events),
+      onEvents: (events) => void invalidateForEvents(queryClient, value.readTags, events),
       isHidden: () => globalThis.document?.visibilityState === "hidden",
       channels: [value.agentUi],
     });
     syncClient.start();
     return () => syncClient.stop();
-  }, [client, ownQueryClient, sync, value]);
-
-  return (
-    <FrameworkContext.Provider value={value}>
-      <QueryClientProvider client={ownQueryClient}>{children}</QueryClientProvider>
-    </FrameworkContext.Provider>
-  );
+  }, [value, queryClient]);
+  return null;
 }
 
 export function useFramework(): FrameworkContextValue {
@@ -87,4 +145,11 @@ export function useFramework(): FrameworkContextValue {
 
 export function useActionClient(): ActionClient<RegisteredActions> {
   return useFramework().client;
+}
+
+/** The session of the `auth` given to `FrameworkProvider`. */
+export function useSession(): SessionSnapshot {
+  const { auth } = useFramework();
+  if (!auth) throw new Error("useSession needs <FrameworkProvider auth={...}>");
+  return useSyncExternalStore(auth.subscribe, auth.current);
 }

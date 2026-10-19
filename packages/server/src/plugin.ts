@@ -4,6 +4,7 @@ import type {
   AuthenticatedPrincipal,
   DataProvider,
   Principal,
+  Tag,
 } from "@parlor/core";
 import type { ActionRegistry } from "@parlor/core/registry";
 import type { ServerChannel } from "@parlor/sync";
@@ -93,4 +94,9 @@ export interface PluginHost {
   readonly basePath: string;
   readonly database: DataProvider | undefined;
   callerOf(request: Request): Promise<Caller>;
+  /**
+   * Records a sync event for writes made outside an action's transaction, such as through
+   * a library that holds its own connection. Does nothing when sync is off.
+   */
+  announce(scope: string, tags: readonly Tag[]): Promise<void>;
 }

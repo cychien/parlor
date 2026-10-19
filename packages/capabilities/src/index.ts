@@ -9,3 +9,4 @@ export {
 export * from "./deep-link/index.js";
 export * from "./notifications/index.js";
 export { detectPlatform, type Platform } from "./runtime.js";
+export * from "./session-store/index.js";

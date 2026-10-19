@@ -6,12 +6,13 @@ This directory is the maintained source for verifying the user-facing behavior o
 
 - Start an instance with `$H up --seed baseline` (add `--target mac` or `--target ios` for a shell) and note its `id` and `urls` from the printed JSON.
 - `$H doctor <id>` prints no `FAIL`.
-- The page lists `Buy milk`, `Write report`, `Call Amy` in that order, all unchecked.
+- Sign the tab in with `$H browser <id> signin` (Alice); the page lists `Buy milk`, `Write report`, `Call Amy` in that order, all unchecked.
 - Never drive an instance this run did not start, and never run chrome-devtools-axi outside `$H browser <id>`.
 
 ## Driving conventions
 
-- Start every recipe from `baseline` unless its preconditions name another dataset. Reload it with `$H seed <id> baseline`, then `$H browser <id> open /`.
+- Start every recipe from `baseline` unless its preconditions name another dataset. Reload it with `$H seed <id> baseline`, then `$H browser <id> signin` (the seed restarts Chrome with a fresh profile) and `$H browser <id> open /`.
+- Every request needs a user. The browser is Alice after `signin`; `$H mcp` and `$H agent` act as Alice unless `--as bob`; curl carries `-H "authorization: Bearer $($H token <id>)"`.
 - Find UI elements by ARIA role and accessible name through `$H browser <id> click|fill ROLE NAME`, never by ref numbers copied from an old snapshot or by position.
 - Drive the surface the claim is about. A UI claim is driven in the browser or shell window, an agent claim through `$H agent`, an HTTP claim with curl.
 - Read every mutation back from a second view: `$H sql`, `listTasks` over HTTP or MCP, or another surface.
@@ -41,4 +42,5 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 - [Agent forms and pointing](./agent-forms.md) covers `ui_set` filling the New task form, the agent-filled marking, the refusals, and `ui_highlight`.
 - [Agent panel](./agent-panel.md) covers the topbar `Agent` button and its dialog: a centered modal on desktop, a bottom sheet on a phone, the pending count, the empty state, both color schemes, and the `agentPanel` view.
 - [Confirmations](./confirmations.md) covers `deleteTask` asking the user in the agent panel, approve, decline, timeout, no app, ties, reload, and the user's own Delete button.
+- [Accounts](./accounts.md) covers signing in, keeping Alice and Bob apart on every surface, signing a device out from settings, and connecting, refusing and revoking an MCP agent through OAuth.
 - [Recovery](./recovery.md) covers an open tab reconnecting after the app server restarts and staying reachable across a navigation to another origin and back (back-forward cache).

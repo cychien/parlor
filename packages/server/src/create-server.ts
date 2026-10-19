@@ -14,6 +14,7 @@ import type { ActionRegistry } from "@parlor/core/registry";
 import type { ServerChannel } from "@parlor/sync";
 import {
   ensureSyncTables,
+  recordSyncEvent,
   registerSyncRoutes,
   type SyncDatabase,
   SyncHub,
@@ -37,6 +38,7 @@ import { applyMigrations, checkMigrations } from "./migrations.js";
 import type {
   ActionAudit,
   AnyPluginRoute,
+  PluginHost,
   PluginRuntime,
   ServerPlugin,
 } from "./plugin.js";
@@ -182,12 +184,8 @@ export function createServer<T extends ActionMap>(
   const app = new H3();
   const syncOptions = sync === false ? undefined : sync;
   const syncEnabled = syncOptions !== undefined && database !== undefined;
-  const callers = createCallerResolver(auth, scope);
   const installed = [...(auth ? [auth] : []), ...plugins];
   checkPlugins(installed, database);
-  const host = { basePath, database, callerOf: callers };
-  const runtimes = installed.map((plugin) => ({ plugin, runtime: plugin.setup(host) }));
-  const audit = auditAll(runtimes.map(({ runtime }) => runtime));
   let prepared: Promise<void> | undefined;
   const ready = () =>
     (prepared ??= (async () => {
@@ -195,6 +193,21 @@ export function createServer<T extends ActionMap>(
       if (syncEnabled) await ensureSyncTables(database.read() as SyncDatabase);
       await applyMigrations(database, installed);
     })());
+  const callers = createCallerResolver(auth, scope, ready);
+  const host: PluginHost = {
+    basePath,
+    database,
+    callerOf: callers,
+    announce: async (target, tags) => {
+      if (!syncEnabled || !database || tags.length === 0) return;
+      await ready();
+      await database.transaction((tx) =>
+        recordSyncEvent(tx as SyncDatabase, { scope: target, tags }),
+      );
+    },
+  };
+  const runtimes = installed.map((plugin) => ({ plugin, runtime: plugin.setup(host) }));
+  const audit = auditAll(runtimes.map(({ runtime }) => runtime));
   const agentUi =
     agentUiOptions === false
       ? undefined

@@ -19,7 +19,12 @@ import {
   type FrameworkServer,
   type ServerOptions,
 } from "./create-server.js";
-import { type ActionAudit, pluginRoute, type ServerPlugin } from "./plugin.js";
+import {
+  type ActionAudit,
+  type PluginHost,
+  pluginRoute,
+  type ServerPlugin,
+} from "./plugin.js";
 
 const alice = asId("user", "alice");
 
@@ -196,6 +201,61 @@ async function rows(handle: DatabaseHandle, query: string): Promise<unknown[]> {
 }
 
 describe("server plugins", () => {
+  it("records a sync event a plugin announces for a write outside an action", async () => {
+    const handle = await database();
+    let host: PluginHost | undefined;
+    const plugin: ServerPlugin = {
+      name: "announcer",
+      setup: (given) => {
+        host = given;
+        return {};
+      },
+    };
+    serve({ database: lend(handle), plugins: [plugin] });
+    await host!.announce("scope-a", [["parlor_announcer_items", "1"]]);
+    expect(await rows(handle, "select scope, tags from sync_events")).toEqual([
+      { scope: "scope-a", tags: [["parlor_announcer_items", "1"]] },
+    ]);
+  });
+
+  it("does nothing when a plugin announces with sync off", async () => {
+    const handle = await database();
+    let host: PluginHost | undefined;
+    serve({
+      database: lend(handle),
+      sync: false,
+      plugins: [{ name: "announcer", setup: (given) => ((host = given), {}) }],
+    });
+    await host!.announce("scope-a", [["parlor_announcer_items", "1"]]);
+    expect(
+      await rows(handle, "select to_regclass('sync_events') is null as missing"),
+    ).toEqual([{ missing: true }]);
+  });
+
+  it("migrates before the auth provider sees the first request", async () => {
+    const handle = await database();
+    const provider: AuthProvider = {
+      ...testAuth,
+      name: "table-auth",
+      migrations: [
+        {
+          id: "table-auth/0001_tokens",
+          sql: "create table parlor_table_auth_tokens (token text primary key)",
+        },
+      ],
+      async authenticate(request) {
+        const token = request.headers.get("authorization")?.replace(/^Bearer /, "");
+        await handle.db.execute(
+          sql`select 1 from parlor_table_auth_tokens where token = ${token ?? ""}`,
+        );
+        return testAuth.authenticate(request);
+      },
+    };
+    const server = serve({ database: lend(handle), auth: provider });
+    const response = await call(server, "GET", "/_parlor/manifest", "alice");
+    expect(response.status).toBe(200);
+  });
+
   it("serves plugin actions through the runner, at the plugin's own path", async () => {
     const log = { audits: [] as ActionAudit[], closed: 0 };
     const handle = await database();

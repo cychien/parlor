@@ -3,9 +3,12 @@ import { useCapability } from "@parlor/client/react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
+import { AccountPanel } from "../account.js";
+
 export const Route = createFileRoute("/settings")({
   staticData: {
-    description: "App settings: notification and deep link support on this device.",
+    description:
+      "App settings: the signed-in account, where it is signed in and which agents it connected, and notification and deep link support on this device.",
   },
   component: Settings,
 });
@@ -14,6 +17,8 @@ function Settings() {
   return (
     <>
       <h1>Settings</h1>
+      <AccountPanel />
+      <h2>This device</h2>
       <NotificationsPanel />
       <DeepLinkPanel />
     </>
