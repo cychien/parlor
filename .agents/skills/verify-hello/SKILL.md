@@ -28,7 +28,7 @@ Read this before starting anything.
 - Starting a web instance takes about 6 seconds (measured: `up` copies the checkout and runs `pnpm install --offline` in the copy), so start one per isolation need without hesitation. A mac or iOS instance takes minutes because it builds the native app; reuse a running one across checks with `$H seed` and `$H sync` instead of starting a new one.
 - Browser sessions are per instance: `$H browser <id> ...` sets `CHROME_DEVTOOLS_AXI_SESSION=hello-<id>`. Never call chrome-devtools-axi without a session name, because the default session may belong to another agent.
 - Desktop builds share one cargo target dir, `~/.cache/parlor-verify-hello/cargo-target`, so only the first mac launch compiles Tauri from scratch. Concurrent mac launches wait on cargo's lock.
-- The Tauri mac app can come up before the server listens and then never joins agent UI until a reload, a known sync-client issue. A mac agent UI check that finds no client is not an app defect on that evidence alone.
+- A shell or page that comes up before the server listens keeps retrying SSE negotiation with backoff (1 s doubling to 30 s) and joins agent UI within a few seconds of the server listening, with no reload.
 - Override the root with `PARLOR_VERIFY_HOME`.
 
 ## Launch
