@@ -73,8 +73,8 @@ Make every decision to a staff engineer's standard. Weigh quality, simplicity, r
 
 ## Pull requests and commits
 
-- **One PR, one intent.** A PR should be readable as a single decision. Size is not the limit, mixed intents are. Split a large feature into stacked PRs, each with its own clear intent.
-- **Few commits.** Do not commit after every small step. Commit when a coherent piece is done and the user has agreed it is right, or once before opening the PR.
+- **One PR, one intent.** A PR should be readable as a single decision. Size is not the limit, mixed intents are. One feature is one intent and one PR, with its commits grouped by unit. Open separate PRs only for intents that can land and roll back independently. An unrelated bug fixed on sight is one: it goes on its own branch off main with its own PR.
+- **Few commits.** Do not commit after every small step. Commit when a coherent unit is done and the user has agreed it is right, or once before opening the PR. Group commits by unit, not by step or by time.
 - No `Co-Authored-By` or agent attribution in commits.
 - No `[codex]`, `[claude]`, or similar labels in user-visible GitHub metadata.
 - Plain dash, never an em dash.
