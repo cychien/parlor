@@ -1,4 +1,5 @@
 import {
+  ActionError,
   type ActionConfig,
   type ActionContext,
   type ActionDefinition,
@@ -6,6 +7,8 @@ import {
   type DeviceId,
   type HostPrincipal,
   type Principal,
+  asId,
+  type UserId,
 } from "@parlor/core";
 import type { z } from "zod";
 
@@ -50,18 +53,44 @@ export function chatAction<P extends Party, I extends z.ZodType, O>(
   });
 }
 
+/** The owner of every chat row while no auth provider tells people apart. */
+export const DEV_USER_ID: UserId = asId("user", "dev");
+
+type PartyResolvers = {
+  readonly [P in Party]: (
+    principal: Principal,
+    scope: string,
+    enforcing: boolean,
+  ) => PartyOf<P>;
+};
+
+const resolvers: PartyResolvers = {
+  host: (principal, scope) => {
+    if (principal.kind !== "host") {
+      throw new ActionError("forbidden", "Only a connected computer can call this.");
+    }
+    return { scope, userId: principal.userId, host: principal };
+  },
+  user: (principal, scope, enforcing) => {
+    if (principal.kind === "user") {
+      return { scope, userId: principal.userId, deviceId: principal.deviceId };
+    }
+    if (principal.kind === "anonymous") {
+      if (enforcing) throw new ActionError("unauthenticated", "Sign in first.");
+      return { scope, userId: DEV_USER_ID, deviceId: undefined };
+    }
+    throw new ActionError(
+      "forbidden",
+      `A ${principal.kind} principal cannot use the chat.`,
+    );
+  },
+};
+
 export function partyOf<P extends Party>(
   party: P,
   principal: Principal,
   scope: string,
   enforcing: boolean,
 ): PartyOf<P> {
-  // TODO: host -> principal.kind "host" else ActionError("forbidden"), { scope, userId,
-  //   host }; user -> "user" -> { scope, userId, deviceId }; "anonymous" && !enforcing ->
-  //   DEV_USER_ID with no device; anything else (agent, a host on a user action) -> forbidden.
-  void party;
-  void principal;
-  void scope;
-  void enforcing;
-  throw new Error("not implemented");
+  return resolvers[party](principal, scope, enforcing);
 }

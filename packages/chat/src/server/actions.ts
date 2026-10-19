@@ -1,4 +1,10 @@
-import type { ActionContext } from "@parlor/core";
+import {
+  type ActionContext,
+  ActionError,
+  type HostId,
+  type ThreadId,
+  type TurnId,
+} from "@parlor/core";
 import { type ActionsOf, createRegistry } from "@parlor/core/registry";
 import type { AuthProvider } from "@parlor/server";
 import { z } from "zod";
@@ -12,10 +18,12 @@ import type {
   TurnFailure,
   TurnSignals,
 } from "../model.js";
-import type { HostWelcome } from "../protocol.js";
+import { HOST_PROTOCOL, type HostWelcome } from "../protocol.js";
+import { turnContext } from "./context.js";
 import type { LiveRelay } from "./live.js";
-import { chatAction } from "./party.js";
-import type { ChatStore } from "./store.js";
+import { type ChatHost, chatAction } from "./party.js";
+import { agentInfoSchema } from "./rows.js";
+import type { ChatDb, ChatStore } from "./store.js";
 
 /** Every chat write emits `["parlor_chat", threadId]`, the one event that wakes hosts and other devices. */
 export const CHAT_TAG = "parlor_chat";
@@ -39,14 +47,6 @@ const turnId = idSchema("turn");
 const itemId = idSchema("item");
 const afterSeq = z.number().int().min(0);
 
-const agentInfo = z.object({
-  id: z.string().min(1),
-  name: z.string(),
-  version: z.string().optional(),
-  ready: z.boolean(),
-  problem: z.string().optional(),
-});
-
 const TURN_FAILURES = [
   "agent_exited",
   "agent_unavailable",
@@ -56,9 +56,11 @@ const TURN_FAILURES = [
   "host_lost",
 ] as const satisfies readonly TurnFailure[];
 
-const notImplemented = (): never => {
-  throw new Error("not implemented");
-};
+const MIN_HOST_PROTOCOL = 1;
+const CONTEXT_HISTORY_ITEMS = 200;
+const TERMINAL: ReadonlySet<string> = new Set(["done", "failed", "cancelled"]);
+
+const dbOf = (ctx: ActionContext) => ctx.db as ChatDb;
 
 /** What the user's devices call. */
 export function userChatActions(deps: ChatActionDeps) {
@@ -75,21 +77,37 @@ export function userChatActions(deps: ChatActionDeps) {
         [CHAT_TAG, ...(input.threadId ? [input.threadId] : [])],
         [HOSTS_TAG],
       ],
-      // TODO: one read: store.listThreads, store.listHosts, store.readPage(threadId ?? newest);
-      //   page.open = deps.relay.open(owner, page.thread.id).
-      run: (): ChatSnapshot => notImplemented(),
+      run: async (input, user, ctx): Promise<ChatSnapshot> => {
+        const db = dbOf(ctx);
+        const [threads, hosts, page] = await Promise.all([
+          deps.store.listThreads(db, user),
+          deps.store.listHosts(db, user),
+          deps.store.readPage(db, user, input.threadId, input.limit),
+        ]);
+        const thread = page.thread;
+        const open = thread ? deps.relay.open(user, thread.id) : [];
+        const streaming = open.filter((turn) => {
+          const state = page.turns.find((status) => status.turnId === turn.turnId)?.state;
+          const ended = state !== undefined && TERMINAL.has(state);
+          if (ended) deps.relay.settle(user, turn.threadId, turn.turnId);
+          return !ended;
+        });
+        return { threads, hosts, page: { ...page, open: streaming } };
+      },
     }),
     items: chatAction("user", enforcing, {
       description: "A thread's items after a sequence number.",
       input: z.object({ threadId, afterSeq }),
       reads: (input) => [[CHAT_TAG, input.threadId]],
-      run: (): LoggedItem[] => notImplemented(),
+      run: (input, user, ctx): Promise<LoggedItem[]> =>
+        deps.store.readItemsAfter(dbOf(ctx), user, input.threadId, input.afterSeq),
     }),
     hosts: chatAction("user", enforcing, {
       description: "The user's computers and the agents on them.",
       input: z.object({}),
       reads: [HOSTS_TAG],
-      run: (): HostSummary[] => notImplemented(),
+      run: (_input, user, ctx): Promise<HostSummary[]> =>
+        deps.store.listHosts(dbOf(ctx), user),
     }),
     send: chatAction("user", enforcing, {
       description: "Send a prompt to an agent on one of the user's computers.",
@@ -101,21 +119,60 @@ export function userChatActions(deps: ChatActionDeps) {
         prompt: chatItemBodies.prompt.body,
       }),
       writes: [CHAT_TAG],
-      // TODO: refuse when prompt.agent.hostId is not one of the owner's live hosts, or the
-      //   thread already queues deps.maxQueued turns; store.appendUserItems with the turn.
-      run: (): { readonly id: string; readonly turnId: string } => notImplemented(),
+      run: async (
+        input,
+        user,
+        ctx,
+      ): Promise<{ readonly id: string; readonly turnId: string }> => {
+        const db = dbOf(ctx);
+        const hosts = await deps.store.listHosts(db, user);
+        const host = hosts.find(
+          (candidate) => candidate.id === input.prompt.agent.hostId,
+        );
+        if (!host) throw new ActionError("not_found", "Computer not found");
+        if (!host.online) {
+          throw new ActionError("invalid_input", `${host.name} is offline.`);
+        }
+        await deps.store.appendUserItems(db, user, {
+          threadId: input.threadId,
+          turnId: input.turnId,
+          items: [{ id: input.itemId, kind: "prompt", body: input.prompt }],
+          turn: {
+            turnId: input.turnId,
+            agent: input.prompt.agent,
+            clientId: input.clientId,
+            deviceId: user.deviceId,
+            maxQueued: deps.maxQueued,
+          },
+        });
+        return { id: input.threadId, turnId: input.turnId };
+      },
     }),
     answer: chatAction("user", enforcing, {
       description: "Answer the agent's permission prompt or question.",
       input: z.object({ threadId, turnId, itemId, answer: chatItemBodies.answer.body }),
       writes: [CHAT_TAG],
-      run: (): { readonly id: string } => notImplemented(),
+      run: async (input, user, ctx): Promise<{ readonly id: string }> => {
+        await deps.store.appendUserItems(dbOf(ctx), user, {
+          threadId: input.threadId,
+          turnId: input.turnId,
+          items: [{ id: input.itemId, kind: "answer", body: input.answer }],
+        });
+        return { id: input.threadId };
+      },
     }),
     cancel: chatAction("user", enforcing, {
       description: "Stop the running turn; what the agent already said is kept.",
       input: z.object({ threadId, turnId, itemId }),
       writes: [CHAT_TAG],
-      run: (): { readonly id: string } => notImplemented(),
+      run: async (input, user, ctx): Promise<{ readonly id: string }> => {
+        await deps.store.appendUserItems(dbOf(ctx), user, {
+          threadId: input.threadId,
+          turnId: input.turnId,
+          items: [{ id: input.itemId, kind: "cancel", body: {} }],
+        });
+        return { id: input.threadId };
+      },
     }),
   };
 }
@@ -123,6 +180,32 @@ export function userChatActions(deps: ChatActionDeps) {
 /** What the user's computers call; `hostHello` first on every link. */
 export function hostChatActions(deps: ChatActionDeps) {
   const { enforcing } = deps;
+  const welcomed = new Set<HostId>();
+  const welcome = async (host: ChatHost, db: ChatDb) => {
+    const hosts = await deps.store.listHosts(db, host);
+    const known = hosts.find((candidate) => candidate.id === host.host.hostId);
+    if (!known) throw new ActionError("forbidden", "Say hello before anything else.");
+    welcomed.add(known.id);
+    return known;
+  };
+  const requireWelcome = async (host: ChatHost, db: ChatDb) => {
+    if (!welcomed.has(host.host.hostId)) await welcome(host, db);
+  };
+  const mint = (
+    host: ChatHost,
+    turn: { threadId: ThreadId; turnId: TurnId; clientId: string; agentId: string },
+  ) => {
+    if (!deps.auth.delegate) {
+      throw new ActionError("internal", "The auth provider cannot mint turn tokens.");
+    }
+    return deps.auth.delegate(host.host, {
+      threadId: turn.threadId,
+      turnId: turn.turnId,
+      clientId: turn.clientId,
+      agent: turn.agentId,
+      ttlMs: deps.leaseMs,
+    });
+  };
   return {
     hostHello: chatAction("host", enforcing, {
       description:
@@ -135,47 +218,127 @@ export function hostChatActions(deps: ChatActionDeps) {
         hostVersion: z.string().min(1).max(32),
         name: z.string().min(1).max(80),
         platform: z.string().min(1).max(32),
-        agents: z.array(agentInfo).max(32),
+        agents: z.array(agentInfoSchema).max(32),
       }),
       writes: [HOSTS_TAG],
-      // TODO: protocol = min(input.protocols.max, HOST_PROTOCOL); below either side's min ->
-      //   { accepted: false, reason }; else store.reportHost and { accepted: true, protocol,
-      //   leaseMs, heartbeatMs }. Other host actions refuse a host never welcomed.
-      run: (): HostWelcome & { readonly id: string } => notImplemented(),
+      run: async (input, host, ctx): Promise<HostWelcome & { readonly id: string }> => {
+        const id = host.host.hostId;
+        const protocols = { min: MIN_HOST_PROTOCOL, max: HOST_PROTOCOL };
+        if (input.protocols.max < protocols.min) {
+          return { id, accepted: false, reason: "host_too_old", protocols };
+        }
+        const protocol = Math.min(input.protocols.max, protocols.max);
+        if (protocol < input.protocols.min) {
+          return { id, accepted: false, reason: "app_too_old", protocols };
+        }
+        await deps.store.reportHost(dbOf(ctx), host, host.host, {
+          protocol,
+          name: input.name,
+          platform: input.platform,
+          agents: input.agents,
+          online: true,
+          ttlMs: 2 * deps.heartbeatMs,
+        });
+        welcomed.add(id);
+        return {
+          id,
+          accepted: true,
+          protocol,
+          leaseMs: deps.leaseMs,
+          heartbeatMs: deps.heartbeatMs,
+        };
+      },
     }),
     hostReport: chatAction("host", enforcing, {
       description: "This computer went offline or changed its agents.",
-      input: z.object({ online: z.boolean(), agents: z.array(agentInfo).max(32) }),
+      input: z.object({ online: z.boolean(), agents: z.array(agentInfoSchema).max(32) }),
       writes: [HOSTS_TAG],
-      run: (): { readonly id: string; readonly onlineUntil: number } => notImplemented(),
+      run: async (
+        input,
+        host,
+        ctx,
+      ): Promise<{ readonly id: string; readonly onlineUntil: number }> => {
+        const db = dbOf(ctx);
+        const known = await welcome(host, db);
+        const { onlineUntil } = await deps.store.reportHost(db, host, host.host, {
+          protocol: HOST_PROTOCOL,
+          name: known.name,
+          platform: known.platform,
+          agents: input.agents,
+          online: input.online,
+          ttlMs: 2 * deps.heartbeatMs,
+        });
+        return { id: host.host.hostId, onlineUntil };
+      },
     }),
     hostClaim: chatAction("host", enforcing, {
       description:
         "Take the next turn addressed to this computer with its turn token; not_found when none waits.",
       input: z.object({}),
       writes: [CHAT_TAG],
-      // TODO: store.claimTurn (none -> ActionError not_found, which rolls back: no sync
-      //   event); token = deps.auth.delegate(host, { threadId, turnId, clientId, agent,
-      //   ttlMs: leaseMs }); device = deps.auth.device(userId, prompt.signed.deviceId);
-      //   context = turnContext({ appName, appOrigin, account: deps.auth.account(userId),
-      //   device, instructions, history: items before the prompt }).
-      run: (): ClaimedTurn => notImplemented(),
+      run: async (_input, host, ctx): Promise<ClaimedTurn> => {
+        const db = dbOf(ctx);
+        await requireWelcome(host, db);
+        const claimed = await deps.store.claimTurn(db, host, host.host, deps.leaseMs);
+        if (!claimed) throw new ActionError("not_found", "No turn is waiting.");
+        const token = await mint(host, {
+          threadId: claimed.id,
+          turnId: claimed.turnId,
+          clientId: claimed.clientId,
+          agentId: claimed.agent.agentId,
+        });
+        const deviceId = claimed.prompt.body.signed?.deviceId;
+        const [device, account, page] = await Promise.all([
+          deviceId ? deps.auth.device?.(host.userId, deviceId) : undefined,
+          deps.auth.account?.(host.userId),
+          deps.store.readPage(db, host, claimed.id, CONTEXT_HISTORY_ITEMS),
+        ]);
+        const context = turnContext({
+          appName: deps.appName,
+          appOrigin: deps.appOrigin(ctx),
+          account,
+          device,
+          instructions: deps.instructions,
+          history: page.items.filter((item) => item.seq < claimed.prompt.seq),
+        });
+        return { ...claimed, device, context, token };
+      },
     }),
     hostSignals: chatAction("host", enforcing, {
       description: "Answers and stop requests for the turns this computer runs.",
       input: z.object({ turns: z.array(z.object({ turnId, afterSeq })).max(16) }),
-      run: (): TurnSignals[] => notImplemented(),
+      run: async (input, host, ctx): Promise<TurnSignals[]> => {
+        const db = dbOf(ctx);
+        await requireWelcome(host, db);
+        return deps.store.readSignals(db, host, host.host, input.turns);
+      },
     }),
     hostAppend: chatAction("host", enforcing, {
       description: "Append finished items of a running turn and extend its lease.",
       input: z.object({ turnId, items: z.array(hostItemDraft).min(1).max(64) }),
       writes: [CHAT_TAG],
-      // TODO: store.appendHostItems; renew the token with deps.auth.delegate.
-      run: (): {
+      run: async (
+        input,
+        host,
+        ctx,
+      ): Promise<{
         readonly id: string;
         readonly leaseUntil: number;
         readonly token: ClaimedTurn["token"];
-      } => notImplemented(),
+      }> => {
+        const db = dbOf(ctx);
+        await requireWelcome(host, db);
+        const appended = await deps.store.appendHostItems(
+          db,
+          host,
+          host.host,
+          input.turnId,
+          input.items,
+          deps.leaseMs,
+        );
+        const token = await mint(host, { ...appended, turnId: input.turnId });
+        return { id: appended.threadId, leaseUntil: appended.leaseUntil, token };
+      },
     }),
     hostFinish: chatAction("host", enforcing, {
       description: "End a turn, once.",
@@ -188,8 +351,19 @@ export function hostChatActions(deps: ChatActionDeps) {
         ]),
       }),
       writes: [CHAT_TAG],
-      // TODO: store.finishTurn; deps.relay.settle(owner, threadId, turnId).
-      run: (): { readonly id: string } => notImplemented(),
+      run: async (input, host, ctx): Promise<{ readonly id: string }> => {
+        const db = dbOf(ctx);
+        await requireWelcome(host, db);
+        const finished = await deps.store.finishTurn(
+          db,
+          host,
+          host.host,
+          input.turnId,
+          input.outcome,
+        );
+        deps.relay.settle(host, finished.threadId, input.turnId);
+        return { id: finished.threadId };
+      },
     }),
   };
 }
