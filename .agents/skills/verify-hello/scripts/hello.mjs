@@ -9,23 +9,33 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
-import { homedir } from "node:os";
+import { cpus, homedir, loadavg } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+
+function canonicalPath(path) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
 
 const SKILL_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const FIXTURES_DIR = join(SKILL_DIR, "fixtures");
 const APP_PATH = "examples/hello";
 const BUNDLE_ID = "dev.parlor.hello";
-const HOME =
-  process.env.PARLOR_VERIFY_HOME ?? join(homedir(), ".cache", "parlor-verify-hello");
+const HOME = canonicalPath(
+  process.env.PARLOR_VERIFY_HOME ?? join(homedir(), ".cache", "parlor-verify-hello"),
+);
 const INSTANCES_DIR = join(HOME, "instances");
 const CARGO_TARGET_DIR = join(HOME, "cargo-target");
 const LOCK_DIR = join(HOME, ".lock");
@@ -60,8 +70,10 @@ const FINGERPRINT_SKIP = [".agents/", ".claude/", "docs/"];
 const USAGE = `usage: hello.mjs <command> [args]
 
   up [--id ID] [--target web|mac|ios] [--seed DATASET] [--device NAME] [--source DIR]
-     [--keep-on-failure]
-                          snapshot the checkout, pick free ports, launch, wait until usable
+     [--keep-on-failure] [--force]
+                          snapshot the checkout, pick free ports, launch, wait until usable;
+                          refused when the 1-minute load exceeds the core count (HELLO_MAX_LOAD)
+                          or HELLO_MAX_INSTANCES (default 3) are running, unless --force
   doctor ID               read-only health check; exit 1 when the instance is not worth driving
   seed ID DATASET         load a fixture straight into PGlite (stops and restarts a running instance)
   sql ID QUERY            read-only SQL against the instance's PGlite (stops and restarts it)
@@ -81,15 +93,27 @@ const USAGE = `usage: hello.mjs <command> [args]
   browser ID focus on|off make the selected page report document.hasFocus() true or false, firing blur
                           or focus; open, click, fill undo off, and after a click or fill off needs a fresh tab
   screenshot ID FILE      capture the mac window or the iOS simulator screen
-  info ID | list          print one instance's state, or every instance
+  info ID | list          print one instance's state, or every instance plus stray processes
+                          under the home that belong to no instance
+  reap [--kill]           list processes whose cwd or command is under the home (deleted cwds
+                          included); exit 1 while any remain; --kill sends SIGTERM then SIGKILL
   down ID... | --all [--save-log FILE]
-                          stop what this skill started and delete the snapshot, never evidence
+                          stop what this skill started and delete the snapshot, never evidence;
+                          exit 1 and keep the instance when any process or listener survives SIGKILL
   evidence                print and create this branch's verification directory
 
 datasets: ${datasets().join(", ")}
 home: ${HOME}`;
 
 class CliError extends Error {}
+
+function positiveNumber(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const value = Number(raw);
+  if (!(value > 0)) throw new CliError(`${name} must be a positive number, got "${raw}"`);
+  return value;
+}
 
 function fail(message) {
   throw new CliError(message);
@@ -163,16 +187,62 @@ function urls(state) {
 }
 
 function processTable() {
-  return run("ps", ["-A", "-o", "pid=,ppid=,pgid=,command="])
+  return run("ps", ["-A", "-o", "pid=,ppid=,pgid=,%cpu=,etime=,command="])
     .stdout.split("\n")
-    .map((line) => line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/))
+    .map((line) => line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+([\d.]+)\s+(\S+)\s+(.*)$/))
     .filter(Boolean)
-    .map(([, pid, ppid, pgid, command]) => ({
+    .map(([, pid, ppid, pgid, cpu, elapsed, command]) => ({
       pid: Number(pid),
       ppid: Number(ppid),
       pgid: Number(pgid),
+      cpu: Number(cpu),
+      elapsed,
       command,
     }));
+}
+
+function processCwds(pids) {
+  const args = ["-nP", "-a", "-d", "cwd", "-F", "pn"];
+  if (pids) args.push("-p", pids.join(","));
+  const cwds = new Map();
+  let pid;
+  for (const line of run("lsof", args, { allowFailure: true }).stdout.split("\n")) {
+    if (line[0] === "p") pid = Number(line.slice(1));
+    if (line[0] === "n" && pid !== undefined) cwds.set(pid, line.slice(1));
+  }
+  return cwds;
+}
+
+function isUnder(path, root) {
+  return path !== undefined && (path === root || path.startsWith(`${root}/`));
+}
+
+function ancestorPids(table) {
+  const parents = new Map(table.map((p) => [p.pid, p.ppid]));
+  const chain = new Set();
+  for (let pid = process.pid; pid > 1 && !chain.has(pid); pid = parents.get(pid)) {
+    chain.add(pid);
+  }
+  return chain;
+}
+
+function processesUnder(root, table = processTable()) {
+  const cwds = processCwds();
+  const self = ancestorPids(table);
+  return table
+    .filter((p) => !self.has(p.pid))
+    .map((p) => ({ ...p, cwd: cwds.get(p.pid) }))
+    .filter((p) => isUnder(p.cwd, root) || p.command.includes(`${root}/`));
+}
+
+function instanceIdIn(text) {
+  const prefix = `${INSTANCES_DIR}/`;
+  const at = text?.indexOf(prefix) ?? -1;
+  return at < 0 ? undefined : text.slice(at + prefix.length).split(/[/\s]/)[0];
+}
+
+function instanceIdOf(p) {
+  return instanceIdIn(p.cwd) ?? instanceIdIn(p.command);
 }
 
 function processKey(p) {
@@ -511,23 +581,62 @@ function signal(pid, name) {
   return true;
 }
 
-async function stopProcesses(state) {
-  const waitGone = async (ms) => {
-    const deadline = Date.now() + ms;
-    while (Date.now() < deadline) {
-      if (ownedProcesses(state).length === 0) return true;
-      await sleep(250);
-    }
-    return ownedProcesses(state).length === 0;
+function describeProcess(p) {
+  const command = p.command.length > 140 ? `${p.command.slice(0, 140)}...` : p.command;
+  return `pid ${p.pid} ppid ${p.ppid} pgid ${p.pgid} elapsed ${p.elapsed} cwd ${p.cwd ?? "?"} ${command}`;
+}
+
+function instanceSurvivors(state) {
+  const table = processTable();
+  const found = new Map();
+  const add = (p, reason) => {
+    const entry = found.get(p.pid) ?? { ...p, reasons: [] };
+    entry.reasons.push(reason);
+    found.set(p.pid, entry);
   };
+  for (const p of ownedProcesses(state, table)) add(p, "instance process");
+  for (const p of processesUnder(instanceDir(state.id), table))
+    add(p, "cwd or command under the instance dir");
+  const ports = [...Object.values(state.ports), state.cdpPort].filter(Boolean);
+  for (const port of ports) {
+    for (const pid of listenerPids(port)) {
+      const p = table.find((row) => row.pid === pid);
+      if (p) add({ ...p, cwd: processCwds([pid]).get(pid) }, `listening on port ${port}`);
+    }
+  }
+  return [...found.values()];
+}
+
+async function waitUntil(done, ms) {
+  const deadline = Date.now() + ms;
+  while (!done() && Date.now() < deadline) await sleep(250);
+  return done();
+}
+
+async function killSurvivors(state) {
+  let survivors = instanceSurvivors(state);
+  for (let round = 0; survivors.length > 0 && round < 3; round += 1) {
+    log(
+      `killing leftovers of ${state.id}:\n  ${survivors.map(describeProcess).join("\n  ")}`,
+    );
+    for (const p of survivors) signal(p.pid, "SIGKILL");
+    await waitUntil(() => instanceSurvivors(state).length === 0, 3000);
+    survivors = instanceSurvivors(state);
+  }
+  return survivors;
+}
+
+async function stopProcesses(state) {
+  state.processes = ownedProcesses(state).map(({ pid, command }) => ({ pid, command }));
+  writeState(state);
   let owned = ownedProcesses(state);
   if (owned.length > 0) {
     for (const pgid of new Set(owned.map((p) => p.pgid))) signal(-pgid, "SIGTERM");
-    if (!(await waitGone(STOP_GRACE_MS))) {
+    if (!(await waitUntil(() => ownedProcesses(state).length === 0, STOP_GRACE_MS))) {
       owned = ownedProcesses(state);
       log(`force killing ${owned.map((p) => p.pid).join(" ")}`);
+      for (const p of owned.filter((q) => q.pid === q.pgid)) signal(-p.pgid, "SIGKILL");
       for (const p of owned) signal(p.pid, "SIGKILL");
-      await waitGone(5000);
     }
   }
   if (state.target === "ios" && state.simulator) {
@@ -535,10 +644,13 @@ async function stopProcesses(state) {
       allowFailure: true,
     });
   }
-  for (const port of Object.values(state.ports)) {
-    const deadline = Date.now() + 5000;
-    while (listenerPids(port).length > 0 && Date.now() < deadline) await sleep(250);
-    if (listenerPids(port).length > 0) log(`warning: port ${port} is still listening`);
+  const survivors = await killSurvivors(state);
+  if (survivors.length > 0) {
+    fail(
+      `${state.id} still has ${survivors.length} process(es) after SIGKILL, so its state in ${instanceDir(state.id)} is kept:\n  ` +
+        `${survivors.map((p) => `${describeProcess(p)} [${p.reasons.join("; ")}]`).join("\n  ")}\n` +
+        "Retry down, or run reap --kill.",
+    );
   }
   state.processes = [];
   writeState(state);
@@ -600,6 +712,54 @@ async function withStopped(state, task) {
   }
 }
 
+function busiestProcesses(limit = 5) {
+  const busiest = processTable()
+    .filter((p) => p.pid !== process.pid && !p.command.startsWith("ps -A"))
+    .sort((a, b) => b.cpu - a.cpu)
+    .slice(0, limit);
+  const cwds = processCwds(busiest.map((p) => p.pid));
+  return busiest.map((p) => ({ ...p, cwd: cwds.get(p.pid) }));
+}
+
+function isHarnessLeftover(p) {
+  return p.ppid === 1 && (isUnder(p.cwd, HOME) || p.command.includes(`${HOME}/`));
+}
+
+function describeBusiest() {
+  const busiest = busiestProcesses();
+  const lines = busiest.map(
+    (p) =>
+      `  ${p.cpu.toFixed(1)}% ${describeProcess(p)}${isHarnessLeftover(p) ? "  <- LEFTOVER of this harness" : ""}`,
+  );
+  return (
+    `\nbusiest processes:\n${lines.join("\n")}` +
+    (busiest.some(isHarnessLeftover)
+      ? "\nrun reap --kill to remove the leftovers, then retry."
+      : "")
+  );
+}
+
+function checkCapacity() {
+  const [load] = loadavg();
+  const cores = cpus().length;
+  const maxLoad = positiveNumber("HELLO_MAX_LOAD", cores);
+  const maxInstances = positiveNumber("HELLO_MAX_INSTANCES", 3);
+  const active = allStates()
+    .filter((s) => !s.pid || isRunning(s))
+    .map((s) => s.id);
+  const reasons = [];
+  if (load > maxLoad) reasons.push(`load is above the limit of ${maxLoad}`);
+  if (active.length >= maxInstances)
+    reasons.push(`instance cap of ${maxInstances} reached`);
+  if (reasons.length === 0) return;
+  fail(
+    `refusing to start: ${reasons.join("; ")}. ` +
+      `1-minute load ${load.toFixed(2)}, ${cores} cores, running instances [${active.join(", ") || "none"}]. ` +
+      "Wait for the load to drop or down one, or pass --force." +
+      (load > maxLoad ? describeBusiest() : ""),
+  );
+}
+
 function newId(target) {
   return `${target}-${randomBytes(2).toString("hex")}`;
 }
@@ -614,6 +774,7 @@ async function cmdUp(args) {
       device: { type: "string", default: DEFAULT_DEVICE },
       source: { type: "string" },
       "keep-on-failure": { type: "boolean" },
+      force: { type: "boolean" },
     },
   });
   if (!TARGETS.includes(values.target))
@@ -627,6 +788,7 @@ async function cmdUp(args) {
 
   const state = await withLock(() => {
     if (existsSync(instanceDir(id))) fail(`instance "${id}" already exists`);
+    if (!values.force) checkCapacity();
     if (sim) {
       const clash = allStates().find((s) => s.simulator?.udid === sim.udid);
       if (clash)
@@ -1264,7 +1426,38 @@ async function cmdDown(args) {
   const states = values.all ? allStates() : positionals.map(readState);
   if (states.length === 0) fail("usage: down ID... | --all");
   if (values["save-log"] && states.length > 1) fail("--save-log takes one instance");
-  for (const state of states) await teardown(state, { saveLog: values["save-log"] });
+  const failed = [];
+  for (const state of states) {
+    try {
+      await teardown(state, { saveLog: values["save-log"] });
+    } catch (error) {
+      if (!(error instanceof CliError)) throw error;
+      log(error.message);
+      failed.push(state.id);
+    }
+  }
+  if (failed.length > 0) fail(`down failed for ${failed.join(", ")}`);
+}
+
+function strayProcesses() {
+  const table = processTable();
+  const tracked = new Set(
+    allStates().flatMap((state) => ownedProcesses(state, table).map((p) => p.pid)),
+  );
+  return processesUnder(INSTANCES_DIR, table).filter((p) => !tracked.has(p.pid));
+}
+
+function strayRow(p) {
+  return {
+    stray: true,
+    pid: p.pid,
+    ppid: p.ppid,
+    pgid: p.pgid,
+    elapsed: p.elapsed,
+    cwd: p.cwd ?? null,
+    instance: instanceIdOf(p) ?? null,
+    command: p.command,
+  };
 }
 
 function cmdList() {
@@ -1277,7 +1470,39 @@ function cmdList() {
     dataset: s.dataset ?? null,
     head: s.head.slice(0, 12),
   }));
-  process.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
+  const strays = strayProcesses();
+  process.stdout.write(
+    `${JSON.stringify([...rows, ...strays.map(strayRow)], null, 2)}\n`,
+  );
+  if (strays.length > 0)
+    log(
+      `${strays.length} stray process(es) under ${INSTANCES_DIR} belong to no running instance; run reap --kill`,
+    );
+}
+
+async function cmdReap(args) {
+  const { values } = parseArgs({ args, options: { kill: { type: "boolean" } } });
+  let found = processesUnder(INSTANCES_DIR);
+  if (values.kill && found.length > 0) {
+    log(`terminating ${found.length} process(es) under ${INSTANCES_DIR}`);
+    for (const p of found) signal(p.pid, "SIGTERM");
+    await waitUntil(() => processesUnder(INSTANCES_DIR).length === 0, STOP_GRACE_MS);
+    for (let round = 0; round < 3; round += 1) {
+      found = processesUnder(INSTANCES_DIR);
+      if (found.length === 0) break;
+      log(`killing ${found.map((p) => p.pid).join(" ")}`);
+      for (const p of found) signal(p.pid, "SIGKILL");
+      await waitUntil(() => processesUnder(INSTANCES_DIR).length === 0, 3000);
+    }
+  }
+  const remaining = processesUnder(INSTANCES_DIR);
+  process.stdout.write(`${JSON.stringify(remaining.map(strayRow), null, 2)}\n`);
+  if (remaining.length > 0)
+    fail(
+      values.kill
+        ? `${remaining.length} process(es) under ${INSTANCES_DIR} survived SIGKILL`
+        : `${remaining.length} process(es) run under ${INSTANCES_DIR}; reap --kill removes them`,
+    );
 }
 
 function cmdEvidence() {
@@ -1308,6 +1533,7 @@ const COMMANDS = {
   screenshot: cmdScreenshot,
   info: ([id]) => printInfo(readState(id)),
   list: cmdList,
+  reap: cmdReap,
   down: cmdDown,
   evidence: cmdEvidence,
 };
