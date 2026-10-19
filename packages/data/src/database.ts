@@ -1,7 +1,8 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
-import { PGlite } from "@electric-sql/pglite";
+import { PGlite, type Transaction } from "@electric-sql/pglite";
 import type { DataProvider, ListenOptions, Unlisten } from "@parlor/core";
 import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
 import { migrate as migratePg } from "drizzle-orm/node-postgres/migrator";
@@ -49,9 +50,53 @@ function once(run: () => Promise<void>): () => Promise<void> {
   return () => (result ??= run());
 }
 
+interface OpenTransaction {
+  tx: Transaction | undefined;
+}
+
+/**
+ * PGlite has one connection, and a transaction holds it, so code that runs inside a
+ * transaction and reaches the database through the bare handle (an auth provider called
+ * from an action) would wait on itself forever. Anything that started inside the
+ * transaction joins it instead; once it ends, stragglers go straight to the database.
+ */
+function joiningTransactions(client: PGlite): PGlite {
+  const open = new AsyncLocalStorage<OpenTransaction>();
+  const current = () => open.getStore()?.tx ?? client;
+  return new Proxy(client, {
+    get(target, property) {
+      switch (property) {
+        case "query":
+        case "exec":
+          return (...args: unknown[]) =>
+            (current()[property] as (...call: unknown[]) => unknown)(...args);
+        case "transaction":
+          return <T>(run: (tx: Transaction) => Promise<T>) => {
+            const joined = open.getStore()?.tx;
+            if (joined) return run(joined);
+            return target.transaction((tx) => {
+              const state: OpenTransaction = { tx };
+              return open.run(state, async () => {
+                try {
+                  return await run(tx);
+                } finally {
+                  state.tx = undefined;
+                }
+              });
+            });
+          };
+        default: {
+          const value: unknown = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        }
+      }
+    },
+  });
+}
+
 function pgliteHandle(dataDir: string): DatabaseHandle {
   const client = new PGlite(dataDir);
-  const db = drizzlePglite(client);
+  const db = drizzlePglite(joiningTransactions(client));
   return {
     db,
     driver: "pglite",

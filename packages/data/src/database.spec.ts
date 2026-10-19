@@ -70,6 +70,87 @@ describe("createDatabase with PGlite", () => {
     expect(rows.rows).toEqual([{ n: 1 }]);
   });
 
+  describe("work started inside a transaction", () => {
+    const within = <T>(work: Promise<T>, ms = 2000) =>
+      Promise.race([
+        work,
+        new Promise<never>((_resolve, reject) =>
+          setTimeout(() => reject(new Error(`still waiting after ${ms} ms`)), ms),
+        ),
+      ]);
+    const countOf = async (db: { execute: DatabaseHandle["db"]["execute"] }) =>
+      (await db.execute(sql`select n from joined order by n`)).rows;
+
+    it("reads through the bare handle and sees the transaction's own writes", async () => {
+      await shared.db.execute(sql`create table joined (n int)`);
+
+      const seen = await shared.transaction(async (tx) => {
+        await tx.execute(sql`insert into joined values (1)`);
+        return within(countOf(shared.read()));
+      });
+
+      expect(seen).toEqual([{ n: 1 }]);
+      expect(await countOf(shared.read())).toEqual([{ n: 1 }]);
+    });
+
+    it("rolls back with the transaction when it writes through the bare handle", async () => {
+      await shared
+        .transaction(async () => {
+          await within(shared.db.execute(sql`insert into joined values (2)`));
+          throw new Error("boom");
+        })
+        .catch(() => {});
+
+      expect(await countOf(shared.read())).toEqual([{ n: 1 }]);
+    });
+
+    it("answers queries issued together on the transaction and the bare handle", async () => {
+      const [viaTx, viaHandle] = await shared.transaction((tx) =>
+        within(Promise.all([countOf(tx), countOf(shared.read())])),
+      );
+
+      expect(viaTx).toEqual([{ n: 1 }]);
+      expect(viaHandle).toEqual([{ n: 1 }]);
+    });
+
+    it("keeps a caller outside the transaction waiting until it commits", async () => {
+      const writing = shared.transaction(async (tx) => {
+        await tx.execute(sql`insert into joined values (3)`);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      });
+      const outside = await within(countOf(shared.read()));
+      await writing;
+
+      expect(outside).toEqual([{ n: 1 }, { n: 3 }]);
+    });
+
+    it("goes straight to the database when it outlives the transaction", async () => {
+      let late!: Promise<unknown[]>;
+      await shared.transaction(async () => {
+        late = new Promise((resolve) => setTimeout(resolve, 30)).then(() =>
+          countOf(shared.read()),
+        );
+      });
+
+      expect(await within(late)).toEqual([{ n: 1 }, { n: 3 }]);
+    });
+
+    it("runs a nested transaction on the handle inside the outer one", async () => {
+      await shared
+        .transaction(async () => {
+          await within(
+            shared.transaction((inner) =>
+              inner.execute(sql`insert into joined values (4)`),
+            ),
+          );
+          throw new Error("boom");
+        })
+        .catch(() => {});
+
+      expect(await countOf(shared.read())).toEqual([{ n: 1 }, { n: 3 }]);
+    });
+  });
+
   it("applies migrations from a folder on create", async () => {
     const folder = await mkdtemp(join(tmpdir(), "parlor-migrations-"));
     await writeFile(
