@@ -37,7 +37,8 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 - [Live sync from an external writer](./live-sync.md) covers writes from HTTP, MCP, or another window appearing without a reload, on web, mac, and iOS.
 - [MCP tools](./mcp-tools.md) covers tool discovery and calls from Claude Code headless and a raw MCP client.
 - [Notifications and deep link panels](./capability-panels.md) covers the platform each panel reports, sending a notification, and receiving a deep link.
-- [Agent UI](./agent-ui.md) covers `ui_screen` and `ui_navigate`: what the agent sees, resolving "this task", navigation, the no-app link, client targeting, the route catalog, the external policy, and the activity pill.
+- [Agent UI](./agent-ui.md) covers `ui_screen` and `ui_navigate`: what the agent sees, resolving "this task", navigation, the no-app link, client targeting, the route catalog, the external policy, the activity status, and the `agentPanel` view.
 - [Agent forms and pointing](./agent-forms.md) covers `ui_set` filling the New task form, the agent-filled marking, the refusals, and `ui_highlight`.
-- [Confirmations](./confirmations.md) covers `deleteTask` asking the user in the app, approve, decline, timeout, no app, ties, reload, and the user's own Delete button.
+- [Agent panel](./agent-panel.md) covers the topbar `Agent` button and its dialog: a centered modal on desktop, a bottom sheet on a phone, the pending count, the empty state, both color schemes, and the `agentPanel` view.
+- [Confirmations](./confirmations.md) covers `deleteTask` asking the user in the agent panel, approve, decline, timeout, no app, ties, reload, and the user's own Delete button.
 - [Recovery](./recovery.md) covers an open tab reconnecting after the app server restarts and staying reachable across a navigation to another origin and back (back-forward cache).

@@ -16,3 +16,10 @@ export const newTask = defineAgentView({
   schema: z.object({ title: z.string(), notes: z.string() }),
   writable: true,
 });
+
+export const agentPanel = defineAgentView({
+  name: "agentPanel",
+  description:
+    "The agent panel: a dialog listing the requests agents wait on the user to approve. Read-only, it only says whether the panel is open.",
+  schema: z.object({ open: z.boolean() }),
+});

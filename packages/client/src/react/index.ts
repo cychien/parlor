@@ -4,6 +4,8 @@ export type {
   AgentOutcome,
   AgentConfirmation,
 } from "@parlor/agent-ui/client";
+export type { AgentActivityState } from "./agent-ui/activity-state.js";
+export * as Chat from "./agent-ui/chat.js";
 export { useAgentActivity } from "./agent-ui/use-agent-activity.js";
 export { useAgentConfirmations } from "./agent-ui/use-agent-confirmations.js";
 export { type AgentViewHandle, useAgentView } from "./agent-ui/use-agent-view.js";

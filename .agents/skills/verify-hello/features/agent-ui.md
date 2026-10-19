@@ -9,9 +9,10 @@ An external agent can see what the user has on screen and move the app to anothe
 - `ui-navigate` moves the app to `/settings` or `/tasks/<id>` from a plain-language request.
 - `ui-unreachable` returns `reachable: false`, reason `no_client`, and for navigation an `href` on the web port, when no app is open.
 - `ui-clients` targets a given `clientId`, lists the others, drops closed or reloaded tabs within 2 s, and rejects an unknown id with `unknown_client`.
-- `ui-catalog` lists the four ui_ tools next to the actions, with the three routes in the description and as the `to` enum, and the `New task` form with its fields `title`, `notes` in `ui_set`'s description; `GET /_parlor/manifest` carries the same routes under `ui`, and the MCP resource `parlor://manifest` carries the pages and views with their schemas.
+- `ui-catalog` lists the four ui_ tools next to the actions, with the three routes in the description and as the `to` enum, and the `New task` form with its fields `title`, `notes` in `ui_set`'s description (the read-only `agentPanel` view is listed in the manifest but not in `ui_set`'s writable forms); `GET /_parlor/manifest` carries the same routes under `ui`, and the MCP resource `parlor://manifest` carries the pages and views with their schemas.
 - `ui-policy` hides all four tools with `agentUi: { external: false }` and keeps only `ui_screen` with `"read-only"`; a confirm action still asks the user under `false`.
-- `ui-activity` shows the app's activity pill while an agent request runs, with a text per operation: reading the screen, opening a page, filling in a form, pointing at something, asking to confirm.
+- `ui-activity` shows the app's activity status (a pill at the bottom left) while an agent request runs, with a text per operation: reading the screen, opening a page, filling in a form, pointing at something, asking to confirm; it says what happened for a moment afterwards, then goes quiet.
+- `ui-panel-view` lists the read-only view `agentPanel` in `ui_screen` with `{open}` for the agent panel, and refuses `ui_set` on it with `not_writable`.
 
 ## How to get to it (user POV)
 
@@ -35,14 +36,16 @@ Preconditions:
 - **Policy.** Find the snapshot with `$H info <id>`, edit its `examples/hello/server.ts` to pass `agentUi: { external: false }` or `agentUi: { external: "read-only" }` to `createServer`, restart with `$H stop <id> && $H start <id>`, and list tools again: `true` lists four ui_ tools, `"read-only"` lists `ui_screen` only, `false` none; the action tools are identical in all three. Never edit the checkout itself for this.
 - **Reading the page.** `$H browser <id> eval "document.activeElement?.name"` is the focused field's name (`title` after `fill textbox "New task"`), and `$H browser <id> eval "document.querySelector('[data-parlor-highlight]')?.getAttribute('data-parlor-highlight') ?? null"` is the highlighted element's value or `null`; list all with `[...document.querySelectorAll('[data-parlor-highlight]')].map(e => e.dataset.parlorHighlight)`.
 - **A call that waits.** For an action that blocks until the user acts in the browser, start it with `$H mcp <id> call TOOL '{...}' --out $E/call.json &`, drive the page, then read `$E/call.json` (`isError`, `startedAt`, `endedAt`, `ms`, `result`) once it exists. Calls may wait up to 180 s without progress and 300 s in total; a confirm call waits at most 59 s on the server.
-- **Activity.** Throttle the page (axi network throttling, Slow 3G), call `ui_navigate` to `/tasks/seed-baseline-1`, and screenshot during the call: the pill reads "Agent is opening a page", then "Agent opened this page", then disappears within 3 s.
+- **Activity.** Throttle the page (axi network throttling, Slow 3G), call `ui_navigate` to `/tasks/seed-baseline-1`, and screenshot during the call: the status reads "Agent is opening a page", then "Agent opened this page", then disappears 2 s later. `eval "document.querySelector('.agent-status').dataset.state"` is `busy`, `done`, then `idle`; a refused call reads `refused`.
+- **Panel view.** `$H mcp <id> call ui_screen '{}'` has `views.agentPanel.value` `{"open":false}`; after `$H browser <id> click button "Agent"` it is `{"open":true}`. `ui_set` `{"view":"agentPanel","value":{"open":false}}` answers `not_writable` and the panel stays open.
 
 ## Gotchas
 
 - By default two open tabs both report focused and visible, so `ui_navigate` without `clientId` answers `ambiguous_client`. That is the designed answer to a tie; pass a `clientId`, or break the tie with `focus off` on one tab.
 - `focus off` changes `hasFocus` and fires `blur`, but `visibilityState` stays `visible` and `visibilitychange` never fires, so a hidden tab cannot be reproduced; `ui_screen` `visible` is always true for a browser tab here.
 - After a `click` or `fill` a tab keeps real input focus and `focus off` fails on it (exit 1); close the tab, `newpage <web url>`, then `focus off`.
-- The ui_ tools show the activity pill for up to 3 s; a `click` or `fill` started in that window may fail on a stale ref, so wait for the pill to go.
+- The ui_ tools show the activity status for up to 3 s; the status is `position: fixed` and does not move the page, so a `click` or `fill` is safe, but wait for `data-state` `idle` before reading its text as quiet.
 - A mac window behind the terminal reports `visible: false`; the screenshot still captures it by window id.
-- Navigation to `/settings` finishes within one frame, so the activity pill is only observable on a slowed page.
+- Navigation to `/settings` finishes within one frame, so a `busy` activity status is only observable on a slowed page.
+- While the agent panel is open the page behind is inert, so `ui_navigate` still works but a `click` on the page fails until the panel is closed.
 - The agent may answer in another language; assert on tool calls, results, and the stored state, not on its wording.
