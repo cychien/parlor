@@ -223,6 +223,17 @@ describe("highlightView", () => {
     notes.dispatchEvent(new browser.window.FocusEvent("focusin", { bubbles: true }));
     expect(registry.lastInteracted()).toBeDefined();
   });
+
+  it("does not count an intersection reported a task after the scroll settled", async () => {
+    const { browser, registry, mount, run } = setup();
+    const { element } = mount(form);
+    browser.intersect(element, false);
+    browser.onScroll((scrolled) => {
+      setTimeout(() => setTimeout(() => browser.intersect(scrolled, true), 0), 0);
+    });
+    await run({ view: "form" });
+    expect(registry.lastEntered()).toBeUndefined();
+  });
 });
 
 describe("the focus ui_highlight places", () => {
