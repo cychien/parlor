@@ -1411,7 +1411,7 @@ async function cmdScreenshot([id, file]) {
 function axiEnv(state) {
   const chromeArgs = [
     process.env.CHROME_DEVTOOLS_AXI_CHROME_ARGS,
-    state.cdpPort && `--remote-debugging-port=${state.cdpPort}`,
+    state.cdpPort && !browserProfile() && `--remote-debugging-port=${state.cdpPort}`,
   ].filter(Boolean);
   return {
     ...process.env,
@@ -1512,8 +1512,14 @@ async function cmdBrowser([id, action, ...args]) {
   return print(axi(state, [action, ...args]));
 }
 
+/** HELLO_BROWSER_PROFILE=bob drives a second Chrome (own cookies) on the same instance. */
+function browserProfile() {
+  return process.env.HELLO_BROWSER_PROFILE || undefined;
+}
+
 function browserSession(state) {
-  return `hello-${state.id}`;
+  const profile = browserProfile();
+  return profile ? `hello-${state.id}-${profile}` : `hello-${state.id}`;
 }
 
 async function cdpConnect(url) {

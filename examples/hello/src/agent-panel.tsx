@@ -1,14 +1,5 @@
 import { useAgentConfirmations, useAgentView } from "@parlor/client/react";
-import {
-  type KeyboardEvent,
-  lazy,
-  Suspense,
-  useCallback,
-  useEffect,
-  useId,
-  useRef,
-  useState,
-} from "react";
+import { lazy, Suspense, useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { agentPanel } from "./views.js";
@@ -34,6 +25,23 @@ export function AgentPanel() {
   useEffect(() => {
     if (open) region.current?.querySelector("textarea")?.focus();
   }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return;
+      const focus = document.activeElement;
+      const inside =
+        focus === document.body ||
+        focus === button.current ||
+        region.current?.contains(focus);
+      if (!inside) return;
+      event.preventDefault();
+      setOpen(false);
+      button.current?.focus();
+    };
+    document.addEventListener("keydown", dismiss);
+    return () => document.removeEventListener("keydown", dismiss);
+  }, [open]);
   const toggle = () => {
     setOpen(!open);
     setEverOpened(true);
@@ -41,12 +49,6 @@ export function AgentPanel() {
   const close = () => {
     setOpen(false);
     button.current?.focus();
-  };
-  const dismiss = (event: KeyboardEvent<HTMLElement>) => {
-    if (event.key !== "Escape" || event.defaultPrevented) return;
-    if (event.nativeEvent.isComposing) return;
-    event.preventDefault();
-    close();
   };
   return (
     <>
@@ -70,7 +72,6 @@ export function AgentPanel() {
           className="agent-sidebar"
           aria-labelledby={titleId}
           hidden={!open}
-          onKeyDown={dismiss}
         >
           <header>
             <h2 id={titleId}>Agent</h2>
