@@ -15,7 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
-import { homedir } from "node:os";
+import { cpus, homedir, loadavg } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -60,8 +60,10 @@ const FINGERPRINT_SKIP = [".agents/", ".claude/", "docs/"];
 const USAGE = `usage: hello.mjs <command> [args]
 
   up [--id ID] [--target web|mac|ios] [--seed DATASET] [--device NAME] [--source DIR]
-     [--keep-on-failure]
-                          snapshot the checkout, pick free ports, launch, wait until usable
+     [--keep-on-failure] [--force]
+                          snapshot the checkout, pick free ports, launch, wait until usable;
+                          refused when the 1-minute load exceeds the core count (HELLO_MAX_LOAD)
+                          or HELLO_MAX_INSTANCES (default 3) are running, unless --force
   doctor ID               read-only health check; exit 1 when the instance is not worth driving
   seed ID DATASET         load a fixture straight into PGlite (stops and restarts a running instance)
   sql ID QUERY            read-only SQL against the instance's PGlite (stops and restarts it)
@@ -90,6 +92,14 @@ datasets: ${datasets().join(", ")}
 home: ${HOME}`;
 
 class CliError extends Error {}
+
+function positiveNumber(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const value = Number(raw);
+  if (!(value > 0)) throw new CliError(`${name} must be a positive number, got "${raw}"`);
+  return value;
+}
 
 function fail(message) {
   throw new CliError(message);
@@ -600,6 +610,26 @@ async function withStopped(state, task) {
   }
 }
 
+function checkCapacity() {
+  const [load] = loadavg();
+  const cores = cpus().length;
+  const maxLoad = positiveNumber("HELLO_MAX_LOAD", cores);
+  const maxInstances = positiveNumber("HELLO_MAX_INSTANCES", 3);
+  const active = allStates()
+    .filter((s) => !s.pid || isRunning(s))
+    .map((s) => s.id);
+  const reasons = [];
+  if (load > maxLoad) reasons.push(`load is above the limit of ${maxLoad}`);
+  if (active.length >= maxInstances)
+    reasons.push(`instance cap of ${maxInstances} reached`);
+  if (reasons.length === 0) return;
+  fail(
+    `refusing to start: ${reasons.join("; ")}. ` +
+      `1-minute load ${load.toFixed(2)}, ${cores} cores, running instances [${active.join(", ") || "none"}]. ` +
+      "Wait for the load to drop or down one, or pass --force.",
+  );
+}
+
 function newId(target) {
   return `${target}-${randomBytes(2).toString("hex")}`;
 }
@@ -614,6 +644,7 @@ async function cmdUp(args) {
       device: { type: "string", default: DEFAULT_DEVICE },
       source: { type: "string" },
       "keep-on-failure": { type: "boolean" },
+      force: { type: "boolean" },
     },
   });
   if (!TARGETS.includes(values.target))
@@ -627,6 +658,7 @@ async function cmdUp(args) {
 
   const state = await withLock(() => {
     if (existsSync(instanceDir(id))) fail(`instance "${id}" already exists`);
+    if (!values.force) checkCapacity();
     if (sim) {
       const clash = allStates().find((s) => s.simulator?.udid === sim.udid);
       if (clash)
