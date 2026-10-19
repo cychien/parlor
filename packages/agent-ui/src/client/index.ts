@@ -2,6 +2,7 @@ export {
   type ActivityStore,
   type AgentActivity,
   type AgentActivityKind,
+  type AgentOutcome,
   type AgentUiClient,
   type AgentUiClientOptions,
   createAgentUiClient,

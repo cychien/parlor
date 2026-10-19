@@ -46,6 +46,18 @@ const DONE: Record<AgentActivityKind, string> = {
   confirm: "Agent got your answer",
 };
 
+const REFUSED: Record<AgentActivityKind, string> = {
+  screen: "Agent could not read this screen",
+  navigate: "Agent could not open that page",
+  set: "Agent could not fill in the form",
+  highlight: "Agent could not point at that",
+  confirm: "Agent got your answer",
+};
+
+function finished(last: NonNullable<AgentActivity["last"]>): string {
+  return last.outcome?.status === "refused" ? REFUSED[last.op] : DONE[last.op];
+}
+
 function AgentIndicator() {
   const { busy, last } = useAgentActivity();
   const [faded, setFaded] = useState<AgentActivity["last"]>();
@@ -60,7 +72,7 @@ function AgentIndicator() {
       ? DOING[last.op]
       : faded === last
         ? undefined
-        : DONE[last.op];
+        : finished(last);
   return (
     <span
       role="status"

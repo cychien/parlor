@@ -12,6 +12,7 @@ import {
   UI_CHANNEL,
   UI_OPS,
   type UiError,
+  type UiErrorCode,
   type UiOp,
   type UiOpInput,
   type UiReply,
@@ -45,6 +46,11 @@ export interface AgentUiClientOptions {
 /** What an agent is doing on this screen: a UI op, or waiting for the user to confirm. */
 export type AgentActivityKind = UiOp | "confirm";
 
+/** How the app answered an operation: it did it, or refused with the error code the agent got. */
+export type AgentOutcome =
+  | { readonly status: "done" }
+  | { readonly status: "refused"; readonly code: UiErrorCode };
+
 export interface AgentActivity {
   /** A request is running, or a confirmation card is waiting for the user on this client. */
   readonly busy: boolean;
@@ -53,6 +59,8 @@ export interface AgentActivity {
         readonly op: AgentActivityKind;
         readonly origin: AgentOrigin;
         readonly at: number;
+        /** Undefined while the operation runs, and for `confirm`, which the user answers. */
+        readonly outcome?: AgentOutcome | undefined;
       }
     | undefined;
 }
@@ -92,7 +100,7 @@ export function routeSnapshot(router: AnyRouter): RouteSnapshot | null {
 
 function createActivityStore(): ActivityStore & {
   begin(request: UiRequest, at: number): void;
-  end(): void;
+  end(reply: UiReply): void;
   confirming(
     pending: number,
     arrived: { readonly origin: AgentOrigin; readonly at: number } | undefined,
@@ -116,11 +124,19 @@ function createActivityStore(): ActivityStore & {
     get: () => state,
     begin(request, at) {
       running = true;
-      last = { op: request.op, origin: request.origin, at };
+      last = { op: request.op, origin: request.origin, at, outcome: undefined };
       publish();
     },
-    end() {
+    end(reply) {
       running = false;
+      if (last && last.op !== "confirm") {
+        last = {
+          ...last,
+          outcome: reply.ok
+            ? { status: "done" }
+            : { status: "refused", code: reply.error.code },
+        };
+      }
       publish();
     },
     confirming(count, arrived) {
@@ -320,7 +336,7 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
       const reply = await execute(request);
       queued.delete(request.id);
       remember(reply);
-      activity.end();
+      activity.end(reply);
     }
     draining = false;
   };
