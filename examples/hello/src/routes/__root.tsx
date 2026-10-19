@@ -1,8 +1,15 @@
 import type { AgentActivityKind, AgentActivityState } from "@parlor/client/react";
-import { Chat } from "@parlor/client/react";
-import { createRootRoute, Link, Outlet } from "@tanstack/react-router";
+import { Chat, useSession } from "@parlor/client/react";
+import {
+  createRootRoute,
+  Link,
+  Navigate,
+  Outlet,
+  useLocation,
+} from "@tanstack/react-router";
 
 import { AgentPanel } from "../agent-panel.js";
+import { auth } from "../auth.js";
 import { agentPanel } from "../views.js";
 
 export const Route = createRootRoute({
@@ -14,6 +21,11 @@ export const Route = createRootRoute({
 });
 
 function Layout() {
+  const session = useSession();
+  const { pathname } = useLocation();
+  if (pathname === "/sign-in") return <Outlet />;
+  if (session.status === "loading") return null;
+  if (session.status === "signed-out") return <Navigate to="/sign-in" replace />;
   return (
     <div className="shell">
       <nav aria-label="Main" className="topbar">
@@ -23,6 +35,9 @@ function Layout() {
           <AgentIndicator />
           <AgentPanel />
         </div>
+        <button type="button" className="link" onClick={() => void auth.signOut()}>
+          Sign out
+        </button>
       </nav>
       <main>
         <Outlet />

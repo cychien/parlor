@@ -15,6 +15,13 @@
       "when": 1792344614399,
       "tag": "0001_wet_rocket_raccoon",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792425753931,
+      "tag": "0002_mysterious_sentry",
+      "breakpoints": true
     }
   ]
 }

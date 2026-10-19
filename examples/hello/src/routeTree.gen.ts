@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from "./routes/__root";
 import { Route as IndexRouteImport } from "./routes/index";
 import { Route as SettingsRouteImport } from "./routes/settings";
+import { Route as SignInRouteImport } from "./routes/sign-in";
 import { Route as TasksTaskIdRouteImport } from "./routes/tasks.$taskId";
 
 const IndexRoute = IndexRouteImport.update({
@@ -23,6 +24,11 @@ const SettingsRoute = SettingsRouteImport.update({
   path: "/settings",
   getParentRoute: () => rootRouteImport,
 } as any);
+const SignInRoute = SignInRouteImport.update({
+  id: "/sign-in",
+  path: "/sign-in",
+  getParentRoute: () => rootRouteImport,
+} as any);
 const TasksTaskIdRoute = TasksTaskIdRouteImport.update({
   id: "/tasks/$taskId",
   path: "/tasks/$taskId",
@@ -32,30 +38,34 @@ const TasksTaskIdRoute = TasksTaskIdRouteImport.update({
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute;
   "/settings": typeof SettingsRoute;
+  "/sign-in": typeof SignInRoute;
   "/tasks/$taskId": typeof TasksTaskIdRoute;
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute;
   "/settings": typeof SettingsRoute;
+  "/sign-in": typeof SignInRoute;
   "/tasks/$taskId": typeof TasksTaskIdRoute;
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
   "/": typeof IndexRoute;
   "/settings": typeof SettingsRoute;
+  "/sign-in": typeof SignInRoute;
   "/tasks/$taskId": typeof TasksTaskIdRoute;
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
-  fullPaths: "/" | "/settings" | "/tasks/$taskId";
+  fullPaths: "/" | "/settings" | "/sign-in" | "/tasks/$taskId";
   fileRoutesByTo: FileRoutesByTo;
-  to: "/" | "/settings" | "/tasks/$taskId";
-  id: "__root__" | "/" | "/settings" | "/tasks/$taskId";
+  to: "/" | "/settings" | "/sign-in" | "/tasks/$taskId";
+  id: "__root__" | "/" | "/settings" | "/sign-in" | "/tasks/$taskId";
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute;
   SettingsRoute: typeof SettingsRoute;
+  SignInRoute: typeof SignInRoute;
   TasksTaskIdRoute: typeof TasksTaskIdRoute;
 }
 
@@ -75,6 +85,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsRouteImport;
       parentRoute: typeof rootRouteImport;
     };
+    "/sign-in": {
+      id: "/sign-in";
+      path: "/sign-in";
+      fullPath: "/sign-in";
+      preLoaderRoute: typeof SignInRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
     "/tasks/$taskId": {
       id: "/tasks/$taskId";
       path: "/tasks/$taskId";
@@ -88,6 +105,7 @@ declare module "@tanstack/react-router" {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   SettingsRoute: SettingsRoute,
+  SignInRoute: SignInRoute,
   TasksTaskIdRoute: TasksTaskIdRoute,
 };
 export const routeTree = rootRouteImport

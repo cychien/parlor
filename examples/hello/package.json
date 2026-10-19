@@ -10,9 +10,11 @@
     "test": "vitest run --passWithNoTests",
     "db:generate": "parlor db generate",
     "db:migrate": "parlor db migrate",
+    "auth:generate": "PARLOR_ORIGIN=http://localhost auth generate --config auth.cli.ts --output schema/auth.ts --adapter drizzle --dialect postgresql --yes",
     "deploy": "parlor deploy"
   },
   "dependencies": {
+    "@parlor/auth": "workspace:*",
     "@parlor/capabilities": "workspace:*",
     "@parlor/client": "workspace:*",
     "@parlor/core": "workspace:*",
@@ -20,6 +22,7 @@
     "@parlor/server": "workspace:*",
     "@tanstack/react-query": "catalog:",
     "@tanstack/react-router": "catalog:",
+    "better-auth": "1.7.7",
     "drizzle-orm": "^0.45.4",
     "react": "catalog:",
     "react-dom": "catalog:",
@@ -31,6 +34,7 @@
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
+    "auth": "1.7.7",
     "typescript": "catalog:",
     "vite": "catalog:"
   }

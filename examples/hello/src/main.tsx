@@ -4,9 +4,10 @@ import { createRouter, RouterProvider } from "@tanstack/react-router";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
+import { auth } from "./auth.js";
 import { routeTree } from "./routeTree.gen.js";
 
-const client = createActionClient();
+const client = createActionClient({ headers: auth.headers });
 const router = createRouter({ routeTree });
 
 declare module "@tanstack/react-router" {
@@ -17,7 +18,7 @@ declare module "@tanstack/react-router" {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <FrameworkProvider client={client} router={router}>
+    <FrameworkProvider client={client} router={router} auth={auth}>
       <RouterProvider router={router} />
     </FrameworkProvider>
   </StrictMode>,
