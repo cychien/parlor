@@ -99,7 +99,8 @@ export interface PluginHost {
   callerOf(request: Request): Promise<Caller>;
   /**
    * Records a sync event for writes made outside an action's transaction, such as through
-   * a library that holds its own connection. Does nothing when sync is off.
+   * a library that holds its own connection. With `tx`, the event commits with that
+   * transaction instead of its own. Does nothing when sync is off.
    */
-  announce(scope: string, tags: readonly Tag[]): Promise<void>;
+  announce(scope: string, tags: readonly Tag[], tx?: unknown): Promise<void>;
 }

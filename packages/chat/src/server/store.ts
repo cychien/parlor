@@ -98,6 +98,16 @@ export interface ChatStore {
     host: HostPrincipal,
     leaseMs: number,
   ): Promise<Omit<ClaimedTurn, "context" | "token" | "device"> | undefined>;
+  /**
+   * Puts a claimed turn back in the queue when the host never learned of the claim.
+   * Refused (false) once the turn has an agent item or is no longer running.
+   */
+  releaseClaim(
+    tx: ChatDb,
+    owner: ChatOwner,
+    host: HostPrincipal,
+    turnId: TurnId,
+  ): Promise<boolean>;
   appendHostItems(
     tx: ChatDb,
     owner: ChatOwner,
@@ -634,6 +644,21 @@ export const sqlChatStore: ChatStore = {
       prompt,
       leaseUntil: lease.lease_until,
     };
+  },
+
+  async releaseClaim(tx, owner, host, turnId) {
+    const released = await query(
+      tx,
+      sql`update parlor_chat_turns set state = 'queued', lease_until = null
+        where id = ${turnId} and host_id = ${host.hostId} and owner_id = ${owner.userId}
+          and scope = ${owner.scope} and state = 'running'
+          and not exists (
+            select 1 from parlor_chat_items i
+            where i.turn_id = parlor_chat_turns.id and i.author <> 'user')
+        returning thread_id`,
+      z.object({ thread_id: idSchema("thread") }),
+    );
+    return released.length > 0;
   },
 
   async appendHostItems(tx, owner, host, turnId, items, leaseMs) {

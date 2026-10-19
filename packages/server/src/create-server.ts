@@ -200,8 +200,12 @@ export function createServer<T extends ActionMap>(
     database,
     ...(auth ? { auth } : {}),
     callerOf: callers,
-    announce: async (target, tags) => {
+    announce: async (target, tags, within) => {
       if (!syncEnabled || !database || tags.length === 0) return;
+      if (within !== undefined) {
+        await recordSyncEvent(within as SyncDatabase, { scope: target, tags });
+        return;
+      }
       await ready();
       await database.transaction((tx) =>
         recordSyncEvent(tx as SyncDatabase, { scope: target, tags }),

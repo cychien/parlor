@@ -218,6 +218,32 @@ describe("server plugins", () => {
     ]);
   });
 
+  it("commits an announced event with the caller's transaction, and drops it on rollback", async () => {
+    const handle = await database();
+    let host: PluginHost | undefined;
+    serve({
+      database: lend(handle),
+      plugins: [{ name: "announcer", setup: (given) => ((host = given), {}) }],
+    });
+    await host!.announce("scope-a", [["warmup"]]);
+    const own = lend(handle);
+
+    await own
+      .transaction(async (tx) => {
+        await host!.announce("scope-a", [["parlor_announcer_items", "rolled-back"]], tx);
+        throw new Error("rollback");
+      })
+      .catch(() => {});
+    await own.transaction((tx) =>
+      host!.announce("scope-a", [["parlor_announcer_items", "kept"]], tx),
+    );
+
+    expect(await rows(handle, "select tags from sync_events order by version")).toEqual([
+      { tags: [["warmup"]] },
+      { tags: [["parlor_announcer_items", "kept"]] },
+    ]);
+  });
+
   it("does nothing when a plugin announces with sync off", async () => {
     const handle = await database();
     let host: PluginHost | undefined;

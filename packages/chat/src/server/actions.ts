@@ -20,19 +20,32 @@ import type {
   TurnSignals,
 } from "../model.js";
 import { HOST_PROTOCOL, type HostWelcome } from "../protocol.js";
+import { CHAT_TAG, HOSTS_TAG } from "../tags.js";
 import { turnContext } from "./context.js";
 import type { LiveRelay } from "./live.js";
 import { type ChatHost, chatAction } from "./party.js";
 import { agentInfoSchema } from "./rows.js";
 import type { ChatDb, ChatStore, StoredHost } from "./store.js";
 
-/** Every chat write emits `["parlor_chat", threadId]`, the one event that wakes hosts and other devices. */
-export const CHAT_TAG = "parlor_chat";
-export const HOSTS_TAG = "parlor_chat_hosts";
-export { HOST_GRANTS_TAG };
+export { CHAT_TAG, HOSTS_TAG, HOST_GRANTS_TAG };
+
+/** What a transactional unit of work produced, and the thread whose event announces it. */
+export interface Written<T> {
+  readonly result: T;
+  readonly threadId: ThreadId;
+}
 
 export interface ChatActionDeps {
   readonly enforcing: boolean;
+  /**
+   * Runs `work` in one transaction with the thread's sync event. Actions that call the auth
+   * provider do so outside it, because a provider may read through another connection
+   * (PGlite has one, and the transaction holds it).
+   */
+  readonly transact: <T>(
+    scope: string,
+    work: (tx: ChatDb) => Promise<Written<T>>,
+  ) => Promise<T>;
   readonly auth: AuthProvider;
   readonly store: ChatStore;
   readonly relay: LiveRelay;
@@ -141,14 +154,12 @@ export function userChatActions(deps: ChatActionDeps) {
         clientId: z.string().min(1).max(128),
         prompt: chatItemBodies.prompt.body,
       }),
-      writes: [CHAT_TAG],
       run: async (
         input,
         user,
         ctx,
       ): Promise<{ readonly id: string; readonly turnId: string }> => {
-        const db = dbOf(ctx);
-        const hosts = await activeHosts(deps, db, user);
+        const hosts = await activeHosts(deps, dbOf(ctx), user);
         const host = hosts.find(
           (candidate) => candidate.id === input.prompt.agent.hostId,
         );
@@ -156,19 +167,24 @@ export function userChatActions(deps: ChatActionDeps) {
         if (!host.online) {
           throw new ActionError("invalid_input", `${host.name} is offline.`);
         }
-        await deps.store.appendUserItems(db, user, {
-          threadId: input.threadId,
-          turnId: input.turnId,
-          items: [{ id: input.itemId, kind: "prompt", body: input.prompt }],
-          turn: {
+        return deps.transact(ctx.scope, async (tx) => {
+          await deps.store.appendUserItems(tx, user, {
+            threadId: input.threadId,
             turnId: input.turnId,
-            agent: input.prompt.agent,
-            clientId: input.clientId,
-            deviceId: user.deviceId,
-            maxQueued: deps.maxQueued,
-          },
+            items: [{ id: input.itemId, kind: "prompt", body: input.prompt }],
+            turn: {
+              turnId: input.turnId,
+              agent: input.prompt.agent,
+              clientId: input.clientId,
+              deviceId: user.deviceId,
+              maxQueued: deps.maxQueued,
+            },
+          });
+          return {
+            result: { id: input.threadId, turnId: input.turnId },
+            threadId: input.threadId,
+          };
         });
-        return { id: input.threadId, turnId: input.turnId };
       },
     }),
     answer: chatAction("user", enforcing, {
@@ -298,33 +314,50 @@ export function hostChatActions(deps: ChatActionDeps) {
       description:
         "Take the next turn addressed to this computer with its turn token; not_found when none waits.",
       input: z.object({}),
-      writes: [CHAT_TAG],
       run: async (_input, host, ctx): Promise<ClaimedTurn> => {
         const db = dbOf(ctx);
         await requireWelcome(host, db);
-        const claimed = await deps.store.claimTurn(db, host, host.host, deps.leaseMs);
-        if (!claimed) throw new ActionError("not_found", "No turn is waiting.");
-        const token = await mint(host, {
-          threadId: claimed.id,
-          turnId: claimed.turnId,
-          clientId: claimed.clientId,
-          agentId: claimed.agent.agentId,
+        const claimed = await deps.transact(ctx.scope, async (tx) => {
+          const taken = await deps.store.claimTurn(tx, host, host.host, deps.leaseMs);
+          if (!taken) throw new ActionError("not_found", "No turn is waiting.");
+          return { result: taken, threadId: taken.id };
         });
-        const deviceId = claimed.prompt.body.signed?.deviceId;
-        const [device, account, page] = await Promise.all([
-          deviceId ? deps.auth.device?.(host.userId, deviceId) : undefined,
-          deps.auth.account?.(host.userId),
-          deps.store.readPage(db, host, claimed.id, CONTEXT_HISTORY_ITEMS),
-        ]);
-        const context = turnContext({
-          appName: deps.appName,
-          appOrigin: deps.appOrigin(ctx),
-          account,
-          device,
-          instructions: deps.instructions,
-          history: page.items.filter((item) => item.seq < claimed.prompt.seq),
-        });
-        return { ...claimed, device, context, token };
+        try {
+          const token = await mint(host, {
+            threadId: claimed.id,
+            turnId: claimed.turnId,
+            clientId: claimed.clientId,
+            agentId: claimed.agent.agentId,
+          });
+          const deviceId = claimed.prompt.body.signed?.deviceId;
+          const [device, account, page] = await Promise.all([
+            deviceId ? deps.auth.device?.(host.userId, deviceId) : undefined,
+            deps.auth.account?.(host.userId),
+            deps.store.readPage(db, host, claimed.id, CONTEXT_HISTORY_ITEMS),
+          ]);
+          const context = turnContext({
+            appName: deps.appName,
+            appOrigin: deps.appOrigin(ctx),
+            account,
+            device,
+            instructions: deps.instructions,
+            history: page.items.filter((item) => item.seq < claimed.prompt.seq),
+          });
+          return { ...claimed, device, context, token };
+        } catch (error) {
+          await deps
+            .transact(ctx.scope, async (tx) => {
+              const released = await deps.store.releaseClaim(
+                tx,
+                host,
+                host.host,
+                claimed.turnId,
+              );
+              return { result: released, threadId: claimed.id };
+            })
+            .catch(() => false);
+          throw error;
+        }
       },
     }),
     hostSignals: chatAction("host", enforcing, {
@@ -339,7 +372,6 @@ export function hostChatActions(deps: ChatActionDeps) {
     hostAppend: chatAction("host", enforcing, {
       description: "Append finished items of a running turn and extend its lease.",
       input: z.object({ turnId, items: z.array(hostItemDraft).min(1).max(64) }),
-      writes: [CHAT_TAG],
       run: async (
         input,
         host,
@@ -349,16 +381,18 @@ export function hostChatActions(deps: ChatActionDeps) {
         readonly leaseUntil: number;
         readonly token: ClaimedTurn["token"];
       }> => {
-        const db = dbOf(ctx);
-        await requireWelcome(host, db);
-        const appended = await deps.store.appendHostItems(
-          db,
-          host,
-          host.host,
-          input.turnId,
-          input.items,
-          deps.leaseMs,
-        );
+        await requireWelcome(host, dbOf(ctx));
+        const appended = await deps.transact(ctx.scope, async (tx) => {
+          const result = await deps.store.appendHostItems(
+            tx,
+            host,
+            host.host,
+            input.turnId,
+            input.items,
+            deps.leaseMs,
+          );
+          return { result, threadId: result.threadId };
+        });
         const token = await mint(host, { ...appended, turnId: input.turnId });
         return { id: appended.threadId, leaseUntil: appended.leaseUntil, token };
       },

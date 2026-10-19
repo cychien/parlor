@@ -1,6 +1,6 @@
 import type { ServerPlugin } from "@parlor/server";
 
-import { chatActions } from "./actions.js";
+import { CHAT_TAG, type ChatActionDeps, chatActions } from "./actions.js";
 import { inProcessRelay, type LiveRelay } from "./live.js";
 import { CHAT_MIGRATIONS } from "./migrations.js";
 import { chatRoutes } from "./routes.js";
@@ -105,9 +105,16 @@ export function chat(options: ChatOptions = {}): ServerPlugin {
       if (!database) throw new Error("chat() needs a database.");
       const relay = (options.relay ?? inProcessRelay)();
       const db = () => database.read() as ChatDb;
+      const transact: ChatActionDeps["transact"] = (scope, work) =>
+        database.transaction(async (tx) => {
+          const { result, threadId } = await work(tx as ChatDb);
+          await host.announce(scope, [[CHAT_TAG, threadId]], tx);
+          return result;
+        });
       const heartbeatMs = DEFAULT_HEARTBEAT_MS;
       const actions = chatActions({
         enforcing: auth.enforcing,
+        transact,
         auth,
         store: sqlChatStore,
         relay,

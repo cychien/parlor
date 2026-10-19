@@ -20,6 +20,7 @@ import {
 import { sql } from "drizzle-orm";
 
 import { chat, type ChatOptions } from "./index.js";
+import type { ChatDb } from "./store.js";
 
 export const alice = asId("user", "alice");
 export const bob = asId("user", "bob");
@@ -67,15 +68,26 @@ export interface TestAuth extends AuthProvider {
   readonly revokedGrants: Set<string>;
 }
 
-export function testAuth(enforcing = true): TestAuth {
+export interface ProviderIo {
+  readonly database: DataProvider;
+  failDelegate?: Error | undefined;
+}
+
+export function testAuth(enforcing = true, io?: ProviderIo): TestAuth {
   const delegated: Delegated[] = [];
   const revokedGrants = new Set<string>();
+  const touchDatabase = async () => {
+    if (io) await (io.database.read() as ChatDb).execute(sql`select 1`);
+  };
   return {
     name: "test-auth",
     enforcing,
     delegated,
     revokedGrants,
-    hostActive: (grantId) => Promise.resolve(!revokedGrants.has(grantId)),
+    async hostActive(grantId) {
+      await touchDatabase();
+      return !revokedGrants.has(grantId);
+    },
     setup: () => ({}),
     authenticate(request): Promise<Principal> {
       const token = request.headers.get("authorization")?.replace(/^Bearer /, "");
@@ -83,14 +95,23 @@ export function testAuth(enforcing = true): TestAuth {
     },
     challenge: () => new Response(null, { status: 401 }),
     revoked: () => new AbortController().signal,
-    delegate(host, turn) {
+    async delegate(host, turn) {
+      await touchDatabase();
+      if (io?.failDelegate) throw io.failDelegate;
       delegated.push({ hostId: host.hostId, ...turn });
-      return Promise.resolve({
+      return {
         token: `turn.${turn.turnId}.${delegated.length}`,
         expiresAt: Date.now() + turn.ttlMs,
-      });
+      };
     },
-    account: (userId) => Promise.resolve({ name: userId === alice ? "Alice" : "Bob" }),
+    async account(userId) {
+      await touchDatabase();
+      return { name: userId === alice ? "Alice" : "Bob" };
+    },
+    async device() {
+      await touchDatabase();
+      return undefined;
+    },
   };
 }
 
@@ -184,9 +205,10 @@ export function serveChat(
     chat?: ChatOptions;
     enforcing?: boolean;
     scope?: ScopeResolver;
+    providerIo?: ProviderIo;
   } = {},
 ): ChatServer {
-  const auth = testAuth(options.enforcing ?? true);
+  const auth = testAuth(options.enforcing ?? true, options.providerIo);
   const server = createServer({
     actions: createRegistry({}),
     auth,
