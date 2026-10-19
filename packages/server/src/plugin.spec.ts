@@ -10,7 +10,7 @@ import {
 import { createRegistry } from "@parlor/core/registry";
 import { createDatabase, type DatabaseHandle } from "@parlor/data";
 import { sql } from "drizzle-orm";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import type { AuthProvider } from "./auth.js";
@@ -129,20 +129,30 @@ const appActions = createRegistry({
   }),
 });
 
-const handles: DatabaseHandle[] = [];
+let shared: DatabaseHandle;
 const servers: FrameworkServer[] = [];
 const closers: (() => Promise<void>)[] = [];
+
+// PGlite starts on its first query, so that happens here, outside any test's timeout.
+beforeAll(async () => {
+  shared = await createDatabase({ dataDir: "memory://" });
+  await shared.db.execute(sql`select 1`);
+}, 30_000);
+
+afterAll(async () => {
+  await shared.close();
+});
 
 afterEach(async () => {
   for (const close of closers.splice(0)) await close();
   for (const server of servers.splice(0)) await server.close();
-  for (const handle of handles.splice(0)) await handle.close();
 });
 
+/** An empty database: one PGlite per file, its public schema dropped for each test. */
 async function database(): Promise<DatabaseHandle> {
-  const handle = await createDatabase({ dataDir: "memory://" });
-  handles.push(handle);
-  return handle;
+  await shared.db.execute(sql`drop schema public cascade`);
+  await shared.db.execute(sql`create schema public`);
+  return shared;
 }
 
 const lend = (handle: DatabaseHandle): DataProvider => ({
