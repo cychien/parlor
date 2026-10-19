@@ -561,3 +561,171 @@ describe("createSyncClient stream liveness", () => {
     client.stop();
   });
 });
+
+describe("createSyncClient addChannel", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  function openStream() {
+    const encoder = new TextEncoder();
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        controller = c;
+      },
+    });
+    return {
+      body,
+      push: (text: string) => controller.enqueue(encoder.encode(text)),
+      end: () => controller.close(),
+    };
+  }
+
+  function server(capabilities: string[]) {
+    const streams: ReturnType<typeof openStream>[] = [];
+    const request = vi.fn(async (path: string) => {
+      if (path.endsWith("/sync/token")) {
+        return Response.json({
+          protocol: 1,
+          transport: "sse",
+          endpoint: "/_parlor/sync/stream",
+          pollIntervalMs: 2000,
+        });
+      }
+      if (path.includes("/sync/stream")) {
+        const live = openStream();
+        streams.push(live);
+        live.push(
+          `event: handshake\ndata: ${JSON.stringify({ protocol: 1, capabilities })}\n\n`,
+        );
+        return new Response(live.body, { status: 200 });
+      }
+      return Response.json({ events: [], cursor: "" });
+    });
+    return { request, streams };
+  }
+
+  function recorder(name: string) {
+    const log: string[] = [];
+    return {
+      log,
+      channel: {
+        event: name,
+        opened: () => log.push("opened"),
+        receive: (data: string) => log.push(`receive ${data}`),
+        closed: () => log.push("closed"),
+      },
+    };
+  }
+
+  const settle = async () => {
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+  };
+
+  it("opens a channel added after the stream started when the handshake listed it, then routes its frames", async () => {
+    const { request, streams } = server(["ui", "chat"]);
+    const chat = recorder("chat");
+    const client = createSyncClient({ request, onEvents: vi.fn() });
+    client.start();
+    await settle();
+
+    client.addChannel(chat.channel);
+    expect(chat.log).toEqual(["opened"]);
+    streams[0]!.push("event: chat\ndata: delta-1\n\n");
+    await settle();
+    expect(chat.log).toEqual(["opened", "receive delta-1"]);
+    client.stop();
+  });
+
+  it("opens a channel added before the handshake arrives once the handshake lists it", async () => {
+    const { request } = server(["chat"]);
+    const chat = recorder("chat");
+    const client = createSyncClient({ request, onEvents: vi.fn() });
+    client.start();
+    client.addChannel(chat.channel);
+    expect(chat.log).toEqual([]);
+    await settle();
+    expect(chat.log).toEqual(["opened"]);
+    client.stop();
+  });
+
+  it("never opens a channel the server did not list, and does not throw", async () => {
+    const { request, streams } = server(["ui"]);
+    const chat = recorder("chat");
+    const onError = vi.fn();
+    const client = createSyncClient({ request, onEvents: vi.fn(), onError });
+    client.start();
+    await settle();
+
+    expect(() => client.addChannel(chat.channel)).not.toThrow();
+    streams[0]!.push("event: chat\ndata: stray\n\n");
+    await settle();
+    expect(chat.log).toEqual([]);
+    expect(onError).not.toHaveBeenCalled();
+    client.stop();
+  });
+
+  it("closes the channel on detach and ignores its later frames", async () => {
+    const { request, streams } = server(["chat"]);
+    const chat = recorder("chat");
+    const client = createSyncClient({ request, onEvents: vi.fn() });
+    client.start();
+    await settle();
+    const detach = client.addChannel(chat.channel);
+
+    detach();
+    streams[0]!.push("event: chat\ndata: late\n\n");
+    await settle();
+    expect(chat.log).toEqual(["opened", "closed"]);
+    client.stop();
+  });
+
+  it("reopens the channel on the next stream without losing a sync event", async () => {
+    const { request, streams } = server(["chat"]);
+    const chat = recorder("chat");
+    const onEvents = vi.fn();
+    const client = createSyncClient({
+      request,
+      onEvents,
+      reconnectBaseMs: 100,
+      coalesceMs: 10,
+    });
+    client.start();
+    await settle();
+    client.addChannel(chat.channel);
+
+    streams[0]!.push(
+      `data: ${JSON.stringify({ events: [event(1, "a")], cursor: "1.a" })}\n\n`,
+    );
+    await vi.advanceTimersByTimeAsync(20);
+    streams[0]!.end();
+    await vi.advanceTimersByTimeAsync(150);
+    streams[1]!.push(
+      `data: ${JSON.stringify({ events: [event(2, "b")], cursor: "2.b" })}\n\n`,
+    );
+    await vi.advanceTimersByTimeAsync(20);
+
+    expect(chat.log).toEqual(["opened", "closed", "opened"]);
+    expect(onEvents.mock.calls).toEqual([[[event(1, "a")]], [[event(2, "b")]]]);
+    expect(request.mock.calls.map(([path]) => String(path)).at(-1)).toContain(
+      "since=1.a",
+    );
+    client.stop();
+  });
+
+  it("replaces a channel registered for the same event, closing the old one", async () => {
+    const { request } = server(["chat"]);
+    const first = recorder("chat");
+    const second = recorder("chat");
+    const client = createSyncClient({ request, onEvents: vi.fn() });
+    client.start();
+    await settle();
+
+    client.addChannel(first.channel);
+    client.addChannel(second.channel);
+    expect(first.log).toEqual(["opened", "closed"]);
+    expect(second.log).toEqual(["opened"]);
+    client.stop();
+  });
+});

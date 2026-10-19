@@ -195,6 +195,12 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     return (await response.json()) as SyncNegotiation;
   };
 
+  interface LiveStream {
+    listed: ReadonlySet<string>;
+    readonly open: Set<ClientChannel>;
+  }
+  let live: LiveStream | undefined;
+
   const stream = async (endpoint: string) => {
     const own = new AbortController();
     controller = own;
@@ -209,6 +215,8 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
       }, streamLivenessMs(keepAliveMs));
     };
     const open = new Set<ClientChannel>();
+    const current: LiveStream = { listed: new Set(), open };
+    live = current;
     rearm();
     try {
       const response = await options.request(
@@ -237,6 +245,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
             const handshake = parseHandshake(frame.data);
             keepAliveMs = handshake.keepAliveMs ?? LEGACY_KEEP_ALIVE_MS;
             rearm();
+            current.listed = new Set(handshake.capabilities);
             for (const event of handshake.capabilities) {
               const channel = channels.get(event);
               if (!channel || open.has(channel)) continue;
@@ -255,6 +264,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
       if (!silent) throw error;
     } finally {
       if (watchdog !== undefined) cancel(watchdog);
+      if (live === current) live = undefined;
       for (const channel of open) guarded(() => channel.closed());
     }
   };
@@ -326,6 +336,12 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     }
   };
 
+  const detachChannel = (channel: ClientChannel) => {
+    if (channels.get(channel.event) !== channel) return;
+    channels.delete(channel.event);
+    if (live?.open.delete(channel)) guarded(() => channel.closed());
+  };
+
   const start = () => {
     if (running) return;
     running = true;
@@ -346,10 +362,15 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     start,
     stop,
     addChannel(channel) {
-      // TODO: add to `channels`; if a stream is open and its handshake listed
-      //   channel.event, call channel.opened() now. The detach closes and removes it.
-      void channel;
-      throw new Error("not implemented");
+      const replaced = channels.get(channel.event);
+      if (replaced === channel) return () => detachChannel(channel);
+      if (replaced) detachChannel(replaced);
+      channels.set(channel.event, channel);
+      if (live?.listed.has(channel.event)) {
+        live.open.add(channel);
+        guarded(() => channel.opened());
+      }
+      return () => detachChannel(channel);
     },
     get cursor() {
       return since();
