@@ -6,13 +6,11 @@ import { CHAT_MIGRATIONS } from "./migrations.js";
 import { drivers, openDatabase, resetDatabase, rows, serveChat } from "./spec-kit.js";
 
 describe("chat/0001_threads", () => {
-  it("is a single statement, because PGlite prepares every query", () => {
+  it("is one migration of plain statements", () => {
     expect(CHAT_MIGRATIONS.map((migration) => migration.id)).toEqual([
       "chat/0001_threads",
     ]);
-    const [migration] = CHAT_MIGRATIONS;
-    expect(migration?.sql.trim().startsWith("do $migration$ begin")).toBe(true);
-    expect(migration?.sql.trim().endsWith("end $migration$")).toBe(true);
+    expect(CHAT_MIGRATIONS[0]?.sql).not.toContain("$");
   });
 });
 

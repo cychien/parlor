@@ -1,11 +1,9 @@
 import type { Migration } from "@parlor/server";
 
-/** One statement: PGlite prepares every query, and a prepared statement holds a single command. */
 export const CHAT_MIGRATIONS: readonly Migration[] = [
   {
     id: "chat/0001_threads",
     sql: `
-      do $migration$ begin
       create table parlor_chat_threads (
         id text primary key,
         scope text not null,
@@ -70,7 +68,6 @@ export const CHAT_MIGRATIONS: readonly Migration[] = [
         agents jsonb not null,
         online_until timestamptz not null
       );
-      create index parlor_chat_hosts_owner on parlor_chat_hosts (owner_id, scope);
-      end $migration$`,
+      create index parlor_chat_hosts_owner on parlor_chat_hosts (owner_id, scope);`,
   },
 ];
