@@ -11,11 +11,18 @@ import {
   type DataProvider,
 } from "@parlor/core";
 import type { ActionRegistry } from "@parlor/core/registry";
-import { registerSyncRoutes, SyncHub, type SyncTransport } from "@parlor/sync/server";
+import type { ServerChannel } from "@parlor/sync";
+import {
+  ensureSyncTables,
+  registerSyncRoutes,
+  type SyncDatabase,
+  SyncHub,
+  type SyncTransport,
+} from "@parlor/sync/server";
 import { H3, type H3Event, readBody } from "h3";
 
-import { admits, requireSurface, type Surface } from "./access.js";
-import { createActionRunner } from "./actions.js";
+import { admits, requireAccess, requireSurface, type Surface } from "./access.js";
+import { type ActionRunner, createActionRunner } from "./actions.js";
 import { AuthFailure, type AuthProvider } from "./auth.js";
 import {
   type Caller,
@@ -26,6 +33,13 @@ import {
 } from "./caller.js";
 import { type CorsConfig, corsMiddleware } from "./cors.js";
 import { createMcpHandler } from "./mcp.js";
+import { applyMigrations, checkMigrations } from "./migrations.js";
+import type {
+  ActionAudit,
+  AnyPluginRoute,
+  PluginRuntime,
+  ServerPlugin,
+} from "./plugin.js";
 import { DEFAULT_BASE_PATH, type Manifest, PROTOCOL_VERSION } from "./protocol.js";
 import { defaultScope, type ScopeResolver } from "./scope.js";
 
@@ -42,6 +56,8 @@ export interface ServerOptions<T extends ActionMap> {
    * header, and confirmations are a UX guard.
    */
   readonly auth?: AuthProvider | undefined;
+  /** Framework features with their own tables and routes, installed after `auth`. */
+  readonly plugins?: readonly ServerPlugin[] | undefined;
   readonly basePath?: string | undefined;
   readonly cors?: CorsConfig | false | undefined;
   readonly database?: DataProvider | undefined;
@@ -93,6 +109,44 @@ function errorResponse(error: unknown): Response {
   });
 }
 
+const PLUGIN_NAME = /^[a-z][a-z0-9-]*$/;
+const RESERVED_NAMES: ReadonlySet<string> = new Set([
+  "actions",
+  "manifest",
+  "mcp",
+  "sync",
+  "ui",
+]);
+
+function checkPlugins(
+  plugins: readonly ServerPlugin[],
+  database: DataProvider | undefined,
+): void {
+  const names = new Set<string>();
+  for (const plugin of plugins) {
+    if (!PLUGIN_NAME.test(plugin.name) || RESERVED_NAMES.has(plugin.name)) {
+      throw new Error(`"${plugin.name}" cannot name a plugin.`);
+    }
+    if (names.has(plugin.name))
+      throw new Error(`Two plugins are named "${plugin.name}".`);
+    names.add(plugin.name);
+    checkMigrations(plugin);
+    if (plugin.migrations?.length && !database) {
+      throw new Error(`The "${plugin.name}" plugin needs a database.`);
+    }
+  }
+}
+
+function auditAll(
+  runtimes: readonly PluginRuntime[],
+): ((record: ActionAudit) => void) | undefined {
+  const hooks = runtimes.filter((runtime) => runtime.audit);
+  if (hooks.length === 0) return undefined;
+  return (record) => {
+    for (const runtime of hooks) runtime.audit?.(record);
+  };
+}
+
 function guard(callers: CallerResolver, surface: Surface) {
   return async (request: Request): Promise<Caller> =>
     requireSurface(await callers(request), surface, callers.enforcing);
@@ -117,6 +171,7 @@ export function createServer<T extends ActionMap>(
     actions,
     scope = defaultScope,
     auth,
+    plugins = [],
     basePath = DEFAULT_BASE_PATH,
     cors = {},
     database,
@@ -128,6 +183,18 @@ export function createServer<T extends ActionMap>(
   const syncOptions = sync === false ? undefined : sync;
   const syncEnabled = syncOptions !== undefined && database !== undefined;
   const callers = createCallerResolver(auth, scope);
+  const installed = [...(auth ? [auth] : []), ...plugins];
+  checkPlugins(installed, database);
+  const host = { basePath, database, callerOf: callers };
+  const runtimes = installed.map((plugin) => ({ plugin, runtime: plugin.setup(host) }));
+  const audit = auditAll(runtimes.map(({ runtime }) => runtime));
+  let prepared: Promise<void> | undefined;
+  const ready = () =>
+    (prepared ??= (async () => {
+      if (!database) return;
+      if (syncEnabled) await ensureSyncTables(database.read() as SyncDatabase);
+      await applyMigrations(database, installed);
+    })());
   const agentUi =
     agentUiOptions === false
       ? undefined
@@ -135,15 +202,19 @@ export function createServer<T extends ActionMap>(
           ...agentUiOptions,
           audience: async (request) => (await callers(request)).audience,
         });
-  const runner = createActionRunner({
-    actions,
-    scope,
-    callers,
-    database,
-    sync: syncEnabled,
-    onClient: agentUi?.touch,
-    confirm: agentUi?.confirm,
-  });
+  const runnerFor = (registry: ActionRegistry): ActionRunner =>
+    createActionRunner({
+      actions: registry,
+      scope,
+      callers,
+      database,
+      sync: syncEnabled,
+      onClient: agentUi?.touch,
+      confirm: agentUi?.confirm,
+      audit,
+      ready,
+    });
+  const runner = runnerFor(actions);
   const hub = database ? new SyncHub(database) : undefined;
   const inflight = new Set<Promise<unknown>>();
   let closing: Promise<void> | undefined;
@@ -167,13 +238,58 @@ export function createServer<T extends ActionMap>(
       const input = await readBody(event).catch(() => {
         throw new ActionError("invalid_input", "Request body must be JSON");
       });
-      await guard(callers, "actions")(event.req);
-      const result = await runner.run(name, input, event.req, sourceOf(event.req));
+      const result = await runner.run(name, input, event.req, sourceOf(event.req), {
+        surface: "actions",
+      });
       return { data: result.data, tags: result.reads };
     } catch (error) {
       return errorBody(event, error);
     }
   });
+
+  const handleRoute = async (route: AnyPluginRoute, request: Request) => {
+    if (route.access === "public") return route.handle(request);
+    const caller = requireAccess(await callers(request), route.access, callers.enforcing);
+    return route.handle(request, caller);
+  };
+
+  for (const { plugin, runtime } of runtimes) {
+    const root = `${basePath}/${plugin.name}`;
+    if (runtime.actions) {
+      const pluginRunner = runnerFor(runtime.actions);
+      app.post(`${root}/actions/:name`, async (event) => {
+        const name = event.context.params?.name ?? "";
+        try {
+          const input = await readBody(event).catch(() => {
+            throw new ActionError("invalid_input", "Request body must be JSON");
+          });
+          const result = await pluginRunner.run(
+            name,
+            input,
+            event.req,
+            sourceOf(event.req),
+            { surface: "pluginActions" },
+          );
+          return { data: result.data, tags: result.reads };
+        } catch (error) {
+          return errorBody(event, error);
+        }
+      });
+    }
+    for (const route of runtime.routes ?? []) {
+      const path = route.path.startsWith("/.well-known/")
+        ? route.path
+        : root + route.path;
+      app.on(route.method, path, async (event) => {
+        try {
+          await ready();
+          return await handleRoute(route, event.req);
+        } catch (error) {
+          return errorResponse(error);
+        }
+      });
+    }
+  }
 
   if (mcp !== false) {
     const handler = createMcpHandler({ actions, runner, agentUi, callers, ...mcp });
@@ -194,7 +310,7 @@ export function createServer<T extends ActionMap>(
   if (syncEnabled && database && hub) {
     app.use(`${basePath}/sync/**`, refuseUnless(callers, "sync"));
     app.use(`${basePath}/sync/**`, async () => {
-      await runner.ready();
+      await ready();
     });
     registerSyncRoutes(app, {
       basePath,
@@ -214,7 +330,12 @@ export function createServer<T extends ActionMap>(
       },
       transport: syncOptions?.transport,
       pollIntervalMs: syncOptions?.pollIntervalMs,
-      channels: agentUi ? [agentUi.channel] : [],
+      channels: [
+        ...(agentUi ? [agentUi.channel] : []),
+        ...runtimes.flatMap(({ runtime }): ServerChannel[] =>
+          runtime.channel ? [runtime.channel] : [],
+        ),
+      ],
       clientId: clientOf,
     });
   }
@@ -243,6 +364,7 @@ export function createServer<T extends ActionMap>(
     close: () =>
       (closing ??= (async () => {
         agentUi?.close();
+        await Promise.allSettled(runtimes.map(({ runtime }) => runtime.close?.()));
         await Promise.all([hub?.stop(), Promise.allSettled([...inflight])]);
         await database?.close?.();
       })()),

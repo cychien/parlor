@@ -427,6 +427,9 @@ importers:
       '@parlor/sync':
         specifier: workspace:*
         version: link:../sync
+      drizzle-orm:
+        specifier: ^0.45.4
+        version: 0.45.4(@electric-sql/pglite@0.5.9)(@types/pg@8.23.1)(pg@8.23.1)
       h3:
         specifier: 'catalog:'
         version: 2.0.1(crossws@0.4.15(srvx@1.0.5))(ocache@0.3.0)
