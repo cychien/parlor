@@ -88,6 +88,69 @@ describe("scrollIntoCenter", () => {
   });
 });
 
+describe("scrollIntoCenter on a page that paints no frames", () => {
+  afterEach(() => vi.useRealTimers());
+
+  const stalledWindow = (visibility: "visible" | "hidden") => {
+    const element = {
+      scrollIntoView: vi.fn(),
+      getBoundingClientRect: () => ({ top: 900 }),
+    };
+    const requestAnimationFrame = vi.fn();
+    const window = {
+      document: { visibilityState: visibility },
+      matchMedia: () => ({ matches: false }),
+      requestAnimationFrame,
+      performance: { now: () => 0 },
+    };
+    return { element, window, requestAnimationFrame };
+  };
+
+  it("settles at the cap on wall-clock time when no frame ever fires", async () => {
+    vi.useFakeTimers();
+    const { element, window } = stalledWindow("visible");
+    const onSettled = vi.fn();
+    void scrollIntoCenter(window as never, element as never).then(onSettled);
+    await vi.advanceTimersByTimeAsync(SCROLL_SETTLE_CAP_MS - 1);
+    expect(onSettled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onSettled).toHaveBeenCalledTimes(1);
+  });
+
+  it("scrolls instantly and settles at once when the document is hidden", async () => {
+    vi.useFakeTimers();
+    const { element, window, requestAnimationFrame } = stalledWindow("hidden");
+    const onSettled = vi.fn();
+    void scrollIntoCenter(window as never, element as never).then(onSettled);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(element.scrollIntoView).toHaveBeenCalledWith({
+      block: "center",
+      inline: "nearest",
+      behavior: "instant",
+    });
+    expect(onSettled).toHaveBeenCalledTimes(1);
+    expect(requestAnimationFrame).not.toHaveBeenCalled();
+  });
+
+  it("leaves no timer behind once frames settle the scroll first", async () => {
+    vi.useFakeTimers();
+    const frames: Frame[] = [];
+    const element = {
+      scrollIntoView: vi.fn(),
+      getBoundingClientRect: () => ({ top: 300 }),
+    };
+    const window = {
+      matchMedia: () => ({ matches: false }),
+      requestAnimationFrame: (frame: Frame) => frames.push(frame),
+      performance: { now: () => 0 },
+    };
+    const done = scrollIntoCenter(window as never, element as never);
+    while (frames.length > 0) frames.shift()!();
+    await done;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
 describe("browserEnvironment hasFinePointer", () => {
   afterEach(() => vi.unstubAllGlobals());
 

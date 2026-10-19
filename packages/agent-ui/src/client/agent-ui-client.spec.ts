@@ -12,6 +12,7 @@ import * as zm from "zod/mini";
 import type { ClientMessage } from "../protocol.js";
 import { defineAgentView } from "../view.js";
 import { createAgentUiClient } from "./agent-ui-client.js";
+import { scrollIntoCenter } from "./environment.js";
 import { fakeBrowser } from "./fake-browser.testing.js";
 
 const note = defineAgentView({
@@ -35,9 +36,19 @@ function setup(
     dev?: boolean;
     next?: Record<string, string>;
     hold?: (message: ClientMessage) => Promise<void> | undefined;
+    paintsNoFrames?: boolean;
   } = {},
 ) {
   const browser = fakeBrowser();
+  if (options.paintsNoFrames) {
+    browser.window.requestAnimationFrame = () => 0;
+  }
+  const environment = options.paintsNoFrames
+    ? {
+        ...browser.env,
+        scrollIntoView: (element: Element) => scrollIntoCenter(browser.window, element),
+      }
+    : browser.env;
   const sent: ClientMessage[] = [];
   const client = createAgentUiClient({
     queries: { active: () => [], settled: async () => {} },
@@ -47,7 +58,7 @@ function setup(
       return message.type === "reply" ? options.next?.[message.id] : undefined;
     },
     platform: "web",
-    environment: browser.env,
+    environment,
     dev: options.dev ?? false,
   });
   const gets = vi.fn(() => ({ text: "draft" }));
@@ -296,6 +307,20 @@ describe("createAgentUiClient highlight", () => {
     expect(replies()).toEqual([
       { type: "reply", id: "h1", ok: true, result: { shown: 1 } },
     ]);
+  });
+
+  it("answers highlight and the request behind it when the page paints no frames", async () => {
+    const { browser, client, replies } = setup({ paintsNoFrames: true });
+    const element = browser.document.createElement("section");
+    browser.document.body.appendChild(element);
+    const slot = client.views.track(note, { get: () => ({ text: "draft" }) });
+    slot.ref(element);
+    slot.mount(undefined);
+    client.receive(request("h1", "highlight", { view: "note" }));
+    client.receive(request("s1"));
+    await vi.waitFor(() => expect(replies().map((r) => r.id)).toEqual(["h1", "s1"]), {
+      timeout: 1900,
+    });
   });
 
   it("answers not_mounted for a view that is not on screen", async () => {
