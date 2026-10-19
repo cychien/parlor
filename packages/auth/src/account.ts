@@ -9,6 +9,7 @@ import type { PluginHost } from "@parlor/server";
 import { z } from "zod";
 
 import { grantIdOf } from "./grants.js";
+import type { HostAccountActions } from "./hosts.js";
 import type { BetterAuthInstance } from "./provider.js";
 import type { RevocationNotice } from "./revocation.js";
 
@@ -42,7 +43,8 @@ interface RefreshToken {
   readonly expiresAt: Date;
 }
 
-export type AccountActions = ActionsOf<ReturnType<typeof accountActions>>;
+export type AccountActions = ActionsOf<ReturnType<typeof accountActions>> &
+  HostAccountActions;
 
 interface AccountDeps {
   readonly instance: BetterAuthInstance;
@@ -50,7 +52,7 @@ interface AccountDeps {
   readonly revoke: (notice: RevocationNotice) => Promise<void>;
 }
 
-function signedIn(ctx: ActionContext): UserPrincipal {
+export function signedIn(ctx: ActionContext): UserPrincipal {
   if (ctx.principal.kind !== "user") {
     throw new ActionError("forbidden", "Only a signed-in user manages the account.");
   }

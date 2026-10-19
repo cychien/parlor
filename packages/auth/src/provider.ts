@@ -3,13 +3,24 @@ import {
   ANONYMOUS,
   asId,
   type AuthenticatedPrincipal,
+  type HostPrincipal,
   type Principal,
+  type UserId,
   type UserPrincipal,
 } from "@parlor/core";
-import { AuthFailure, type AuthProvider, type PluginHost } from "@parlor/server";
+import { createRegistry } from "@parlor/core/registry";
+import {
+  type AccountProfile,
+  AuthFailure,
+  type AuthProvider,
+  type Delegation,
+  type PluginHost,
+  type TurnDelegation,
+} from "@parlor/server";
 import type { BetterAuthOptions } from "better-auth";
 import {
   createLocalJWKSet,
+  decodeProtectedHeader,
   errors,
   type JSONWebKeySet,
   type JWTPayload,
@@ -25,9 +36,31 @@ import {
   type ParlorAuthSettings,
 } from "./better-auth.js";
 import { grantIdOf } from "./grants.js";
+import {
+  createGrantKeys,
+  type GrantKeys,
+  hostAccountActions,
+  hostPrincipalOf,
+  HOSTS_MIGRATION,
+  hostRoutes,
+  verifyHostAssertion,
+} from "./hosts.js";
 import { AUTH_MIGRATIONS } from "./migrations.js";
-import { RevocationSet } from "./revocation.js";
+import { type RevocationNotice, RevocationSet } from "./revocation.js";
 import { authRoutes } from "./routes.js";
+import {
+  agentPrincipalOf,
+  credentialOf,
+  delegate,
+  type HostAssertion,
+  type TurnToken,
+  verifyTurnToken,
+} from "./tokens.js";
+import {
+  createTurnKeyStore,
+  TURN_KEYS_MIGRATION,
+  type TurnKeyStore,
+} from "./turn-keys.js";
 
 /** The slice of a Better Auth instance Parlor relies on. */
 export interface BetterAuthInstance {
@@ -58,6 +91,7 @@ export interface BetterAuthContext {
     findOne<T>(input: { model: string; where: Where[] }): Promise<T | null>;
     deleteMany(input: { model: string; where: Where[] }): Promise<number>;
   };
+  readonly secret: string;
   readonly internalAdapter: {
     listSessions(userId: string): Promise<StoredSession[]>;
     deleteSession(token: string): Promise<void>;
@@ -82,16 +116,6 @@ export interface BetterAuthProviderOptions {
 /** Clock skew a revocation must outlast beyond the access token's own lifetime. */
 const SKEW_MS = 60_000;
 
-const JWT = /^[\w-]+\.[\w-]+\.[\w-]+$/;
-
-function bearerOf(request: Request): string | undefined {
-  const header = request.headers.get("authorization");
-  if (header === null) return undefined;
-  const match = /^Bearer\s+(\S+)$/i.exec(header);
-  if (!match) throw new AuthFailure("invalid", "Use a Bearer token.");
-  return match[1]!;
-}
-
 function hasCookie(request: Request, name: string): boolean {
   const cookie = request.headers.get("cookie");
   if (!cookie) return false;
@@ -110,7 +134,14 @@ export function betterAuthProvider({
   const settings: ParlorAuthSettings = bridge.settings;
   let revocations: RevocationSet | undefined;
   let keys: ReturnType<typeof createLocalJWKSet> | undefined;
+  let grantKeys: GrantKeys | undefined;
+  let turnKeys: TurnKeyStore | undefined;
   const clientNames = new Map<string, Promise<string>>();
+
+  const installed = () => {
+    if (!grantKeys || !turnKeys) throw new Error("The auth provider is not installed.");
+    return { grantKeys, turnKeys };
+  };
 
   const started = () => {
     if (!revocations) throw new Error("The auth provider is not installed.");
@@ -204,9 +235,39 @@ export function betterAuthProvider({
     };
   };
 
+  const hostOf = async (
+    request: Request,
+    assertion: HostAssertion,
+  ): Promise<HostPrincipal> => {
+    const grant = await verifyHostAssertion(
+      assertion,
+      { method: request.method, url: request.url },
+      installed().grantKeys,
+      Date.now(),
+    );
+    if (await started().isRevoked({ kind: "grant", id: grant.grantId })) {
+      throw new AuthFailure("revoked", "This computer was disconnected.");
+    }
+    return hostPrincipalOf(grant);
+  };
+
+  const turnOf = async (token: TurnToken): Promise<AgentPrincipal> => {
+    const store = installed().turnKeys;
+    let turnTokenKeys = await store.keys();
+    const kid = decodeProtectedHeader(token).kid;
+    if (kid !== undefined && !turnTokenKeys.publicKeys.has(kid)) {
+      turnTokenKeys = await store.refresh();
+    }
+    const claims = await verifyTurnToken(turnTokenKeys, token, Date.now());
+    if (await started().isRevoked({ kind: "grant", id: claims.gid })) {
+      throw new AuthFailure("revoked", "This computer was disconnected.");
+    }
+    return agentPrincipalOf(claims);
+  };
+
   return {
     name: AUTH_PLUGIN,
-    migrations: AUTH_MIGRATIONS,
+    migrations: [...AUTH_MIGRATIONS, HOSTS_MIGRATION, TURN_KEYS_MIGRATION],
     enforcing: true,
     setup(host: PluginHost) {
       const { database } = host;
@@ -218,26 +279,45 @@ export function betterAuthProvider({
       revocations = set;
       bridge.revoke = (notice) =>
         database.transaction((tx) => RevocationSet.revoke(tx, notice));
-      // TODO(phase 3): merge hostAccountActions, add hostRoutes, append HOSTS_MIGRATION,
-      //   and answer delegate and account.
+      grantKeys = createGrantKeys(database);
+      turnKeys = createTurnKeyStore({
+        database,
+        issuer: settings.baseURL,
+        secret: async () => (await instance.$context).secret,
+      });
+      const hostDeps = {
+        host,
+        settings,
+        revoke: (tx: unknown, notice: RevocationNotice) =>
+          RevocationSet.revoke(tx, notice),
+      };
       return {
-        actions: accountActions({ instance, host, revoke: bridge.revoke }),
-        routes: authRoutes({ instance, settings, host }),
+        actions: createRegistry({
+          ...accountActions({ instance, host, revoke: bridge.revoke }).actions,
+          ...hostAccountActions(hostDeps).actions,
+        }),
+        routes: [...authRoutes({ instance, settings, host }), ...hostRoutes(hostDeps)],
         close: () => set.stop(),
       };
     },
     async authenticate(request: Request): Promise<Principal> {
       await started().ready();
-      // TODO(phase 3): credentialOf(header) first: `ParlorHost` -> verifyHostAssertion ->
-      //   host principal; a turn token -> verifyTurnToken -> agentPrincipalOf; both then
-      //   checked against RevocationSet by grant.
-      const token = bearerOf(request);
-      if (token !== undefined) {
-        if (JWT.test(token)) return agentOf(token);
-        const user = await userOf(request);
-        if (!user)
-          throw new AuthFailure("invalid", "The session is invalid or has ended.");
-        return user;
+      const credential = credentialOf(request.headers.get("authorization"));
+      switch (credential?.kind) {
+        case "host":
+          return hostOf(request, credential.assertion);
+        case "turn":
+          return turnOf(credential.token);
+        case "access":
+          return agentOf(credential.token);
+        case "session": {
+          const user = await userOf(request);
+          if (!user)
+            throw new AuthFailure("invalid", "The session is invalid or has ended.");
+          return user;
+        }
+        case undefined:
+          break;
       }
       const { authCookies } = await instance.$context;
       if (!hasCookie(request, authCookies.sessionToken.name)) return ANONYMOUS;
@@ -254,6 +334,18 @@ export function betterAuthProvider({
           },
         },
       );
+    },
+    async delegate(host: HostPrincipal, turn: TurnDelegation): Promise<Delegation> {
+      await started().ready();
+      return delegate(await installed().turnKeys.keys(), host, turn, Date.now());
+    },
+    async account(userId: UserId): Promise<AccountProfile | undefined> {
+      const { adapter } = await instance.$context;
+      const user = await adapter.findOne<{ name: string; email: string }>({
+        model: "user",
+        where: [{ field: "id", value: userId }],
+      });
+      return user ? { name: user.name, email: user.email } : undefined;
     },
     revoked(principal: AuthenticatedPrincipal): AbortSignal {
       const notice =

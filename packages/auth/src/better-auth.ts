@@ -41,6 +41,7 @@ export interface ParlorAuthOptions extends Omit<
 }
 
 export interface ParlorAuthSettings {
+  readonly appName?: string | undefined;
   readonly origin: string;
   readonly baseURL: string;
   readonly resource: string;
@@ -109,7 +110,9 @@ export function parlorAuth(options: ParlorAuthOptions): BetterAuthOptions {
   const origin = originOf(options);
   const baseURL = `${origin}${AUTH_BASE_PATH}`;
   const resource = `${origin}${DEFAULT_BASE_PATH}/mcp`;
-  const bridge: Bridge = { settings: { origin, baseURL, resource } };
+  const bridge: Bridge = {
+    settings: { appName: rest.appName, origin, baseURL, resource },
+  };
   const trusted = rest.trustedOrigins;
   return {
     ...rest,

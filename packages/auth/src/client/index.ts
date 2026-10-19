@@ -15,6 +15,7 @@ const DEFAULT_BASE_PATH = "/_parlor";
 const RETRY_BASE_MS = 1000;
 const RETRY_MAX_MS = 30_000;
 const TOKEN_HEADER = "set-auth-token";
+const HOST_IPC_REDIRECT = "urn:parlor:ipc";
 
 function injectedServerUrl(): string {
   const env = (import.meta as { env?: { PARLOR_SERVER_URL?: string } }).env;
@@ -176,11 +177,34 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
         await (await store)?.set(undefined);
       }
     },
-    authorizeHost: (pairing) => {
-      // TODO: POST `${basePath}/auth/hosts/authorize` with redirect urn:parlor:ipc and this
-      //   session's headers; answer the code.
-      void pairing;
-      throw new Error("not implemented");
+    authorizeHost: async (pairing) => {
+      const response = await (options.fetch ?? fetch)(
+        `${baseUrl}${basePath}/auth/hosts/authorize`,
+        {
+          method: "POST",
+          headers: { ...(await headers()), "content-type": "application/json" },
+          body: JSON.stringify({
+            ...pairing,
+            redirectUri: HOST_IPC_REDIRECT,
+            decision: "connect",
+          }),
+        },
+      );
+      const body = (await response.json().catch(() => undefined)) as
+        | { code?: unknown; state?: unknown; error?: { message?: string; code?: string } }
+        | undefined;
+      if (
+        !response.ok ||
+        typeof body?.code !== "string" ||
+        body.state !== pairing.state
+      ) {
+        throw new AuthClientError(
+          body?.error?.message ?? "The computer could not be connected.",
+          response.status,
+          body?.error?.code,
+        );
+      }
+      return body.code;
     },
     account: createActionClient<AccountActions>({
       baseUrl,
