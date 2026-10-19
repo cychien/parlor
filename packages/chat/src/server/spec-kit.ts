@@ -117,9 +117,9 @@ async function scratchDatabase(baseUrl: string): Promise<DatabaseHandle> {
     }
   };
   await onServer(`create database ${name}`);
-  const url = new URL(baseUrl);
-  url.pathname = `/${name}`;
-  const handle = await createDatabase({ url: url.href });
+  const scratchUrl = new URL(baseUrl);
+  scratchUrl.pathname = `/${name}`;
+  const handle = await createDatabase({ url: scratchUrl.href });
   return {
     ...handle,
     close: async () => {
