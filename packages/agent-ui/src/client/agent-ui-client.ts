@@ -355,6 +355,7 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
   const watched = new Map<string, number>();
   let lastPresence: string | undefined;
   let gone = false;
+  let connected = false;
   let presenceTimer: ReturnType<typeof setTimeout> | undefined;
   const presence = (): PresenceUpdate => {
     const visible = env.document?.visibilityState === "visible";
@@ -372,7 +373,7 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
     };
   };
   const reportPresence = () => {
-    if (gone) return;
+    if (gone || !connected) return;
     const update = presence();
     const serialized = JSON.stringify(update);
     if (serialized === lastPresence) return;
@@ -464,11 +465,15 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
     screen,
     opened() {
       gone = false;
+      connected = true;
       attachPresence();
       lastPresence = undefined;
       reportPresence();
     },
-    closed: detachPresence,
+    closed() {
+      connected = false;
+      detachPresence();
+    },
     receive,
     watch(threadId) {
       watched.set(threadId, (watched.get(threadId) ?? 0) + 1);

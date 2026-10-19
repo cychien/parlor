@@ -576,6 +576,38 @@ describe("createAgentUiClient presence", () => {
   });
 });
 
+describe("createAgentUiClient presence without a stream", () => {
+  it("posts nothing while the channel is not open, then names what is watched when it opens", async () => {
+    const { browser, client, sent, quiet } = setup();
+    vi.spyOn(browser.document, "hasFocus").mockReturnValue(true);
+
+    client.watch("thr_1");
+    browser.window.dispatchEvent(new browser.window.Event("focus"));
+    await quiet();
+    expect(sent).toEqual([]);
+
+    client.opened();
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toMatchObject({ type: "presence", watching: ["thr_1"] });
+  });
+
+  it("goes silent again once the channel closes, and resumes when it reopens", async () => {
+    const { browser, client, sent, quiet } = setup();
+    vi.spyOn(browser.document, "hasFocus").mockReturnValue(true);
+    client.opened();
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+
+    client.closed();
+    client.watch("thr_2");
+    await quiet();
+    expect(sent).toHaveLength(1);
+
+    client.opened();
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    expect(sent[1]).toMatchObject({ type: "presence", watching: ["thr_2"] });
+  });
+});
+
 describe("createAgentUiClient leaving", () => {
   it("announces it is leaving right away when the page goes away", async () => {
     const { browser, client, sent } = setup();
