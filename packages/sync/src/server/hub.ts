@@ -23,15 +23,33 @@ export class SyncHub {
 
   async start(): Promise<void> {
     if (!this.data.listen || this.#unlisten) return;
-    this.#starting ??= this.data
-      .listen(SYNC_CHANNEL, (payload) => {
-        const parsed = parseNotifyPayload(payload);
-        if (parsed) this.publish(parsed.scope, parsed.event);
-      })
-      .then((unlisten) => {
-        this.#unlisten = unlisten;
-      });
-    await this.#starting;
+    const starting = (this.#starting ??= this.data
+      .listen(
+        SYNC_CHANNEL,
+        (payload) => {
+          const parsed = parseNotifyPayload(payload);
+          if (parsed) this.publish(parsed.scope, parsed.event);
+        },
+        { onLost: () => this.#reconnectEveryStream() },
+      )
+      .then(
+        (unlisten) => {
+          if (this.#starting === starting) this.#unlisten = unlisten;
+          else void unlisten();
+        },
+        (error: unknown) => {
+          if (this.#starting === starting) this.#starting = undefined;
+          throw error;
+        },
+      ));
+    await starting;
+  }
+
+  #reconnectEveryStream(): void {
+    this.#unlisten = undefined;
+    this.#starting = undefined;
+    const subscriptions = [...this.#subscribers.values()].flatMap((set) => [...set]);
+    for (const { onStop } of subscriptions) onStop?.();
   }
 
   publish(scope: string, event: SyncEvent): void {
