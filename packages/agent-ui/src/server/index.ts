@@ -11,6 +11,7 @@ export { audienceOf } from "./audience.js";
 export {
   type ConfirmationOutcome,
   type ConfirmationRequest,
+  type ConfirmationThread,
   DEFAULT_CONFIRM_TIMEOUT_MS,
 } from "./confirmations.js";
 export {

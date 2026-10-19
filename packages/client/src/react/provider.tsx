@@ -1,4 +1,5 @@
 import type { AgentUiClient } from "@parlor/agent-ui/client";
+import type { ClientChannel, SyncEvent } from "@parlor/sync";
 import { createSyncClient, type SyncClient } from "@parlor/sync/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AnyRouter } from "@tanstack/react-router";
@@ -14,16 +15,34 @@ import {
 
 import type { ActionClient } from "../action-client.js";
 import type { RegisteredActions } from "../register.js";
-import type { SessionSnapshot, SessionSource } from "../session.js";
+import type { FrameworkAuth, SessionSnapshot, SessionSource } from "../session.js";
 import { createAgentUiRuntime } from "./agent-ui/runtime.js";
 import { invalidateForEvents, ReadTagRegistry } from "./sync.js";
+
+/** The live sync connection, for features loaded after it started (the chat runtime). */
+export interface FrameworkSync {
+  addChannel(channel: ClientChannel): () => void;
+  onEvents(listener: (events: readonly SyncEvent[]) => void): () => void;
+}
 
 interface FrameworkContextValue {
   readonly client: ActionClient<RegisteredActions>;
   readonly readTags: ReadTagRegistry;
   readonly agentUi: AgentUiClient;
-  readonly auth: SessionSource | undefined;
+  readonly auth: FrameworkAuth | undefined;
+  readonly sync: FrameworkSync;
 }
+
+// TODO: channels and listeners registered before the sync client exists are kept and
+//   handed to each SyncConnection; addChannel forwards to syncClient.addChannel.
+const PENDING_SYNC: FrameworkSync = {
+  addChannel: () => {
+    throw new Error("not implemented");
+  },
+  onEvents: () => {
+    throw new Error("not implemented");
+  },
+};
 
 const FrameworkContext = createContext<FrameworkContextValue | null>(null);
 
@@ -32,8 +51,11 @@ export interface FrameworkProviderProps {
   readonly queryClient?: QueryClient | undefined;
   readonly sync?: boolean | undefined;
   readonly router?: AnyRouter | undefined;
-  /** When the signed-in user changes, cached queries reset and sync reconnects as them. */
-  readonly auth?: SessionSource | undefined;
+  /**
+   * When the signed-in user changes, cached queries reset and sync reconnects as them. An
+   * auth client that can also sign (`device`) and pair hosts (`authorizeHost`) gives the chat both.
+   */
+  readonly auth?: FrameworkAuth | undefined;
   readonly children: ReactNode;
 }
 
@@ -79,6 +101,7 @@ export function FrameworkProvider({
     readTags: new ReadTagRegistry(),
     agentUi: createAgentUiRuntime({ client, queryClient: ownQueryClient, router }),
     auth,
+    sync: PENDING_SYNC,
   }));
   const [resetQueries] = useState(() => () => void ownQueryClient.resetQueries());
   const epoch = useIdentityEpoch(auth, resetQueries);

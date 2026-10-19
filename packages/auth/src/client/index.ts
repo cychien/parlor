@@ -3,6 +3,7 @@ import { resolveCapability, type SessionStore, sessionStore } from "@parlor/capa
 import {
   type ActionClient,
   createActionClient,
+  type HostAuthorizer,
   type SessionSnapshot,
   type SessionSource,
 } from "@parlor/client";
@@ -43,7 +44,7 @@ export class AuthClientError extends Error {
   }
 }
 
-export interface AuthClient extends SessionSource {
+export interface AuthClient extends SessionSource, HostAuthorizer {
   /** Plug into `createActionClient({ headers })` so every surface carries the session. */
   readonly headers: () => Promise<HeadersInit>;
   signIn(input: { readonly email: string; readonly password: string }): Promise<void>;
@@ -175,6 +176,12 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
         await (await store)?.set(undefined);
       }
     },
+    authorizeHost: (pairing) => {
+      // TODO: POST `${basePath}/auth/hosts/authorize` with redirect urn:parlor:ipc and this
+      //   session's headers; answer the code.
+      void pairing;
+      throw new Error("not implemented");
+    },
     account: createActionClient<AccountActions>({
       baseUrl,
       fetch: options.fetch,
@@ -184,4 +191,4 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
   };
 }
 
-export type { SessionStore } from "@parlor/capabilities";
+export type { HostPairing, SessionStore } from "@parlor/capabilities";

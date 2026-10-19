@@ -63,6 +63,7 @@ export const clientMessageSchema = z.union([
     buildId: z.string().optional(),
     ops: z.array(z.string()).optional(),
     canConfirm: z.boolean().optional(),
+    watching: z.array(z.string().min(1)).max(8).optional(),
   }),
   z.object({ type: z.literal("leave") }),
   z.object({ type: z.literal("answer"), id: z.string().min(1), approve: z.boolean() }),

@@ -51,6 +51,11 @@ const refused = (response: Response) =>
 export interface SyncClient {
   start(): void;
   stop(): void;
+  /**
+   * Registers a channel after `start`, for features loaded lazily. It opens at once when
+   * the live stream's handshake lists it, else on the next stream. Returns the detach.
+   */
+  addChannel(channel: ClientChannel): () => void;
   readonly cursor: string;
   readonly transport: "sse" | "poll" | undefined;
 }
@@ -340,6 +345,12 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
   return {
     start,
     stop,
+    addChannel(channel) {
+      // TODO: add to `channels`; if a stream is open and its handshake listed
+      //   channel.event, call channel.opened() now. The detach closes and removes it.
+      void channel;
+      throw new Error("not implemented");
+    },
     get cursor() {
       return since();
     },

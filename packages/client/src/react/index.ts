@@ -6,6 +6,18 @@ export type {
 } from "@parlor/agent-ui/client";
 export type { AgentActivityState } from "./agent-ui/activity-state.js";
 export * as Chat from "./agent-ui/chat.js";
+export type { ChatAskChoiceProps, ChatAskProps } from "./chat/chat-ask.js";
+export type { ChatRootProps } from "./chat/chat-root.js";
+export type { ChatThreadProps } from "./chat/chat-thread.js";
+export type {
+  AgentChoice,
+  ChatCommands,
+  ChatState,
+  ChatStatus,
+  ConnectOption,
+} from "./chat/runtime.js";
+export { useChat } from "./chat/use-chat.js";
+export type { ChatItem } from "@parlor/chat";
 export { useAgentActivity } from "./agent-ui/use-agent-activity.js";
 export { useAgentConfirmations } from "./agent-ui/use-agent-confirmations.js";
 export { type AgentViewHandle, useAgentView } from "./agent-ui/use-agent-view.js";

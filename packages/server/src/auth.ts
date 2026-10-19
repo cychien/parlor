@@ -1,4 +1,12 @@
-import type { AuthenticatedPrincipal, Principal } from "@parlor/core";
+import type {
+  AuthenticatedPrincipal,
+  DeviceId,
+  HostPrincipal,
+  Principal,
+  ThreadId,
+  TurnId,
+  UserId,
+} from "@parlor/core";
 
 import type { ServerPlugin } from "./plugin.js";
 
@@ -24,6 +32,55 @@ export interface AuthProvider extends ServerPlugin {
    * (sync streams) close on it.
    */
   revoked(principal: AuthenticatedPrincipal): AbortSignal;
+  /**
+   * Mints the turn token an inline agent's MCP calls carry while one chat turn runs,
+   * bound to the host's grant. Optional so providers written before chat still compile;
+   * `chat()` refuses to start on a provider without it.
+   */
+  delegate?(host: HostPrincipal, turn: TurnDelegation): Promise<Delegation>;
+  /** A device's public keys as the account registered them, for prompt and answer signatures. */
+  device?(userId: UserId, deviceId: DeviceId): Promise<DeviceKeys | undefined>;
+  /** Who the agent works for, for the turn's context block. */
+  account?(userId: UserId): Promise<AccountProfile | undefined>;
+}
+
+export interface TurnDelegation {
+  readonly threadId: ThreadId;
+  readonly turnId: TurnId;
+  readonly clientId: string;
+  readonly agent: string;
+  readonly ttlMs: number;
+}
+
+export interface Delegation {
+  readonly token: string;
+  readonly expiresAt: number;
+}
+
+export interface DeviceKeys {
+  readonly id: DeviceId;
+  readonly name: string;
+  readonly platform: string;
+  readonly signingKey: JsonWebKey;
+  readonly presenceKey?: PresenceKey | undefined;
+}
+
+export type PresenceKey =
+  | {
+      readonly format: "webauthn";
+      readonly credentialId: string;
+      readonly rpId: string;
+      readonly publicKey: JsonWebKey;
+    }
+  | {
+      readonly format: "es256-raw";
+      readonly keyId: string;
+      readonly publicKey: JsonWebKey;
+    };
+
+export interface AccountProfile {
+  readonly name: string;
+  readonly email?: string | undefined;
 }
 
 export type AuthFailureReason = "invalid" | "expired" | "revoked";

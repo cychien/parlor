@@ -218,6 +218,8 @@ export function betterAuthProvider({
       revocations = set;
       bridge.revoke = (notice) =>
         database.transaction((tx) => RevocationSet.revoke(tx, notice));
+      // TODO(phase 3): merge hostAccountActions, add hostRoutes, append HOSTS_MIGRATION,
+      //   and answer delegate and account.
       return {
         actions: accountActions({ instance, host, revoke: bridge.revoke }),
         routes: authRoutes({ instance, settings, host }),
@@ -226,6 +228,9 @@ export function betterAuthProvider({
     },
     async authenticate(request: Request): Promise<Principal> {
       await started().ready();
+      // TODO(phase 3): credentialOf(header) first: `ParlorHost` -> verifyHostAssertion ->
+      //   host principal; a turn token -> verifyTurnToken -> agentPrincipalOf; both then
+      //   checked against RevocationSet by grant.
       const token = bearerOf(request);
       if (token !== undefined) {
         if (JWT.test(token)) return agentOf(token);

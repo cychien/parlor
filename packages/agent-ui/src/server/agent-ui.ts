@@ -40,10 +40,12 @@ export interface AgentUi {
   touch(clientId: string | undefined, audience: string): void;
   receive(clientId: string, audience: string, message: ClientMessage): UiReceipt;
   tools(surface: "mcp" | "agent"): readonly AgentTool[];
+  /** `chat` binds an inline agent's `ui_*` calls to the client its turn's prompt came from. */
   contextFor(
     request: Request | undefined,
     origin: AgentOrigin,
     signal?: AbortSignal,
+    chat?: { readonly clientId: string },
   ): Promise<AgentToolContext>;
   instructions(surface: "mcp" | "agent"): string | undefined;
   confirm(request: ConfirmationRequest): Promise<ConfirmationOutcome>;
@@ -114,7 +116,11 @@ export function createAgentUi(options: AgentUiOptions & AgentUiDependencies): Ag
       }
     },
     tools,
-    async contextFor(request, origin, signal) {
+    async contextFor(request, origin, signal, chat) {
+      if (chat) {
+        // TODO: the same context with `clientId: chat.clientId`, skipping presence selection.
+        throw new Error("not implemented");
+      }
       return {
         scope: request ? await options.audience(request) : "default",
         origin,

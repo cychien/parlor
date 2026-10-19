@@ -123,6 +123,8 @@ export interface PresenceUpdate {
   readonly buildId?: string | undefined;
   readonly ops?: readonly string[] | undefined;
   readonly canConfirm?: boolean | undefined;
+  /** Chat threads this client shows; a confirmation bound to one reaches every watcher. */
+  readonly watching?: readonly string[] | undefined;
 }
 
 export interface LeaveNotice {
@@ -144,6 +146,8 @@ export interface ConfirmationPrompt {
   readonly input: unknown;
   readonly origin: AgentOrigin;
   readonly expiresInMs: number;
+  /** The chat thread whose turn asked; the chat renders the card inline there. */
+  readonly threadId?: string | undefined;
 }
 
 export interface ConfirmationsFrame {

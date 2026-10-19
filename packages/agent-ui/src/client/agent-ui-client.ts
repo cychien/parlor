@@ -76,6 +76,8 @@ export interface AgentUiClient extends ClientChannel {
   readonly confirmations: ConfirmationStore;
   screen(): Promise<ScreenSnapshot>;
   start(): () => void;
+  /** Declares a chat thread shown here until the returned function runs (presence `watching`). */
+  watch(threadId: string): () => void;
 }
 
 const REPLY_CACHE_SIZE = 64;
@@ -463,6 +465,12 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
     },
     closed: detachPresence,
     receive,
+    watch(threadId) {
+      // TODO: ref-count threadId in a watched set; send presence with `watching` whenever
+      //   the set changes, and on every later presence.
+      void threadId;
+      throw new Error("not implemented");
+    },
     start() {
       registry.resume();
       return () => {

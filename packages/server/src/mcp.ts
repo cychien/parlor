@@ -246,6 +246,8 @@ export function createMcpHandler<T extends ActionMap>(
               await inCall(ctx, toolCtx, async (signal) =>
                 tool.run(
                   input.data,
+                  // TODO(chat): pass `{ clientId: principal.turn.clientId }` for an
+                  //   inline agent, so its ui_* calls act on the tab the prompt came from.
                   await agentUi!.contextFor(
                     ctx.requestInfo,
                     await verifiedOrigin(callers, ctx.requestInfo, toolCtx),

@@ -16,11 +16,21 @@ export const MAX_PENDING_PER_SCOPE = 8;
 export interface ConfirmationRequest {
   readonly scope: string;
   readonly clientId?: string | undefined;
+  /**
+   * Set when an inline agent asks inside a chat turn: the audience is then every client
+   * watching the thread plus `clientId`, not the presence selection.
+   */
+  readonly thread?: ConfirmationThread | undefined;
   readonly action: string;
   readonly description: string;
   readonly input: unknown;
   readonly origin: AgentOrigin;
   readonly signal?: AbortSignal | undefined;
+}
+
+export interface ConfirmationThread {
+  readonly threadId: string;
+  readonly turnId: string;
 }
 
 export type ConfirmationOutcome =
@@ -190,6 +200,11 @@ export class ConfirmationBoard {
   }
 
   #selected(request: ConfirmationRequest): string[] {
+    if (request.thread) {
+      // TODO: every canConfirm client in request.scope whose presence `watching` includes
+      //   thread.threadId, plus request.clientId when it can confirm; prompts carry threadId.
+      throw new Error("not implemented");
+    }
     const selection = this.#directory.select(request.scope, request.clientId);
     if (!selection) return [];
     return [selection.target.client, ...selection.tied]

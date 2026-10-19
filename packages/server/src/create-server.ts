@@ -197,6 +197,7 @@ export function createServer<T extends ActionMap>(
   const host: PluginHost = {
     basePath,
     database,
+    ...(auth ? { auth } : {}),
     callerOf: callers,
     announce: async (target, tags) => {
       if (!syncEnabled || !database || tags.length === 0) return;

@@ -11,6 +11,8 @@ export interface AgentConfirmation {
   readonly origin: AgentOrigin;
   /** Local `Date.now()` time after which the server stops waiting. */
   readonly expiresAt: number;
+  /** The chat thread an inline agent asked from; the chat shows the card inline there. */
+  readonly threadId?: string | undefined;
   readonly approve: () => void;
   readonly decline: () => void;
 }

@@ -137,6 +137,7 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
           clientId,
           scope: currentScope,
           ...(authority ? { principal: authority.principal } : {}),
+          // TODO(chat): `closed`, a signal aborted when this stream ends or is revoked.
           send: (frame) => {
             if (!detached) void stream.push({ event: channel.event, data: frame });
           },

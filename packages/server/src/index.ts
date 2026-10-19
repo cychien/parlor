@@ -12,7 +12,16 @@ export {
   createActionRunner,
   type RunOptions,
 } from "./actions.js";
-export { AuthFailure, type AuthFailureReason, type AuthProvider } from "./auth.js";
+export {
+  type AccountProfile,
+  AuthFailure,
+  type AuthFailureReason,
+  type AuthProvider,
+  type Delegation,
+  type DeviceKeys,
+  type PresenceKey,
+  type TurnDelegation,
+} from "./auth.js";
 export {
   type Caller,
   type CallerResolver,

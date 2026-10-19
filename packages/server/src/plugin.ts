@@ -10,6 +10,7 @@ import type { ActionRegistry } from "@parlor/core/registry";
 import type { ServerChannel } from "@parlor/sync";
 
 import type { CallerOf } from "./access.js";
+import type { AuthProvider } from "./auth.js";
 import type { Caller } from "./caller.js";
 
 /**
@@ -93,6 +94,8 @@ export function pluginRoute<const K extends SignedInKind | "anonymous">(
 export interface PluginHost {
   readonly basePath: string;
   readonly database: DataProvider | undefined;
+  /** The installed auth provider, for plugins that mint or look up credentials (chat). */
+  readonly auth?: AuthProvider | undefined;
   callerOf(request: Request): Promise<Caller>;
   /**
    * Records a sync event for writes made outside an action's transaction, such as through

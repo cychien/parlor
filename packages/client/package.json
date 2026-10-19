@@ -29,6 +29,7 @@
   "dependencies": {
     "@parlor/agent-ui": "workspace:*",
     "@parlor/capabilities": "workspace:*",
+    "@parlor/chat": "workspace:*",
     "@parlor/core": "workspace:*",
     "@parlor/sync": "workspace:*"
   },
