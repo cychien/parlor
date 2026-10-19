@@ -21,12 +21,15 @@ import {
   type SyncDatabase,
 } from "@parlor/sync/server";
 
+import { requireSurface, type Surface } from "./access.js";
+import { AuthFailure } from "./auth.js";
 import {
   type Caller,
   type CallerResolver,
   createCallerResolver,
   sourceFor,
 } from "./caller.js";
+import type { ActionAudit, ConfirmationAnswer } from "./plugin.js";
 import { DEFAULT_SCOPE, type ScopeResolver } from "./scope.js";
 
 export { clientOf, sourceOf } from "./caller.js";
@@ -44,11 +47,16 @@ export interface ActionRunnerOptions<T extends ActionMap> {
     | ((clientId: string | undefined, audience: string) => void)
     | undefined;
   readonly confirm?: Confirm | undefined;
+  readonly audit?: ((record: ActionAudit) => void) | undefined;
+  /** Awaited before every call, so it must memoize; defaults to creating the sync tables. */
+  readonly ready?: (() => Promise<void>) | undefined;
 }
 
 export interface RunOptions {
   readonly signal?: AbortSignal | undefined;
   readonly origin?: AgentOrigin | undefined;
+  /** Refuses callers the surface does not admit, inside the call so the refusal is audited. */
+  readonly surface?: Surface | undefined;
 }
 
 export interface ActionRunner {
@@ -64,6 +72,7 @@ export interface ActionRunner {
 
 interface Gate {
   readonly confirm: Confirm;
+  readonly answered: (answer: ConfirmationAnswer) => void;
   readonly scope: string;
   readonly clientId: string | undefined;
   readonly origin: AgentOrigin | undefined;
@@ -86,6 +95,9 @@ function confirmationGate(gate: Gate): (call: PreparedCall) => Promise<void> {
       origin: gate.origin ?? originOf(ctx.source, ctx.principal ?? ANONYMOUS),
       signal: gate.signal,
     });
+    if (outcome !== "cancelled") {
+      gate.answered(outcome === "shutdown" ? "unavailable" : outcome);
+    }
     switch (outcome) {
       case "approved":
         return;
@@ -127,16 +139,72 @@ const INTERNAL_CALLER: Caller = {
 export function createActionRunner<T extends ActionMap>(
   options: ActionRunnerOptions<T>,
 ): ActionRunner {
-  const { actions, scope, database, sync, onClient, confirm } = options;
+  const { actions, scope, database, sync, onClient, confirm, audit } = options;
   const callers = options.callers ?? createCallerResolver(undefined, scope);
   const pruner = sync && database ? createPruner(database) : undefined;
   let prepared: Promise<void> | undefined;
-  const ready = () => {
-    prepared ??=
-      sync && database
-        ? ensureSyncTables(database.read() as SyncDatabase)
-        : Promise.resolve();
-    return prepared;
+  const ready =
+    options.ready ??
+    (() => {
+      prepared ??=
+        sync && database
+          ? ensureSyncTables(database.read() as SyncDatabase)
+          : Promise.resolve();
+      return prepared;
+    });
+
+  const invoke = async (
+    name: string,
+    input: unknown,
+    request: Request | undefined,
+    caller: Caller,
+    source: ActionSource,
+    runOptions: RunOptions,
+    trace: Trace,
+  ): Promise<InvokeResult> => {
+    if (runOptions.surface) requireSurface(caller, runOptions.surface, callers.enforcing);
+    const client = caller.clientId;
+    onClient?.(client, caller.audience);
+    const signal = runOptions.signal ?? request?.signal;
+    const resolvedScope = caller.scope;
+    const result = await invokeAction(
+      actions,
+      name,
+      input,
+      { scope: resolvedScope, source, principal: caller.principal, signal },
+      {
+        data: database,
+        enforcing: callers.enforcing,
+        onRun: () => {
+          trace.stage = "ran";
+        },
+        confirm: confirm
+          ? confirmationGate({
+              confirm,
+              answered: (answer) => {
+                trace.confirmation = answer;
+              },
+              scope: caller.audience,
+              clientId: client,
+              origin: runOptions.origin,
+              signal,
+            })
+          : undefined,
+        onWrite:
+          sync && database
+            ? async ({ tags, tx }) => {
+                if (tags.length === 0) return;
+                await recordSyncEvent(tx as SyncDatabase, {
+                  scope: resolvedScope,
+                  tags,
+                  source: client,
+                });
+              }
+            : undefined,
+      },
+    );
+    if (result.writes.length > 0) pruner?.touch();
+    return result;
   };
 
   return {
@@ -145,42 +213,60 @@ export function createActionRunner<T extends ActionMap>(
       await ready();
       const caller = request ? await callers(request) : INTERNAL_CALLER;
       const source = sourceFor(declared, caller, callers.enforcing);
-      const client = caller.clientId;
-      onClient?.(client, caller.audience);
-      const signal = runOptions.signal ?? request?.signal;
-      const resolvedScope = caller.scope;
-      const result = await invokeAction(
-        actions,
-        name,
-        input,
-        { scope: resolvedScope, source, principal: caller.principal, signal },
-        {
-          data: database,
-          enforcing: callers.enforcing,
-          confirm: confirm
-            ? confirmationGate({
-                confirm,
-                scope: caller.audience,
-                clientId: client,
-                origin: runOptions.origin,
-                signal,
-              })
-            : undefined,
-          onWrite:
-            sync && database
-              ? async ({ tags, tx }) => {
-                  if (tags.length === 0) return;
-                  await recordSyncEvent(tx as SyncDatabase, {
-                    scope: resolvedScope,
-                    tags,
-                    source: client,
-                  });
-                }
-              : undefined,
-        },
-      );
-      if (result.writes.length > 0) pruner?.touch();
-      return result;
+      const trace: Trace = { stage: "refused", confirmation: undefined };
+      if (!audit) return invoke(name, input, request, caller, source, runOptions, trace);
+      const at = Date.now();
+      const record = async (outcome: ActionAudit["outcome"]) => {
+        try {
+          audit({
+            at,
+            action: name,
+            principal: caller.principal,
+            source,
+            scope: caller.scope,
+            inputDigest: await digest(input),
+            stage: trace.stage,
+            outcome,
+            ...(trace.confirmation ? { confirmation: trace.confirmation } : {}),
+          });
+        } catch (error) {
+          console.error("[parlor] audit failed:", error);
+        }
+      };
+      try {
+        const result = await invoke(
+          name,
+          input,
+          request,
+          caller,
+          source,
+          runOptions,
+          trace,
+        );
+        await record("ok");
+        return result;
+      } catch (error) {
+        await record(outcomeOf(error));
+        throw error;
+      }
     },
   };
+}
+
+interface Trace {
+  stage: ActionAudit["stage"];
+  confirmation: ConfirmationAnswer | undefined;
+}
+
+function outcomeOf(error: unknown): ActionAudit["outcome"] {
+  if (error instanceof ActionError) return error.code;
+  if (error instanceof AuthFailure) return "unauthenticated";
+  if (error instanceof Error && error.name === "AbortError") return "cancelled";
+  return "internal";
+}
+
+async function digest(input: unknown): Promise<string> {
+  const bytes = new TextEncoder().encode(JSON.stringify(input ?? null));
+  const hash = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }

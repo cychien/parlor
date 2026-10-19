@@ -12,6 +12,7 @@ type SignedInKind = AuthenticatedPrincipal["kind"];
 export const ROUTE_ACCESS = {
   manifest: ["user", "agent"],
   actions: ["user", "agent"],
+  pluginActions: ["user", "host"],
   mcp: ["agent"],
   sync: ["user", "host"],
   channels: ["user"],
@@ -49,4 +50,18 @@ export function requireSurface<S extends Surface>(
   const { kind } = caller.principal;
   if (kind === "anonymous") throw new ActionError("unauthenticated", "Sign in first.");
   throw new ActionError("forbidden", `A ${kind} principal cannot use ${surface}.`);
+}
+
+export function requireAccess<K extends PrincipalKind>(
+  caller: Caller,
+  kinds: readonly K[],
+  enforcing: boolean,
+): CallerOf<K> {
+  const { kind } = caller.principal;
+  const listed = (kinds as readonly PrincipalKind[]).includes(kind);
+  if (kind === "anonymous" && (enforcing || !listed)) {
+    throw new ActionError("unauthenticated", "Sign in first.");
+  }
+  if (!listed) throw new ActionError("forbidden", `A ${kind} principal cannot use this.`);
+  return caller as CallerOf<K>;
 }

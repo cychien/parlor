@@ -1,6 +1,7 @@
 export {
   type CallerOf,
   type KindsOf,
+  requireAccess,
   requireSurface,
   ROUTE_ACCESS,
   type Surface,
@@ -28,6 +29,18 @@ export {
   type SyncOptions,
 } from "./create-server.js";
 export { createMcpHandler, type McpOptions } from "./mcp.js";
+export {
+  type ActionAudit,
+  type AnyPluginRoute,
+  type ConfirmationAnswer,
+  type Migration,
+  type PluginHost,
+  type PluginRoute,
+  pluginRoute,
+  type PluginRuntime,
+  type PublicPluginRoute,
+  type ServerPlugin,
+} from "./plugin.js";
 export {
   CLIENT_HEADER,
   DEFAULT_BASE_PATH,

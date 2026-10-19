@@ -39,6 +39,8 @@ function testAuth() {
   const keyOf = (principal: AuthenticatedPrincipal) =>
     `${principal.kind}:${principal.userId}`;
   const provider: AuthProvider = {
+    name: "test-auth",
+    setup: () => ({}),
     enforcing: true,
     authenticate(request) {
       calls += 1;

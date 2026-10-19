@@ -1,10 +1,12 @@
 import type { AuthenticatedPrincipal, Principal } from "@parlor/core";
 
+import type { ServerPlugin } from "./plugin.js";
+
 /**
  * Where identity comes from. The server calls `authenticate` once per request and hands
- * the principal to actions, MCP, sync and agent UI.
+ * the principal to actions, MCP, sync and agent UI. It installs like any plugin, first.
  */
-export interface AuthProvider {
+export interface AuthProvider extends ServerPlugin {
   /**
    * When true, an anonymous caller is refused by non-public actions, by MCP (with
    * `challenge`) and by `/ui`, and `x-parlor-source` no longer decides an action's source.

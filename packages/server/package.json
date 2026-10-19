@@ -26,6 +26,7 @@
     "@parlor/agent-ui": "workspace:*",
     "@parlor/core": "workspace:*",
     "@parlor/sync": "workspace:*",
+    "drizzle-orm": "^0.45.4",
     "h3": "catalog:",
     "zod": "catalog:"
   },

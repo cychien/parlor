@@ -31,6 +31,8 @@ export interface InvokeOptions {
   readonly confirm?: ((call: PreparedCall) => Promise<void>) | undefined;
   /** An enforcing auth provider is installed: non-public actions refuse anonymous callers. */
   readonly enforcing?: boolean | undefined;
+  /** Called once, right before `run`: every earlier refusal leaves it uncalled. */
+  readonly onRun?: (() => void) | undefined;
 }
 
 export interface InvokeResult {
@@ -76,11 +78,13 @@ export async function invokeAction(
   const reads = readTagsFor(action, input);
 
   if (!data) {
+    options.onRun?.();
     const result = await action.run(input, { ...ctx, principal, db: undefined as never });
     return { data: result, reads, writes: writeTagsFor(action, result) };
   }
 
   if (!isMutating(action)) {
+    options.onRun?.();
     const result = await action.run(input, {
       ...ctx,
       principal,
@@ -90,6 +94,7 @@ export async function invokeAction(
   }
 
   return data.transaction(async (tx) => {
+    options.onRun?.();
     const result = await action.run(input, { ...ctx, principal, db: tx as never });
     const writes = writeTagsFor(action, result);
     await onWrite?.({ action, name, tags: writes, ctx, tx });
