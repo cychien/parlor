@@ -44,19 +44,29 @@ export function scrollIntoCenter(
   element: Element,
 ): Promise<void> {
   if (!window) return Promise.resolve();
+  const hidden = window.document?.visibilityState === "hidden";
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const started = window.performance.now();
   let last = element.getBoundingClientRect().top;
   element.scrollIntoView({
     block: "center",
     inline: "nearest",
-    behavior: reduced ? "instant" : "smooth",
+    behavior: reduced || hidden ? "instant" : "smooth",
   });
+  if (hidden) return Promise.resolve();
   return new Promise((resolve) => {
     let moved = false;
     let still = 0;
     let frames = 0;
+    let done = false;
+    const finish = () => {
+      done = true;
+      globalThis.clearTimeout(cap);
+      resolve();
+    };
+    const cap = globalThis.setTimeout(finish, SCROLL_SETTLE_CAP_MS);
     const step = () => {
+      if (done) return;
       const { top } = element.getBoundingClientRect();
       frames++;
       if (top === last) still++;
@@ -67,7 +77,7 @@ export function scrollIntoCenter(
       }
       const settled = moved ? still >= STILL_FRAMES : frames >= NO_SCROLL_FRAMES;
       if (settled || window.performance.now() - started >= SCROLL_SETTLE_CAP_MS) {
-        resolve();
+        finish();
         return;
       }
       window.requestAnimationFrame(step);
