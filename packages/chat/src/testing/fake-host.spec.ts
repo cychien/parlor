@@ -1,6 +1,15 @@
 import { asId } from "@parlor/core";
 import type { DatabaseHandle } from "@parlor/data";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import {
   agentRef,
@@ -164,7 +173,11 @@ describe("createFakeHost over real HTTP", () => {
       { kind: "wait_for_answer", askId: "u1.1" },
       { kind: "finish", outcome: { state: "done", stopReason: "end_turn" } },
     ]);
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await vi.waitFor(async () =>
+      expect(
+        await rows(handle, "select id from parlor_chat_items where kind = 'ask'"),
+      ).toEqual([{ id: "u1.1" }]),
+    );
     await app.action("alice", "answer", {
       threadId: "t1",
       turnId: "u1",
