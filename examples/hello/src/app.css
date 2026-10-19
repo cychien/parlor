@@ -69,6 +69,7 @@ h2 {
 
 input,
 textarea,
+select,
 button {
   font: inherit;
   color: inherit;

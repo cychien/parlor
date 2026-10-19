@@ -152,7 +152,7 @@ function Item({ item }: { readonly item: ChatItem<AgentConfirmation> }) {
       return (
         <>
           <p className="reply">{item.text}</p>
-          {item.interrupted ? <p className="item-meta">Stopped</p> : null}
+          {item.interrupted ? <p className="item-meta">Interrupted</p> : null}
         </>
       );
     case "reasoning":
