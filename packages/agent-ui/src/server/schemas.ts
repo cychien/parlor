@@ -62,8 +62,10 @@ export const clientMessageSchema = z.union([
     platform: z.string(),
     buildId: z.string().optional(),
     ops: z.array(z.string()).optional(),
+    canConfirm: z.boolean().optional(),
   }),
   z.object({ type: z.literal("leave") }),
+  z.object({ type: z.literal("answer"), id: z.string().min(1), approve: z.boolean() }),
 ]);
 
 export function parseClientMessage(body: unknown): ClientMessage | undefined {

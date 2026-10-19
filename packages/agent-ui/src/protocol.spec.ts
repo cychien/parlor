@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { parseUiRequest } from "./protocol.js";
+import { parseUiFrame } from "./protocol.js";
 
 const envelope = { id: "r1", origin: { via: "mcp" }, timeoutMs: 1000 };
-const parse = (value: unknown) => parseUiRequest(JSON.stringify(value));
+const parseRaw = (data: string) => {
+  const parsed = parseUiFrame(data);
+  return parsed.ok ? { ok: true, request: parsed.frame } : parsed;
+};
+const parse = (value: unknown) => parseRaw(JSON.stringify(value));
 
-describe("parseUiRequest", () => {
+describe("parseUiFrame requests", () => {
   it("reads a screen request and keeps only the fields the protocol defines", () => {
     expect(
       parse({
@@ -52,11 +56,11 @@ describe("parseUiRequest", () => {
       id: undefined,
     });
     expect(parse(null)).toEqual({ ok: false, id: undefined });
-    expect(parseUiRequest("not json")).toEqual({ ok: false, id: undefined });
+    expect(parseRaw("not json")).toEqual({ ok: false, id: undefined });
   });
 });
 
-describe("parseUiRequest navigate", () => {
+describe("parseUiFrame requests navigate", () => {
   it("reads a navigate request with its optional fields", () => {
     const input = {
       to: "/tasks/$taskId",
@@ -88,7 +92,7 @@ describe("parseUiRequest navigate", () => {
   });
 });
 
-describe("parseUiRequest set", () => {
+describe("parseUiFrame requests set", () => {
   it("reads a set request with its optional key and keeps only the fields the protocol defines", () => {
     const input = { view: "newTask", value: { title: "Buy", done: false } };
     expect(parse({ ...envelope, op: "set", input: { ...input, extra: 1 } })).toEqual({
@@ -117,7 +121,7 @@ describe("parseUiRequest set", () => {
   });
 });
 
-describe("parseUiRequest highlight", () => {
+describe("parseUiFrame requests highlight", () => {
   it("reads a highlight request with its optional key and field", () => {
     const input = { view: "task", key: "t1", field: "notes" };
     expect(
@@ -146,5 +150,64 @@ describe("parseUiRequest highlight", () => {
       ok: true,
       request: { ...envelope, op: "highlight", input: { view: "f" } },
     });
+  });
+});
+
+describe("parseUiFrame", () => {
+  const frame = (value: unknown) => parseUiFrame(JSON.stringify(value));
+  const prompt = {
+    id: "c1",
+    action: "deleteTask",
+    description: "Delete a task.",
+    input: { id: "t1" },
+    origin: { via: "mcp", name: "Claude Code" },
+    expiresInMs: 59_000,
+  };
+
+  it("reads a confirmations frame and keeps only the fields the protocol defines", () => {
+    expect(
+      frame({ type: "confirmations", items: [{ ...prompt, extra: 1 }], extra: 2 }),
+    ).toEqual({ ok: true, frame: { type: "confirmations", items: [prompt] } });
+    expect(frame({ type: "confirmations", items: [] })).toEqual({
+      ok: true,
+      frame: { type: "confirmations", items: [] },
+    });
+  });
+
+  it("drops a malformed item instead of the frame, so one bad prompt never hides the others", () => {
+    const parsed = frame({
+      type: "confirmations",
+      items: [
+        { ...prompt, id: "" },
+        { ...prompt, id: "c2", expiresInMs: -1 },
+        { ...prompt, id: "c3", origin: { via: "x" } },
+        { ...prompt, id: "c4", action: 7 },
+        null,
+        prompt,
+      ],
+    });
+    expect(parsed).toEqual({
+      ok: true,
+      frame: { type: "confirmations", items: [prompt] },
+    });
+  });
+
+  it("rejects a confirmations frame whose items are not a list", () => {
+    expect(frame({ type: "confirmations", items: "none" })).toEqual({
+      ok: false,
+      id: undefined,
+    });
+  });
+
+  it("still reads a request, and reports the id of one it cannot read", () => {
+    expect(frame({ ...envelope, op: "screen", input: {} })).toEqual({
+      ok: true,
+      frame: { ...envelope, op: "screen", input: {} },
+    });
+    expect(frame({ ...envelope, op: "explode", input: {} })).toEqual({
+      ok: false,
+      id: "r1",
+    });
+    expect(parseUiFrame("not json")).toEqual({ ok: false, id: undefined });
   });
 });

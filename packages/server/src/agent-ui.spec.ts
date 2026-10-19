@@ -2,7 +2,7 @@ import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/cli
 import { type ActionMap, type DataProvider, defineAction } from "@parlor/core";
 import { createRegistry } from "@parlor/core/registry";
 import { createDatabase, type DatabaseHandle } from "@parlor/data";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import {
@@ -120,11 +120,23 @@ async function openBrowser(
   const decoder = new TextDecoder();
   const requests: unknown[] = [];
   const via: ("stream" | "reply")[] = [];
+  const lists: {
+    id: string;
+    action: string;
+    description: string;
+    input: unknown;
+    origin: unknown;
+  }[][] = [];
   let buffer = "";
   let handshake!: () => void;
   const ready = new Promise<void>((resolve) => (handshake = resolve));
   const answer = async (data: string, channel: "stream" | "reply"): Promise<void> => {
-    const request = JSON.parse(data) as {
+    const frame = JSON.parse(data) as { type?: string; items?: (typeof lists)[number] };
+    if (frame.type === "confirmations") {
+      lists.push(frame.items ?? []);
+      return;
+    }
+    const request = frame as unknown as {
       id: string;
       op: string;
       input: { to?: string; value?: Record<string, unknown> };
@@ -174,19 +186,33 @@ async function openBrowser(
     await reader.cancel().catch(() => {});
     await pump;
   });
+  const answerCard = (cardId: string, approve: boolean) =>
+    post(target, "/_parlor/ui", { type: "answer", id: cardId, approve }, id);
   return {
     requests,
     via,
+    shown: () => lists.at(-1) ?? [],
+    lists,
+    approve: (cardId: string) => answerCard(cardId, true),
+    decline: (cardId: string) => answerCard(cardId, false),
     presence: (
       focused: boolean,
       visible: boolean,
       platform = "web",
+      canConfirm = true,
       ops: readonly string[] | null = ALL_OPS,
     ) =>
       post(
         target,
         "/_parlor/ui",
-        { type: "presence", focused, visible, platform, ...(ops ? { ops } : {}) },
+        {
+          type: "presence",
+          focused,
+          visible,
+          platform,
+          canConfirm,
+          ...(ops ? { ops } : {}),
+        },
         id,
       ),
     leave: () => post(target, "/_parlor/ui", { type: "leave" }, id),
@@ -216,10 +242,11 @@ async function openSilentBrowser(id: string) {
   return { leave: () => post(server, "/_parlor/ui", { type: "leave" }, id) };
 }
 
-async function mcp(target = server) {
+async function mcp(target = server, headers: Record<string, string> = {}) {
   const client = new Client({ name: "test", version: "0.0.0" });
   await client.connect(
     new StreamableHTTPClientTransport(new URL("http://app.test/_parlor/mcp"), {
+      requestInit: { headers },
       fetch: (input, init) => target.fetch(new Request(input, init)),
     }),
   );
@@ -318,6 +345,30 @@ describe("agent UI over MCP", () => {
     });
   });
 
+  it("keeps serving MCP when the installed manifest predates writable views", async () => {
+    const target = createServer({ actions, database: lend(database) });
+    closers.push(() => target.close());
+    target.installUiManifest?.(() => ({
+      protocol: 1,
+      app: { id: "dev.parlor.test", name: "Test" },
+      routes: [{ path: "/", params: [], views: ["form"] }],
+      views: [{ name: "form", description: "A form.", keyed: false }],
+    }));
+    const client = await mcp(target);
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name)).toEqual([
+      "hello",
+      "ui_screen",
+      "ui_navigate",
+      "ui_set",
+      "ui_highlight",
+    ]);
+    expect(tools.find((t) => t.name === "ui_set")?.description).not.toContain(
+      "Forms you can fill",
+    );
+    expect((await client.callTool({ name: "hello", arguments: {} })).isError).toBeFalsy();
+  });
+
   it("serves the full manifest as an MCP resource and over HTTP", async () => {
     const client = await mcp();
     const resource = await client.readResource({ uri: "parlor://manifest" });
@@ -400,7 +451,7 @@ describe("agent UI over MCP", () => {
 
   it("refuses ui_set and ui_highlight with unsupported_op for an app that predates them, and keeps screen and navigate working", async () => {
     const tab = await openBrowser("old-tab", "/");
-    await tab.presence(true, true, "tauri", null);
+    await tab.presence(true, true, "tauri", false, null);
     const client = await mcp();
     const refusals = await Promise.all([
       client.callTool({
@@ -496,6 +547,24 @@ describe("agent UI over MCP", () => {
       reachable: false,
       reason: "no_client",
       href: "http://app.test/tasks/t%201",
+    });
+  });
+
+  it("answers bad arguments to a ui_ tool in the same error body as every other failure", async () => {
+    const client = await mcp();
+    const result = await client.callTool({
+      name: "ui_set",
+      arguments: { value: { title: "x" } },
+    });
+    expect(result.isError).toBe(true);
+    expect(
+      JSON.parse((result.content as { text: string }[])[0]!.text) as unknown,
+    ).toEqual({
+      error: {
+        code: "invalid_input",
+        message: 'Invalid input for "ui_set"',
+        issues: [{ path: "view", message: expect.any(String) }],
+      },
     });
   });
 
@@ -750,5 +819,326 @@ describe("external agent policy", () => {
     expect(await toolNames({ external: "read-only" })).toEqual(["hello", "ui_screen"]);
     expect(await toolNames({ external: false })).toEqual(["hello"]);
     expect(await toolNames(false)).toEqual(["hello"]);
+  });
+});
+
+describe("actions that ask the user to confirm", () => {
+  const ran: string[] = [];
+  const confirmActions = createRegistry({
+    hello: defineAction({
+      description: "Say hello.",
+      input: z.object({}),
+      run: () => ({ message: "hi" }),
+    }),
+    removeNote: defineAction({
+      description: "Remove a note.",
+      input: z.object({ id: z.string() }),
+      confirm: true,
+      run: ({ id }) => {
+        ran.push(id);
+        return { removed: id };
+      },
+    }),
+  });
+  const open = (agentUi: ServerOptions<ActionMap>["agentUi"] = {}) => {
+    ran.length = 0;
+    const target = createServer({
+      actions: confirmActions,
+      database: lend(database),
+      agentUi: { timeoutMs: 2000, confirmTimeoutMs: 600, ...(agentUi || {}) },
+    });
+    closers.push(() => target.close());
+    return target;
+  };
+  const errorOf = (result: { content?: unknown }) =>
+    (
+      JSON.parse((result.content as { text: string }[])[0]!.text) as {
+        error: { code: string; message: string };
+      }
+    ).error;
+  const settle = (ms = 50) => new Promise((r) => setTimeout(r, ms));
+
+  it("shows a card on the client the user looks at and runs the action once they approve", async () => {
+    const target = open();
+    const tab = await openBrowser("tab-1", "/", target);
+    await tab.presence(true, true);
+    const call = (await mcp(target)).callTool({
+      name: "removeNote",
+      arguments: { id: "n1" },
+    });
+    await settle();
+    expect(tab.shown()).toEqual([
+      expect.objectContaining({
+        action: "removeNote",
+        description: "Remove a note.",
+        input: { id: "n1" },
+        origin: expect.objectContaining({ via: "mcp" }),
+      }),
+    ]);
+    expect(ran).toEqual([]);
+    expect((await tab.approve(tab.shown()[0]!.id)).status).toBe(204);
+    const result = await call;
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toEqual({ removed: "n1" });
+    expect(ran).toEqual(["n1"]);
+    await settle();
+    expect(tab.shown()).toEqual([]);
+  });
+
+  it("fails with declined when the user declines and runs nothing", async () => {
+    const target = open();
+    const tab = await openBrowser("tab-1", "/", target);
+    await tab.presence(true, true);
+    const call = (await mcp(target)).callTool({
+      name: "removeNote",
+      arguments: { id: "n1" },
+    });
+    await settle();
+    await tab.decline(tab.shown()[0]!.id);
+    const result = await call;
+    expect(result.isError).toBe(true);
+    expect(errorOf(result).code).toBe("declined");
+    expect(ran).toEqual([]);
+  });
+
+  it("fails with confirmation_timeout when nobody answers, and takes the card away", async () => {
+    const target = open({ confirmTimeoutMs: 300 });
+    const tab = await openBrowser("tab-1", "/", target);
+    await tab.presence(true, true);
+    const started = Date.now();
+    const result = await (
+      await mcp(target)
+    ).callTool({
+      name: "removeNote",
+      arguments: { id: "n1" },
+    });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(290);
+    expect(errorOf(result).code).toBe("confirmation_timeout");
+    await settle();
+    expect(tab.shown()).toEqual([]);
+    expect(ran).toEqual([]);
+  });
+
+  it("fails at once with confirmation_unavailable, telling the agent to ask the user, when no app is open", async () => {
+    const target = open();
+    const started = Date.now();
+    const result = await (
+      await mcp(target)
+    ).callTool({
+      name: "removeNote",
+      arguments: { id: "n1" },
+    });
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(errorOf(result).code).toBe("confirmation_unavailable");
+    expect(errorOf(result).message).toContain("Ask the user");
+    expect(ran).toEqual([]);
+  });
+
+  it("tells the agent the action did not run when the server shuts down while the card waits", async () => {
+    const target = open();
+    const tab = await openBrowser("tab-1", "/", target);
+    await tab.presence(true, true);
+    const call = (await mcp(target)).callTool({
+      name: "removeNote",
+      arguments: { id: "n1" },
+    });
+    await vi.waitFor(() => expect(tab.shown()).toHaveLength(1));
+    await target.close();
+    const result = await call;
+    expect(result.isError).toBe(true);
+    expect(errorOf(result).code).toBe("confirmation_unavailable");
+    expect(errorOf(result).message).toContain("removeNote did not run");
+    expect(ran).toEqual([]);
+  });
+
+  it("is unavailable when the open app does not render confirmations", async () => {
+    const target = open();
+    const tab = await openBrowser("tab-1", "/", target);
+    await tab.presence(true, true, "web", false);
+    const result = await (
+      await mcp(target)
+    ).callTool({
+      name: "removeNote",
+      arguments: { id: "n1" },
+    });
+    expect(errorOf(result).code).toBe("confirmation_unavailable");
+    expect(tab.shown()).toEqual([]);
+  });
+
+  it("asks even when the ui_ tools are hidden from external agents", async () => {
+    const target = open({ external: false });
+    const tab = await openBrowser("tab-1", "/", target);
+    await tab.presence(true, true);
+    const client = await mcp(target);
+    expect((await client.listTools()).tools.map((t) => t.name)).toEqual([
+      "hello",
+      "removeNote",
+    ]);
+    const call = client.callTool({ name: "removeNote", arguments: { id: "n1" } });
+    await settle();
+    expect(ran).toEqual([]);
+    await tab.approve(tab.shown()[0]!.id);
+    expect((await call).isError).toBeFalsy();
+    expect(ran).toEqual(["n1"]);
+  });
+
+  it("shows the card on every tied client, and the first answer wins", async () => {
+    const target = open();
+    const a = await openBrowser("tab-a", "/", target);
+    const b = await openBrowser("tab-b", "/settings", target);
+    await Promise.all([a.presence(true, true), b.presence(true, true)]);
+    const call = (await mcp(target)).callTool({
+      name: "removeNote",
+      arguments: { id: "n1" },
+    });
+    await settle();
+    expect(a.shown()).toHaveLength(1);
+    expect(b.shown()).toHaveLength(1);
+    const id = a.shown()[0]!.id;
+    expect((await a.approve(id)).status).toBe(204);
+    expect((await b.approve(id)).status).toBe(404);
+    expect((await call).isError).toBeFalsy();
+    await settle();
+    expect([a.shown(), b.shown()]).toEqual([[], []]);
+    expect(ran).toEqual(["n1"]);
+  });
+
+  it("does not make the agent wait for the screen while a confirmation is pending", async () => {
+    const target = open({ confirmTimeoutMs: 2000 });
+    const tab = await openBrowser("tab-1", "/", target);
+    await tab.presence(true, true);
+    const client = await mcp(target);
+    const call = client.callTool({ name: "removeNote", arguments: { id: "n1" } });
+    await settle();
+    const started = Date.now();
+    const screenResult = await client.callTool({ name: "ui_screen", arguments: {} });
+    expect(screenResult.isError).toBeFalsy();
+    expect(Date.now() - started).toBeLessThan(1000);
+    await tab.decline(tab.shown()[0]!.id);
+    await call;
+  });
+
+  it("takes the card away when the caller drops the request while the card waits", async () => {
+    const target = open({ confirmTimeoutMs: 5000 });
+    const tab = await openBrowser("tab-1", "/", target);
+    await tab.presence(true, true);
+    const controller = new AbortController();
+    const call = target
+      .fetch(
+        new Request("http://app.test/_parlor/actions/removeNote", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-parlor-source": "agent" },
+          body: JSON.stringify({ id: "n1" }),
+          signal: controller.signal,
+        }),
+      )
+      .catch((error: unknown) => error);
+    await settle();
+    expect(tab.shown()).toHaveLength(1);
+    controller.abort();
+    await call;
+    await settle(100);
+    expect(tab.shown()).toEqual([]);
+    expect(ran).toEqual([]);
+  });
+
+  it("takes the card away and never runs the action when the MCP client cancels the call", async () => {
+    const target = open({ confirmTimeoutMs: 5000 });
+    const tab = await openBrowser("tab-1", "/", target);
+    await tab.presence(true, true);
+    const controller = new AbortController();
+    const call = (await mcp(target))
+      .callTool(
+        { name: "removeNote", arguments: { id: "n1" } },
+        { signal: controller.signal },
+      )
+      .catch((error: unknown) => error);
+    await vi.waitFor(() => expect(tab.shown()).toHaveLength(1));
+    const cardId = tab.shown()[0]!.id;
+    controller.abort();
+    await call;
+    await vi.waitFor(() => expect(tab.shown()).toEqual([]));
+    expect((await tab.approve(cardId)).status).toBe(404);
+    await settle();
+    expect(ran).toEqual([]);
+  });
+
+  it("leaves another client's call waiting when its own call has the same JSON-RPC id", async () => {
+    const target = open({ confirmTimeoutMs: 5000 });
+    const tab = await openBrowser("tab-1", "/", target);
+    await tab.presence(true, true);
+    const quitter = await mcp(target, { authorization: "Bearer quitter" });
+    const stayer = await mcp(target, { authorization: "Bearer stayer" });
+    const controller = new AbortController();
+    const cancelled = quitter
+      .callTool(
+        { name: "removeNote", arguments: { id: "n1" } },
+        { signal: controller.signal },
+      )
+      .catch((error: unknown) => error);
+    const waiting = stayer.callTool({ name: "removeNote", arguments: { id: "n2" } });
+    await vi.waitFor(() => expect(tab.shown()).toHaveLength(2));
+    controller.abort();
+    await cancelled;
+    await vi.waitFor(() => expect(tab.shown()).toHaveLength(1));
+    const remaining = tab.shown()[0]!;
+    expect(remaining.input).toEqual({ id: "n2" });
+    await tab.approve(remaining.id);
+    expect((await waiting).isError).toBeFalsy();
+    expect(ran).toEqual(["n2"]);
+  });
+
+  it("asks for HTTP callers only when they claim to be an agent, and maps the outcomes to statuses", async () => {
+    const target = open({ confirmTimeoutMs: 200 });
+    const asUi = await target.fetch(
+      new Request("http://app.test/_parlor/actions/removeNote", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-parlor-source": "ui",
+          "x-parlor-client": "tab-x",
+        },
+        body: JSON.stringify({ id: "n1" }),
+      }),
+    );
+    expect(asUi.status).toBe(200);
+    const plain = await target.fetch(
+      new Request("http://app.test/_parlor/actions/removeNote", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: "n2" }),
+      }),
+    );
+    expect(plain.status).toBe(200);
+    expect(ran).toEqual(["n1", "n2"]);
+    const asAgent = (id: string) =>
+      target.fetch(
+        new Request("http://app.test/_parlor/actions/removeNote", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-parlor-source": "agent" },
+          body: JSON.stringify({ id }),
+        }),
+      );
+    const none = await asAgent("n3");
+    expect(none.status).toBe(503);
+    expect(await none.json()).toMatchObject({
+      error: { code: "confirmation_unavailable" },
+    });
+    const tab = await openBrowser("tab-1", "/", target);
+    await tab.presence(true, true);
+    const unanswered = await asAgent("n4");
+    expect(unanswered.status).toBe(504);
+    const declining = asAgent("n5");
+    await settle();
+    await tab.decline(tab.shown()[0]!.id);
+    const declined = await declining;
+    expect(declined.status).toBe(403);
+    expect(await declined.json()).toMatchObject({ error: { code: "declined" } });
+    expect(ran).toEqual(["n1", "n2"]);
+  });
+
+  it("states the confirmation convention in the server instructions", async () => {
+    const target = open();
+    expect((await mcp(target)).getInstructions()).toContain("ask the user to approve");
   });
 });

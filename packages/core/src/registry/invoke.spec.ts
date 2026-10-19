@@ -99,3 +99,103 @@ describe("invokeAction with a data provider", () => {
     );
   });
 });
+
+describe("invokeAction confirmation", () => {
+  const log: string[] = [];
+  const data = {
+    read: () => "read-db",
+    transaction: async <T>(run: (tx: unknown) => Promise<T>) => {
+      log.push("begin");
+      const result = await run("tx-db");
+      log.push("commit");
+      return result;
+    },
+  };
+  const gated = createRegistry({
+    remove: defineAction({
+      description: "remove",
+      input: z.object({ id: z.string(), force: z.boolean().default(false) }),
+      writes: ["tasks"],
+      confirm: true,
+      run: ({ id }) => {
+        log.push("run");
+        return { id };
+      },
+    }),
+    list: defineAction({
+      description: "list",
+      input: z.object({}),
+      run: () => "listed",
+    }),
+  });
+  const from = (source: "ui" | "agent" | "http" | "mcp") => ({ scope: "test", source });
+
+  it.each(["mcp", "agent"] as const)(
+    "asks before a %s call with the parsed input, then runs it outside the confirmation's wait",
+    async (source) => {
+      log.length = 0;
+      const confirm = vi.fn(async () => {
+        log.push("confirm");
+      });
+      await expect(
+        invokeAction(gated, "remove", { id: "t1" }, from(source), { data, confirm }),
+      ).resolves.toMatchObject({ data: { id: "t1" } });
+      expect(confirm).toHaveBeenCalledWith({
+        action: gated.get("remove"),
+        name: "remove",
+        input: { id: "t1", force: false },
+        ctx: from(source),
+      });
+      expect(log).toEqual(["confirm", "begin", "run", "commit"]);
+    },
+  );
+
+  it("stops the call and opens no transaction when the confirmation rejects", async () => {
+    log.length = 0;
+    const confirm = async () => {
+      throw new ActionError("declined", "The user said no.");
+    };
+    const error = await invokeAction(gated, "remove", { id: "t1" }, from("mcp"), {
+      data,
+      confirm,
+    }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ActionError);
+    expect((error as ActionError).code).toBe("declined");
+    expect(log).toEqual([]);
+  });
+
+  it.each(["ui", "http"] as const)(
+    "asks for an mcp call but never for a %s call",
+    async (source) => {
+      log.length = 0;
+      const confirm = vi.fn(async () => {});
+      await invokeAction(gated, "remove", { id: "t1" }, from(source), { data, confirm });
+      expect(confirm).not.toHaveBeenCalled();
+      expect(log).toEqual(["begin", "run", "commit"]);
+      await invokeAction(gated, "remove", { id: "t1" }, from("mcp"), { data, confirm });
+      expect(confirm).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("never asks for an action without confirm, or before the input is valid, but asks once both hold", async () => {
+    const confirm = vi.fn(async () => {});
+    await invokeAction(gated, "list", {}, from("mcp"), { confirm });
+    const error = await invokeAction(gated, "remove", { id: 7 }, from("mcp"), {
+      confirm,
+    }).catch((e: unknown) => e);
+    expect((error as ActionError).code).toBe("invalid_input");
+    expect(confirm).not.toHaveBeenCalled();
+    await invokeAction(gated, "remove", { id: "t1" }, from("mcp"), { data, confirm });
+    expect(confirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed with confirmation_unavailable when a gated call has nobody to ask", async () => {
+    log.length = 0;
+    const error = await invokeAction(gated, "remove", { id: "t1" }, from("mcp"), {
+      data,
+    }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ActionError);
+    expect((error as ActionError).code).toBe("confirmation_unavailable");
+    expect(log).toEqual([]);
+  });
+});

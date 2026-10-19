@@ -1,6 +1,15 @@
 import type { z } from "zod";
 
-export type ActionErrorCode = "not_found" | "invalid_input" | "internal";
+export const ACTION_ERROR_CODES = [
+  "not_found",
+  "invalid_input",
+  "declined",
+  "confirmation_timeout",
+  "confirmation_unavailable",
+  "internal",
+] as const;
+
+export type ActionErrorCode = (typeof ACTION_ERROR_CODES)[number];
 
 export interface ActionErrorBody {
   readonly error: {

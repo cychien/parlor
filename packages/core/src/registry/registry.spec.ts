@@ -41,4 +41,29 @@ describe("createRegistry", () => {
       properties: { name: { type: "string", default: "world" } },
     });
   });
+
+  it("leaves confirm out of the descriptor of an action that does not ask, so the manifest stays as it was", () => {
+    const [descriptor] = createRegistry({ hello }).describe();
+    expect(Object.keys(descriptor!)).toEqual([
+      "name",
+      "description",
+      "mutating",
+      "inputSchema",
+    ]);
+  });
+
+  it("says which actions ask the user to confirm", () => {
+    const remove = defineAction({
+      description: "Remove.",
+      input: z.object({}),
+      writes: ["tasks"],
+      confirm: true,
+      run: () => 1,
+    });
+    expect(
+      createRegistry({ hello, remove })
+        .describe()
+        .map((d) => d.confirm),
+    ).toEqual([undefined, true]);
+  });
 });

@@ -122,13 +122,36 @@ export interface PresenceUpdate {
   readonly platform: string;
   readonly buildId?: string | undefined;
   readonly ops?: readonly string[] | undefined;
+  readonly canConfirm?: boolean | undefined;
 }
 
 export interface LeaveNotice {
   readonly type: "leave";
 }
 
-export type ClientMessage = UiReply | PresenceUpdate | LeaveNotice;
+export interface ConfirmationAnswer {
+  readonly type: "answer";
+  readonly id: string;
+  readonly approve: boolean;
+}
+
+export type ClientMessage = UiReply | PresenceUpdate | LeaveNotice | ConfirmationAnswer;
+
+export interface ConfirmationPrompt {
+  readonly id: string;
+  readonly action: string;
+  readonly description: string;
+  readonly input: unknown;
+  readonly origin: AgentOrigin;
+  readonly expiresInMs: number;
+}
+
+export interface ConfirmationsFrame {
+  readonly type: "confirmations";
+  readonly items: readonly ConfirmationPrompt[];
+}
+
+export type UiFrame = UiRequest | ConfirmationsFrame;
 
 export type JsonObject = { readonly [key: string]: unknown };
 
@@ -220,8 +243,8 @@ export interface ClientSummary {
   readonly seenAgoMs: number;
 }
 
-export type ParsedUiRequest =
-  | { readonly ok: true; readonly request: UiRequest }
+export type ParsedUiFrame =
+  | { readonly ok: true; readonly frame: UiFrame }
   | { readonly ok: false; readonly id: string | undefined };
 
 type Fields = { readonly [key: string]: unknown };
@@ -307,15 +330,45 @@ function requestOf(json: unknown): UiRequest | undefined {
     : ({ id, origin, timeoutMs, op, input: parsed } as UiRequest);
 }
 
-export function parseUiRequest(data: string): ParsedUiRequest {
-  let json: unknown;
+const isNonNegativeInteger = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
+function promptOf(json: unknown): ConfirmationPrompt | undefined {
+  if (!isFields(json)) return undefined;
+  const { id, action, description, input, expiresInMs } = json;
+  const origin = originOf(json.origin);
+  if (!isString(id) || id === "" || !isString(action) || !isString(description)) {
+    return undefined;
+  }
+  if (!origin || !isNonNegativeInteger(expiresInMs)) return undefined;
+  return { id, action, description, input, origin, expiresInMs };
+}
+
+function confirmationsOf(json: Fields): ConfirmationsFrame | undefined {
+  if (!Array.isArray(json.items)) return undefined;
+  const items = json.items.flatMap((item) => promptOf(item) ?? []);
+  return { type: "confirmations", items };
+}
+
+function parseJson(data: string): unknown {
   try {
-    json = JSON.parse(data);
+    return JSON.parse(data);
   } catch {
-    return { ok: false, id: undefined };
+    return undefined;
+  }
+}
+
+const idOf = (json: unknown) => {
+  const id = isFields(json) ? json.id : undefined;
+  return isString(id) && id !== "" ? id : undefined;
+};
+
+export function parseUiFrame(data: string): ParsedUiFrame {
+  const json = parseJson(data);
+  if (isFields(json) && json.type === "confirmations") {
+    const frame = confirmationsOf(json);
+    return frame ? { ok: true, frame } : { ok: false, id: undefined };
   }
   const request = requestOf(json);
-  if (request) return { ok: true, request };
-  const id = isFields(json) ? json.id : undefined;
-  return { ok: false, id: isString(id) && id !== "" ? id : undefined };
+  return request ? { ok: true, frame: request } : { ok: false, id: idOf(json) };
 }

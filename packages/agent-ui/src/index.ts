@@ -21,8 +21,6 @@ export {
   type LeaveNotice,
   type MatchedRouteSnapshot,
   type NotFoundRouteSnapshot,
-  parseUiRequest,
-  type ParsedUiRequest,
   type PresenceUpdate,
   type QuerySnapshot,
   type QueryStatus,

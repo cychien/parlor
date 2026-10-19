@@ -304,6 +304,89 @@ describe("ClientDirectory connections", () => {
   });
 });
 
+describe("ClientDirectory changes", () => {
+  const watch = () => {
+    const world = setup();
+    const changes: string[] = [];
+    const off = world.directory.subscribe((scope, id, change) =>
+      changes.push(`${scope}:${id}:${change}`),
+    );
+    return { ...world, changes, off };
+  };
+
+  it("tells subscribers when a client joins, moves, or is touched", () => {
+    const { directory, connect, presence, changes } = watch();
+    connect("a");
+    expect(changes).toEqual([]);
+    directory.presence("a", "default", presence(true, true));
+    directory.presence("a", "default", presence(false, true));
+    directory.touch("a");
+    expect(changes).toEqual([
+      "default:a:joined",
+      "default:a:updated",
+      "default:a:updated",
+    ]);
+  });
+
+  it("tells subscribers when a client leaves or its last connection drops, not when another connection does", () => {
+    const { directory, connect, presence, changes } = watch();
+    const first = connect("a");
+    directory.presence("a", "default", presence(true, true));
+    const second = connect("a");
+    directory.presence("a", "default", presence(true, true));
+    changes.length = 0;
+    first();
+    expect(changes).toEqual([]);
+    second();
+    expect(changes).toEqual(["default:a:left"]);
+    changes.length = 0;
+    connect("b");
+    directory.presence("b", "default", presence(true, true));
+    changes.length = 0;
+    directory.leave("b", "default");
+    expect(changes).toEqual(["default:b:left"]);
+  });
+
+  it("says nothing for a touch of an unknown client or a rejected presence, and stops after unsubscribe", () => {
+    const { directory, connect, presence, changes, off } = watch();
+    connect("a");
+    directory.presence("a", "default", presence(true, true));
+    expect(changes).toEqual(["default:a:joined"]);
+    directory.touch("ghost");
+    directory.presence("ghost", "default", presence(true, true));
+    expect(changes).toEqual(["default:a:joined"]);
+    off();
+    directory.touch("a");
+    expect(changes).toEqual(["default:a:joined"]);
+  });
+
+  it("remembers whether a client can draw a confirmation, and lists a scope's targets", () => {
+    const { directory, connect } = setup();
+    connect("a");
+    directory.presence("a", "default", {
+      type: "presence",
+      focused: true,
+      visible: true,
+      platform: "web",
+      canConfirm: true,
+    });
+    connect("b");
+    directory.presence("b", "default", {
+      type: "presence",
+      focused: true,
+      visible: true,
+      platform: "web",
+    });
+    expect(
+      directory.targets("default").map((t) => [t.client.id, t.client.canConfirm]),
+    ).toEqual([
+      ["a", true],
+      ["b", false],
+    ]);
+    expect(directory.targets("elsewhere")).toEqual([]);
+  });
+});
+
 describe("ClientDirectory ops", () => {
   it("remembers the ops a client supports, drops ones it does not know, and assumes screen and navigate when a client lists none", () => {
     const { directory, connect } = setup();

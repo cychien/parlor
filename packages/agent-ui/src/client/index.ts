@@ -1,6 +1,7 @@
 export {
   type ActivityStore,
   type AgentActivity,
+  type AgentActivityKind,
   type AgentUiClient,
   type AgentUiClientOptions,
   createAgentUiClient,
@@ -14,6 +15,7 @@ export {
   type IntersectionObserverLike,
   type RectLike,
 } from "./environment.js";
+export { type AgentConfirmation, type ConfirmationStore } from "./confirmations.js";
 export {
   type AgentWrites,
   type AnyViewBinding,

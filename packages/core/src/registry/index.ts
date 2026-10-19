@@ -3,6 +3,7 @@ export {
   type InvokeContext,
   type InvokeOptions,
   type InvokeResult,
+  type PreparedCall,
   type WriteEvent,
 } from "./invoke.js";
 export {

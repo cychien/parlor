@@ -1,5 +1,5 @@
 import type { ActionContext, AnyAction, DataProvider, Tag } from "../action.js";
-import { isMutating } from "../action.js";
+import { isMutating, needsConfirmation } from "../action.js";
 import { ActionError } from "../errors.js";
 import { readTagsFor, writeTagsFor } from "../tags.js";
 import type { ActionRegistry } from "./registry.js";
@@ -14,9 +14,17 @@ export interface WriteEvent {
   readonly tx: unknown;
 }
 
+export interface PreparedCall {
+  readonly action: AnyAction;
+  readonly name: string;
+  readonly input: unknown;
+  readonly ctx: InvokeContext;
+}
+
 export interface InvokeOptions {
   readonly data?: DataProvider | undefined;
   readonly onWrite?: ((event: WriteEvent) => Promise<void>) | undefined;
+  readonly confirm?: ((call: PreparedCall) => Promise<void>) | undefined;
 }
 
 export interface InvokeResult {
@@ -42,8 +50,17 @@ export async function invokeAction(
     });
   }
   const input = parsed.data;
+  const { data, onWrite, confirm } = options;
+  if (needsConfirmation(action, ctx.source)) {
+    if (!confirm) {
+      throw new ActionError(
+        "confirmation_unavailable",
+        `"${name}" needs the user's approval, but nothing here can ask for it.`,
+      );
+    }
+    await confirm({ action, name, input, ctx });
+  }
   const reads = readTagsFor(action, input);
-  const { data, onWrite } = options;
 
   if (!data) {
     const result = await action.run(input, { ...ctx, db: undefined as never });

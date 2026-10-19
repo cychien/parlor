@@ -16,6 +16,7 @@ export interface ConnectedClient {
   readonly focused: boolean;
   readonly visible: boolean;
   readonly ops: readonly UiOp[];
+  readonly canConfirm: boolean;
   readonly seenAt: number;
 }
 
@@ -31,6 +32,14 @@ export interface Selection {
 
 export type PresenceOutcome = "rejected" | "updated" | "registered";
 
+export type DirectoryChange = "joined" | "updated" | "left";
+
+export type DirectoryListener = (
+  scope: string,
+  clientId: string,
+  change: DirectoryChange,
+) => void;
+
 interface Entry {
   client: ConnectedClient;
   readonly connections: ChannelConnection[];
@@ -42,8 +51,15 @@ export class ClientDirectory {
   readonly #byScope = new Map<string, Set<Entry>>();
   readonly #unannounced = new Map<string, ChannelConnection[]>();
 
+  readonly #listeners = new Set<DirectoryListener>();
+
   constructor(now: () => number = Date.now) {
     this.#now = now;
+  }
+
+  subscribe(listener: DirectoryListener): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
   }
 
   connect(connection: ChannelConnection): () => void {
@@ -59,7 +75,9 @@ export class ClientDirectory {
   touch(clientId: string | undefined): void {
     if (clientId === undefined) return;
     const entry = this.#byId.get(clientId);
-    if (entry) entry.client = { ...entry.client, seenAt: this.#now() };
+    if (!entry) return;
+    entry.client = { ...entry.client, seenAt: this.#now() };
+    this.#notify(entry.client, "updated");
   }
 
   presence(clientId: string, scope: string, update: PresenceUpdate): PresenceOutcome {
@@ -79,6 +97,7 @@ export class ClientDirectory {
       focused: update.focused,
       visible: update.visible,
       ops: update.ops ? update.ops.filter(isUiOp) : LEGACY_UI_OPS,
+      canConfirm: update.canConfirm ?? false,
       seenAt: this.#now(),
     };
     if (entry) {
@@ -89,7 +108,9 @@ export class ClientDirectory {
       this.#scopeSet(scope).add(entry);
     }
     entry.connections.push(...announcing);
-    return announcing.length > 0 ? "registered" : "updated";
+    const outcome = announcing.length > 0 ? "registered" : "updated";
+    this.#notify(client, outcome === "registered" ? "joined" : "updated");
+    return outcome;
   }
 
   leave(clientId: string, scope: string): boolean {
@@ -106,6 +127,10 @@ export class ClientDirectory {
 
   connected(scope: string, clientId: string): boolean {
     return this.#byId.get(clientId)?.client.scope === scope;
+  }
+
+  targets(scope: string): readonly ClientTarget[] {
+    return [...(this.#byScope.get(scope) ?? [])].map((entry) => this.#targetOf(entry));
   }
 
   target(clientId: string): ClientTarget | undefined {
@@ -199,6 +224,11 @@ export class ClientDirectory {
     const peers = this.#byScope.get(entry.client.scope);
     peers?.delete(entry);
     if (peers?.size === 0) this.#byScope.delete(entry.client.scope);
+    this.#notify(entry.client, "left");
+  }
+
+  #notify(client: ConnectedClient, change: DirectoryChange): void {
+    for (const listener of this.#listeners) listener(client.scope, client.id, change);
   }
 
   #scopeSet(scope: string): Set<Entry> {
