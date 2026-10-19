@@ -1,12 +1,14 @@
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { parseConfig } from "@parlor/config";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { serverEnv, startServerProcess } from "./server-process.js";
+import { serverEnv, startServerProcess, stopServerProcess } from "./server-process.js";
 
 describe("serverEnv", () => {
   it("tells the server its port and the origin the web dev server serves the app on", () => {
@@ -111,4 +113,46 @@ describe("startServerProcess shutdown", () => {
       child.kill("SIGKILL");
     }
   }, 60_000);
+});
+
+describe("stopServerProcess", () => {
+  function fakeChild() {
+    const emitter = new EventEmitter();
+    const kill = vi.fn();
+    const child = Object.assign(emitter, {
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      kill,
+    });
+    return { child: child as unknown as ChildProcess, emitter, kill };
+  }
+
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("sends no signal to a child that exits on its own within the grace", async () => {
+    const { child, emitter, kill } = fakeChild();
+    const stopped = stopServerProcess(child, 1000);
+    await vi.advanceTimersByTimeAsync(900);
+    emitter.emit("exit", 0, null);
+    await stopped;
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it("sends SIGTERM once when the child has not exited after the grace", async () => {
+    const { child, emitter, kill } = fakeChild();
+    const stopped = stopServerProcess(child, 1000);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+    emitter.emit("exit", 0, null);
+    await stopped;
+  });
+
+  it("returns at once for a child that already exited", async () => {
+    const { child, kill } = fakeChild();
+    child.exitCode = 0;
+    await stopServerProcess(child, 1000);
+    expect(kill).not.toHaveBeenCalled();
+  });
 });
