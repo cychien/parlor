@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import pg from "pg";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createDatabase, type DatabaseHandle } from "./database.js";
 
@@ -19,15 +19,23 @@ const drivers = [
     : []),
 ];
 
-const handles: DatabaseHandle[] = [];
-afterEach(async () => {
-  for (const handle of handles.splice(0)) await handle.close();
+const handles = new Map<string, DatabaseHandle>();
+
+// PGlite starts on its first query and that is the slow part, so it happens once, outside any test's timeout.
+beforeAll(async () => {
+  for (const driver of drivers) {
+    const handle = await driver.open();
+    await handle.db.execute(sql`select 1`);
+    handles.set(driver.name, handle);
+  }
+}, 30_000);
+
+afterAll(async () => {
+  for (const handle of handles.values()) await handle.close();
 });
 
-async function open(driver: (typeof drivers)[number]) {
-  const handle = await driver.open();
-  handles.push(handle);
-  return handle;
+function open(driver: (typeof drivers)[number]): DatabaseHandle {
+  return handles.get(driver.name)!;
 }
 
 const channel = () => `parlor_contract_${crypto.randomUUID().replaceAll("-", "")}`;
@@ -56,7 +64,7 @@ function received() {
 
 describe.each(drivers)("DataProvider contract on $name", (driver) => {
   it("delivers NOTIFY to a listener until it unlistens", async () => {
-    const handle = await open(driver);
+    const handle = open(driver);
     const name = channel();
     const inbox = received();
     const unlisten = await handle.listen(name, inbox.handler);
@@ -69,7 +77,7 @@ describe.each(drivers)("DataProvider contract on $name", (driver) => {
   });
 
   it("delivers a NOTIFY sent inside a transaction only after it commits", async () => {
-    const handle = await open(driver);
+    const handle = open(driver);
     const name = channel();
     const inbox = received();
     await handle.listen(name, inbox.handler);
@@ -99,7 +107,7 @@ describe.runIf(postgresUrl)("node-postgres when the server drops a connection", 
   };
 
   it("reports a dropped LISTEN connection once instead of crashing", async () => {
-    const handle = await open(drivers[1]!);
+    const handle = open(drivers[1]!);
     const name = channel();
     let lost = 0;
     let reported!: () => void;
@@ -123,7 +131,7 @@ describe.runIf(postgresUrl)("node-postgres when the server drops a connection", 
   });
 
   it("survives losing its idle pooled connections and serves the next query", async () => {
-    const handle = await open(drivers[1]!);
+    const handle = open(drivers[1]!);
     await handle.db.execute(sql`select 1`);
     await admin(
       "select pg_terminate_backend(pid) from pg_stat_activity where pid <> pg_backend_pid() and state = 'idle' and datname = current_database()",
