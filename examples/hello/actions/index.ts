@@ -28,13 +28,16 @@ export const registry = createRegistry({
     },
   }),
   createTask: defineAction({
-    description: "Create a task with the given title.",
-    input: z.object({ title: z.string().min(1).describe("What needs to be done") }),
+    description: "Create a task with the given title and optional notes.",
+    input: z.object({
+      title: z.string().min(1).describe("What needs to be done"),
+      notes: z.string().optional().describe("Details, shown on the task's page"),
+    }),
     writes: [tasks],
-    run: async ({ title }, { db }) => {
+    run: async ({ title, notes }, { db }) => {
       const [task] = await db
         .insert(tasks)
-        .values({ id: crypto.randomUUID(), title })
+        .values({ id: crypto.randomUUID(), title, notes: notes ?? null })
         .returning();
       return task;
     },
@@ -51,6 +54,17 @@ export const registry = createRegistry({
         .set({ done: !current.done })
         .where(eq(tasks.id, id))
         .returning();
+      return task;
+    },
+  }),
+  deleteTask: defineAction({
+    description: "Delete a task by id.",
+    input: z.object({ id: z.string() }),
+    writes: [tasks],
+    confirm: true,
+    run: async ({ id }, { db }) => {
+      const [task] = await db.delete(tasks).where(eq(tasks.id, id)).returning();
+      if (!task) throw new ActionError("not_found", `No task ${id}`);
       return task;
     },
   }),

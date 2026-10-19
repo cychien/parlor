@@ -52,11 +52,12 @@ A launch that fails or crashes prints the log tail, then removes the instance. A
 
 Datasets are SQL fixtures in `fixtures/`, applied inside one transaction straight to the instance's PGlite after the app's own migrations (`examples/hello/migrations`, applied with the same drizzle migrator the server uses). They never go through actions. Each fixture deletes every task first, so loading twice gives the same state. IDs and `created_at` are fixed, and `listTasks` orders by `created_at`, so the order is deterministic.
 
-| Dataset    | Contents                                                                                           |
-| ---------- | -------------------------------------------------------------------------------------------------- |
-| `baseline` | `Buy milk`, `Write report`, `Call Amy` in that created order, none done (ids `seed-baseline-1..3`) |
-| `s30`      | `Task 01` .. `Task 30` in order, none done                                                         |
-| `large`    | `Task 0001` .. `Task 1000` in order, none done, for perf and long-list checks                      |
+| Dataset    | Contents                                                                                                                                 |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `baseline` | `Buy milk`, `Write report`, `Call Amy` in that created order, none done (ids `seed-baseline-1..3`)                                       |
+| `s30`      | `Task 01` .. `Task 30` in order, none done                                                                                               |
+| `notes`    | `Buy milk` with notes `2 litres, semi-skimmed`, `Write report` with notes `Due Friday`, `Call Amy` without notes (ids `seed-notes-1..3`) |
+| `large`    | `Task 0001` .. `Task 1000` in order, none done, for perf and long-list checks                                                            |
 
 ```sh
 $H up --seed baseline            # before the first start
@@ -71,7 +72,7 @@ Because PGlite allows one process, `seed` and `sql` stop a running instance and 
 $H doctor <id>      # read-only, exit 1 on any FAIL
 ```
 
-It checks: processes alive in the instance tree; the snapshot fingerprint matches the checkout (`build`); both ports are listened on only by processes this instance started; the page, `/_parlor/manifest` (protocol 1 and the five actions), `/_parlor/sync/token` (transport), `listTasks` through the proxy (count and first titles), MCP `tools/list`; the server's working directory is the instance app dir (so PGlite is the instance's); for mac the `parlor_app` process; for iOS the app on the simulator; for both shells a connection to the server port from outside the dev tree. There is no auth: every request runs in the `default` scope. Run doctor first and whenever anything looks off.
+It checks: processes alive in the instance tree; the snapshot fingerprint matches the checkout (`build`); both ports are listened on only by processes this instance started; the page, `/_parlor/manifest` (protocol 1 and the six actions), `/_parlor/sync/token` (transport), `listTasks` through the proxy (count and first titles), MCP `tools/list`; the server's working directory is the instance app dir (so PGlite is the instance's); for mac the `parlor_app` process; for iOS the app on the simulator; for both shells a connection to the server port from outside the dev tree. There is no auth: every request runs in the `default` scope. Run doctor first and whenever anything looks off.
 
 ## Drive
 
@@ -110,7 +111,7 @@ Feature recipes live in `features/README.md`. The surfaces:
 
 - **MCP through a real agent.** `$H agent <id> --out <dir> "<prompt>"` runs `claude -p` with an MCP config pointing at `http://localhost:<server>/_parlor/mcp` (streamable HTTP), `--strict-mcp-config`, every built-in tool removed (`--tools ""`), only `mcp__hello` allowed, user settings and hooks skipped, no session saved. It writes `agent-mcp-config.json`, `agent-command.json`, `agent-transcript.jsonl` (stream-json), and `agent-summary.json` (MCP server status, every tool call with its input, final text) into `<dir>`. Add `--model M` to pick a model.
 - **Which MCP path.** Drive a check through `$H mcp` when it is about a tool's result: its fields, error codes, which client it picks, what it does under concurrency. It answers in milliseconds and spends no model. Use `$H agent` only when the check is whether an agent reads a plain request and picks the right tool and arguments, because each run costs a model turn per call and 30 to 90 seconds. The two send the same MCP requests, so the app cannot tell them apart; they differ in timing between calls (an agent pauses to think) and in which arguments get sent.
-- **MCP without a model.** `$H mcp <id> tools` and `$H mcp <id> call createTask '{"title":"X"}'` use `@modelcontextprotocol/client` (2.3.1) from the snapshot. Tools: the actions `hello`, `listTasks`, `getTask`, `createTask`, `toggleTask`, plus `ui_screen` and `ui_navigate`; `readOnlyHint` is true for `hello`, `listTasks`, `getTask`, and `ui_screen`.
+- **MCP without a model.** `$H mcp <id> tools` and `$H mcp <id> call createTask '{"title":"X"}'` use `@modelcontextprotocol/client` (2.3.1) from the snapshot. Tools: the actions `hello`, `listTasks`, `getTask`, `createTask`, `toggleTask`, `deleteTask`, plus `ui_screen`, `ui_navigate`, `ui_set` and `ui_highlight`; `readOnlyHint` is true for `hello`, `listTasks`, `getTask`, and `ui_screen`. `deleteTask` asks the user to confirm in the app before it runs, so call it with `--out FILE &` and click the card (see the confirmations recipe).
 - **MCP resources.** `$H mcp <id> resources` lists them; `$H mcp <id> resource parlor://manifest` reads one and prints the `resources/read` result (`contents[]` with `uri`, `mimeType`, `text`). An unknown URI prints `mcp resource failed: Resource not found: <uri>` and exits 1. To get the manifest itself: `$H mcp <id> resource parlor://manifest | jq -r '.contents[0].text | fromjson'`. `parlor://manifest` is the app's pages and views with their JSON schemas.
 - **A tool call in the background.** `$H mcp <id> call TOOL '{...}' --out FILE &` runs a call that may block, such as one waiting for a click in the browser, while the shell drives the page. FILE appears only when the call ends (written whole, never partial) as `{tool, input, startedAt, endedAt, ms, isError, result}` with epoch-millisecond timestamps from `Date.now()`; `result` is the tool result, or `{error}` when the request failed (for example an unknown tool), and the command still prints the result and exits 1 on error. A call may wait up to 180 s without progress, longer if the server sends progress notifications, and at most 300 s in total; these are explicit request options, not the SDK default of 60 s. Proven with a 75 s action: the call returned `ms: 75011`, `isError: false`.
 

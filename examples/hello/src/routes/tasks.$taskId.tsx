@@ -1,11 +1,12 @@
 import { useActionMutation, useActionQuery, useAgentView } from "@parlor/client/react";
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 
 import { task as taskView } from "../views.js";
 
 export const Route = createFileRoute("/tasks/$taskId")({
   staticData: {
-    description: "One task: its title and whether it is done.",
+    description:
+      "One task: its title, notes and whether it is done, with a Delete task button.",
     views: [taskView],
   },
   component: TaskDetail,
@@ -13,7 +14,15 @@ export const Route = createFileRoute("/tasks/$taskId")({
 
 function TaskDetail() {
   const { taskId } = Route.useParams();
-  const task = useActionQuery("getTask", { id: taskId });
+  const navigate = useNavigate();
+  const remove = useActionMutation("deleteTask", {
+    onSuccess: () => navigate({ to: "/" }),
+  });
+  const task = useActionQuery(
+    "getTask",
+    { id: taskId },
+    { enabled: !remove.isPending && !remove.isSuccess },
+  );
 
   if (!task.data) {
     return (
@@ -23,31 +32,50 @@ function TaskDetail() {
       </article>
     );
   }
-  return <LoadedTask task={task.data} />;
+  return (
+    <LoadedTask
+      task={task.data}
+      deleting={remove.isPending}
+      onDelete={() => remove.mutate({ id: task.data.id })}
+    />
+  );
 }
 
 interface LoadedTaskProps {
-  readonly task: { readonly id: string; readonly title: string; readonly done: boolean };
+  readonly task: {
+    readonly id: string;
+    readonly title: string;
+    readonly done: boolean;
+    readonly notes: string | null;
+  };
+  readonly deleting: boolean;
+  readonly onDelete: () => void;
 }
 
-function LoadedTask({ task }: LoadedTaskProps) {
+function LoadedTask({ task, deleting, onDelete }: LoadedTaskProps) {
   const toggle = useActionMutation("toggleTask");
   const { ref } = useAgentView(taskView, {
     key: task.id,
-    get: () => ({ title: task.title, done: task.done }),
+    get: () => ({ title: task.title, done: task.done, notes: task.notes ?? "" }),
   });
 
   return (
     <article ref={ref}>
       <h1>{task.title}</h1>
-      <label>
-        <input
-          type="checkbox"
-          checked={task.done}
-          onChange={() => toggle.mutate({ id: task.id })}
-        />{" "}
-        Done
-      </label>
+      {task.notes ? <p className="task-notes">{task.notes}</p> : null}
+      <div className="task-actions">
+        <label>
+          <input
+            type="checkbox"
+            checked={task.done}
+            onChange={() => toggle.mutate({ id: task.id })}
+          />{" "}
+          Done
+        </label>
+        <button type="button" className="danger" disabled={deleting} onClick={onDelete}>
+          Delete task
+        </button>
+      </div>
       <BackLink />
     </article>
   );
