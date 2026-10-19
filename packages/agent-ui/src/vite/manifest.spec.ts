@@ -83,6 +83,7 @@ describe("buildUiManifest", () => {
             required: ["message"],
             additionalProperties: false,
           },
+          writable: [],
         },
         {
           name: "task",
@@ -95,6 +96,7 @@ describe("buildUiManifest", () => {
             required: ["title", "done"],
             additionalProperties: false,
           },
+          writable: [],
         },
       ],
     });
@@ -165,7 +167,13 @@ describe("buildUiManifest", () => {
     const root = createRootRoute({ staticData: { views: [note] } });
     const { manifest, warnings } = buildUiManifest(app, root);
     expect(manifest.views).toEqual([
-      { name: "note", description: "A note.", keyed: false, schema: jsonSchema },
+      {
+        name: "note",
+        description: "A note.",
+        keyed: false,
+        schema: jsonSchema,
+        writable: [],
+      },
     ]);
     expect(warnings).toEqual([]);
   });
@@ -182,10 +190,61 @@ describe("buildUiManifest", () => {
     const root = createRootRoute({ staticData: { views: [note] } });
     const { manifest, warnings } = buildUiManifest(app, root);
     expect(manifest.views).toEqual([
-      { name: "note", description: "A note.", keyed: false },
+      { name: "note", description: "A note.", keyed: false, writable: [] },
     ]);
     expect(warnings).toEqual([
       'View "note" has a schema that cannot be converted to JSON Schema, so the manifest lists it without one.',
+    ]);
+  });
+
+  it("spells out a writable view's fields: the list as given, or every property for true", () => {
+    const schema = z.object({ title: z.string(), notes: z.string() });
+    const some = defineAgentView({
+      name: "some",
+      description: "Some fields.",
+      schema,
+      writable: ["notes"],
+    });
+    const every = defineAgentView({
+      name: "every",
+      description: "Every field.",
+      schema,
+      writable: true,
+    });
+    const root = createRootRoute({ staticData: { views: [some, every] } });
+    const { manifest } = buildUiManifest(app, root);
+    expect(manifest.views.map((v) => [v.name, v.writable])).toEqual([
+      ["some", ["notes"]],
+      ["every", ["title", "notes"]],
+    ]);
+  });
+
+  it("lists no writable fields for writable: true when the schema cannot be described, and every field of one that can", () => {
+    const schema: StandardSchemaV1<unknown, { text: string }> = {
+      "~standard": {
+        version: 1,
+        vendor: "test",
+        validate: (value) => ({ value: value as { text: string } }),
+      },
+    };
+    const note = defineAgentView({
+      name: "note",
+      description: "A note.",
+      schema,
+      writable: true,
+    });
+    const described = defineAgentView({
+      name: "described",
+      description: "A described view.",
+      schema: z.object({ text: z.string() }),
+      writable: true,
+    });
+    const root = createRootRoute({ staticData: { views: [note, described] } });
+    expect(
+      buildUiManifest(app, root).manifest.views.map((v) => [v.name, v.writable]),
+    ).toEqual([
+      ["note", []],
+      ["described", ["text"]],
     ]);
   });
 });

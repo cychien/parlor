@@ -20,6 +20,7 @@ import { type AnyAgentView } from "../view.js";
 import { type BrowserEnvironment, browserEnvironment } from "./environment.js";
 import { createViewRegistry, type ViewRegistry, type ViewSlot } from "./registry.js";
 import { captureScreen, DEFAULT_SCREEN_LIMITS, type ScreenLimits } from "./screen.js";
+import { setView } from "./write.js";
 
 export interface QuerySource {
   active(): readonly QuerySnapshot[];
@@ -240,6 +241,10 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
         case "navigate": {
           const outcome = await navigate(request.input);
           return "code" in outcome ? fail(outcome) : ok({ screen: outcome });
+        }
+        case "set": {
+          const outcome = await setView(registry, request.input, env);
+          return "code" in outcome ? fail(outcome) : ok(outcome);
         }
       }
     } catch (error) {

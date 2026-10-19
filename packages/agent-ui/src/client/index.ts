@@ -14,5 +14,12 @@ export {
   type IntersectionObserverLike,
   type RectLike,
 } from "./environment.js";
-export type { AnyViewBinding, ViewRegistry, ViewSlot } from "./registry.js";
+export {
+  type AgentWrites,
+  type AnyViewBinding,
+  NO_AGENT_WRITES,
+  type ViewRegistry,
+  type ViewSlot,
+} from "./registry.js";
+export { agentFieldsOf } from "./write.js";
 export { DEFAULT_SCREEN_LIMITS, type ScreenLimits } from "./screen.js";

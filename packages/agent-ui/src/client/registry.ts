@@ -4,16 +4,27 @@ import type {
   IntersectionEntryLike,
   IntersectionObserverLike,
 } from "./environment.js";
+import { jsonEqual } from "./json-equal.js";
 
 export interface AnyViewBinding {
   readonly key?: string | undefined;
   get(): Readonly<Record<string, unknown>>;
+  set?(
+    next: Readonly<Record<string, unknown>>,
+    changed: readonly string[],
+  ): void | Promise<void>;
 }
+
+export type AgentWrites = ReadonlyMap<string, unknown>;
+
+export const NO_AGENT_WRITES: AgentWrites = new Map();
 
 export interface ViewSlot {
   readonly ref: (element: Element | null) => void;
   bind(binding: AnyViewBinding): void;
   mount(key: string | undefined): () => void;
+  readonly subscribeWrites: (listener: () => void) => () => void;
+  readonly writes: () => AgentWrites;
 }
 
 export interface ViewRegistry {
@@ -25,6 +36,7 @@ export interface MountedView {
   readonly key: string | undefined;
   readonly binding: AnyViewBinding;
   readonly element: Element | undefined;
+  readonly writes: AgentWrites;
 }
 
 export interface Moment {
@@ -33,6 +45,7 @@ export interface Moment {
 }
 
 export interface RegistryReader {
+  find(ref: ViewRef): MountedView | undefined;
   singles(): Iterable<MountedView>;
   onScreenCandidates(): Iterable<MountedView>;
   keyedCount(viewName: string): number;
@@ -43,6 +56,8 @@ export interface RegistryReader {
 }
 
 export interface ViewRegistryRuntime extends ViewRegistry, RegistryReader {
+  remember(mounted: MountedView, values: Readonly<Record<string, unknown>>): void;
+  restore(mounted: MountedView, writes: AgentWrites): void;
   awaitingObserver(): boolean;
   observed(): Promise<void>;
   resume(): void;
@@ -52,6 +67,8 @@ export interface ViewRegistryRuntime extends ViewRegistry, RegistryReader {
 class Mounted implements MountedView {
   element: Element | undefined;
   key: string | undefined;
+  writes: AgentWrites = NO_AGENT_WRITES;
+  readonly writeListeners = new Set<() => void>();
   constructor(
     readonly view: AnyAgentView,
     public binding: AnyViewBinding,
@@ -109,6 +126,7 @@ export function createViewRegistry(env: BrowserEnvironment): ViewRegistryRuntime
     listening = true;
     env.document.addEventListener("pointerdown", onInteraction, true);
     env.document.addEventListener("focusin", onInteraction, true);
+    env.document.addEventListener("input", onInput);
   };
 
   const observe = (mounted: Mounted) => {
@@ -162,6 +180,21 @@ export function createViewRegistry(env: BrowserEnvironment): ViewRegistryRuntime
     return undefined;
   }
 
+  const replaceWrites = (mounted: Mounted, writes: AgentWrites) => {
+    mounted.writes = writes;
+    for (const listener of mounted.writeListeners) listener();
+  };
+
+  const onInput = (event: Event) => {
+    const target = event.target as Element | null;
+    const mounted = owner(target) as Mounted | undefined;
+    if (!mounted || mounted.writes.size === 0) return;
+    const name = target?.getAttribute?.("name");
+    const remaining = new Map(mounted.writes);
+    if (name) remaining.delete(name);
+    replaceWrites(mounted, remaining.size === 0 ? NO_AGENT_WRITES : remaining);
+  };
+
   const current = (moment: Moment | undefined) =>
     moment && live.has(moment.view as Mounted) ? moment : undefined;
 
@@ -195,8 +228,28 @@ export function createViewRegistry(env: BrowserEnvironment): ViewRegistryRuntime
             live.delete(mounted);
           };
         },
+        subscribeWrites(listener) {
+          mounted.writeListeners.add(listener);
+          return () => mounted.writeListeners.delete(listener);
+        },
+        writes: () => mounted.writes,
       };
     },
+    find(ref) {
+      return (
+        ref.key === undefined ? singles.get(ref.view) : keyed.get(ref.view)?.get(ref.key)
+      )?.at(-1);
+    },
+    remember(mounted, values) {
+      const target = mounted as Mounted;
+      const entries = Object.entries(values).filter(
+        ([field, value]) =>
+          !target.writes.has(field) || !jsonEqual(target.writes.get(field), value),
+      );
+      if (entries.length === 0) return;
+      replaceWrites(target, new Map([...target.writes, ...entries]));
+    },
+    restore: (mounted, writes) => replaceWrites(mounted as Mounted, writes),
     *singles() {
       for (const stack of singles.values()) yield stack.at(-1)!;
     },
@@ -228,6 +281,7 @@ export function createViewRegistry(env: BrowserEnvironment): ViewRegistryRuntime
       if (listening && env.document) {
         env.document.removeEventListener("pointerdown", onInteraction, true);
         env.document.removeEventListener("focusin", onInteraction, true);
+        env.document.removeEventListener("input", onInput);
       }
       listening = false;
     },

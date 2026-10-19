@@ -50,7 +50,8 @@
   "peerDependencies": {
     "@tanstack/react-query": ">=5",
     "@tanstack/react-router": ">=1.170",
-    "react": ">=19"
+    "react": ">=19",
+    "react-dom": ">=19"
   },
   "peerDependenciesMeta": {
     "@tanstack/react-router": {

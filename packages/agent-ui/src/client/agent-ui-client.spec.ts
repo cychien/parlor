@@ -209,6 +209,78 @@ describe("createAgentUiClient snapshot timing", () => {
   });
 });
 
+describe("createAgentUiClient writes", () => {
+  const form = defineAgentView({
+    name: "form",
+    description: "A form.",
+    schema: z.object({ title: z.string(), notes: z.string() }),
+    writable: ["title", "notes"],
+  });
+
+  it("answers a set request by writing through the view's set and reading the value back", async () => {
+    const { client, replies, settle } = setup();
+    let value = { title: "", notes: "" };
+    client.views
+      .track(form, {
+        get: () => value,
+        set: (next) => {
+          value = next as typeof value;
+        },
+      })
+      .mount(undefined);
+    client.receive(
+      request("w1", "set", { view: "form", value: { title: "Buy stamps" } }),
+    );
+    await settle();
+    expect(replies()).toEqual([
+      {
+        type: "reply",
+        id: "w1",
+        ok: true,
+        result: { value: { title: "Buy stamps", notes: "" }, agentFields: ["title"] },
+      },
+    ]);
+  });
+
+  it("answers a refused write with the error code and shows the agent as busy only while it runs", async () => {
+    const { client, replies, settle } = setup();
+    client.receive(request("w1", "set", { view: "form", value: { title: "x" } }));
+    await settle();
+    expect(replies()).toEqual([
+      {
+        type: "reply",
+        id: "w1",
+        ok: false,
+        error: { code: "not_mounted", message: expect.any(String) },
+      },
+    ]);
+    expect(client.activity.get()).toEqual({
+      busy: false,
+      last: { op: "set", origin: { via: "mcp" }, at: 10_000 },
+    });
+  });
+
+  it("answers a malformed set request with an internal error instead of running it, and still runs a well-formed one", async () => {
+    const { client, replies, settle } = setup();
+    const set = vi.fn();
+    client.views
+      .track(form, { get: () => ({ title: "", notes: "" }), set })
+      .mount(undefined);
+    client.receive(request("w1", "set", { view: "form", value: "title" }));
+    await settle();
+    expect(replies()[0]).toMatchObject({
+      id: "w1",
+      ok: false,
+      error: { code: "internal" },
+    });
+    expect(set).not.toHaveBeenCalled();
+    client.receive(request("w2", "set", { view: "form", value: { title: "x" } }));
+    await settle();
+    expect(replies()[1]).toMatchObject({ id: "w2", ok: true });
+    expect(set).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("createAgentUiClient activity", () => {
   it("is busy while a request runs and remembers the last operation", async () => {
     const { client, answered } = setup();

@@ -7,7 +7,11 @@ export {
   type ExternalUiPolicy,
   webOriginFromEnv,
 } from "./agent-ui.js";
-export { fileManifestSource, type UiManifestSource } from "./manifest-source.js";
+export {
+  fileManifestSource,
+  type UiManifestInput,
+  type UiManifestSource,
+} from "./manifest-source.js";
 export { type BrokerOptions, UiBroker, UiFailure, type UiReceipt } from "./broker.js";
 export {
   ClientDirectory,
@@ -27,6 +31,7 @@ export {
   type AgentToolContext,
   type NavigateToolResult,
   type ScreenToolResult,
+  type SetToolResult,
   UI_MANIFEST_RESOURCE,
   UI_TOOLS,
   type UiToolName,

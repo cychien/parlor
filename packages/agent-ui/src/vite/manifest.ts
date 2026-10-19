@@ -54,6 +54,16 @@ function jsonSchemaOf(schema: unknown, io: "input" | "output"): JsonSchema | und
   }
 }
 
+function writableFields(view: AnyAgentView, schema: JsonSchema | undefined): string[] {
+  if (view.writable === true) {
+    const properties = schema?.properties;
+    return typeof properties === "object" && properties !== null
+      ? Object.keys(properties)
+      : [];
+  }
+  return view.writable === false ? [] : [...view.writable];
+}
+
 export function describeView(view: AnyAgentView): ViewEntry {
   const schema = jsonSchemaOf(view.schema, "output");
   return {
@@ -61,6 +71,7 @@ export function describeView(view: AnyAgentView): ViewEntry {
     description: view.description,
     keyed: view.keyed,
     ...(schema ? { schema } : {}),
+    writable: writableFields(view, schema),
   };
 }
 
