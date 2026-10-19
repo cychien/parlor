@@ -1,15 +1,15 @@
-import {
-  type AgentActivity,
-  type AgentActivityKind,
-  useAgentActivity,
-} from "@parlor/client/react";
+import type { AgentActivityKind, AgentActivityState } from "@parlor/client/react";
+import { Chat } from "@parlor/client/react";
 import { createRootRoute, Link, Outlet } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
 
-import { ConfirmationCards } from "../confirmation-cards.js";
+import { AgentPanel } from "../agent-panel.js";
+import { agentPanel } from "../views.js";
 
 export const Route = createRootRoute({
-  staticData: { description: "The app shell: navigation to every page." },
+  staticData: {
+    description: "The app shell: navigation to every page.",
+    views: [agentPanel],
+  },
   component: Layout,
 });
 
@@ -19,17 +19,17 @@ function Layout() {
       <nav aria-label="Main" className="topbar">
         <Link to="/">Tasks</Link>
         <Link to="/settings">Settings</Link>
-        <AgentIndicator />
+        <div className="topbar-agent">
+          <AgentIndicator />
+          <AgentPanel />
+        </div>
       </nav>
-      <ConfirmationCards />
       <main>
         <Outlet />
       </main>
     </div>
   );
 }
-
-const LINGER_MS = 2000;
 
 const DOING: Record<AgentActivityKind, string> = {
   screen: "Agent is reading this screen",
@@ -54,33 +54,19 @@ const REFUSED: Record<AgentActivityKind, string> = {
   confirm: "Agent got your answer",
 };
 
-function finished(last: NonNullable<AgentActivity["last"]>): string {
-  return last.outcome?.status === "refused" ? REFUSED[last.op] : DONE[last.op];
+function describe(state: AgentActivityState): string {
+  switch (state.status) {
+    case "idle":
+      return "No agent activity";
+    case "busy":
+      return DOING[state.op];
+    case "done":
+      return DONE[state.op];
+    case "refused":
+      return REFUSED[state.op];
+  }
 }
 
 function AgentIndicator() {
-  const { busy, last } = useAgentActivity();
-  const [faded, setFaded] = useState<AgentActivity["last"]>();
-  useEffect(() => {
-    if (busy || !last) return;
-    const timer = setTimeout(() => setFaded(last), LINGER_MS);
-    return () => clearTimeout(timer);
-  }, [busy, last]);
-  const text = !last
-    ? undefined
-    : busy
-      ? DOING[last.op]
-      : faded === last
-        ? undefined
-        : finished(last);
-  return (
-    <span
-      role="status"
-      aria-live="polite"
-      className="agent-status"
-      data-idle={text ? undefined : ""}
-    >
-      {text ?? "No agent activity"}
-    </span>
-  );
+  return <Chat.Activity className="agent-status">{describe}</Chat.Activity>;
 }
