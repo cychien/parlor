@@ -135,13 +135,26 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
   let draining = false;
   let warnedUnwatched = false;
 
-  const post = (message: ClientMessage) =>
-    void options.send(message).then(
+  const deliver = (message: ClientMessage): Promise<void> =>
+    options.send(message).then(
       (next) => {
         if (next !== undefined) receive(next);
       },
       () => {},
     );
+  const post = (message: ClientMessage) => void deliver(message);
+
+  let lifecycleTail: Promise<void> | undefined;
+  const postInOrder = (message: ClientMessage) => {
+    const delivered =
+      lifecycleTail === undefined
+        ? deliver(message)
+        : lifecycleTail.then(() => deliver(message));
+    const tail: Promise<void> = delivered.finally(() => {
+      if (lifecycleTail === tail) lifecycleTail = undefined;
+    });
+    lifecycleTail = tail;
+  };
 
   const observed = async () => {
     // A hidden page does not render, so its observer stays silent until it is shown.
@@ -266,6 +279,7 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
   };
 
   let lastPresence: string | undefined;
+  let gone = false;
   let presenceTimer: ReturnType<typeof setTimeout> | undefined;
   const presence = (): PresenceUpdate => {
     const visible = env.document?.visibilityState === "visible";
@@ -278,11 +292,12 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
     };
   };
   const reportPresence = () => {
+    if (gone) return;
     const update = presence();
     const serialized = JSON.stringify(update);
     if (serialized === lastPresence) return;
     lastPresence = serialized;
-    post(update);
+    postInOrder(update);
   };
   const schedulePresence = () => {
     if (presenceTimer !== undefined) return;
@@ -291,12 +306,22 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
       reportPresence();
     }, 0);
   };
-  const leave = () => post({ type: "leave" });
+  const leave = () => {
+    gone = true;
+    lastPresence = undefined;
+    if (presenceTimer !== undefined) env.clearTimeout(presenceTimer);
+    presenceTimer = undefined;
+    postInOrder({ type: "leave" });
+  };
+  const resume = () => {
+    gone = false;
+    schedulePresence();
+  };
   const presenceTargets = () =>
     [
       [env.window, "focus", schedulePresence],
       [env.window, "blur", schedulePresence],
-      [env.window, "pageshow", schedulePresence],
+      [env.window, "pageshow", resume],
       [env.window, "pagehide", leave],
       [env.document, "visibilitychange", schedulePresence],
     ] as const;
@@ -353,6 +378,7 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
     activity,
     screen,
     opened() {
+      gone = false;
       attachPresence();
       lastPresence = undefined;
       reportPresence();

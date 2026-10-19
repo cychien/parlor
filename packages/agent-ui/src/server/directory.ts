@@ -85,11 +85,14 @@ export class ClientDirectory {
   }
 
   leave(clientId: string, scope: string): boolean {
-    this.#takeUnannounced(clientId, scope);
     const entry = this.#byId.get(clientId);
     if (!entry || entry.client.scope !== scope) return false;
-    entry.connections.length = 0;
+    const released = entry.connections.splice(0);
     this.#forget(entry);
+    this.#keepUnannounced(clientId, [
+      ...(this.#unannounced.get(clientId) ?? []),
+      ...released,
+    ]);
     return true;
   }
 

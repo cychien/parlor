@@ -232,3 +232,135 @@ describe("createSyncClient channels", () => {
     client.stop();
   });
 });
+
+describe("createSyncClient stream liveness", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const encoder = new TextEncoder();
+  const handshake = (keepAliveMs?: number) =>
+    `event: handshake\ndata: ${JSON.stringify({
+      protocol: 1,
+      capabilities: ["ui"],
+      ...(keepAliveMs === undefined ? {} : { keepAliveMs }),
+    })}\n\n`;
+
+  function openStreams(firstFrame: string) {
+    const controllers: ReadableStreamDefaultController<Uint8Array>[] = [];
+    const request = vi.fn(async (path: string) => {
+      if (path.endsWith("/sync/token")) {
+        return Response.json({
+          protocol: 1,
+          transport: "sse",
+          endpoint: "/_parlor/sync/stream",
+          pollIntervalMs: 2000,
+        });
+      }
+      if (path.includes("/sync/stream")) {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controllers.push(controller);
+              controller.enqueue(encoder.encode(firstFrame));
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      return Response.json({ events: [], cursor: "" });
+    });
+    const streams = () =>
+      request.mock.calls.filter(([path]) => String(path).includes("/sync/stream")).length;
+    return { request, controllers, streams };
+  }
+
+  function recorded() {
+    const log: string[] = [];
+    return {
+      log,
+      channel: {
+        event: "ui",
+        opened: () => log.push("opened"),
+        receive: () => {},
+        closed: () => log.push("closed"),
+      },
+    };
+  }
+
+  async function started(firstFrame: string) {
+    const ui = recorded();
+    const open = openStreams(firstFrame);
+    const client = createSyncClient({
+      request: open.request,
+      onEvents: vi.fn(),
+      channels: [ui.channel],
+    });
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+    return { ...open, ui, client };
+  }
+
+  it("reconnects and reopens its channels when the stream goes silent", async () => {
+    const { ui, streams, client } = await started(handshake(10_000));
+    expect(ui.log).toEqual(["opened"]);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(ui.log).toEqual(["opened"]);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(ui.log).toEqual(["opened", "closed", "opened"]);
+    expect(streams()).toBe(2);
+    client.stop();
+  });
+
+  it("stays on one stream while the server keeps sending comments, and leaves it once they stop", async () => {
+    const { ui, streams, controllers, client } = await started(handshake(10_000));
+    for (let i = 0; i < 12; i++) {
+      await vi.advanceTimersByTimeAsync(10_000);
+      controllers[0]!.enqueue(encoder.encode(": keep-alive\n\n"));
+    }
+    expect(ui.log).toEqual(["opened"]);
+    expect(streams()).toBe(1);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(ui.log).toEqual(["opened", "closed", "opened"]);
+    expect(streams()).toBe(2);
+    client.stop();
+  });
+
+  it("assumes the 25 s keep-alive of older servers when the handshake does not advertise one", async () => {
+    const { ui, streams, controllers, client } = await started(handshake());
+    for (let i = 0; i < 10; i++) {
+      await vi.advanceTimersByTimeAsync(25_000);
+      controllers[0]!.enqueue(encoder.encode(": keep-alive\n\n"));
+    }
+    expect(ui.log).toEqual(["opened"]);
+    expect(streams()).toBe(1);
+    await vi.advanceTimersByTimeAsync(75_000);
+    expect(ui.log).toEqual(["opened", "closed", "opened"]);
+    expect(streams()).toBe(2);
+    client.stop();
+  });
+
+  it("derives the silence window from the keep-alive the server advertises", async () => {
+    const { ui, client } = await started(handshake(1000));
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(ui.log).toEqual(["opened"]);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(ui.log).toEqual(["opened", "closed", "opened"]);
+    client.stop();
+  });
+
+  it("does not report a silent stream as an error", async () => {
+    const onError = vi.fn();
+    const open = openStreams(handshake(10_000));
+    const client = createSyncClient({
+      request: open.request,
+      onEvents: vi.fn(),
+      onError,
+    });
+    client.start();
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(open.streams()).toBeGreaterThan(1);
+    expect(onError).not.toHaveBeenCalled();
+    client.stop();
+  });
+});

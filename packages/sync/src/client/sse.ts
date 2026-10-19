@@ -27,6 +27,7 @@ export async function readSse(
   body: ReadableStream<Uint8Array>,
   onFrame: (frame: SseFrame) => void,
   signal?: AbortSignal,
+  onChunk?: () => void,
 ): Promise<void> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -37,6 +38,7 @@ export async function readSse(
     for (;;) {
       const { value, done } = await reader.read();
       if (done) break;
+      onChunk?.();
       buffer += decoder.decode(value, { stream: true });
       const { frames, rest } = parseSseChunk(buffer);
       buffer = rest;

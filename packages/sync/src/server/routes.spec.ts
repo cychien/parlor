@@ -221,7 +221,7 @@ describe("sync stream channels", () => {
     ui.send('{"op":"screen"}');
     const frames = await readFrames(response.body!, 3);
     expect(frames[0]).toBe(
-      'event: handshake\ndata: {"protocol":1,"capabilities":["ui"]}',
+      'event: handshake\ndata: {"protocol":1,"capabilities":["ui"],"keepAliveMs":50}',
     );
     expect(frames.slice(1)).toEqual([
       "event: ui\ndata: hello tab-1",
@@ -245,7 +245,9 @@ describe("sync stream channels", () => {
       new Request("http://app.test/_parlor/sync/stream?since="),
     );
     const frames = await readFrames(response.body!, 1);
-    expect(frames[0]).toBe('event: handshake\ndata: {"protocol":1,"capabilities":[]}');
+    expect(frames[0]).toBe(
+      'event: handshake\ndata: {"protocol":1,"capabilities":[],"keepAliveMs":50}',
+    );
   });
 
   it("delivers server channel frames to the matching client channel end to end", async () => {
