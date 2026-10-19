@@ -62,9 +62,10 @@ const uiManifest = {
 
 beforeAll(async () => {
   database = await createDatabase({ dataDir: "memory://" });
+  await database.db.execute("select 1");
   server = createServer({ actions, database, agentUi: { timeoutMs: 2000 } });
   server.installUiManifest?.(() => uiManifest);
-});
+}, 30_000);
 afterEach(async () => {
   for (const close of closers.splice(0)) await close();
 });

@@ -1,4 +1,10 @@
 // @vitest-environment happy-dom
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from "@tanstack/react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import * as zm from "zod/mini";
@@ -41,17 +47,19 @@ function setup(options: { dev?: boolean; next?: Record<string, string> } = {}) {
   const slot = client.views.track(note, { get: gets });
   slot.mount(undefined);
   const replies = () => sent.filter((m) => m.type === "reply");
-  const settle = () => new Promise((r) => setTimeout(r, 10));
-  return { browser, client, sent, gets, replies, settle };
+  const answered = (count: number) =>
+    vi.waitFor(() => expect(replies()).toHaveLength(count));
+  const quiet = () => new Promise((r) => setTimeout(r, 10));
+  return { browser, client, sent, gets, replies, answered, quiet };
 }
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("createAgentUiClient requests", () => {
   it("answers a screen request with the snapshot", async () => {
-    const { client, replies, settle } = setup();
+    const { client, replies, answered } = setup();
     client.receive(request("r1"));
-    await settle();
+    await answered(1);
     expect(replies()).toEqual([
       {
         type: "reply",
@@ -75,41 +83,43 @@ describe("createAgentUiClient requests", () => {
   });
 
   it("re-sends the cached reply for a request it already answered instead of running it again", async () => {
-    const { client, replies, gets, settle } = setup();
+    const { client, replies, gets, answered } = setup();
     client.receive(request("r1"));
-    await settle();
+    await answered(1);
     client.receive(request("r1"));
     client.receive(request("r1"));
-    await settle();
+    await answered(3);
     expect(gets).toHaveBeenCalledTimes(1);
     expect(replies()).toHaveLength(3);
     expect(replies()[2]).toEqual(replies()[0]);
   });
 
   it("runs requests one at a time in arrival order and ignores a duplicate still in the queue", async () => {
-    const { client, replies, settle } = setup();
+    const { client, replies, answered, quiet } = setup();
     client.receive(request("r1"));
     client.receive(request("r2"));
     client.receive(request("r2"));
-    await settle();
+    await answered(2);
+    await quiet();
     expect(replies().map((r) => r.id)).toEqual(["r1", "r2"]);
   });
 
   it("runs the request the server hands back in answer to a reply", async () => {
-    const { client, replies, gets, settle } = setup({
+    const { client, replies, gets, answered } = setup({
       next: { r1: request("r2"), r2: request("r3") },
     });
     client.receive(request("r1"));
-    await settle();
+    await answered(3);
     expect(replies().map((r) => r.id)).toEqual(["r1", "r2", "r3"]);
     expect(gets).toHaveBeenCalledTimes(3);
   });
 
   it("replies with an internal error to a request it cannot parse", async () => {
-    const { client, replies, settle } = setup();
+    const { client, replies, answered, quiet } = setup();
     client.receive(request("r9", "explode"));
     client.receive("not json");
-    await settle();
+    await answered(1);
+    await quiet();
     expect(replies()).toEqual([
       {
         type: "reply",
@@ -146,15 +156,16 @@ describe("createAgentUiClient snapshot timing", () => {
     ).result.views.row.items.map((item) => item.key);
 
   it("waits for the observer's first report instead of measuring every row that just mounted", async () => {
-    const { browser, client, replies, settle } = setup();
+    const { browser, client, replies, answered, quiet } = setup();
     const elements = mountRows(browser, client, 1000);
     const rect = vi.spyOn(browser.env, "rect");
+    vi.spyOn(browser.env, "setTimeout").mockReturnValue(0 as never);
     client.receive(request("r1"));
-    await settle();
+    await quiet();
     expect(replies()).toEqual([]);
     expect(rect).not.toHaveBeenCalled();
     elements.forEach((element, n) => browser.intersect(element, n * ROW < 600));
-    await settle();
+    await answered(1);
     expect(shownRows(replies()[0])).toEqual(
       Array.from({ length: 20 }, (_, n) => `r${n}`),
     );
@@ -162,31 +173,30 @@ describe("createAgentUiClient snapshot timing", () => {
   });
 
   it("measures the rows itself when the observer stays silent", async () => {
-    const { browser, client, replies } = setup();
+    const { browser, client, replies, answered } = setup();
     mountRows(browser, client, 40);
     client.receive(request("r1"));
-    await new Promise((r) => setTimeout(r, 150));
+    await answered(1);
     expect(shownRows(replies()[0])).toEqual(
       Array.from({ length: 20 }, (_, n) => `r${n}`),
     );
   });
 
   it("does not wait for the observer in a hidden page, which does not render", async () => {
-    const { browser, client, replies, settle } = setup();
+    const { browser, client, replies, answered } = setup();
     vi.spyOn(browser.document, "visibilityState", "get").mockReturnValue("hidden");
     mountRows(browser, client, 40);
     client.receive(request("r1"));
-    await settle();
+    await answered(1);
     expect(shownRows(replies()[0])).toHaveLength(20);
   });
 
   it("answers right away once every row has been reported", async () => {
-    const { browser, client, settle } = setup();
+    const { browser, client } = setup();
     const elements = mountRows(browser, client, 40);
     elements.forEach((element, n) => browser.intersect(element, n * ROW < 600));
     const rect = vi.spyOn(browser.env, "rect");
     const snapshot = client.screen();
-    await settle();
     await expect(snapshot).resolves.toMatchObject({ views: { row: { offscreen: 20 } } });
     expect(rect).toHaveBeenCalledTimes(20);
   });
@@ -194,11 +204,12 @@ describe("createAgentUiClient snapshot timing", () => {
 
 describe("createAgentUiClient activity", () => {
   it("is busy while a request runs and remembers the last operation", async () => {
-    const { client, settle } = setup();
+    const { client, answered } = setup();
     const seen: boolean[] = [];
     const off = client.activity.subscribe(() => seen.push(client.activity.get().busy));
     client.receive(request("r1"));
-    await settle();
+    await answered(1);
+    await vi.waitFor(() => expect(client.activity.get().busy).toBe(false));
     expect(seen).toEqual([true, false]);
     expect(client.activity.get()).toEqual({
       busy: false,
@@ -209,40 +220,40 @@ describe("createAgentUiClient activity", () => {
 
   it("warns once in dev when an agent request arrives and nothing shows activity", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const { client, settle } = setup({ dev: true });
+    const { client, answered } = setup({ dev: true });
     client.receive(request("r1"));
     client.receive(request("r2"));
-    await settle();
+    await answered(2);
     expect(warn).toHaveBeenCalledOnce();
     expect(String(warn.mock.calls[0]?.[0])).toContain("useAgentActivity");
   });
 
   it("does not warn when something subscribes to activity", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const { client, settle } = setup({ dev: true });
+    const { client, answered } = setup({ dev: true });
     client.activity.subscribe(() => {});
     client.receive(request("r1"));
-    await settle();
+    await answered(1);
     expect(warn).not.toHaveBeenCalled();
   });
 });
 
 describe("createAgentUiClient presence", () => {
   it("reports presence when the channel opens and again only when focus or visibility changes", async () => {
-    const { browser, client, sent, settle } = setup();
+    const { browser, client, sent, quiet } = setup();
     const focused = vi.spyOn(browser.document, "hasFocus").mockReturnValue(false);
     client.opened();
-    await settle();
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
     focused.mockReturnValue(true);
     browser.window.dispatchEvent(new browser.window.Event("focus"));
     browser.window.dispatchEvent(new browser.window.Event("focus"));
-    await settle();
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
     browser.window.dispatchEvent(new browser.window.Event("focus"));
-    await settle();
+    await quiet();
     client.closed();
     focused.mockReturnValue(false);
     browser.window.dispatchEvent(new browser.window.Event("blur"));
-    await settle();
+    await quiet();
     expect(sent).toEqual([
       { type: "presence", focused: false, visible: true, platform: "web" },
       { type: "presence", focused: true, visible: true, platform: "web" },
@@ -252,9 +263,9 @@ describe("createAgentUiClient presence", () => {
 
 describe("createAgentUiClient leaving", () => {
   it("announces it is leaving right away when the page goes away", async () => {
-    const { browser, client, sent, settle } = setup();
+    const { browser, client, sent } = setup();
     client.opened();
-    await settle();
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
     browser.window.dispatchEvent(new browser.window.Event("pagehide"));
     expect(sent.at(-1)).toEqual({ type: "leave" });
   });
@@ -262,8 +273,6 @@ describe("createAgentUiClient leaving", () => {
 
 describe("createAgentUiClient navigate", () => {
   async function routed(settled = async () => {}) {
-    const { createMemoryHistory, createRootRoute, createRoute, createRouter } =
-      await import("@tanstack/react-router");
     const root = createRootRoute();
     const listed = createRoute({
       getParentRoute: () => root,
@@ -296,17 +305,18 @@ describe("createAgentUiClient navigate", () => {
       client,
       router,
       sent,
-      settle: () => new Promise((r) => setTimeout(r, 20)),
+      answered: (count: number) => vi.waitFor(() => expect(sent).toHaveLength(count)),
+      quiet: () => new Promise((r) => setTimeout(r, 20)),
     };
   }
 
   it("navigates to a route with params and returns the new screen", async () => {
     const settled = vi.fn(async () => {});
-    const { client, router, sent, settle } = await routed(settled);
+    const { client, router, sent, answered } = await routed(settled);
     client.receive(
       request("n1", "navigate", { to: "/tasks/$taskId", params: { taskId: "t1" } }),
     );
-    await settle();
+    await answered(1);
     expect(router.state.location.pathname).toBe("/tasks/t1");
     expect(sent).toEqual([
       {
@@ -331,18 +341,20 @@ describe("createAgentUiClient navigate", () => {
 
   it("returns the new screen only after the observer reports the rows the page mounted", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    const { browser, client, sent, settle } = await routed();
+    const { browser, client, router, sent, answered, quiet } = await routed();
     const element = browser.document.createElement("li");
     browser.document.body.appendChild(element);
     browser.setRect(element, 0, 30);
     const slot = client.views.track(row, { key: "r0", get: () => ({ n: 0 }) });
     slot.ref(element);
     slot.mount("r0");
+    vi.spyOn(browser.env, "setTimeout").mockReturnValue(0 as never);
     client.receive(request("n3", "navigate", { to: "/settings" }));
-    await settle();
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe("/settings"));
+    await quiet();
     expect(sent).toEqual([]);
     browser.intersect(element, true);
-    await settle();
+    await answered(1);
     expect(sent).toEqual([
       {
         type: "reply",
@@ -360,9 +372,9 @@ describe("createAgentUiClient navigate", () => {
   });
 
   it("refuses a path the router does not know", async () => {
-    const { client, router, sent, settle } = await routed();
+    const { client, router, sent, answered } = await routed();
     client.receive(request("n2", "navigate", { to: "/nope" }));
-    await settle();
+    await answered(1);
     expect(router.state.location.pathname).toBe("/");
     expect(sent).toEqual([
       {

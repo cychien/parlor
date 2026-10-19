@@ -9,7 +9,7 @@ let handle: DatabaseHandle;
 beforeAll(async () => {
   handle = await createDatabase({ dataDir: "memory://" });
   await ensureSyncTables(handle.db);
-});
+}, 30_000);
 afterAll(() => handle.close());
 
 describe("createPruner", () => {
