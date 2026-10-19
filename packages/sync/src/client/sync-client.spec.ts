@@ -125,6 +125,117 @@ describe("createSyncClient", () => {
   });
 });
 
+describe("createSyncClient negotiation retries", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  function serverComingUp(failures: number) {
+    const tokenAttempts: number[] = [];
+    const streams: string[] = [];
+    const request = vi.fn(async (path: string) => {
+      if (path.endsWith("/sync/token")) {
+        tokenAttempts.push(Date.now());
+        if (tokenAttempts.length <= failures)
+          return new Response("down", { status: 502 });
+        return Response.json({
+          protocol: 1,
+          transport: "sse",
+          endpoint: "/_parlor/sync/stream",
+          pollIntervalMs: 2000,
+        });
+      }
+      if (path.includes("/sync/stream")) {
+        streams.push(path);
+        return new Response(
+          sseBody(['event: handshake\ndata: {"protocol":1,"capabilities":["ui"]}\n\n']),
+          { status: 200 },
+        );
+      }
+      return Response.json({ events: [], cursor: "" });
+    });
+    return { request, tokenAttempts, streams };
+  }
+
+  const channel = () => {
+    const log: string[] = [];
+    return {
+      log,
+      channel: {
+        event: "ui",
+        opened: () => log.push("opened"),
+        receive: () => {},
+        closed: () => log.push("closed"),
+      },
+    };
+  };
+
+  it("keeps negotiating with backoff while the server is down and polls in the meantime", async () => {
+    const { request, tokenAttempts, streams } = serverComingUp(Number.POSITIVE_INFINITY);
+    const client = createSyncClient({
+      request,
+      onEvents: vi.fn(),
+      onError: vi.fn(),
+      reconnectBaseMs: 1000,
+      reconnectMaxMs: 4000,
+    });
+    const t0 = Date.now();
+    client.start();
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(tokenAttempts.map((at) => at - t0)).toEqual([
+      0, 1000, 3000, 7000, 11_000, 15_000, 19_000,
+    ]);
+    expect(streams).toEqual([]);
+    expect(client.transport).toBe("poll");
+    expect(
+      request.mock.calls.filter(([p]) => String(p).includes("/sync?since=")),
+    ).not.toHaveLength(0);
+    client.stop();
+  });
+
+  it("joins SSE and opens its channels once the server starts answering", async () => {
+    const { request, streams } = serverComingUp(2);
+    const ui = channel();
+    const client = createSyncClient({
+      request,
+      onEvents: vi.fn(),
+      onError: vi.fn(),
+      reconnectBaseMs: 1000,
+      channels: [ui.channel],
+    });
+    client.start();
+    await vi.advanceTimersByTimeAsync(2900);
+    expect(ui.log).toEqual([]);
+    expect(client.transport).toBe("poll");
+
+    await vi.advanceTimersByTimeAsync(200);
+    expect(streams).toHaveLength(1);
+    expect(ui.log[0]).toBe("opened");
+    expect(client.transport).toBe("sse");
+    client.stop();
+  });
+
+  it("leaves fast polling for the safety poll after it joins SSE", async () => {
+    const { request } = serverComingUp(1);
+    const client = createSyncClient({
+      request,
+      onEvents: vi.fn(),
+      onError: vi.fn(),
+      reconnectBaseMs: 1000,
+      safetyPollMs: 60_000,
+    });
+    client.start();
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(client.transport).toBe("sse");
+    const polls = () =>
+      request.mock.calls.filter(([p]) => String(p).includes("/sync?since=")).length;
+    const before = polls();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(polls()).toBe(before);
+    client.stop();
+  });
+});
+
 describe("createSyncClient channels", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
