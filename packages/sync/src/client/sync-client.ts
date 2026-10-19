@@ -222,14 +222,37 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     }
   };
 
-  const runSse = async (endpoint: string) => {
+  const connect = async () => {
     for (;;) {
       if (!running) return;
+      let endpoint: string | undefined;
       try {
-        await stream(endpoint);
+        const negotiation = await negotiate();
+        if (!running) return;
+        negotiatedPollMs = negotiation.pollIntervalMs;
+        if (negotiation.transport === "poll") {
+          transport = "poll";
+          schedulePoll(0);
+          return;
+        }
+        endpoint = negotiation.endpoint;
       } catch (error) {
         if (!running) return;
         settings.onError?.(error);
+        if (transport !== "poll") {
+          transport = "poll";
+          schedulePoll(negotiatedPollMs);
+        }
+      }
+      if (endpoint !== undefined) {
+        transport = "sse";
+        schedulePoll(settings.safetyPollMs);
+        try {
+          await stream(endpoint);
+        } catch (error) {
+          if (!running) return;
+          settings.onError?.(error);
+        }
       }
       if (!running) return;
       await new Promise<void>((resolve) => schedule(() => resolve(), reconnectDelay));
@@ -240,19 +263,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
   const start = () => {
     if (running) return;
     running = true;
-    void negotiate()
-      .then((negotiation) => {
-        if (!running) return;
-        transport = negotiation.transport;
-        negotiatedPollMs = negotiation.pollIntervalMs;
-        if (transport === "sse") void runSse(negotiation.endpoint);
-        schedulePoll(transport === "sse" ? settings.safetyPollMs : 0);
-      })
-      .catch((error) => {
-        settings.onError?.(error);
-        transport = "poll";
-        schedulePoll(negotiatedPollMs);
-      });
+    void connect();
   };
 
   const stop = () => {
