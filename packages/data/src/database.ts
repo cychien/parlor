@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import { PGlite } from "@electric-sql/pglite";
-import type { DataProvider, Unlisten } from "@parlor/core";
+import type { DataProvider, ListenOptions, Unlisten } from "@parlor/core";
 import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
 import { migrate as migratePg } from "drizzle-orm/node-postgres/migrator";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
@@ -27,7 +27,11 @@ export interface DatabaseOptions {
 export interface DatabaseHandle extends DataProvider<Database> {
   readonly db: Database;
   readonly driver: "pglite" | "node-postgres";
-  listen(channel: string, handler: (payload: string) => void): Promise<Unlisten>;
+  listen(
+    channel: string,
+    handler: (payload: string) => void,
+    options?: ListenOptions,
+  ): Promise<Unlisten>;
   migrate(folder: string): Promise<void>;
   close(): Promise<void>;
 }
@@ -64,6 +68,9 @@ function pgliteHandle(dataDir: string): DatabaseHandle {
 
 function nodePostgresHandle(url: string): DatabaseHandle {
   const pool = new pg.Pool({ connectionString: url });
+  pool.on("error", (error) => {
+    console.warn("[parlor] an idle database connection dropped:", error.message);
+  });
   const db = drizzlePg(pool);
   const listeners = new Set<pg.Client>();
   return {
@@ -71,19 +78,40 @@ function nodePostgresHandle(url: string): DatabaseHandle {
     driver: "node-postgres",
     read: () => db,
     transaction: (run) => db.transaction((tx) => run(tx)),
-    listen: async (channel, handler) => {
+    listen: async (channel, handler, options = {}) => {
       const client = new pg.Client({ connectionString: url });
-      await client.connect();
-      listeners.add(client);
+      let state: "listening" | "lost" | "closed" = "listening";
+      const current = () => state;
+      const lose = () => {
+        if (state !== "listening") return;
+        state = "lost";
+        listeners.delete(client);
+        client.end().catch(() => {});
+        options.onLost?.();
+      };
+      client.on("error", lose);
+      client.on("end", lose);
       client.on("notification", (message) => {
         if (message.channel === channel) handler(message.payload ?? "");
       });
       const identifier = pg.escapeIdentifier(channel);
-      await client.query(`LISTEN ${identifier}`);
+      try {
+        await client.connect();
+        await client.query(`LISTEN ${identifier}`);
+      } catch (error) {
+        state = "closed";
+        await client.end().catch(() => {});
+        throw error;
+      }
+      if (current() === "lost")
+        throw new Error(`LISTEN ${identifier} lost its connection`);
+      listeners.add(client);
       return async () => {
+        if (state !== "listening") return;
+        state = "closed";
+        listeners.delete(client);
         await client.query(`UNLISTEN ${identifier}`).catch(() => {});
         await client.end();
-        listeners.delete(client);
       };
     },
     migrate: (folder) => migratePg(db, { migrationsFolder: folder }),

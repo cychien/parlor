@@ -50,4 +50,41 @@ describe("SyncHub", () => {
     expect(onStop).toHaveBeenCalledOnce();
     expect(hub.subscriberCount()).toBe(0);
   });
+
+  it("ends every stream and listens again after its connection is lost", async () => {
+    const listens: { onLost: (() => void) | undefined }[] = [];
+    const hub = new SyncHub({
+      read: () => ({}),
+      transaction: async (run) => run({}),
+      listen: async (_channel, _handler, options) => {
+        listens.push({ onLost: options?.onLost });
+        return async () => {};
+      },
+    });
+    await hub.start();
+    const onStop = vi.fn();
+    hub.subscribe("acme", vi.fn(), onStop);
+
+    listens[0]?.onLost?.();
+    expect(onStop).toHaveBeenCalledOnce();
+
+    await hub.start();
+    expect(listens).toHaveLength(2);
+  });
+
+  it("tries to listen again after a failed start", async () => {
+    let attempts = 0;
+    const hub = new SyncHub({
+      read: () => ({}),
+      transaction: async (run) => run({}),
+      listen: async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("database down");
+        return async () => {};
+      },
+    });
+    await expect(hub.start()).rejects.toThrow("database down");
+    await hub.start();
+    expect(attempts).toBe(2);
+  });
 });

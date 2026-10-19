@@ -13,6 +13,7 @@ export {
   defineAction,
   isAction,
   isMutating,
+  type ListenOptions,
   needsConfirmation,
   needsPrincipal,
   type ParlorDatabase,

@@ -10,10 +10,23 @@ export type ParlorDatabase = DataRegister extends { database: infer D } ? D : un
 
 export type Unlisten = () => Promise<void>;
 
+export interface ListenOptions {
+  /**
+   * The connection behind this listener dropped. It is gone for good, and notifications
+   * sent until a new `listen` call succeeds are lost, so a listener must listen again and
+   * reload whatever it derived from them.
+   */
+  readonly onLost?: (() => void) | undefined;
+}
+
 export interface DataProvider<TDb = unknown> {
   read(): TDb;
   transaction<T>(run: (tx: TDb) => Promise<T>): Promise<T>;
-  listen?(channel: string, handler: (payload: string) => void): Promise<Unlisten>;
+  listen?(
+    channel: string,
+    handler: (payload: string) => void,
+    options?: ListenOptions,
+  ): Promise<Unlisten>;
   close?(): Promise<void>;
 }
 
