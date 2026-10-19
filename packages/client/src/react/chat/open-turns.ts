@@ -1,72 +1,38 @@
-import type { ChatFrame, LoggedItem, OpenItem, OpenTurn, TurnStatus } from "@parlor/chat";
-import type { ItemId, TurnId } from "@parlor/core";
+import {
+  applyFrame as applyToItems,
+  type ChatFrame,
+  type LoggedItem,
+  type OpenItem,
+  type OpenTurn,
+  type TurnStatus,
+} from "@parlor/chat";
+import type { TurnId } from "@parlor/core";
 
-/** What streams now, per turn; deltas apply in place and anything else is replaced. */
+/** What streams now, per turn. */
 export interface OpenTurns {
   readonly turns: ReadonlyMap<TurnId, OpenTurn>;
-  /** Items whose stream has a hole; they wait for their durable twin. */
-  readonly gapped: ReadonlySet<ItemId>;
 }
 
-export const NO_OPEN_TURNS: OpenTurns = { turns: new Map(), gapped: new Set() };
-
-function withItem(
-  turn: OpenTurn | undefined,
-  frame: ChatFrame,
-  item: OpenItem,
-): OpenTurn {
-  const base = turn ?? { turnId: frame.turnId, threadId: frame.threadId, items: [] };
-  const at = base.items.findIndex((existing) => existing.id === item.id);
-  return {
-    ...base,
-    items:
-      at === -1
-        ? [...base.items, item]
-        : base.items.map((existing, index) => (index === at ? item : existing)),
-  };
-}
-
-const replaced = (open: OpenTurns, turn: OpenTurn): OpenTurns => ({
-  ...open,
-  turns: new Map(open.turns).set(turn.turnId, turn),
-});
-
-const gapAt = (open: OpenTurns, id: ItemId): OpenTurns => ({
-  ...open,
-  gapped: new Set(open.gapped).add(id),
-});
+export const NO_OPEN_TURNS: OpenTurns = { turns: new Map() };
 
 /**
- * A delta carries the text length it starts at: bytes already shown are skipped, a hole
+ * A delta carries the text length it starts at: text already shown is skipped and a hole
  * freezes the item until its durable twin arrives, so a reload mid-stream neither repeats
- * nor loses text.
+ * nor loses text. `settled` changes nothing: the final durable item can trail it, so an
+ * open item leaves only with its twin or with its turn's end.
  */
 export function applyFrame(open: OpenTurns, frame: ChatFrame): OpenTurns {
-  if (frame.type === "settled") {
-    const turns = new Map(open.turns);
-    turns.delete(frame.turnId);
-    return { ...open, turns };
-  }
+  if (frame.type === "settled") return open;
   const turn = open.turns.get(frame.turnId);
-  if (frame.type === "item") return replaced(open, withItem(turn, frame, frame.item));
-  if (open.gapped.has(frame.itemId)) return open;
-  const existing = turn?.items.find((item) => item.id === frame.itemId);
-  if (!existing) {
-    if (frame.offset !== 0) return gapAt(open, frame.itemId);
-    return replaced(
-      open,
-      withItem(turn, frame, { id: frame.itemId, kind: frame.kind, text: frame.text }),
-    );
-  }
-  if (existing.kind !== "reply" && existing.kind !== "reasoning") return open;
-  const shown = existing.text.length;
-  if (frame.offset > shown) return gapAt(open, frame.itemId);
-  const tail = frame.text.slice(shown - frame.offset);
-  if (tail === "") return open;
-  return replaced(
-    open,
-    withItem(turn, frame, { ...existing, text: existing.text + tail }),
-  );
+  const applied = applyToItems(turn?.items ?? [], frame);
+  if (!applied) return open;
+  const next = new Map(open.turns);
+  next.set(frame.turnId, {
+    turnId: frame.turnId,
+    threadId: frame.threadId,
+    items: [...applied.items],
+  });
+  return { turns: next };
 }
 
 /** A snapshot read late may trail the frames already applied: keep the longer text. */
@@ -96,7 +62,7 @@ export function mergeSnapshot(open: OpenTurns, snapshot: readonly OpenTurn[]): O
       ],
     });
   }
-  return { ...open, turns };
+  return { turns };
 }
 
 /** Drops what is durable by now and what belongs to a turn that is over. */
@@ -116,8 +82,5 @@ export function pruneOpen(
     const items = turn.items.filter((item) => !durable.has(item.id));
     if (items.length > 0) turns.set(turnId, { ...turn, items });
   }
-  return {
-    turns,
-    gapped: new Set([...open.gapped].filter((id) => !durable.has(id))),
-  };
+  return { turns };
 }

@@ -1,4 +1,3 @@
-import type { LoggedItem, OpenTurn } from "@parlor/chat";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -6,22 +5,6 @@ import type { ActionClient } from "../../action-client.js";
 import * as Chat from "../agent-ui/chat.js";
 import { FrameworkProvider } from "../provider.js";
 import { useChat } from "./use-chat.js";
-
-vi.mock("@parlor/chat", () => ({
-  CHAT_CHANNEL: "chat",
-  parseChatFrame: (data: string) => JSON.parse(data),
-  foldThread: (input: { items: readonly LoggedItem[]; open: readonly OpenTurn[] }) => [
-    ...input.items.map((item) => ({ kind: item.kind, id: item.id, streaming: false })),
-    ...input.open.flatMap((turn) =>
-      turn.items.map((item) => ({
-        kind: item.kind,
-        id: item.id,
-        streaming: true,
-        text: "text" in item ? item.text : "",
-      })),
-    ),
-  ],
-}));
 
 const snapshot = {
   threads: [],

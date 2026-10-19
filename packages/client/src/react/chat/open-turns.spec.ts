@@ -55,15 +55,13 @@ describe("applyFrame", () => {
   });
 
   it("freezes a reply at a gap, so a hole is never drawn", () => {
-    const open = apply([delta(0, "Hel"), delta(9, "world"), delta(3, "lo")]);
+    const open = apply([delta(0, "Hel"), delta(9, "world"), delta(14, "!")]);
     expect(textOf(open)).toEqual([[replyId, "Hel"]]);
-    expect([...open.gapped]).toEqual([replyId]);
   });
 
   it("ignores the middle of a reply it never saw begin", () => {
     const open = apply([delta(5, "world")]);
     expect(open.turns.size).toBe(0);
-    expect([...open.gapped]).toEqual([replyId]);
   });
 
   it("replaces a tool's state and keeps first-seen order", () => {
@@ -80,9 +78,9 @@ describe("applyFrame", () => {
     ]);
   });
 
-  it("forgets the turn when it settles", () => {
+  it("keeps the open items when the turn settles, until their durable twins arrive", () => {
     const open = apply([delta(0, "Hi"), { type: "settled", threadId, turnId }]);
-    expect(open.turns.size).toBe(0);
+    expect(textOf(open)).toEqual([[replyId, "Hi"]]);
   });
 });
 

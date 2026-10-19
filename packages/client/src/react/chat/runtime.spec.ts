@@ -4,7 +4,6 @@ import type {
   ChatSnapshot,
   HostSummary,
   LoggedItem,
-  OpenTurn,
   ThreadSummary,
   TurnStatus,
 } from "@parlor/chat";
@@ -14,38 +13,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { DeviceSource, HostAuthorizer } from "../../session.js";
 import { createChatRuntime } from "./runtime.js";
-
-vi.mock("@parlor/chat", () => ({
-  CHAT_CHANNEL: "chat",
-  parseChatFrame: (data: string) => JSON.parse(data),
-  foldThread: (input: {
-    items: readonly LoggedItem[];
-    open: readonly OpenTurn[];
-    turns: readonly TurnStatus[];
-    confirmations: readonly { id: string }[];
-  }) => {
-    const durable = new Set(input.items.map((item) => item.id));
-    return [
-      ...input.items.map((item) => ({
-        kind: item.kind,
-        id: item.id,
-        text: "text" in item.body ? item.body.text : "",
-        streaming: false,
-      })),
-      ...input.open.flatMap((turn) =>
-        turn.items
-          .filter((item) => !durable.has(item.id))
-          .map((item) => ({
-            kind: item.kind,
-            id: item.id,
-            text: "text" in item ? item.text : "",
-            streaming: true,
-          })),
-      ),
-      ...input.confirmations.map((c) => ({ kind: "confirm", id: c.id })),
-    ];
-  },
-}));
 
 const thread = (id: string, agent?: ThreadSummary["agent"]): ThreadSummary => ({
   id: asId("thread", id),
@@ -223,7 +190,7 @@ describe("createChatRuntime start", () => {
     await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
 
     expect(h.calls).toEqual([{ name: "open", input: {} }]);
-    expect(h.shown()).toEqual([{ id: "item_p", text: "hi", streaming: false }]);
+    expect(h.shown()).toEqual([{ id: "item_p", text: "hi", streaming: undefined }]);
     expect(h.watch).toHaveBeenCalledWith("thr_1");
     expect(h.runtime.get().agents).toEqual([
       {
@@ -303,7 +270,7 @@ describe("createChatRuntime reload mid-stream", () => {
     h.frame(delta(3, "lo, "));
     h.frame(delta(7, "world"));
     expect(h.shown()).toEqual([
-      { id: "item_p", text: "write a long reply", streaming: false },
+      { id: "item_p", text: "write a long reply", streaming: undefined },
       { id: "turn_1.1", text: "Hello, world", streaming: true },
     ]);
   });
@@ -345,7 +312,7 @@ describe("createChatRuntime reload mid-stream", () => {
     await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
     h.frame({ type: "settled", threadId: "thr_1", turnId: "turn_1" });
     expect(h.shown()).toEqual([
-      { id: "item_p", text: "write a long reply", streaming: false },
+      { id: "item_p", text: "write a long reply", streaming: undefined },
       { id: "turn_1.1", text: "Hello, world", streaming: false },
     ]);
   });
@@ -400,7 +367,7 @@ describe("createChatRuntime poll deployments", () => {
       input: { threadId: "thr_1", afterSeq: 1 },
     });
     expect(h.shown()).toEqual([
-      { id: "item_p", text: "go", streaming: false },
+      { id: "item_p", text: "go", streaming: undefined },
       { id: "turn_1.1", text: "first", streaming: false },
       { id: "turn_1.2", text: "second", streaming: false },
     ]);
@@ -433,6 +400,14 @@ describe("createChatRuntime poll deployments", () => {
     h.runtime.start();
     await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
     h.tags(["parlor_chat_hosts"]);
+    await vi.waitFor(() => expect(h.names()).toEqual(["open", "hosts"]));
+  });
+
+  it("re-reads the computers when a grant is added or revoked", async () => {
+    const h = setup();
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    h.tags(["parlor_auth_hosts", "host_mac"]);
     await vi.waitFor(() => expect(h.names()).toEqual(["open", "hosts"]));
   });
 });
@@ -561,9 +536,15 @@ describe("createChatRuntime stop and answer", () => {
 
 describe("createChatRuntime confirmations", () => {
   it("hands the folded list only the confirmations of its own thread", async () => {
-    const h = setup();
+    const h = setup({
+      open: async () =>
+        snapshot({
+          items: [logged(1, "item_p", "prompt", "go")],
+          turns: [turn("turn_1", "running")],
+        }),
+    });
     h.runtime.start();
-    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("running"));
     const card = (id: string, threadId: string | undefined) =>
       ({ id, threadId }) as unknown as AgentConfirmation;
     h.setConfirmations([
@@ -571,7 +552,10 @@ describe("createChatRuntime confirmations", () => {
       card("c2", "thr_other"),
       card("c3", undefined),
     ]);
-    expect(h.shown()).toEqual([{ id: "c1", text: undefined, streaming: undefined }]);
+    expect(h.shown()).toEqual([
+      { id: "item_p", text: "go", streaming: undefined },
+      { id: "c1", text: undefined, streaming: undefined },
+    ]);
   });
 });
 
