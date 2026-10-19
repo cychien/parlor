@@ -251,6 +251,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 24.19.1
+      drizzle-orm:
+        specifier: ^0.45.4
+        version: 0.45.4(@electric-sql/pglite@0.5.9)(@types/pg@8.23.1)(pg@8.23.1)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
