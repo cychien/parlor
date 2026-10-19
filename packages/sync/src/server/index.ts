@@ -3,6 +3,7 @@ export { createPruner, DEFAULT_PRUNE_INTERVAL_MS, type Pruner } from "./pruner.j
 export {
   DEFAULT_POLL_INTERVAL_MS,
   registerSyncRoutes,
+  type StreamAuthority,
   type SyncRouteOptions,
   type SyncTransport,
   transportFromEnv,

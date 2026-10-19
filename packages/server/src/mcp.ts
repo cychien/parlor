@@ -20,6 +20,7 @@ import {
 import type { ActionRegistry } from "@parlor/core/registry";
 
 import type { ActionRunner } from "./actions.js";
+import type { CallerResolver } from "./caller.js";
 import { McpCalls } from "./mcp-calls.js";
 
 export interface McpOptions<T extends ActionMap> {
@@ -28,6 +29,7 @@ export interface McpOptions<T extends ActionMap> {
   readonly name?: string | undefined;
   readonly version?: string | undefined;
   readonly agentUi?: AgentUi | undefined;
+  readonly callers?: CallerResolver | undefined;
 }
 
 function toolResult(result: unknown): CallToolResult {
@@ -93,6 +95,19 @@ function actionDescription(action: AnyAction): string {
 
 export const PROGRESS_INTERVAL_MS = 10_000;
 
+async function verifiedOrigin(
+  callers: CallerResolver | undefined,
+  request: Request | undefined,
+  ctx: ServerContext,
+): Promise<AgentOrigin> {
+  const caller = callers && request ? await callers(request) : undefined;
+  const principal = caller?.principal;
+  if (principal?.kind === "agent" && principal.agent.verified) {
+    return { via: "mcp", name: principal.agent.name };
+  }
+  return originOf(ctx);
+}
+
 export function originOf(ctx: ServerContext): AgentOrigin {
   const envelope: Readonly<Record<string, unknown>> | undefined = ctx.mcpReq.envelope;
   const info = envelope?.[CLIENT_INFO_META_KEY];
@@ -133,7 +148,14 @@ export async function withProgress<T>(
 export function createMcpHandler<T extends ActionMap>(
   options: McpOptions<T>,
 ): McpHttpHandler {
-  const { actions, runner, agentUi, name = "parlor", version = "0.0.0" } = options;
+  const {
+    actions,
+    runner,
+    agentUi,
+    callers,
+    name = "parlor",
+    version = "0.0.0",
+  } = options;
 
   const calls = new McpCalls();
 
@@ -169,12 +191,10 @@ export function createMcpHandler<T extends ActionMap>(
         },
         async (args, toolCtx) => {
           try {
+            const origin = await verifiedOrigin(callers, ctx.requestInfo, toolCtx);
             const result = await inCall(ctx, toolCtx, (signal) => {
               const run = () =>
-                runner.run(actionName, args, ctx.requestInfo, "mcp", {
-                  signal,
-                  origin: originOf(toolCtx),
-                });
+                runner.run(actionName, args, ctx.requestInfo, "mcp", { signal, origin });
               return action.confirm ? withProgress(toolCtx, run) : run();
             });
             return toolResult(result.data);
@@ -226,7 +246,11 @@ export function createMcpHandler<T extends ActionMap>(
               await inCall(ctx, toolCtx, async (signal) =>
                 tool.run(
                   input.data,
-                  await agentUi!.contextFor(ctx.requestInfo, originOf(toolCtx), signal),
+                  await agentUi!.contextFor(
+                    ctx.requestInfo,
+                    await verifiedOrigin(callers, ctx.requestInfo, toolCtx),
+                    signal,
+                  ),
                 ),
               ),
             );

@@ -6,6 +6,8 @@ export const ACTION_ERROR_CODES = [
   "declined",
   "confirmation_timeout",
   "confirmation_unavailable",
+  "unauthenticated",
+  "forbidden",
   "internal",
 ] as const;
 

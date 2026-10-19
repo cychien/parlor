@@ -7,6 +7,7 @@ import {
   type PresenceUpdate,
   type UiOp,
 } from "../protocol.js";
+import { audienceOf } from "./audience.js";
 
 export interface ConnectedClient {
   readonly id: string;
@@ -62,9 +63,13 @@ export class ClientDirectory {
     return () => this.#listeners.delete(listener);
   }
 
-  connect(connection: ChannelConnection): () => void {
-    const { clientId } = connection;
+  connect(stream: ChannelConnection): () => void {
+    const { clientId } = stream;
     if (clientId === undefined) return () => {};
+    const connection: ChannelConnection = {
+      ...stream,
+      scope: audienceOf(stream.scope, stream.principal),
+    };
     this.#keepUnannounced(clientId, [
       ...(this.#unannounced.get(clientId) ?? []),
       connection,
@@ -72,10 +77,10 @@ export class ClientDirectory {
     return () => this.#disconnect(clientId, connection);
   }
 
-  touch(clientId: string | undefined): void {
+  touch(clientId: string | undefined, scope: string): void {
     if (clientId === undefined) return;
     const entry = this.#byId.get(clientId);
-    if (!entry) return;
+    if (!entry || entry.client.scope !== scope) return;
     entry.client = { ...entry.client, seenAt: this.#now() };
     this.#notify(entry.client, "updated");
   }

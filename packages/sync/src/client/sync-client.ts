@@ -31,7 +31,22 @@ export interface SyncClientOptions {
   readonly setTimeout?: typeof globalThis.setTimeout | undefined;
   readonly clearTimeout?: typeof globalThis.clearTimeout | undefined;
   readonly channels?: readonly ClientChannel[] | undefined;
+  /**
+   * The server refused the credential (401 or 403). The client never degrades to polling
+   * on it; it keeps retrying the negotiation with backoff. Defaults to `onError`.
+   */
+  readonly onUnauthorized?: ((error: SyncUnauthorized) => void) | undefined;
 }
+
+export class SyncUnauthorized extends Error {
+  override readonly name = "SyncUnauthorized";
+  constructor(readonly status: number) {
+    super(`sync was refused with HTTP ${status}`);
+  }
+}
+
+const refused = (response: Response) =>
+  response.status === 401 || response.status === 403;
 
 export interface SyncClient {
   start(): void;
@@ -129,6 +144,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     const response = await options.request(
       `${basePath}/sync?since=${encodeURIComponent(since())}`,
     );
+    if (refused(response)) throw new SyncUnauthorized(response.status);
     if (!response.ok) throw new Error(`sync poll failed with HTTP ${response.status}`);
     const batch = (await response.json()) as SyncBatch;
     accept(batch.events);
@@ -139,9 +155,23 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     if (pollTimer !== undefined) cancel(pollTimer);
     pollTimer = schedule(() => {
       pollTimer = undefined;
+      let halted = false;
       void poll()
-        .catch(settings.onError ?? (() => {}))
-        .finally(() => schedulePoll(nextPollDelay()));
+        .catch((error: unknown) => {
+          if (error instanceof SyncUnauthorized) {
+            halted = true;
+            unauthorized(error);
+            if (transport === "poll") {
+              transport = undefined;
+              schedule(() => void connect(), backoff());
+            }
+            return;
+          }
+          settings.onError?.(error);
+        })
+        .finally(() => {
+          if (!halted) schedulePoll(nextPollDelay());
+        });
     }, ms);
   };
 
@@ -154,6 +184,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
 
   const negotiate = async (): Promise<SyncNegotiation> => {
     const response = await options.request(`${basePath}/sync/token`, { method: "POST" });
+    if (refused(response)) throw new SyncUnauthorized(response.status);
     if (!response.ok)
       throw new Error(`sync negotiation failed with HTTP ${response.status}`);
     return (await response.json()) as SyncNegotiation;
@@ -182,6 +213,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
           signal: own.signal,
         },
       );
+      if (refused(response)) throw new SyncUnauthorized(response.status);
       if (!response.ok || !response.body) {
         throw new Error(`sync stream failed with HTTP ${response.status}`);
       }
@@ -222,7 +254,30 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     }
   };
 
+  const unauthorized = (error: SyncUnauthorized) => {
+    if (pollTimer !== undefined) cancel(pollTimer);
+    pollTimer = undefined;
+    (options.onUnauthorized ?? settings.onError)?.(error);
+  };
+
+  const backoff = () => {
+    const delay = reconnectDelay;
+    reconnectDelay = Math.min(reconnectDelay * 2, settings.reconnectMaxMs);
+    return delay;
+  };
+
+  let connecting = false;
   const connect = async () => {
+    if (connecting) return;
+    connecting = true;
+    try {
+      await connectLoop();
+    } finally {
+      connecting = false;
+    }
+  };
+
+  const connectLoop = async () => {
     for (;;) {
       if (!running) return;
       let endpoint: string | undefined;
@@ -238,10 +293,15 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
         endpoint = negotiation.endpoint;
       } catch (error) {
         if (!running) return;
-        settings.onError?.(error);
-        if (transport !== "poll") {
-          transport = "poll";
-          schedulePoll(negotiatedPollMs);
+        if (error instanceof SyncUnauthorized) {
+          transport = undefined;
+          unauthorized(error);
+        } else {
+          settings.onError?.(error);
+          if (transport !== "poll") {
+            transport = "poll";
+            schedulePoll(negotiatedPollMs);
+          }
         }
       }
       if (endpoint !== undefined) {
@@ -251,12 +311,13 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
           await stream(endpoint);
         } catch (error) {
           if (!running) return;
-          settings.onError?.(error);
+          if (error instanceof SyncUnauthorized) unauthorized(error);
+          else settings.onError?.(error);
         }
       }
       if (!running) return;
-      await new Promise<void>((resolve) => schedule(() => resolve(), reconnectDelay));
-      reconnectDelay = Math.min(reconnectDelay * 2, settings.reconnectMaxMs);
+      const delay = backoff();
+      await new Promise<void>((resolve) => schedule(() => resolve(), delay));
     }
   };
 

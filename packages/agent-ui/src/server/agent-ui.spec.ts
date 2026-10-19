@@ -13,7 +13,7 @@ const manifest: UiManifest = {
 };
 
 async function hrefWhenClosed(webOrigin: string | undefined) {
-  const agentUi = createAgentUi({ scope: () => "default", webOrigin });
+  const agentUi = createAgentUi({ audience: () => "default", webOrigin });
   agentUi.install(() => manifest);
   const navigate = agentUi.tools("agent").find((tool) => tool.name === "ui_navigate")!;
   const ctx = await agentUi.contextFor(new Request("http://localhost:3300/_parlor/mcp"), {
@@ -49,14 +49,14 @@ describe("an installed manifest that predates writable views", () => {
   };
 
   it("reads every view as read-only instead of failing the tools built from it", () => {
-    const agentUi = createAgentUi({ scope: () => "default" });
+    const agentUi = createAgentUi({ audience: () => "default" });
     agentUi.install(() => legacy);
     expect(agentUi.manifest()?.views).toEqual([{ ...legacy.views[0], writable: [] }]);
     expect(agentUi.tools("mcp").map((tool) => tool.name)).toContain("ui_set");
   });
 
   it("hands out the same manifest object while the source keeps returning the same one", () => {
-    const agentUi = createAgentUi({ scope: () => "default" });
+    const agentUi = createAgentUi({ audience: () => "default" });
     agentUi.install(() => legacy);
     expect(agentUi.manifest()).toBe(agentUi.manifest());
     expect(agentUi.manifest()?.views[0]?.writable).toEqual([]);

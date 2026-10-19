@@ -11,6 +11,8 @@ const RETRY_CAN_CHANGE_OUTCOME: Readonly<Record<ActionErrorCode, boolean>> = {
   declined: false,
   confirmation_timeout: true,
   confirmation_unavailable: true,
+  unauthenticated: false,
+  forbidden: false,
   internal: true,
 };
 

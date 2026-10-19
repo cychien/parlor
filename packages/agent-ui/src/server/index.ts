@@ -7,6 +7,7 @@ export {
   type ExternalUiPolicy,
   webOriginFromEnv,
 } from "./agent-ui.js";
+export { audienceOf } from "./audience.js";
 export {
   type ConfirmationOutcome,
   type ConfirmationRequest,

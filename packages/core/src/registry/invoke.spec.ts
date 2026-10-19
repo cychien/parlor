@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { defineAction } from "../action.js";
 import { ActionError } from "../errors.js";
+import { asId } from "../ids.js";
 import { invokeAction } from "./invoke.js";
 import { createRegistry } from "./registry.js";
 
@@ -144,7 +145,7 @@ describe("invokeAction confirmation", () => {
         action: gated.get("remove"),
         name: "remove",
         input: { id: "t1", force: false },
-        ctx: from(source),
+        ctx: { ...from(source), principal: { kind: "anonymous" } },
       });
       expect(log).toEqual(["confirm", "begin", "run", "commit"]);
     },
@@ -197,5 +198,44 @@ describe("invokeAction confirmation", () => {
     expect(error).toBeInstanceOf(ActionError);
     expect((error as ActionError).code).toBe("confirmation_unavailable");
     expect(log).toEqual([]);
+  });
+});
+
+describe("invokeAction identity", () => {
+  const alice = { kind: "user", userId: asId("user", "alice"), sessionId: "s" } as const;
+  const gated = createRegistry({
+    whoami: defineAction({
+      description: "Who is calling.",
+      input: z.object({}),
+      run: (_input, context) => context.principal,
+    }),
+    ping: defineAction({
+      description: "Anyone may ping.",
+      input: z.object({}),
+      public: true,
+      run: () => "pong",
+    }),
+  });
+
+  it("hands a caller that names no principal to the action as anonymous", async () => {
+    await expect(invokeAction(gated, "whoami", {}, ctx)).resolves.toMatchObject({
+      data: { kind: "anonymous" },
+    });
+  });
+
+  it("passes the principal through to the action", async () => {
+    await expect(
+      invokeAction(gated, "whoami", {}, { ...ctx, principal: alice }),
+    ).resolves.toMatchObject({ data: alice });
+  });
+
+  it("refuses an anonymous caller before validating input when auth is enforced", async () => {
+    const error = await invokeAction(gated, "whoami", { bad: true }, ctx, {
+      enforcing: true,
+    }).catch((e: unknown) => e);
+    expect((error as ActionError).code).toBe("unauthenticated");
+    await expect(
+      invokeAction(gated, "ping", {}, ctx, { enforcing: true }),
+    ).resolves.toMatchObject({ data: "pong" });
   });
 });

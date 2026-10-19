@@ -8,14 +8,14 @@ export const MAX_CLIENT_MESSAGE_BYTES = 256 * 1024;
 export interface AgentUiRouteOptions {
   readonly basePath: string;
   readonly agentUi: AgentUi;
-  readonly scope: (request: Request) => string | Promise<string>;
+  readonly audience: (request: Request) => string | Promise<string>;
   readonly clientId: (request: Request) => string | undefined;
 }
 
 const status = (code: number) => new Response(null, { status: code });
 
 export function registerAgentUiRoutes(app: H3, options: AgentUiRouteOptions): void {
-  const { basePath, agentUi, scope, clientId } = options;
+  const { basePath, agentUi, audience, clientId } = options;
 
   app.post(`${basePath}/ui`, async (event) => {
     const request = event.req;
@@ -36,7 +36,7 @@ export function registerAgentUiRoutes(app: H3, options: AgentUiRouteOptions): vo
     }
     const message = parseClientMessage(json);
     if (!message) return status(400);
-    const receipt = agentUi.receive(id, await scope(request), message);
+    const receipt = agentUi.receive(id, await audience(request), message);
     if (!receipt.accepted) return status(404);
     if (receipt.next === undefined) return status(204);
     return new Response(receipt.next, {

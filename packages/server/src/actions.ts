@@ -3,8 +3,10 @@ import type { ConfirmationOutcome, ConfirmationRequest } from "@parlor/agent-ui/
 import {
   ActionError,
   type ActionMap,
+  ANONYMOUS,
   type ActionSource,
   type DataProvider,
+  type Principal,
 } from "@parlor/core";
 import {
   type ActionRegistry,
@@ -19,24 +21,15 @@ import {
   type SyncDatabase,
 } from "@parlor/sync/server";
 
-import { CLIENT_HEADER, SOURCE_HEADER } from "./protocol.js";
-import type { ScopeResolver } from "./scope.js";
+import {
+  type Caller,
+  type CallerResolver,
+  createCallerResolver,
+  sourceFor,
+} from "./caller.js";
+import { DEFAULT_SCOPE, type ScopeResolver } from "./scope.js";
 
-const SOURCES: ReadonlySet<string> = new Set<ActionSource>([
-  "ui",
-  "agent",
-  "http",
-  "mcp",
-]);
-
-export function sourceOf(request: Request): ActionSource {
-  const header = request.headers.get(SOURCE_HEADER);
-  return header && SOURCES.has(header) ? (header as ActionSource) : "http";
-}
-
-export function clientOf(request: Request): string | undefined {
-  return request.headers.get(CLIENT_HEADER) ?? undefined;
-}
+export { clientOf, sourceOf } from "./caller.js";
 
 export type Confirm = (request: ConfirmationRequest) => Promise<ConfirmationOutcome>;
 
@@ -45,7 +38,11 @@ export interface ActionRunnerOptions<T extends ActionMap> {
   readonly scope: ScopeResolver;
   readonly database?: DataProvider | undefined;
   readonly sync: boolean;
-  readonly onClient?: ((clientId: string | undefined) => void) | undefined;
+  /** Resolves each request's identity once; without it every caller is anonymous. */
+  readonly callers?: CallerResolver | undefined;
+  readonly onClient?:
+    | ((clientId: string | undefined, audience: string) => void)
+    | undefined;
   readonly confirm?: Confirm | undefined;
 }
 
@@ -73,9 +70,10 @@ interface Gate {
   readonly signal: AbortSignal | undefined;
 }
 
-const originOfSource = (source: ActionSource): AgentOrigin => ({
-  via: source === "agent" ? "agent" : "mcp",
-});
+function originOf(source: ActionSource, principal: Principal): AgentOrigin {
+  const via = source === "agent" ? "agent" : "mcp";
+  return principal.kind === "agent" ? { via, name: principal.agent.name } : { via };
+}
 
 function confirmationGate(gate: Gate): (call: PreparedCall) => Promise<void> {
   return async ({ action, name, input, ctx }) => {
@@ -85,7 +83,7 @@ function confirmationGate(gate: Gate): (call: PreparedCall) => Promise<void> {
       action: name,
       description: action.description,
       input,
-      origin: gate.origin ?? originOfSource(ctx.source),
+      origin: gate.origin ?? originOf(ctx.source, ctx.principal ?? ANONYMOUS),
       signal: gate.signal,
     });
     switch (outcome) {
@@ -119,10 +117,18 @@ function confirmationGate(gate: Gate): (call: PreparedCall) => Promise<void> {
   };
 }
 
+const INTERNAL_CALLER: Caller = {
+  principal: ANONYMOUS,
+  scope: DEFAULT_SCOPE,
+  audience: DEFAULT_SCOPE,
+  clientId: undefined,
+};
+
 export function createActionRunner<T extends ActionMap>(
   options: ActionRunnerOptions<T>,
 ): ActionRunner {
   const { actions, scope, database, sync, onClient, confirm } = options;
+  const callers = options.callers ?? createCallerResolver(undefined, scope);
   const pruner = sync && database ? createPruner(database) : undefined;
   let prepared: Promise<void> | undefined;
   const ready = () => {
@@ -135,23 +141,26 @@ export function createActionRunner<T extends ActionMap>(
 
   return {
     ready,
-    async run(name, input, request, source, runOptions = {}) {
+    async run(name, input, request, declared, runOptions = {}) {
       await ready();
-      const resolvedScope = request ? await scope(request) : "default";
-      const client = request ? clientOf(request) : undefined;
-      onClient?.(client);
+      const caller = request ? await callers(request) : INTERNAL_CALLER;
+      const source = sourceFor(declared, caller, callers.enforcing);
+      const client = caller.clientId;
+      onClient?.(client, caller.audience);
       const signal = runOptions.signal ?? request?.signal;
+      const resolvedScope = caller.scope;
       const result = await invokeAction(
         actions,
         name,
         input,
-        { scope: resolvedScope, source, signal },
+        { scope: resolvedScope, source, principal: caller.principal, signal },
         {
           data: database,
+          enforcing: callers.enforcing,
           confirm: confirm
             ? confirmationGate({
                 confirm,
-                scope: resolvedScope,
+                scope: caller.audience,
                 clientId: client,
                 origin: runOptions.origin,
                 signal,
