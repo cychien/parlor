@@ -20,6 +20,7 @@ const LOADING_STATE: ChatState = {
   agent: undefined,
   connect: { kind: "command", command: "" },
   draft: "",
+  error: undefined,
 };
 
 /** Stands in while the runtime's chunk loads, so the primitives render at once. */

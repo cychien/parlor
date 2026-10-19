@@ -534,6 +534,90 @@ describe("createChatRuntime stop and answer", () => {
   });
 });
 
+describe("createChatRuntime command failures", () => {
+  const running = () =>
+    snapshot({
+      items: [logged(1, "item_p", "prompt", "go")],
+      turns: [turn("turn_1", "running")],
+    });
+
+  function failing(
+    name: string,
+    error: Error,
+    options: Parameters<typeof setup>[0] = {},
+  ) {
+    const h = setup(options);
+    let broken = true;
+    h.call.mockImplementation(async (called: string, input: unknown) => {
+      h.calls.push({ name: called, input });
+      if (called === name && broken) throw error;
+      if (called === "open") return options.open ? options.open() : snapshot();
+      return { id: "thr_1" };
+    });
+    return { h, repair: () => (broken = false) };
+  }
+
+  it("shows the server's reason when a send is refused, and clears it after a send that works", async () => {
+    const { h, repair } = failing(
+      "send",
+      new ActionError("invalid_input", "Alice's Mac is offline."),
+    );
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    expect(h.runtime.get().error).toBeUndefined();
+
+    h.runtime.setDraft("hello");
+    await expect(h.runtime.send()).rejects.toThrow("Alice's Mac is offline.");
+    expect(h.runtime.get().error).toBe("Alice's Mac is offline.");
+    expect(h.runtime.get().draft).toBe("hello");
+
+    repair();
+    await h.runtime.send();
+    expect(h.runtime.get().error).toBeUndefined();
+  });
+
+  it("says the server could not be reached when the request itself fails", async () => {
+    const { h } = failing("send", new TypeError("Failed to fetch"));
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    h.runtime.setDraft("hello");
+
+    await expect(h.runtime.send()).rejects.toThrow("Failed to fetch");
+
+    expect(h.runtime.get().error).toBe("Could not reach the server.");
+  });
+
+  it("shows a refused stop and clears it when the next stop works", async () => {
+    const { h, repair } = failing(
+      "cancel",
+      new ActionError("not_found", "Turn not found"),
+      { open: async () => running() },
+    );
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("running"));
+
+    await expect(h.runtime.stop()).rejects.toThrow("Turn not found");
+    expect(h.runtime.get().error).toBe("Turn not found");
+
+    repair();
+    await h.runtime.stop();
+    expect(h.runtime.get().error).toBeUndefined();
+  });
+
+  it("keeps a failure shown while a read that is not a command succeeds", async () => {
+    const { h } = failing("send", new ActionError("invalid_input", "Offline."));
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    h.runtime.setDraft("hello");
+    await expect(h.runtime.send()).rejects.toThrow("Offline.");
+
+    h.tags(["parlor_chat", "thr_1"]);
+    await flush();
+
+    expect(h.runtime.get().error).toBe("Offline.");
+  });
+});
+
 describe("createChatRuntime confirmations", () => {
   it("hands the folded list only the confirmations of its own thread", async () => {
     const h = setup({

@@ -1,8 +1,13 @@
 import { type AgentConfirmation, Chat, useActionQuery } from "@parlor/client/react";
+import type { MouseEvent } from "react";
 
 const ACTION_VERBS: Readonly<Record<string, string>> = {
   deleteTask: "delete a task",
 };
+
+export function focusComposer(event: MouseEvent<HTMLElement>) {
+  event.currentTarget.closest(".agent-sidebar")?.querySelector("textarea")?.focus();
+}
 
 const idOf = (input: unknown) =>
   typeof input === "object" &&
@@ -57,8 +62,10 @@ export function ConfirmationCard({
         </details>
       )}
       <div className="actions">
-        <Chat.Approve className="primary">Approve</Chat.Approve>
-        <Chat.Decline>Decline</Chat.Decline>
+        <Chat.Approve className="primary" onClick={focusComposer}>
+          Approve
+        </Chat.Approve>
+        <Chat.Decline onClick={focusComposer}>Decline</Chat.Decline>
       </div>
     </Chat.Confirm>
   );

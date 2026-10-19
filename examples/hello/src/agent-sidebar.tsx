@@ -6,7 +6,7 @@ import {
   useChat,
 } from "@parlor/client/react";
 
-import { ConfirmationCard } from "./agent-requests.js";
+import { ConfirmationCard, focusComposer } from "./agent-requests.js";
 
 export default function AgentSidebar() {
   return (
@@ -92,7 +92,7 @@ function ThreadEmpty() {
 }
 
 function Composer() {
-  const { status } = useChat();
+  const { status, error } = useChat();
   return (
     <Chat.Composer className="composer">
       <Chat.Input
@@ -101,6 +101,11 @@ function Composer() {
         rows={2}
         autoFocus
       />
+      {error ? (
+        <p className="problem" role="alert">
+          {error}
+        </p>
+      ) : null}
       <div className="composer-bar">
         <p className="composer-status" role="status">
           {status === "sending" ? "Sending..." : status === "running" ? "Working..." : ""}
@@ -192,6 +197,7 @@ function Item({ item }: { readonly item: ChatItem<AgentConfirmation> }) {
                   key={choice.id}
                   choice={choice}
                   className={choice.effect.startsWith("allow") ? "primary" : undefined}
+                  onClick={focusComposer}
                 >
                   {choice.label}
                 </Chat.AskChoice>

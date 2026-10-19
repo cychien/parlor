@@ -2,10 +2,12 @@ import type { AgentConfirmation, AgentUiClient } from "@parlor/agent-ui/client";
 import type { CapabilityHandle, LocalAgentHost } from "@parlor/capabilities";
 import {
   CHAT_CHANNEL,
+  CHAT_TAG,
   type ChatFrame,
   type ChatItem,
   foldThread,
   type HostSummary,
+  HOSTS_TAG,
   type LoggedItem,
   parseChatFrame,
   type ThreadSummary,
@@ -13,6 +15,7 @@ import {
 } from "@parlor/chat";
 import type { ChatUserActionMap } from "@parlor/chat/server";
 import {
+  ActionError,
   asId,
   type ItemId,
   type Tag,
@@ -61,6 +64,8 @@ export interface ChatState {
   readonly agent: AgentChoice | undefined;
   readonly connect: ConnectOption;
   readonly draft: string;
+  /** Why the last send, stop or answer failed; cleared by the next one that succeeds. */
+  readonly error: string | undefined;
 }
 
 export interface ChatCommands {
@@ -97,8 +102,6 @@ export interface ChatRuntimeDeps {
   readonly threadId: string | undefined;
 }
 
-export const CHAT_TAG = "parlor_chat";
-export const HOSTS_TAG = "parlor_chat_hosts";
 export const HOST_GRANTS_TAG = "parlor_auth_hosts";
 
 interface PendingSend {
@@ -136,6 +139,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
   let open: OpenTurns = NO_OPEN_TURNS;
   let beforeLoad: ChatFrame[] = [];
   let draft = "";
+  let failure: string | undefined;
   let chosen: string | undefined;
   let sending = false;
   let pendingSend: PendingSend | undefined;
@@ -198,6 +202,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       agent,
       connect,
       draft,
+      error: failure,
     };
   };
 
@@ -286,6 +291,21 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     }
   };
 
+  const reporting = async (command: () => Promise<void>) => {
+    try {
+      await command();
+    } catch (error) {
+      failure =
+        error instanceof ActionError ? error.message : "Could not reach the server.";
+      emit();
+      throw error;
+    }
+    if (failure !== undefined) {
+      failure = undefined;
+      emit();
+    }
+  };
+
   const activeTurn = (): TurnStatus | undefined => [...turns].reverse().find(isActive);
 
   const runtime: ChatRuntime = {
@@ -315,18 +335,20 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       sending = true;
       emit();
       try {
-        await calls.call("send", {
-          threadId: attempt.threadId,
-          turnId: attempt.turnId,
-          itemId: attempt.itemId,
-          clientId: deps.clientId,
-          prompt: { text: prompt, agent: { hostId: asId("host", hostId), agentId } },
+        await reporting(async () => {
+          await calls.call("send", {
+            threadId: attempt.threadId,
+            turnId: attempt.turnId,
+            itemId: attempt.itemId,
+            clientId: deps.clientId,
+            prompt: { text: prompt, agent: { hostId: asId("host", hostId), agentId } },
+          });
+          pendingSend = undefined;
+          if (draft.trim() === prompt) draft = "";
+          threadId = attempt.threadId;
+          watch();
+          await load(threadId);
         });
-        pendingSend = undefined;
-        if (draft.trim() === prompt) draft = "";
-        threadId = attempt.threadId;
-        watch();
-        await load(threadId);
       } finally {
         sending = false;
         emit();
@@ -337,8 +359,11 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       if (!turn || threadId === undefined) return;
       const itemId = stopIds.get(turn.turnId) ?? mint("item");
       stopIds.set(turn.turnId, itemId);
-      await calls.call("cancel", { threadId, turnId: turn.turnId, itemId });
-      await refresh();
+      const target = threadId;
+      await reporting(async () => {
+        await calls.call("cancel", { threadId: target, turnId: turn.turnId, itemId });
+        await refresh();
+      });
     },
     async answer(askId, choice, values) {
       const ask = state.items.find((item) => item.kind === "ask" && item.id === askId);
@@ -348,13 +373,16 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       }
       const itemId = answerIds.get(askId) ?? mint("item");
       answerIds.set(askId, itemId);
-      await calls.call("answer", {
-        threadId,
-        turnId: ask.turnId,
-        itemId,
-        answer: { askId: ask.id, choice, ...(values ? { values } : {}) },
+      const target = threadId;
+      await reporting(async () => {
+        await calls.call("answer", {
+          threadId: target,
+          turnId: ask.turnId,
+          itemId,
+          answer: { askId: ask.id, choice, ...(values ? { values } : {}) },
+        });
+        await refresh();
       });
-      await refresh();
     },
     choose(agentKey) {
       chosen = agentKey;

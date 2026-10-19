@@ -1,5 +1,14 @@
 import { useAgentConfirmations, useAgentView } from "@parlor/client/react";
-import { lazy, Suspense, useCallback, useEffect, useId, useRef, useState } from "react";
+import {
+  type KeyboardEvent,
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 
 import { agentPanel } from "./views.js";
@@ -33,6 +42,12 @@ export function AgentPanel() {
     setOpen(false);
     button.current?.focus();
   };
+  const dismiss = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Escape" || event.defaultPrevented) return;
+    if (event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    close();
+  };
   return (
     <>
       <button
@@ -55,6 +70,7 @@ export function AgentPanel() {
           className="agent-sidebar"
           aria-labelledby={titleId}
           hidden={!open}
+          onKeyDown={dismiss}
         >
           <header>
             <h2 id={titleId}>Agent</h2>
