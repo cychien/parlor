@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { type DataProvider, defineAction } from "@parlor/core";
-import { createRegistry } from "@parlor/core/registry";
+import { type ActionRegistry, createRegistry } from "@parlor/core/registry";
 import type { DatabaseHandle } from "@parlor/data";
 import {
   type AuthProvider,
@@ -47,6 +47,8 @@ export interface TestApp {
 }
 
 export interface TestAppOptions {
+  /** Replaces the default `whoami` and `ping` actions. */
+  readonly actions?: ActionRegistry | undefined;
   readonly plugins?: readonly ServerPlugin[] | undefined;
   /** Sees every database call the app makes, e.g. to count queries. */
   readonly wrap?: ((provider: DataProvider) => DataProvider) | undefined;
@@ -81,7 +83,7 @@ export function createTestApp(
   });
   const provider = betterAuthProvider({ instance });
   const server = createServer({
-    actions,
+    actions: options.actions ?? actions,
     auth: provider,
     ...(options.plugins ? { plugins: options.plugins } : {}),
     database: (options.wrap ?? ((data) => data))({
