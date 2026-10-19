@@ -1,8 +1,8 @@
-import type { DeviceId, ItemId, TurnId } from "@parlor/core";
+import { asId, type DeviceId, type ItemId, type TurnId } from "@parlor/core";
 
 import type { ChatEvent } from "./events.js";
 import type { ChatItemBody, ChatItemKind, LoggedItem } from "./items.js";
-import type { AgentRef, OpenTurn, TurnState, TurnStatus } from "./model.js";
+import type { AgentRef, OpenItem, OpenTurn, TurnState, TurnStatus } from "./model.js";
 
 export type AskState =
   | { readonly state: "open" }
@@ -89,6 +89,8 @@ export type ItemFolders = {
   readonly [K in ChatItemKind]: (item: LoggedItem<K>) => void;
 };
 
+const TERMINAL: ReadonlySet<TurnState> = new Set(["done", "failed", "cancelled"]);
+
 /**
  * Pure and O(items + open): the same input gives the same list with stable ids, so a
  * durable item replacing its open twin keeps its React row.
@@ -96,9 +98,216 @@ export type ItemFolders = {
 export function foldThread<C extends ThreadConfirmation>(
   input: FoldInput<C>,
 ): readonly ChatItem<C>[] {
-  // TODO: walk items by seq through an `ItemFolders` table: answer settles its ask, cancel
-  //   its turn's prompt; then each turn's open items whose id is not durable yet (streaming);
-  //   then confirmations with this thread's id after the running turn's items.
-  void input;
-  throw new Error("not implemented");
+  const states = new Map<TurnId, TurnState>();
+  for (const turn of input.turns) states.set(turn.turnId, turn.state);
+  const stateOf = (turnId: TurnId): TurnState => states.get(turnId) ?? "done";
+
+  const rows: ChatItem<C>[] = [];
+  const durable = new Set<ItemId>();
+  const asks = new Map<ItemId, number>();
+  const prompts = new Map<TurnId, number>();
+  const cancelled = new Set<TurnId>();
+
+  const push = (row: ChatItem<C>) => {
+    rows.push(row);
+    return rows.length - 1;
+  };
+
+  const folders: ItemFolders = {
+    prompt: (item) => {
+      prompts.set(
+        item.turnId,
+        push({
+          kind: "prompt",
+          id: item.id,
+          turnId: item.turnId,
+          text: item.body.text,
+          agent: item.body.agent,
+          state: stateOf(item.turnId),
+          mine:
+            input.deviceId !== undefined && item.body.signed?.deviceId === input.deviceId,
+        }),
+      );
+    },
+    answer: (item) => {
+      const at = asks.get(item.body.askId);
+      if (at === undefined) return;
+      const row = rows[at];
+      if (row?.kind === "ask" && row.answer.state === "open") {
+        rows[at] = {
+          ...row,
+          answer: { state: "answered", choice: item.body.choice },
+        };
+      }
+    },
+    cancel: (item) => {
+      cancelled.add(item.turnId);
+    },
+    reply: (item) => {
+      push({
+        kind: "reply",
+        id: item.id,
+        turnId: item.turnId,
+        text: item.body.text,
+        streaming: false,
+        interrupted: item.body.interrupted === true,
+      });
+    },
+    reasoning: (item) => {
+      push({
+        kind: "reasoning",
+        id: item.id,
+        turnId: item.turnId,
+        text: item.body.text,
+        streaming: false,
+        interrupted: false,
+      });
+    },
+    tool: (item) => {
+      push({
+        kind: "tool",
+        id: item.id,
+        turnId: item.turnId,
+        title: item.body.title,
+        tool: item.body.tool,
+        status: item.body.status,
+        detail: item.body.detail,
+      });
+    },
+    plan: (item) => {
+      push({
+        kind: "plan",
+        id: item.id,
+        turnId: item.turnId,
+        entries: item.body.entries,
+        streaming: false,
+      });
+    },
+    ask: (item) => {
+      asks.set(
+        item.id,
+        push({
+          kind: "ask",
+          id: item.id,
+          turnId: item.turnId,
+          question: item.body.question,
+          choices: item.body.choices,
+          form: item.body.form,
+          approval: item.body.approval,
+          answer: { state: "open" },
+        }),
+      );
+    },
+    event: (item) => {
+      push({
+        kind: "event",
+        id: item.id,
+        turnId: item.turnId,
+        event: item.body.event,
+        detail: item.body.detail,
+      });
+    },
+  };
+
+  for (const item of input.items) {
+    durable.add(item.id);
+    fold(folders, item);
+  }
+
+  for (const [turnId, at] of prompts) {
+    const row = rows[at];
+    if (row?.kind === "prompt" && cancelled.has(turnId) && !TERMINAL.has(row.state)) {
+      rows[at] = { ...row, state: "cancelled" };
+    }
+  }
+  for (const at of asks.values()) {
+    const row = rows[at];
+    if (row?.kind === "ask" && row.answer.state === "open") {
+      if (TERMINAL.has(stateOf(row.turnId)) || cancelled.has(row.turnId)) {
+        rows[at] = { ...row, answer: { state: "closed" } };
+      }
+    }
+  }
+
+  for (const turn of input.open) {
+    if (TERMINAL.has(stateOf(turn.turnId))) continue;
+    for (const open of turn.items) {
+      if (durable.has(open.id)) continue;
+      rows.push(openRow(open, turn.turnId));
+    }
+  }
+
+  const threadId = input.items[0]?.threadId ?? input.open[0]?.threadId;
+  if (threadId !== undefined) {
+    const running = input.turns.find((turn) => turn.state === "running")?.turnId;
+    const turnId = running ?? input.items.at(-1)?.turnId ?? input.open[0]?.turnId;
+    if (turnId !== undefined) {
+      for (const confirmation of input.confirmations) {
+        if (confirmation.threadId !== threadId) continue;
+        rows.push({
+          kind: "confirm",
+          id: asId("item", confirmation.id),
+          turnId,
+          confirmation,
+        });
+      }
+    }
+  }
+  return rows;
+}
+
+function fold(folders: ItemFolders, item: LoggedItem): void {
+  switch (item.kind) {
+    case "prompt":
+      return folders.prompt(item);
+    case "answer":
+      return folders.answer(item);
+    case "cancel":
+      return folders.cancel(item);
+    case "reply":
+      return folders.reply(item);
+    case "reasoning":
+      return folders.reasoning(item);
+    case "tool":
+      return folders.tool(item);
+    case "plan":
+      return folders.plan(item);
+    case "ask":
+      return folders.ask(item);
+    case "event":
+      return folders.event(item);
+  }
+}
+
+function openRow<C>(open: OpenItem, turnId: TurnId): ChatItem<C> {
+  switch (open.kind) {
+    case "reply":
+    case "reasoning":
+      return {
+        kind: open.kind,
+        id: open.id,
+        turnId,
+        text: open.text,
+        streaming: true,
+        interrupted: false,
+      };
+    case "tool":
+      return {
+        kind: "tool",
+        id: open.id,
+        turnId,
+        title: open.title,
+        tool: undefined,
+        status: open.status,
+        detail: undefined,
+      };
+    case "plan":
+      return {
+        kind: "plan",
+        id: open.id,
+        turnId,
+        entries: open.entries,
+        streaming: true,
+      };
+  }
 }

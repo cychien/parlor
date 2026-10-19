@@ -1,7 +1,10 @@
 import type { ServerPlugin } from "@parlor/server";
 
-import type { LiveRelay } from "./live.js";
+import { chatActions } from "./actions.js";
+import { inProcessRelay, type LiveRelay } from "./live.js";
 import { CHAT_MIGRATIONS } from "./migrations.js";
+import { chatRoutes } from "./routes.js";
+import { type ChatDb, sqlChatStore } from "./store.js";
 
 export {
   CHAT_TAG,
@@ -63,6 +66,16 @@ export interface ChatOptions {
   readonly relay?: (() => LiveRelay) | undefined;
 }
 
+/** A lease past the revocation memory would outlive the revocation of its grant. */
+export const MAX_LEASE_MS = 11 * 60_000;
+
+function positiveInteger(name: string, value: number): number {
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`chat(): ${name} must be a positive whole number, got ${value}.`);
+  }
+  return value;
+}
+
 /**
  * The inline agent's server half: the `parlor_chat_*` log, the user and host actions, the
  * `chat` channel, and the host-only stream and heartbeat routes.
@@ -72,15 +85,44 @@ export function chat(options: ChatOptions = {}): ServerPlugin {
     name: CHAT_PLUGIN,
     migrations: CHAT_MIGRATIONS,
     setup(host) {
-      // TODO: refuse to start without host.auth?.delegate (production without auth;
-      //   `parlor dev` gets devAuth); relay = (options.relay ?? inProcessRelay)();
-      //   appName from PARLOR_APP_NAME, appOrigin from PARLOR_ORIGIN or the request;
-      //   actions = chatActions({ enforcing: host.auth.enforcing, auth: host.auth, store:
-      //   sqlChatStore, relay, leaseMs, heartbeatMs, maxQueued, instructions, ... });
-      //   routes = chatRoutes(...); channel = relay.channel; close = relay.close.
-      void options;
-      void host;
-      throw new Error("not implemented");
+      const leaseMs = positiveInteger("leaseMs", options.leaseMs ?? DEFAULT_LEASE_MS);
+      const maxQueued = positiveInteger(
+        "maxQueued",
+        options.maxQueued ?? DEFAULT_MAX_QUEUED,
+      );
+      if (leaseMs > MAX_LEASE_MS) {
+        throw new Error(
+          `chat(): leaseMs ${leaseMs} is above ${MAX_LEASE_MS}, the longest a revoked computer's turn token can be kept out.`,
+        );
+      }
+      const { auth, database } = host;
+      if (!auth?.delegate) {
+        throw new Error(
+          "chat() needs an auth provider that can mint turn tokens; add `auth` to createServer (parlor dev installs one).",
+        );
+      }
+      if (!database) throw new Error("chat() needs a database.");
+      const relay = (options.relay ?? inProcessRelay)();
+      const db = () => database.read() as ChatDb;
+      const heartbeatMs = DEFAULT_HEARTBEAT_MS;
+      const actions = chatActions({
+        enforcing: auth.enforcing,
+        auth,
+        store: sqlChatStore,
+        relay,
+        leaseMs,
+        heartbeatMs,
+        maxQueued,
+        instructions: options.instructions,
+        appName: process.env.PARLOR_APP_NAME ?? "this app",
+        appOrigin: () => process.env.PARLOR_ORIGIN ?? process.env.PARLOR_WEB_ORIGIN ?? "",
+      });
+      return {
+        actions,
+        routes: chatRoutes({ db, store: sqlChatStore, relay, heartbeatMs }),
+        channel: relay.channel,
+        close: () => relay.close(),
+      };
     },
   };
 }

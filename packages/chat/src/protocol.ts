@@ -1,5 +1,13 @@
-import type { ItemId, ThreadId, TurnId } from "@parlor/core";
+import {
+  asId,
+  type Id,
+  type IdKind,
+  type ItemId,
+  type ThreadId,
+  type TurnId,
+} from "@parlor/core";
 
+import type { ChatItemBody } from "./items.js";
 import type { AgentInfo, OpenItem } from "./model.js";
 
 export const CHAT_CHANNEL = "chat";
@@ -74,9 +82,73 @@ export type HostWelcome =
       readonly protocols: ProtocolRange;
     };
 
+type Fields = Readonly<Record<string, unknown>>;
+
+function isFields(value: unknown): value is Fields {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function oneOf<T extends string>(values: readonly T[], value: unknown): T | undefined {
+  return values.find((candidate) => candidate === value);
+}
+
+function idOf<K extends IdKind>(kind: K, value: unknown): Id<K> | undefined {
+  return typeof value === "string" && value.length > 0 ? asId(kind, value) : undefined;
+}
+
+function openItemOf(
+  value: unknown,
+): Extract<OpenItem, { kind: "tool" | "plan" }> | undefined {
+  if (!isFields(value)) return undefined;
+  const id = idOf("item", value.id);
+  if (!id) return undefined;
+  if (value.kind === "tool") {
+    const status = oneOf(["pending", "running"], value.status);
+    if (typeof value.title !== "string" || !status) return undefined;
+    return { id, kind: "tool", title: value.title, status };
+  }
+  if (value.kind === "plan" && Array.isArray(value.entries)) {
+    const entries: ChatItemBody<"plan">["entries"][number][] = [];
+    for (const entry of value.entries as unknown[]) {
+      if (!isFields(entry) || typeof entry.content !== "string") return undefined;
+      const status = oneOf(["pending", "in_progress", "completed"], entry.status);
+      if (!status) return undefined;
+      entries.push({ content: entry.content, status });
+    }
+    return { id, kind: "plan", entries };
+  }
+  return undefined;
+}
+
 /** Hand-written so the browser's chat chunk carries no zod. */
 export function parseChatFrame(data: string): ChatFrame | undefined {
-  // TODO: JSON.parse; check `type` and every field's type per variant; anything else -> undefined.
-  void data;
-  throw new Error("not implemented");
+  let value: unknown;
+  try {
+    value = JSON.parse(data);
+  } catch {
+    return undefined;
+  }
+  if (!isFields(value)) return undefined;
+  const threadId = idOf("thread", value.threadId);
+  const turnId = idOf("turn", value.turnId);
+  if (!threadId || !turnId) return undefined;
+  switch (value.type) {
+    case "settled":
+      return { type: "settled", threadId, turnId };
+    case "item": {
+      const item = openItemOf(value.item);
+      return item ? { type: "item", threadId, turnId, item } : undefined;
+    }
+    case "delta": {
+      const itemId = idOf("item", value.itemId);
+      const kind = oneOf(["reply", "reasoning"], value.kind);
+      const { offset, text } = value;
+      if (!itemId || !kind || typeof text !== "string") return undefined;
+      if (typeof offset !== "number" || !Number.isInteger(offset) || offset < 0)
+        return undefined;
+      return { type: "delta", threadId, turnId, itemId, kind, offset, text };
+    }
+    default:
+      return undefined;
+  }
 }

@@ -10,6 +10,7 @@ export type {
   LoggedItem,
   UserItemKind,
 } from "./items.js";
+export { type AppliedFrame, applyFrame } from "./open-turns.js";
 export type {
   AgentInfo,
   AgentRef,
