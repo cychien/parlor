@@ -51,6 +51,7 @@ function Computers() {
   return (
     <div className="picker">
       <select
+        name="agent"
         aria-label="Agent"
         value={agent?.key ?? ""}
         onChange={(event) => choose(event.target.value)}
@@ -96,6 +97,7 @@ function Composer() {
   return (
     <Chat.Composer className="composer">
       <Chat.Input
+        name="message"
         aria-label="Message"
         placeholder="Message your agent"
         rows={2}

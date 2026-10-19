@@ -150,6 +150,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
   let stopWatching: (() => void) | undefined;
   let watched: ThreadId | undefined;
   let running = false;
+  let channelOpen = false;
   let staleAfterLoad = false;
   let generation = 0;
   const answerIds = new Map<string, ItemId>();
@@ -238,7 +239,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     thread = snapshot.page.thread;
     threadId = snapshot.page.thread?.id ?? target;
     absorb(snapshot.page);
-    open = mergeSnapshot(open, snapshot.page.open);
+    open = mergeSnapshot(open, channelOpen ? snapshot.page.open : []);
     const replay = beforeLoad;
     beforeLoad = [];
     loaded = "yes";
@@ -406,6 +407,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       const detachChannel = deps.addChannel({
         event: CHAT_CHANNEL,
         opened: () => {
+          channelOpen = true;
           if (loaded === "yes" && turns.some(isActive)) void refresh();
         },
         receive(data) {
@@ -419,7 +421,9 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
           open = applyFrame(open, frame);
           emit();
         },
-        closed: () => {},
+        closed: () => {
+          channelOpen = false;
+        },
       });
       const offTags = deps.onSyncTags((tags) => {
         const mine = tags.some((tag) =>
@@ -442,6 +446,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       void initial();
       return () => {
         running = false;
+        channelOpen = false;
         generation += 1;
         detachChannel();
         offTags();

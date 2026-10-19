@@ -264,6 +264,7 @@ describe("createChatRuntime reload mid-stream", () => {
   it("shows the open reply from the snapshot and appends later deltas from where it ended", async () => {
     const h = setup({ open: async () => reloaded() });
     h.runtime.start();
+    h.channel().opened();
     await vi.waitFor(() => expect(h.runtime.get().status).toBe("running"));
     h.frame(delta(0, "Hel"));
     h.frame(delta(3, "lo, "));
@@ -279,6 +280,7 @@ describe("createChatRuntime reload mid-stream", () => {
     let release!: (value: ChatSnapshot) => void;
     const h = setup({ open: () => new Promise((resolve) => (release = resolve)) });
     h.runtime.start();
+    h.channel().opened();
     h.frame(delta(3, "lo"));
     h.frame(delta(5, ", world"));
     expect(h.shown()).toEqual([]);
@@ -295,6 +297,7 @@ describe("createChatRuntime reload mid-stream", () => {
     let current = reloaded();
     const h = setup({ open: async () => current });
     h.runtime.start();
+    h.channel().opened();
     await vi.waitFor(() => expect(h.runtime.get().status).toBe("running"));
     h.frame(delta(3, "lo, world"));
     expect(h.shown().filter((item) => item.id === "turn_1.1")).toEqual([
@@ -329,6 +332,7 @@ describe("createChatRuntime reload mid-stream", () => {
         }),
     });
     h.runtime.start();
+    h.channel().opened();
     await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
     h.frame(delta(0, "Hel"));
     expect(h.shown().filter((item) => item.id === "turn_1.1")).toEqual([
@@ -339,6 +343,7 @@ describe("createChatRuntime reload mid-stream", () => {
   it("ignores frames of another thread", async () => {
     const h = setup({ open: async () => reloaded() });
     h.runtime.start();
+    h.channel().opened();
     await vi.waitFor(() => expect(h.runtime.get().status).toBe("running"));
     h.frame({ ...delta(3, "lo"), threadId: "thr_other" });
     expect(h.shown().at(-1)?.text).toBe("Hel");
@@ -346,6 +351,41 @@ describe("createChatRuntime reload mid-stream", () => {
 });
 
 describe("createChatRuntime poll deployments", () => {
+  const streaming = () =>
+    snapshot({
+      items: [logged(1, "item_p", "prompt", "write a long reply")],
+      open: [
+        {
+          turnId: asId("turn", "turn_1"),
+          threadId: asId("thread", "thr_1"),
+          items: [{ id: asId("item", "turn_1.1"), kind: "reply", text: "Hel" }],
+        },
+      ],
+      turns: [turn("turn_1", "running")],
+    });
+
+  it("shows no in-flight text from the snapshot while the chat channel is not open", async () => {
+    const h = setup({ open: async () => streaming() });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("running"));
+    expect(h.shown()).toEqual([
+      { id: "item_p", text: "write a long reply", streaming: undefined },
+    ]);
+  });
+
+  it("adopts the in-flight text once the chat channel opens, and drops nothing when it closes", async () => {
+    const h = setup({ open: async () => streaming() });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("running"));
+
+    h.channel().opened();
+    await vi.waitFor(() => expect(h.shown()).toHaveLength(2));
+    expect(h.shown().at(-1)).toEqual({ id: "turn_1.1", text: "Hel", streaming: true });
+
+    h.channel().closed();
+    expect(h.shown()).toHaveLength(2);
+  });
+
   it("shows every item from sync events alone, with nothing streaming", async () => {
     const store = [logged(1, "item_p", "prompt", "go")];
     const h = setup({
