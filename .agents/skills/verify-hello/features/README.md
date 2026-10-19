@@ -40,3 +40,4 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 - [Agent UI](./agent-ui.md) covers `ui_screen` and `ui_navigate`: what the agent sees, resolving "this task", navigation, the no-app link, client targeting, the route catalog, the external policy, and the activity pill.
 - [Agent forms and pointing](./agent-forms.md) covers `ui_set` filling the New task form, the agent-filled marking, the refusals, and `ui_highlight`.
 - [Confirmations](./confirmations.md) covers `deleteTask` asking the user in the app, approve, decline, timeout, no app, ties, reload, and the user's own Delete button.
+- [Recovery](./recovery.md) covers an open tab reconnecting after the app server restarts and staying reachable across a navigation to another origin and back (back-forward cache).
