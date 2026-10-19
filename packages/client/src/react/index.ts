@@ -1,6 +1,7 @@
 export type {
   AgentActivity,
   AgentActivityKind,
+  AgentOutcome,
   AgentConfirmation,
 } from "@parlor/agent-ui/client";
 export { useAgentActivity } from "./agent-ui/use-agent-activity.js";

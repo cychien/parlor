@@ -82,6 +82,12 @@ function typingElsewhere(
     : undefined;
 }
 
+async function untilIntersectionsReported(env: Pick<BrowserEnvironment, "nextTask">) {
+  // The observer's notification is queued after our first task, so wait for a second.
+  await env.nextTask();
+  await env.nextTask();
+}
+
 export async function highlightView(
   registry: ViewRegistryRuntime,
   input: UiOpInput<"highlight">,
@@ -115,8 +121,7 @@ export async function highlightView(
       registry.placeFocus(element as HTMLElement);
     }
     await env.scrollIntoView(element);
-    await env.nextTask();
-    await env.nextTask();
+    await untilIntersectionsReported(env);
   });
   marks.mark(element);
   return { shown: measure(element, env).shown };

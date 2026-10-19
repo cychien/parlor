@@ -256,7 +256,12 @@ describe("createAgentUiClient writes", () => {
     ]);
     expect(client.activity.get()).toEqual({
       busy: false,
-      last: { op: "set", origin: { via: "mcp" }, at: 10_000 },
+      last: {
+        op: "set",
+        origin: { via: "mcp" },
+        at: 10_000,
+        outcome: { status: "refused", code: "not_mounted" },
+      },
     });
   });
 
@@ -401,9 +406,92 @@ describe("createAgentUiClient activity", () => {
     expect(seen).toEqual([true, false]);
     expect(client.activity.get()).toEqual({
       busy: false,
-      last: { op: "screen", origin: { via: "mcp" }, at: 10_000 },
+      last: {
+        op: "screen",
+        origin: { via: "mcp" },
+        at: 10_000,
+        outcome: { status: "done" },
+      },
     });
     off();
+  });
+
+  const gated = defineAgentView({
+    name: "gated",
+    description: "A field whose write waits.",
+    schema: z.object({ text: z.string() }),
+    writable: ["text"],
+  });
+
+  it("has no outcome for the last operation while it runs, and keeps the operation", async () => {
+    const { client, answered } = setup();
+    let release = () => {};
+    client.views
+      .track(gated, {
+        get: () => ({ text: "" }),
+        set: () => new Promise<void>((resolve) => (release = resolve)),
+      })
+      .mount(undefined);
+    client.receive(request("r1", "set", { view: "gated", value: { text: "x" } }));
+    await vi.waitFor(() => expect(client.activity.get().busy).toBe(true));
+    expect(client.activity.get().last?.op).toBe("set");
+    expect(client.activity.get().last?.outcome).toBeUndefined();
+    release();
+    await answered(1);
+    await vi.waitFor(() =>
+      expect(client.activity.get().last?.outcome).toEqual({ status: "done" }),
+    );
+  });
+
+  it.each([
+    ["navigate", { to: "/nowhere" }, "unknown_route"],
+    ["highlight", { view: "nope" }, "not_mounted"],
+    ["set", { view: "note", value: { text: 42 } }, "not_writable"],
+  ])("records a refused %s with the error code", async (op, input, code) => {
+    const { client, answered } = setup();
+    client.receive(request("r1", op, input));
+    await answered(1);
+    await vi.waitFor(() => expect(client.activity.get().busy).toBe(false));
+    expect(client.activity.get().last).toMatchObject({
+      op,
+      outcome: { status: "refused", code },
+    });
+  });
+
+  it("records a request the app failed to run as refused with the internal code", async () => {
+    const { client, answered } = setup();
+    client.views
+      .track(gated, {
+        get: () => ({ text: "" }),
+        set: () => Promise.reject(new Error("boom")),
+      })
+      .mount(undefined);
+    client.receive(request("r1", "set", { view: "gated", value: { text: "x" } }));
+    await answered(1);
+    await vi.waitFor(() => expect(client.activity.get().busy).toBe(false));
+    expect(client.activity.get().last?.outcome).toEqual({
+      status: "refused",
+      code: "internal",
+    });
+  });
+
+  it("clears the outcome when the next request starts", async () => {
+    const { client, answered } = setup();
+    let release = () => {};
+    client.views
+      .track(gated, {
+        get: () => ({ text: "" }),
+        set: () => new Promise<void>((resolve) => (release = resolve)),
+      })
+      .mount(undefined);
+    client.receive(request("r1", "highlight", { view: "nope" }));
+    await answered(1);
+    client.receive(request("r2", "set", { view: "gated", value: { text: "x" } }));
+    await vi.waitFor(() => expect(client.activity.get().busy).toBe(true));
+    expect(client.activity.get().last?.op).toBe("set");
+    expect(client.activity.get().last?.outcome).toBeUndefined();
+    release();
+    await answered(2);
   });
 
   it("warns once in dev when an agent request arrives and nothing shows activity", async () => {
