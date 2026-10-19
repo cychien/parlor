@@ -45,7 +45,7 @@ $H up --target ios --seed baseline            # Capacitor app on "iPhone 17 Pro"
 - mac: a `parlor_app` process runs in the instance tree and holds a connection to the server port.
 - iOS: `UIKitApplication:dev.parlor.hello` runs on the simulator and the webview holds a connection to the server port.
 
-`up` refuses to start when the 1-minute load average exceeds the core count (override the limit with `HELLO_MAX_LOAD`) or when 3 instances are already running (`HELLO_MAX_INSTANCES`), unless `--force`. The refusal prints the load, the core count, and the running instance ids; wait for the load to drop or `down` one instead of forcing.
+`up` refuses to start when the 1-minute load average exceeds the core count (override the limit with `HELLO_MAX_LOAD`) or when 3 instances are already running (`HELLO_MAX_INSTANCES`), unless `--force`. The refusal prints the load, the core count, and the running instance ids; when the load is the reason it also lists the busiest processes with pid, ppid, elapsed time, and cwd, and flags the ppid-1 ones under the harness home as leftovers that `$H reap --kill` removes. Wait for the load to drop or `down` one instead of forcing.
 
 A launch that fails or crashes prints the log tail, then removes the instance. Add `--keep-on-failure` to keep the snapshot and log for inspection, then `$H down <id>`. Timeouts are 2 minutes for web and 30 for mac and iOS. The iOS target gets `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` automatically, so `xcode-select` can stay on the Command Line Tools. Android is not covered: this machine has no Android SDK.
 
@@ -162,13 +162,15 @@ Keep every artifact there, named by check, never inside the repo or the instance
 
 ```sh
 $H down <id> --save-log "$E/dev.log"     # or: $H down --all
-$H list                                   # should print []
+$H reap                                   # exit 0 and [] when nothing runs from the home
 ```
 
-`down` stops the instance's browser session, sends SIGTERM to each process group the instance started, then SIGKILL to what is left after 10 seconds, terminates the iOS app and shuts the simulator down if `up` booted it, waits for both ports to close, and deletes the snapshot. It finds processes by the instance's recorded pids and process groups and their descendants, never by name, so other node or Vite processes on the machine are untouched. Evidence is never under the instance dir, so it survives. The shared cargo target dir is a build cache and stays; delete `~/.cache/parlor-verify-hello/cargo-target` by hand to reclaim its space.
+`$H list` printing `[]` is not proof that nothing survives, because a server whose instance directory is gone has no state file; `list` now also prints stray processes under the home, and `reap` is the check that exits non-zero while any remain. `$H reap --kill` sweeps strays: it sends SIGTERM, then SIGKILL after 10 seconds, to every process whose cwd (deleted cwds included) or command is under `~/.cache/parlor-verify-hello/instances`, and rescans. It also kills live instances, so run it only when none is in use.
+
+`down` stops the instance's browser session, sends SIGTERM to each process group the instance started, then SIGKILL to what is left after 10 seconds, terminates the iOS app and shuts the simulator down if `up` booted it, and deletes the snapshot only when its postcondition holds. It first re-records the instance's processes, so children started after readiness are included, and finds them by recorded pids, process groups, and descendants. It then rescans the whole process table for any process whose cwd or command is under the instance dir and for any listener on the instance's server, web, and browser ports, and SIGKILLs what it finds. If anything still survives, `down` prints each survivor, keeps the instance dir and its recorded processes, and exits 1: never treat a `down` that failed as down. It matches by path and port, never by process name, so other node or Vite processes on the machine are untouched. Evidence is never under the instance dir, so it survives. The shared cargo target dir is a build cache and stays; delete `~/.cache/parlor-verify-hello/cargo-target` by hand to reclaim its space.
 
 ## Helpers
 
-- `scripts/hello.mjs` is the whole control CLI: `up`, `doctor`, `seed`, `sql`, `stop`, `start`, `sync`, `browser`, `mcp`, `agent`, `screenshot`, `info`, `list`, `down`, `evidence`. `$H --help` prints usage, datasets, and the home dir.
+- `scripts/hello.mjs` is the whole control CLI: `up`, `doctor`, `seed`, `sql`, `stop`, `start`, `sync`, `browser`, `mcp`, `agent`, `screenshot`, `info`, `list`, `reap`, `down`, `evidence`. `$H --help` prints usage, datasets, and the home dir.
 - `fixtures/*.sql` are the datasets.
 - `features/` is the feature map. Keep it current with the **maintain-verification-skill** skill.
