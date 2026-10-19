@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -63,14 +64,18 @@ export interface Delegated {
 
 export interface TestAuth extends AuthProvider {
   readonly delegated: Delegated[];
+  readonly revokedGrants: Set<string>;
 }
 
 export function testAuth(enforcing = true): TestAuth {
   const delegated: Delegated[] = [];
+  const revokedGrants = new Set<string>();
   return {
     name: "test-auth",
     enforcing,
     delegated,
+    revokedGrants,
+    hostActive: (grantId) => Promise.resolve(!revokedGrants.has(grantId)),
     setup: () => ({}),
     authenticate(request): Promise<Principal> {
       const token = request.headers.get("authorization")?.replace(/^Bearer /, "");
@@ -100,10 +105,34 @@ export const drivers: readonly Driver[] = [
   ...(url ? [{ name: "node-postgres" as const, url }] : []),
 ];
 
+/** node-postgres gets a database of its own, so spec files running in parallel never share tables. */
+async function scratchDatabase(baseUrl: string): Promise<DatabaseHandle> {
+  const name = `parlor_test_${randomBytes(6).toString("hex")}`;
+  const onServer = async (statement: string) => {
+    const admin = await createDatabase({ url: baseUrl });
+    try {
+      await admin.db.execute(sql.raw(statement));
+    } finally {
+      await admin.close();
+    }
+  };
+  await onServer(`create database ${name}`);
+  const url = new URL(baseUrl);
+  url.pathname = `/${name}`;
+  const handle = await createDatabase({ url: url.href });
+  return {
+    ...handle,
+    close: async () => {
+      await handle.close();
+      await onServer(`drop database if exists ${name} with (force)`);
+    },
+  };
+}
+
 export async function openDatabase(driver: Driver): Promise<DatabaseHandle> {
-  const handle = await createDatabase(
-    driver.url ? { url: driver.url } : { dataDir: "memory://" },
-  );
+  const handle = await (driver.url
+    ? scratchDatabase(driver.url)
+    : createDatabase({ dataDir: "memory://" }));
   await handle.db.execute(sql`select 1`);
   return handle;
 }

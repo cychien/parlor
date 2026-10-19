@@ -19,6 +19,7 @@ export {
   type AuthProvider,
   type Delegation,
   type DeviceKeys,
+  HOST_GRANTS_TAG,
   type PresenceKey,
   type TurnDelegation,
 } from "./auth.js";

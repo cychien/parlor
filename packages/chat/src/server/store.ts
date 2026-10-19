@@ -2,6 +2,7 @@ import {
   ActionError,
   asId,
   type DeviceId,
+  type GrantId,
   type HostId,
   type HostPrincipal,
   type ItemId,
@@ -145,8 +146,13 @@ export interface ChatStore {
     host: HostPrincipal,
     ttlMs: number,
   ): Promise<void>;
-  listHosts(db: ChatDb, owner: ChatOwner): Promise<HostSummary[]>;
+  listHosts(db: ChatDb, owner: ChatOwner): Promise<StoredHost[]>;
   turnHolder(db: ChatDb, turnId: TurnId): Promise<TurnHolder | undefined>;
+}
+
+/** A computer as stored: its grant decides whether it may still be offered. */
+export interface StoredHost extends HostSummary {
+  readonly grantId: GrantId;
 }
 
 function rowsOf(result: unknown): unknown[] {
@@ -743,17 +749,20 @@ export const sqlChatStore: ChatStore = {
   async listHosts(db, owner) {
     return query(
       db,
-      sql`select id, name, platform, agents, online_until > now() as online
+      sql`select id, grant_id, name, platform, agents, online_until > now() as online
         from parlor_chat_hosts
         where owner_id = ${owner.userId} and scope = ${owner.scope}
         order by name, id`,
-      z.object({
-        id: idSchema("host"),
-        name: z.string(),
-        platform: z.string(),
-        agents: z.array(agentInfoSchema),
-        online: z.boolean(),
-      }),
+      z
+        .object({
+          id: idSchema("host"),
+          grant_id: idSchema("grant"),
+          name: z.string(),
+          platform: z.string(),
+          agents: z.array(agentInfoSchema),
+          online: z.boolean(),
+        })
+        .transform(({ grant_id, ...host }) => ({ ...host, grantId: grant_id })),
     );
   },
 

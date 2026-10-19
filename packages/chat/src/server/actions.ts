@@ -6,12 +6,13 @@ import {
   type TurnId,
 } from "@parlor/core";
 import { type ActionsOf, createRegistry } from "@parlor/core/registry";
-import type { AuthProvider } from "@parlor/server";
+import { type AuthProvider, HOST_GRANTS_TAG } from "@parlor/server";
 import { z } from "zod";
 
 import { idSchema } from "../id-schemas.js";
 import { chatItemBodies, hostItemDraft, type LoggedItem } from "../items.js";
 import type {
+  ChatOwner,
   ChatSnapshot,
   ClaimedTurn,
   HostSummary,
@@ -23,11 +24,12 @@ import { turnContext } from "./context.js";
 import type { LiveRelay } from "./live.js";
 import { type ChatHost, chatAction } from "./party.js";
 import { agentInfoSchema } from "./rows.js";
-import type { ChatDb, ChatStore } from "./store.js";
+import type { ChatDb, ChatStore, StoredHost } from "./store.js";
 
 /** Every chat write emits `["parlor_chat", threadId]`, the one event that wakes hosts and other devices. */
 export const CHAT_TAG = "parlor_chat";
 export const HOSTS_TAG = "parlor_chat_hosts";
+export { HOST_GRANTS_TAG };
 
 export interface ChatActionDeps {
   readonly enforcing: boolean;
@@ -62,6 +64,22 @@ const TERMINAL: ReadonlySet<string> = new Set(["done", "failed", "cancelled"]);
 
 const dbOf = (ctx: ActionContext) => ctx.db as ChatDb;
 
+async function activeHosts(
+  deps: ChatActionDeps,
+  db: ChatDb,
+  owner: ChatOwner,
+): Promise<StoredHost[]> {
+  const hosts = await deps.store.listHosts(db, owner);
+  const { hostActive } = deps.auth;
+  if (!hostActive) return hosts;
+  const holding = await Promise.all(
+    hosts.map((host) => hostActive.call(deps.auth, host.grantId)),
+  );
+  return hosts.filter((_host, at) => holding[at]);
+}
+
+const summaryOf = ({ grantId: _grantId, ...summary }: StoredHost): HostSummary => summary;
+
 /** What the user's devices call. */
 export function userChatActions(deps: ChatActionDeps) {
   const { enforcing } = deps;
@@ -76,12 +94,13 @@ export function userChatActions(deps: ChatActionDeps) {
       reads: (input) => [
         [CHAT_TAG, ...(input.threadId ? [input.threadId] : [])],
         [HOSTS_TAG],
+        [HOST_GRANTS_TAG],
       ],
       run: async (input, user, ctx): Promise<ChatSnapshot> => {
         const db = dbOf(ctx);
         const [threads, hosts, page] = await Promise.all([
           deps.store.listThreads(db, user),
-          deps.store.listHosts(db, user),
+          activeHosts(deps, db, user),
           deps.store.readPage(db, user, input.threadId, input.limit),
         ]);
         const thread = page.thread;
@@ -92,7 +111,11 @@ export function userChatActions(deps: ChatActionDeps) {
           if (ended) deps.relay.settle(user, turn.threadId, turn.turnId);
           return !ended;
         });
-        return { threads, hosts, page: { ...page, open: streaming } };
+        return {
+          threads,
+          hosts: hosts.map(summaryOf),
+          page: { ...page, open: streaming },
+        };
       },
     }),
     items: chatAction("user", enforcing, {
@@ -105,9 +128,9 @@ export function userChatActions(deps: ChatActionDeps) {
     hosts: chatAction("user", enforcing, {
       description: "The user's computers and the agents on them.",
       input: z.object({}),
-      reads: [HOSTS_TAG],
-      run: (_input, user, ctx): Promise<HostSummary[]> =>
-        deps.store.listHosts(dbOf(ctx), user),
+      reads: [HOSTS_TAG, HOST_GRANTS_TAG],
+      run: async (_input, user, ctx): Promise<HostSummary[]> =>
+        (await activeHosts(deps, dbOf(ctx), user)).map(summaryOf),
     }),
     send: chatAction("user", enforcing, {
       description: "Send a prompt to an agent on one of the user's computers.",
@@ -125,7 +148,7 @@ export function userChatActions(deps: ChatActionDeps) {
         ctx,
       ): Promise<{ readonly id: string; readonly turnId: string }> => {
         const db = dbOf(ctx);
-        const hosts = await deps.store.listHosts(db, user);
+        const hosts = await activeHosts(deps, db, user);
         const host = hosts.find(
           (candidate) => candidate.id === input.prompt.agent.hostId,
         );

@@ -14,6 +14,7 @@ export {
   chatActions,
   type ChatHostActionMap,
   type ChatUserActionMap,
+  HOST_GRANTS_TAG,
   hostChatActions,
   HOSTS_TAG,
   userChatActions,

@@ -15,6 +15,7 @@ import {
   type AnyPluginRoute,
   AuthFailure,
   type DeviceKeys,
+  HOST_GRANTS_TAG,
   type Migration,
   type PluginHost,
   pluginRoute,
@@ -295,7 +296,7 @@ export function hostPrincipalOf(grant: GrantKey): HostPrincipal {
   };
 }
 
-export const HOSTS_TAG = "parlor_auth_hosts";
+export const HOSTS_TAG = HOST_GRANTS_TAG;
 
 export const HOSTS_MIGRATION: Migration = {
   id: "auth/0003_hosts",

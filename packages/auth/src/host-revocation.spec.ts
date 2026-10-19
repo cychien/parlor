@@ -113,6 +113,17 @@ describe("revoking a computer", () => {
     expect((await hello(sibling)).status).toBe(200);
   });
 
+  it("stops the provider from offering the computer's grant, siblings unaffected", async () => {
+    const { alice, principal } = await connect();
+    const sibling = await pair(app.server, alice, new Computer("Second"));
+    expect(await app.provider.hostActive!(principal.grantId)).toBe(true);
+
+    await alice.account("revokeHost", { hostId: principal.hostId });
+
+    expect(await app.provider.hostActive!(principal.grantId)).toBe(false);
+    expect(await app.provider.hostActive!(sibling.grant!.grant.id)).toBe(true);
+  });
+
   it("lets the computer disconnect itself", async () => {
     const { computer } = await connect();
     const url = `${ORIGIN}/_parlor/auth/hosts/revoke`;

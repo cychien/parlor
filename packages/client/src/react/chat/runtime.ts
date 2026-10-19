@@ -99,6 +99,7 @@ export interface ChatRuntimeDeps {
 
 export const CHAT_TAG = "parlor_chat";
 export const HOSTS_TAG = "parlor_chat_hosts";
+export const HOST_GRANTS_TAG = "parlor_auth_hosts";
 
 interface PendingSend {
   readonly text: string;
@@ -396,7 +397,9 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
         const mine = tags.some((tag) =>
           tagsOverlap(tag, threadId === undefined ? [CHAT_TAG] : [CHAT_TAG, threadId]),
         );
-        const computers = tags.some((tag) => tagsOverlap(tag, [HOSTS_TAG]));
+        const computers = tags.some(
+          (tag) => tagsOverlap(tag, [HOSTS_TAG]) || tagsOverlap(tag, [HOST_GRANTS_TAG]),
+        );
         if (loaded === "failed" && (mine || computers)) {
           void loadFirst().then(emit);
         } else if (loaded === "no") {

@@ -1,6 +1,7 @@
 import type {
   AuthenticatedPrincipal,
   DeviceId,
+  GrantId,
   HostPrincipal,
   Principal,
   ThreadId,
@@ -38,11 +39,19 @@ export interface AuthProvider extends ServerPlugin {
    * `chat()` refuses to start on a provider without it.
    */
   delegate?(host: HostPrincipal, turn: TurnDelegation): Promise<Delegation>;
+  /**
+   * Whether the host grant still holds. Lists of computers drop a grant that answers
+   * false at once, without waiting for the host to notice. Absent means every grant holds.
+   */
+  hostActive?(grantId: GrantId): Promise<boolean>;
   /** A device's public keys as the account registered them, for prompt and answer signatures. */
   device?(userId: UserId, deviceId: DeviceId): Promise<DeviceKeys | undefined>;
   /** Who the agent works for, for the turn's context block. */
   account?(userId: UserId): Promise<AccountProfile | undefined>;
 }
+
+/** Announced when a computer's grant is added or removed; whatever lists computers reads it. */
+export const HOST_GRANTS_TAG = "parlor_auth_hosts";
 
 export interface TurnDelegation {
   readonly threadId: ThreadId;

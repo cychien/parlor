@@ -3,6 +3,7 @@ import {
   ANONYMOUS,
   asId,
   type AuthenticatedPrincipal,
+  type GrantId,
   type HostPrincipal,
   type Principal,
   type UserId,
@@ -338,6 +339,10 @@ export function betterAuthProvider({
     async delegate(host: HostPrincipal, turn: TurnDelegation): Promise<Delegation> {
       await started().ready();
       return delegate(await installed().turnKeys.keys(), host, turn, Date.now());
+    },
+    async hostActive(grantId: GrantId): Promise<boolean> {
+      const revoked = await started().isRevoked({ kind: "grant", id: grantId });
+      return !revoked && (await installed().grantKeys.get(grantId)) !== undefined;
     },
     async account(userId: UserId): Promise<AccountProfile | undefined> {
       const { adapter } = await instance.$context;
