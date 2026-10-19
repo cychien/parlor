@@ -33,4 +33,24 @@ describe("buildWeb", () => {
       display: "standalone",
     });
   }, 30_000);
+
+  it("keeps the service worker from answering navigations to framework pages with the app shell", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "parlor-web-sw-"));
+    await writeFile(
+      join(rootDir, "index.html"),
+      `<!doctype html><html><head><title>t</title></head><body><div id="root"></div><script type="module" src="/main.ts"></script></body></html>`,
+    );
+    await writeFile(join(rootDir, "main.ts"), `document.title = "built";`);
+    const config = parseConfig({ app: { id: "com.example.todo", name: "Todo" } });
+
+    const outDir = await buildWeb({ config, rootDir, configFile: "parlor.config.ts" });
+
+    const worker = await readFile(join(outDir, "sw.js"), "utf8");
+    const denylist = /denylist: \[(.*)\]/.exec(worker)?.[1];
+    expect(denylist?.split(", ")).toEqual([
+      String.raw`/^\/_parlor(\/|$)/`,
+      String.raw`/^\/\.well-known\/oauth-protected-resource(\/|$)/`,
+      String.raw`/^\/\.well-known\/oauth-authorization-server(\/|$)/`,
+    ]);
+  }, 30_000);
 });
