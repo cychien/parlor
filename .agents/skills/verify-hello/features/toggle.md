@@ -20,7 +20,7 @@ Preconditions:
 
 - **Check.** Run `$H browser <id> click checkbox "Buy milk"`. The printed snapshot shows `checkbox "Buy milk" checked`; the others stay unchecked.
 - **Strike.** Run `$H browser <id> eval "getComputedStyle([...document.querySelectorAll('[data-testid=tasks] span')].find(s => s.textContent === 'Buy milk')).textDecorationLine"`. The result is `line-through`. Capture `$H browser <id> screenshot $E/toggle-done.png`.
-- **Read back.** Run `curl -s -X POST localhost:<server>/_parlor/actions/listTasks -H 'content-type: application/json' -d '{}'`. `seed-baseline-1` has `"done": true`.
+- **Read back.** Run `curl -s -X POST localhost:<server>/_parlor/actions/listTasks -H 'content-type: application/json' -H "authorization: Bearer $($H token <id>)" -d '{}'`. `seed-baseline-1` has `"done": true`.
 - **Uncheck.** Run `$H browser <id> click checkbox "Buy milk"` again. The snapshot line has no `checked` and the decoration is `none`.
 - **Storage.** Run `$H sql <id> "select id, done from tasks order by created_at"`. Every row is `done: false` after the second click.
 

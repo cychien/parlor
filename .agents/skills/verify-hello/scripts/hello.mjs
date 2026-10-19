@@ -66,6 +66,16 @@ const SNAPSHOT_EXCLUDES = [
   `/${APP_PATH}/parlor.config.source.ts`,
 ];
 const FINGERPRINT_SKIP = [".agents/", ".claude/", "docs/"];
+const USERS = {
+  alice: { id: "alice", name: "Alice", email: "alice@example.com" },
+  bob: { id: "bob", name: "Bob", email: "bob@example.com" },
+};
+const PASSWORD = "parlor-verify-hello";
+// better-auth/crypto hashPassword(PASSWORD): seeding writes it as is, without Better Auth.
+const PASSWORD_HASH =
+  "8d1a9a3c2713d7517fd3870ae6145587:b8adeda943efe474d1faf107a9c2c2eda5ffb67f8685b6d0b8cfc4028dc457042aac911886cc083ccfddba5d0c722be570955117e788fe2e1a0e017306752224";
+const HARNESS_CLIENT = "verify-hello";
+const HARNESS_REDIRECT = "http://127.0.0.1:47001/callback";
 
 const USAGE = `usage: hello.mjs <command> [args]
 
@@ -81,14 +91,19 @@ const USAGE = `usage: hello.mjs <command> [args]
   sql ID QUERY            read-only SQL against the instance's PGlite (stops and restarts it)
   stop ID | start ID      stop or start the processes, keeping the snapshot and its data
   sync ID                 copy the current checkout into a running instance (tsx and Vite reload)
-  mcp ID tools | resources
-                          raw MCP tools/list or resources/list against the instance
+  mcp ID tools | resources [--as USER]
+                          raw MCP tools/list or resources/list against the instance, as alice
+                          unless --as names another seeded user
   mcp ID resource URI     raw MCP resources/read, prints the contents; exit 1 on error
-  mcp ID call TOOL [JSON] [--out FILE]
+  mcp ID call TOOL [JSON] [--out FILE] [--as USER]
                           raw MCP tools/call; --out also writes {tool, input, startedAt, endedAt, ms,
                           isError, result} (epoch ms) for a call started in the background with &
-  agent ID --out DIR [--model M] PROMPT
+  agent ID --out DIR [--model M] [--as USER] PROMPT
                           Claude Code headless, MCP-only tools, transcript into DIR
+  token ID [--as USER] [--kind session|mcp]
+                          print a bearer token: a session for actions, sync and /ui, or an MCP access token
+  browser ID signin [USER]
+                          sign the selected tab in as USER (alice by default), signing out first
   browser ID open [PATH] | click ROLE NAME | fill ROLE NAME TEXT | snapshot [FILE]
                           chrome-devtools-axi in this instance's own session, refs found by role and name;
                           any other axi command (screenshot FILE, wait TEXT, eval JS, console) passes through
@@ -104,6 +119,7 @@ const USAGE = `usage: hello.mjs <command> [args]
                           exit 1 and keep the instance when any process or listener survives SIGKILL
   evidence                print and create this branch's verification directory
 
+users: ${Object.keys(USERS).join(", ")} (password ${PASSWORD})
 datasets: ${datasets().join(", ")}
 home: ${HOME}`;
 
@@ -180,12 +196,155 @@ function allStates() {
 }
 
 function urls(state) {
-  const server = `http://localhost:${state.ports.server}`;
+  const web = `http://localhost:${state.ports.web}`;
   return {
-    web: `http://localhost:${state.ports.web}`,
-    server,
-    mcp: `${server}/_parlor/mcp`,
+    web,
+    server: `http://localhost:${state.ports.server}`,
+    mcp: `${web}/_parlor/mcp`,
   };
+}
+
+function userOf(name = "alice") {
+  const user = USERS[name];
+  if (!user)
+    fail(`no seeded user "${name}"; pick one of ${Object.keys(USERS).join(", ")}`);
+  return user;
+}
+
+function accountsSql(state) {
+  const resource = urls(state).mcp;
+  const users = Object.values(USERS);
+  return `
+INSERT INTO "user" (id, name, email, email_verified, created_at, updated_at) VALUES
+  ${users.map((u) => `('${u.id}', '${u.name}', '${u.email}', true, now(), now())`).join(",\n  ")}
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO account (id, account_id, provider_id, user_id, password, created_at, updated_at) VALUES
+  ${users.map((u) => `('${u.id}-credential', '${u.id}', 'credential', '${u.id}', '${PASSWORD_HASH}', now(), now())`).join(",\n  ")}
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO oauth_resource (id, identifier, name, created_at, updated_at)
+VALUES ('verify-hello-mcp', '${resource}', '${resource}', now(), now())
+ON CONFLICT (identifier) DO NOTHING;
+INSERT INTO oauth_client (id, client_id, name, redirect_uris, token_endpoint_auth_method,
+  application_type, grant_types, response_types, scopes, skip_consent, require_pkce,
+  created_at, updated_at)
+VALUES ('${HARNESS_CLIENT}', '${HARNESS_CLIENT}', 'verify-hello', ARRAY['http://127.0.0.1/callback'],
+  'none', 'native', ARRAY['authorization_code', 'refresh_token'], ARRAY['code'],
+  ARRAY['mcp', 'offline_access'], true, true, now(), now())
+ON CONFLICT (client_id) DO NOTHING;
+INSERT INTO oauth_client_resource (id, client_id, resource_id, created_at)
+VALUES ('${HARNESS_CLIENT}-mcp', '${HARNESS_CLIENT}', '${resource}', now())
+ON CONFLICT (id) DO NOTHING;`;
+}
+
+async function signIn(state, name) {
+  const user = userOf(name);
+  const web = urls(state).web;
+  const response = await fetch(`${web}/_parlor/auth/sign-in/email`, {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: web },
+    body: JSON.stringify({ email: user.email, password: PASSWORD }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  const token = response.headers.get("set-auth-token");
+  if (!response.ok || !token) {
+    throw new CliError(
+      `sign-in as ${name} answered ${response.status}: ${await response.text()}`,
+    );
+  }
+  return token;
+}
+
+/** One session per user per instance, kept in its state, so probes do not pile up sessions. */
+async function sessionToken(state, name = "alice", { fresh = false } = {}) {
+  const cached = state.sessions?.[name];
+  if (cached && !fresh) return cached;
+  const token = await signIn(state, name);
+  state.sessions = { ...state.sessions, [name]: token };
+  writeState(state);
+  return token;
+}
+
+async function asUser(state, name, send) {
+  let response = await send(await sessionToken(state, name));
+  if (response.status === 401) {
+    response = await send(await sessionToken(state, name, { fresh: true }));
+  }
+  return response;
+}
+
+function authedPost(state, url, body, name) {
+  return asUser(state, name, (token) =>
+    probe(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+function authedGet(state, url, name) {
+  return asUser(state, name, (token) =>
+    probe(url, { headers: { authorization: `Bearer ${token}` } }),
+  );
+}
+
+/** The harness client is seeded with skip_consent, so the code comes straight back. */
+async function accessToken(state, name = "alice") {
+  const cached = state.tokens?.[name];
+  if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token;
+  const u = urls(state);
+  const verifier = randomBytes(32).toString("base64url");
+  const challenge = createHash("sha256").update(verifier).digest("base64url");
+  const query = new URLSearchParams({
+    response_type: "code",
+    client_id: HARNESS_CLIENT,
+    redirect_uri: HARNESS_REDIRECT,
+    code_challenge: challenge,
+    code_challenge_method: "S256",
+    state: randomBytes(8).toString("hex"),
+    scope: "mcp offline_access",
+    resource: u.mcp,
+  });
+  const authorize = await asUser(state, name, async (session) => {
+    const response = await fetch(`${u.web}/_parlor/auth/oauth2/authorize?${query}`, {
+      headers: { authorization: `Bearer ${session}`, accept: "text/html" },
+      redirect: "manual",
+      signal: AbortSignal.timeout(10_000),
+    });
+    return response;
+  });
+  // Better Auth answers a request it takes for a fetch with {redirect, url} instead of a 302.
+  const text = await authorize.text();
+  const location =
+    authorize.headers.get("location") ?? JSON.parse(text || "{}").url ?? undefined;
+  const code = location && new URL(location, u.web).searchParams.get("code");
+  if (!code)
+    throw new CliError(`authorize as ${name} answered ${authorize.status} ${text}`);
+  const exchange = await fetch(`${u.web}/_parlor/auth/oauth2/token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: HARNESS_REDIRECT,
+      client_id: HARNESS_CLIENT,
+      code_verifier: verifier,
+      resource: u.mcp,
+    }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  const body = await exchange.json().catch(() => ({}));
+  if (!exchange.ok || !body.access_token) {
+    throw new CliError(
+      `token exchange as ${name} answered ${exchange.status}: ${JSON.stringify(body)}`,
+    );
+  }
+  state.tokens = {
+    ...state.tokens,
+    [name]: { token: body.access_token, expiresAt: Date.now() + body.expires_in * 1000 },
+  };
+  writeState(state);
+  return body.access_token;
 }
 
 function processTable() {
@@ -505,7 +664,12 @@ async function readiness(state) {
   const page = await probe(`${u.web}/`);
   if (!page.ok || !page.text.includes("<title>Hello</title>"))
     return "web page not served yet";
-  const list = await postJson(`${u.web}/_parlor/actions/listTasks`, {});
+  let list;
+  try {
+    list = await authedPost(state, `${u.web}/_parlor/actions/listTasks`, {});
+  } catch {
+    return "sign-in through the Vite proxy not answering yet";
+  }
   if (!list.ok || !Array.isArray(list.json?.data))
     return "listTasks through the Vite proxy not answering yet";
   const table = processTable();
@@ -685,10 +849,19 @@ async function withDatabase(state, task) {
   }
 }
 
+async function seedAccounts(state) {
+  await withDatabase(state, (client) =>
+    client.transaction((tx) => tx.exec(accountsSql(state))),
+  );
+}
+
 async function loadDataset(state, name) {
   const sql = readFileSync(fixturePath(name), "utf8");
   const summary = await withDatabase(state, async (client) => {
-    await client.transaction((tx) => tx.exec(sql));
+    await client.transaction(async (tx) => {
+      await tx.exec(accountsSql(state));
+      await tx.exec(sql);
+    });
     const { rows } = await client.query(
       `select count(*)::int as tasks, count(*) filter (where done)::int as done,
               (select title from tasks order by created_at limit 1) as first,
@@ -831,6 +1004,8 @@ async function cmdUp(args) {
       log(
         `seeded ${values.seed}: ${JSON.stringify(await loadDataset(state, values.seed))}`,
       );
+    else await seedAccounts(state);
+    log(`seeded users ${Object.keys(USERS).join(", ")} (password ${PASSWORD})`);
     await start(state);
   } catch (error) {
     log(error instanceof CliError ? error.message : String(error?.stack ?? error));
@@ -905,19 +1080,25 @@ async function cmdDoctor([id]) {
     page.ok && page.text.includes("<title>Hello</title>"),
     `${u.web}/ -> ${page.status}`,
   );
-  const manifest = await probe(`${u.server}/_parlor/manifest`);
+  const manifest = await authedGet(state, `${u.server}/_parlor/manifest`).catch(
+    (error) => ({ ok: false, json: undefined, status: String(error?.message ?? error) }),
+  );
   const names = (manifest.json?.actions ?? []).map((a) => a.name).sort();
   check(
     "manifest",
     manifest.ok && manifest.json?.protocol === 1,
     `actions ${names.join(", ")}`,
   );
-  const negotiation = await postJson(`${u.server}/_parlor/sync/token`, {});
+  const negotiation = await authedPost(state, `${u.server}/_parlor/sync/token`, {}).catch(
+    (error) => ({ ok: false, json: undefined, text: String(error?.message ?? error) }),
+  );
   check("sync", negotiation.ok, `transport ${negotiation.json?.transport}`);
-  const list = await postJson(`${u.web}/_parlor/actions/listTasks`, {});
+  const list = await authedPost(state, `${u.web}/_parlor/actions/listTasks`, {}).catch(
+    (error) => ({ ok: false, json: undefined, text: String(error?.message ?? error) }),
+  );
   const tasks = Array.isArray(list.json?.data) ? list.json.data : undefined;
   check(
-    "listTasks via proxy",
+    "listTasks as alice via proxy",
     Boolean(tasks),
     tasks
       ? `${tasks.length} tasks, first ${JSON.stringify(tasks.slice(0, 3).map((t) => t.title))}`
@@ -975,10 +1156,11 @@ async function cmdDoctor([id]) {
         : "no connection from outside the dev tree",
     );
   }
+  const anonymous = await postJson(`${u.web}/_parlor/actions/listTasks`, {});
   check(
     "auth",
-    true,
-    "not required, the hello app runs every request in the default scope",
+    anonymous.status === 401,
+    `anonymous listTasks -> ${anonymous.status}; users ${Object.keys(USERS).join(", ")}`,
   );
 
   for (const r of results)
@@ -986,7 +1168,7 @@ async function cmdDoctor([id]) {
   if (results.some((r) => !r.ok)) process.exitCode = 1;
 }
 
-async function withMcp(state, task) {
+async function withMcp(state, task, user = "alice") {
   const require = createRequire(
     join(instanceDir(state.id), "repo", "packages", "server", "package.json"),
   );
@@ -994,8 +1176,13 @@ async function withMcp(state, task) {
     Client,
     StreamableHTTPClientTransport,
   } = require("@modelcontextprotocol/client");
+  const token = await accessToken(state, user);
   const client = new Client({ name: "verify-hello", version: "0.0.0" });
-  await client.connect(new StreamableHTTPClientTransport(new URL(urls(state).mcp)));
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(urls(state).mcp), {
+      requestInit: { headers: { authorization: `Bearer ${token}` } },
+    }),
+  );
   try {
     return await task(client);
   } finally {
@@ -1048,23 +1235,28 @@ async function cmdMcp(args) {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
-    options: { out: { type: "string" } },
+    options: { out: { type: "string" }, as: { type: "string" } },
   });
   const [id, mode, subject, input] = positionals;
+  userOf(values.as);
   const usage =
     "usage: mcp ID tools | resources | resource URI | call TOOL [JSON] [--out FILE]";
   const state = readState(id);
   if (values.out && mode !== "call") fail("--out applies to mcp ID call only");
   let result;
   try {
-    result = await withMcp(state, (client) => {
-      if (mode === "tools") return client.listTools();
-      if (mode === "resources") return client.listResources();
-      if (mode === "resource" && subject) return client.readResource({ uri: subject });
-      if (mode === "call" && subject)
-        return callTool(client, subject, input ? JSON.parse(input) : {}, values.out);
-      return fail(usage);
-    });
+    result = await withMcp(
+      state,
+      (client) => {
+        if (mode === "tools") return client.listTools();
+        if (mode === "resources") return client.listResources();
+        if (mode === "resource" && subject) return client.readResource({ uri: subject });
+        if (mode === "call" && subject)
+          return callTool(client, subject, input ? JSON.parse(input) : {}, values.out);
+        return fail(usage);
+      },
+      values.as,
+    );
   } catch (error) {
     if (error instanceof CliError) throw error;
     return fail(`mcp ${mode} failed: ${error?.message ?? error}`);
@@ -1086,18 +1278,29 @@ async function cmdAgent(args) {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
-    options: { out: { type: "string" }, model: { type: "string" } },
+    options: {
+      out: { type: "string" },
+      model: { type: "string" },
+      as: { type: "string" },
+    },
   });
   const [id, ...words] = positionals;
+  userOf(values.as);
   const state = readState(id);
   const prompt = words.join(" ");
   if (!values.out || !prompt) fail("usage: agent ID --out DIR [--model M] PROMPT");
   const out = resolve(values.out);
   mkdirSync(out, { recursive: true });
   const config = join(out, "agent-mcp-config.json");
+  const token = await accessToken(state, values.as);
+  const server = {
+    type: "http",
+    url: urls(state).mcp,
+    headers: { Authorization: `Bearer ${token}` },
+  };
   writeFileSync(
     config,
-    `${JSON.stringify({ mcpServers: { hello: { type: "http", url: urls(state).mcp } } }, null, 2)}\n`,
+    `${JSON.stringify({ mcpServers: { hello: server } }, null, 2)}\n`,
   );
   const cwd = join(instanceDir(state.id), "agent-cwd");
   mkdirSync(cwd, { recursive: true });
@@ -1228,9 +1431,25 @@ function browserRef(state, role, name) {
   return `@${matches[0].match(pattern)[1]}`;
 }
 
+async function browserSignIn(state, name) {
+  const user = userOf(name);
+  axi(state, ["open", `${urls(state).web}/sign-in`]);
+  axi(state, ["wait", "Sign"]);
+  if (/button "Sign out"/.test(axi(state, ["snapshot", "--full"]).stdout)) {
+    axi(state, ["click", browserRef(state, "button", "Sign out")]);
+    axi(state, ["wait", "Sign in to Hello"]);
+  }
+  axi(state, ["fill", browserRef(state, "textbox", "Email"), user.email]);
+  axi(state, ["fill", browserRef(state, "textbox", "Password"), PASSWORD]);
+  axi(state, ["click", browserRef(state, "button", "Sign in")]);
+  const result = axi(state, ["wait", "Sign out"]);
+  process.stdout.write(`signed in as ${name}\n${result.stdout}`);
+}
+
 async function cmdBrowser([id, action, ...args]) {
   const state = readState(id);
   const print = (result) => process.stdout.write(result.stdout);
+  if (action === "signin") return browserSignIn(state, args[0]);
   if (action === "open")
     return print(axi(state, ["open", `${urls(state).web}${args[0] ?? "/"}`]));
   if (action === "click")
@@ -1248,7 +1467,7 @@ async function cmdBrowser([id, action, ...args]) {
   }
   if (!action)
     fail(
-      "usage: browser ID open [PATH] | click ROLE NAME | fill ROLE NAME TEXT | snapshot [FILE] | focus on|off | <axi command>",
+      "usage: browser ID signin [USER] | open [PATH] | click ROLE NAME | fill ROLE NAME TEXT | snapshot [FILE] | focus on|off | <axi command>",
     );
   return print(axi(state, [action, ...args]));
 }
@@ -1366,6 +1585,23 @@ async function setBrowserFocus(state, mode) {
     fail(
       `page still reports hasFocus ${report.hasFocus} after focus ${mode}; a click or fill gives a tab real input focus that only a fresh tab sheds: hello.mjs browser ${state.id} closepage <id>, then newpage <url>, then focus ${mode}`,
     );
+}
+
+async function cmdToken(args) {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { as: { type: "string" }, kind: { type: "string", default: "session" } },
+  });
+  const state = readState(positionals[0]);
+  userOf(values.as);
+  if (values.kind === "session") {
+    process.stdout.write(`${await sessionToken(state, values.as, { fresh: true })}\n`);
+  } else if (values.kind === "mcp") {
+    process.stdout.write(`${await accessToken(state, values.as)}\n`);
+  } else {
+    fail("--kind must be session or mcp");
+  }
 }
 
 async function cmdSeed([id, name]) {
@@ -1540,6 +1776,7 @@ const COMMANDS = {
   sync: cmdSync,
   mcp: cmdMcp,
   agent: cmdAgent,
+  token: cmdToken,
   browser: cmdBrowser,
   screenshot: cmdScreenshot,
   info: ([id]) => printInfo(readState(id)),
