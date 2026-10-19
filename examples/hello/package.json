@@ -16,6 +16,7 @@
   "dependencies": {
     "@parlor/auth": "workspace:*",
     "@parlor/capabilities": "workspace:*",
+    "@parlor/chat": "workspace:*",
     "@parlor/client": "workspace:*",
     "@parlor/core": "workspace:*",
     "@parlor/data": "workspace:*",
