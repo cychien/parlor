@@ -200,15 +200,23 @@ export class ConfirmationBoard {
   }
 
   #selected(request: ConfirmationRequest): string[] {
-    if (request.thread) {
-      // TODO: every canConfirm client in request.scope whose presence `watching` includes
-      //   thread.threadId, plus request.clientId when it can confirm; prompts carry threadId.
-      throw new Error("not implemented");
-    }
+    if (request.thread) return this.#watchers(request, request.thread);
     const selection = this.#directory.select(request.scope, request.clientId);
     if (!selection) return [];
     return [selection.target.client, ...selection.tied]
       .filter((client) => client.canConfirm)
+      .map((client) => client.id);
+  }
+
+  #watchers(request: ConfirmationRequest, thread: ConfirmationThread): string[] {
+    return this.#directory
+      .targets(request.scope)
+      .map(({ client }) => client)
+      .filter(
+        (client) =>
+          client.canConfirm &&
+          (client.id === request.clientId || client.watching.includes(thread.threadId)),
+      )
       .map((client) => client.id);
   }
 
@@ -220,7 +228,9 @@ export class ConfirmationBoard {
     const peers = this.#byScope.get(scope);
     if (!peers && ![...this.#sent.values()].some((sent) => sent.scope === scope)) return;
     for (const pending of peers ?? []) {
-      for (const id of this.#selected(pending.request)) pending.audience.add(id);
+      const selected = this.#selected(pending.request);
+      if (pending.request.thread) pending.audience.clear();
+      for (const id of selected) pending.audience.add(id);
     }
     for (const target of this.#directory.targets(scope)) {
       this.#deliver(target, [...(peers ?? [])]);
@@ -258,6 +268,7 @@ export class ConfirmationBoard {
       input: request.input ?? null,
       origin: request.origin,
       expiresInMs: Math.max(0, deadline - now),
+      ...(request.thread ? { threadId: request.thread.threadId } : {}),
     };
   }
 

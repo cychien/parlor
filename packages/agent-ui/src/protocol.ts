@@ -4,6 +4,9 @@ import type { ViewRef } from "./view.js";
 
 export const UI_CHANNEL = "ui";
 
+/** Presence names at most this many watched chat threads; a client sending more is truncated. */
+export const MAX_WATCHED_THREADS = 8;
+
 export interface UiOpInputs {
   readonly screen: Readonly<Record<string, never>>;
   readonly navigate: {
@@ -345,7 +348,16 @@ function promptOf(json: unknown): ConfirmationPrompt | undefined {
     return undefined;
   }
   if (!origin || !isNonNegativeInteger(expiresInMs)) return undefined;
-  return { id, action, description, input, origin, expiresInMs };
+  const { threadId } = json;
+  return {
+    id,
+    action,
+    description,
+    input,
+    origin,
+    expiresInMs,
+    ...(isString(threadId) && threadId !== "" ? { threadId } : {}),
+  };
 }
 
 function confirmationsOf(json: Fields): ConfirmationsFrame | undefined {

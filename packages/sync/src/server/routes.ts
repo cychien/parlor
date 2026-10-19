@@ -107,12 +107,14 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
       keepAliveMs,
     );
     const disconnects: (() => void)[] = [];
+    const ended = new AbortController();
     let detached = false;
     const revoked = authority?.revoked;
     const closeRevoked = () => void stream.close();
     const detach = () => {
       if (detached) return;
       detached = true;
+      ended.abort();
       clearInterval(keepAlive);
       revoked?.removeEventListener("abort", closeRevoked);
       unsubscribe();
@@ -137,7 +139,7 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
           clientId,
           scope: currentScope,
           ...(authority ? { principal: authority.principal } : {}),
-          // TODO(chat): `closed`, a signal aborted when this stream ends or is revoked.
+          closed: ended.signal,
           send: (frame) => {
             if (!detached) void stream.push({ event: channel.event, data: frame });
           },

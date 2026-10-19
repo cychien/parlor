@@ -1,5 +1,4 @@
 import type { AgentUiClient } from "@parlor/agent-ui/client";
-import type { ClientChannel, SyncEvent } from "@parlor/sync";
 import { createSyncClient, type SyncClient } from "@parlor/sync/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AnyRouter } from "@tanstack/react-router";
@@ -17,13 +16,8 @@ import type { ActionClient } from "../action-client.js";
 import type { RegisteredActions } from "../register.js";
 import type { FrameworkAuth, SessionSnapshot, SessionSource } from "../session.js";
 import { createAgentUiRuntime } from "./agent-ui/runtime.js";
+import { type FrameworkSync, SyncBridge } from "./sync-bridge.js";
 import { invalidateForEvents, ReadTagRegistry } from "./sync.js";
-
-/** The live sync connection, for features loaded after it started (the chat runtime). */
-export interface FrameworkSync {
-  addChannel(channel: ClientChannel): () => void;
-  onEvents(listener: (events: readonly SyncEvent[]) => void): () => void;
-}
 
 interface FrameworkContextValue {
   readonly client: ActionClient<RegisteredActions>;
@@ -31,18 +25,8 @@ interface FrameworkContextValue {
   readonly agentUi: AgentUiClient;
   readonly auth: FrameworkAuth | undefined;
   readonly sync: FrameworkSync;
+  readonly bridge: SyncBridge;
 }
-
-// TODO: channels and listeners registered before the sync client exists are kept and
-//   handed to each SyncConnection; addChannel forwards to syncClient.addChannel.
-const PENDING_SYNC: FrameworkSync = {
-  addChannel: () => {
-    throw new Error("not implemented");
-  },
-  onEvents: () => {
-    throw new Error("not implemented");
-  },
-};
 
 const FrameworkContext = createContext<FrameworkContextValue | null>(null);
 
@@ -96,13 +80,17 @@ export function FrameworkProvider({
   children,
 }: FrameworkProviderProps) {
   const [ownQueryClient] = useState(() => queryClient ?? new QueryClient());
-  const [value] = useState<FrameworkContextValue>(() => ({
-    client,
-    readTags: new ReadTagRegistry(),
-    agentUi: createAgentUiRuntime({ client, queryClient: ownQueryClient, router }),
-    auth,
-    sync: PENDING_SYNC,
-  }));
+  const [value] = useState<FrameworkContextValue>(() => {
+    const bridge = new SyncBridge();
+    return {
+      client,
+      readTags: new ReadTagRegistry(),
+      agentUi: createAgentUiRuntime({ client, queryClient: ownQueryClient, router }),
+      auth,
+      sync: bridge,
+      bridge,
+    };
+  });
   const [resetQueries] = useState(() => () => void ownQueryClient.resetQueries());
   const epoch = useIdentityEpoch(auth, resetQueries);
 
@@ -150,12 +138,19 @@ function SyncConnection({
       request: (path, init) => client.request(path, init),
       basePath: client.basePath,
       clientId: client.clientId,
-      onEvents: (events) => void invalidateForEvents(queryClient, value.readTags, events),
+      onEvents: (events) => {
+        void invalidateForEvents(queryClient, value.readTags, events);
+        value.bridge.emit(events);
+      },
       isHidden: () => globalThis.document?.visibilityState === "hidden",
       channels: [value.agentUi],
     });
+    const detach = value.bridge.attach(syncClient);
     syncClient.start();
-    return () => syncClient.stop();
+    return () => {
+      syncClient.stop();
+      detach();
+    };
   }, [value, queryClient]);
   return null;
 }

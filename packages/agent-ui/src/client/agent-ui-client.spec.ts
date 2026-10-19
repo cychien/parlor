@@ -791,3 +791,64 @@ describe("createAgentUiClient navigate", () => {
     expect(String(warn.mock.calls[0]?.[0])).toContain('"note"');
   });
 });
+
+describe("createAgentUiClient watch", () => {
+  const presences = (sent: ClientMessage[]) =>
+    sent.flatMap((m) => (m.type === "presence" ? [m.watching] : []));
+
+  it("reports the watched threads in presence and stops when the last watcher leaves", async () => {
+    const { browser, client, sent } = setup();
+    vi.spyOn(browser.document, "hasFocus").mockReturnValue(true);
+    client.opened();
+    await vi.waitFor(() => expect(presences(sent)).toEqual([undefined]));
+
+    const stopOne = client.watch("thr_1");
+    const stopTwo = client.watch("thr_2");
+    await vi.waitFor(() => expect(presences(sent).at(-1)).toEqual(["thr_1", "thr_2"]));
+
+    stopOne();
+    await vi.waitFor(() => expect(presences(sent).at(-1)).toEqual(["thr_2"]));
+    stopTwo();
+    await vi.waitFor(() => expect(presences(sent).at(-1)).toBeUndefined());
+    expect(presences(sent)).toEqual([
+      undefined,
+      ["thr_1", "thr_2"],
+      ["thr_2"],
+      undefined,
+    ]);
+  });
+
+  it("keeps a thread watched until every watcher of it has stopped", async () => {
+    const { browser, client, sent } = setup();
+    vi.spyOn(browser.document, "hasFocus").mockReturnValue(true);
+    client.opened();
+    const first = client.watch("thr_1");
+    const second = client.watch("thr_1");
+    await vi.waitFor(() => expect(presences(sent).at(-1)).toEqual(["thr_1"]));
+    first();
+    first();
+    await client.screen();
+    expect(presences(sent).at(-1)).toEqual(["thr_1"]);
+    second();
+    await vi.waitFor(() => expect(presences(sent).at(-1)).toBeUndefined());
+  });
+
+  it("names at most 8 threads, so presence is never refused for watching too many", async () => {
+    const { browser, client, sent } = setup();
+    vi.spyOn(browser.document, "hasFocus").mockReturnValue(true);
+    client.opened();
+    for (let n = 1; n <= 9; n++) client.watch(`thr_${n}`);
+    await vi.waitFor(() =>
+      expect(presences(sent).at(-1)).toEqual([
+        "thr_1",
+        "thr_2",
+        "thr_3",
+        "thr_4",
+        "thr_5",
+        "thr_6",
+        "thr_7",
+        "thr_8",
+      ]),
+    );
+  });
+});

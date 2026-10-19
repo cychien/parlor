@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { UiManifest } from "../manifest.js";
 import { createAgentUi, webOriginFromEnv } from "./agent-ui.js";
@@ -73,5 +73,62 @@ describe("webOriginFromEnv", () => {
   it("reads the literal process.env.PARLOR_WEB_ORIGIN", async () => {
     const source = await readFile(new URL("./agent-ui.ts", import.meta.url), "utf8");
     expect(source).toContain("= process.env.PARLOR_WEB_ORIGIN");
+  });
+});
+
+describe("contextFor with a chat turn", () => {
+  function twoFocusedTabs() {
+    const agentUi = createAgentUi({ audience: () => "default" });
+    const requests: Record<string, string[]> = { "tab-1": [], "tab-2": [] };
+    for (const clientId of ["tab-1", "tab-2"]) {
+      agentUi.channel.connect({
+        clientId,
+        scope: "default",
+        send: (data) => requests[clientId]!.push(data),
+      });
+      agentUi.receive(clientId, "default", {
+        type: "presence",
+        focused: true,
+        visible: true,
+        platform: "web",
+      });
+    }
+    agentUi.install(() => manifest);
+    const navigate = agentUi.tools("mcp").find((tool) => tool.name === "ui_navigate")!;
+    const mcp = new Request("http://localhost:3300/_parlor/mcp");
+    return { agentUi, requests, navigate, mcp };
+  }
+
+  it("binds ui tools to the tab that sent the prompt although both tabs are focused", async () => {
+    const { agentUi, requests, navigate, mcp } = twoFocusedTabs();
+    const ctx = await agentUi.contextFor(mcp, { via: "agent" }, undefined, {
+      clientId: "tab-1",
+    });
+    expect(ctx.clientId).toBe("tab-1");
+
+    const running = navigate.run({ to: "/settings" }, ctx);
+    await vi.waitFor(() => expect(requests["tab-1"]).toHaveLength(1));
+    expect(requests["tab-2"]).toEqual([]);
+    const { id } = JSON.parse(requests["tab-1"]![0]!) as { id: string };
+    agentUi.receive("tab-1", "default", {
+      type: "reply",
+      id,
+      ok: true,
+      result: { screen: { route: null } },
+    });
+    await expect(running).resolves.toMatchObject({
+      client: { id: "tab-1" },
+      screen: { route: null },
+    });
+  });
+
+  it("reports unknown_client when the prompt's tab has left", async () => {
+    const { agentUi, navigate, mcp } = twoFocusedTabs();
+    const ctx = await agentUi.contextFor(mcp, { via: "agent" }, undefined, {
+      clientId: "tab-closed",
+    });
+    await expect(navigate.run({ to: "/settings" }, ctx)).rejects.toMatchObject({
+      error: { code: "unknown_client" },
+    });
   });
 });

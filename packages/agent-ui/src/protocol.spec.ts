@@ -211,3 +211,46 @@ describe("parseUiFrame", () => {
     expect(parseUiFrame("not json")).toEqual({ ok: false, id: undefined });
   });
 });
+
+describe("parseUiFrame confirmations", () => {
+  const card = {
+    id: "c1",
+    action: "deleteTask",
+    description: "Delete a task by id.",
+    input: { id: "t1" },
+    origin: { via: "agent", name: "Claude" },
+    expiresInMs: 59_000,
+  };
+
+  it("keeps the chat thread an inline agent's card belongs to", () => {
+    const parsed = parseUiFrame(
+      JSON.stringify({
+        type: "confirmations",
+        items: [{ ...card, threadId: "thr_alice_1" }, card],
+      }),
+    );
+    expect(parsed).toEqual({
+      ok: true,
+      frame: {
+        type: "confirmations",
+        items: [{ ...card, threadId: "thr_alice_1" }, card],
+      },
+    });
+  });
+
+  it("drops a thread id that is not a non-empty string, keeping the card", () => {
+    const parsed = parseUiFrame(
+      JSON.stringify({
+        type: "confirmations",
+        items: [
+          { ...card, threadId: 7 },
+          { ...card, id: "c2", threadId: "" },
+        ],
+      }),
+    );
+    expect(parsed).toEqual({
+      ok: true,
+      frame: { type: "confirmations", items: [card, { ...card, id: "c2" }] },
+    });
+  });
+});

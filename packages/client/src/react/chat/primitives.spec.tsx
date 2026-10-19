@@ -1,0 +1,309 @@
+import type { AgentConfirmation } from "@parlor/agent-ui/client";
+import type { ChatItem } from "@parlor/chat";
+import { asId } from "@parlor/core";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+
+import * as Chat from "../agent-ui/chat.js";
+import { ChatScope } from "./context.js";
+import type { ChatRuntime, ChatState } from "./runtime.js";
+import { useChat } from "./use-chat.js";
+
+const turnId = asId("turn", "turn_1");
+const agentRef = { hostId: asId("host", "host_mac"), agentId: "claude" };
+
+const baseState: ChatState = {
+  status: "idle",
+  thread: undefined,
+  threads: [],
+  items: [],
+  hosts: [],
+  agents: [
+    {
+      key: "host_mac/claude",
+      name: "Claude Code",
+      hostName: "Alice's Mac",
+      online: true,
+      ready: true,
+      problem: undefined,
+    },
+  ],
+  agent: {
+    key: "host_mac/claude",
+    name: "Claude Code",
+    hostName: "Alice's Mac",
+    online: true,
+    ready: true,
+    problem: undefined,
+  },
+  connect: {
+    kind: "command",
+    command: "npx @parlor/agent-host connect https://app.test",
+  },
+  draft: "",
+};
+
+function fakeRuntime(initial: Partial<ChatState> = {}) {
+  let state: ChatState = { ...baseState, ...initial };
+  const listeners = new Set<() => void>();
+  const runtime = {
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    get: () => state,
+    start: () => () => {},
+    setDraft: vi.fn((text: string) => set({ draft: text })),
+    send: vi.fn(async () => {}),
+    stop: vi.fn(async () => {}),
+    answer: vi.fn(async () => {}),
+    choose: vi.fn(),
+    openThread: vi.fn(),
+  } satisfies ChatRuntime;
+  function set(next: Partial<ChatState>) {
+    state = { ...state, ...next };
+    act(() => {
+      for (const listener of listeners) listener();
+    });
+  }
+  return { runtime, set };
+}
+
+function mount(runtime: ChatRuntime, ui: React.ReactNode) {
+  return render(<ChatScope value={runtime}>{ui}</ChatScope>);
+}
+
+const reply = (
+  id: string,
+  text: string,
+  streaming = false,
+  interrupted = false,
+): ChatItem<AgentConfirmation> => ({
+  kind: "reply",
+  id: asId("item", id),
+  turnId,
+  text,
+  streaming,
+  interrupted,
+});
+
+describe("Chat.Thread", () => {
+  it("renders one li per item with the contract's data attributes", () => {
+    const { runtime } = fakeRuntime({
+      status: "running",
+      items: [
+        {
+          kind: "prompt",
+          id: asId("item", "item_p"),
+          turnId,
+          text: "go",
+          agent: agentRef,
+          state: "running",
+          mine: true,
+        },
+        reply("turn_1.1", "Hel", true),
+        reply("turn_1.2", "Done.", false, true),
+      ],
+    });
+    mount(
+      runtime,
+      <Chat.Thread>
+        {(item) => <span>{"text" in item ? item.text : ""}</span>}
+      </Chat.Thread>,
+    );
+
+    const rows = screen.getAllByRole("listitem");
+    expect(
+      rows.map((row) => [
+        row.dataset.itemId,
+        row.dataset.kind,
+        row.dataset.streaming,
+        row.dataset.interrupted,
+        row.textContent,
+      ]),
+    ).toEqual([
+      ["item_p", "prompt", undefined, undefined, "go"],
+      ["turn_1.1", "reply", "true", "false", "Hel"],
+      ["turn_1.2", "reply", "false", "true", "Done."],
+    ]);
+    expect(screen.getByRole("log").dataset.status).toBe("running");
+  });
+
+  it("keeps a row mounted when its open reply becomes the persisted twin", () => {
+    const { runtime, set } = fakeRuntime({ items: [reply("turn_1.1", "Hel", true)] });
+    mount(
+      runtime,
+      <Chat.Thread>
+        {(item) => <span>{"text" in item ? item.text : ""}</span>}
+      </Chat.Thread>,
+    );
+    const row = screen.getByRole("listitem");
+    set({ items: [reply("turn_1.1", "Hello", false)] });
+    expect(screen.getByRole("listitem")).toBe(row);
+    expect(row.dataset.streaming).toBe("false");
+  });
+
+  it("shows the empty state beside an empty log", () => {
+    const { runtime } = fakeRuntime();
+    mount(
+      runtime,
+      <Chat.Thread empty={<p>Ask your agent.</p>}>{() => null}</Chat.Thread>,
+    );
+    expect(screen.queryAllByRole("listitem")).toEqual([]);
+    expect(screen.getByText("Ask your agent.")).toBeTruthy();
+  });
+});
+
+describe("Chat.Composer", () => {
+  function composer(initial: Partial<ChatState> = {}) {
+    const fake = fakeRuntime(initial);
+    mount(
+      fake.runtime,
+      <Chat.Composer>
+        <Chat.Input />
+        <Chat.Send />
+        <Chat.Stop />
+      </Chat.Composer>,
+    );
+    return fake;
+  }
+
+  it("types into the draft, and Enter sends it", () => {
+    const fake = composer();
+    const box = screen.getByRole("textbox", { name: "Message" });
+    fireEvent.change(box, { target: { value: "hello" } });
+    expect(fake.runtime.setDraft).toHaveBeenCalledWith("hello");
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(fake.runtime.send).toHaveBeenCalledOnce();
+  });
+
+  it("breaks the line on Shift+Enter and never sends mid-composition", () => {
+    const fake = composer({ draft: "hello" });
+    const box = screen.getByRole("textbox", { name: "Message" });
+    fireEvent.keyDown(box, { key: "Enter", shiftKey: true });
+    fireEvent.keyDown(box, { key: "Enter", isComposing: true });
+    expect(fake.runtime.send).not.toHaveBeenCalled();
+  });
+
+  it("sends with the Send button once there is text, and not before", () => {
+    const fake = composer();
+    const send = screen.getByRole("button", { name: "Send" }) as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+    fake.set({ draft: "hello" });
+    expect(send.disabled).toBe(false);
+    fireEvent.click(send);
+    expect(fake.runtime.send).toHaveBeenCalledOnce();
+  });
+
+  it("cannot send to an agent that is offline", () => {
+    composer({
+      draft: "hello",
+      agent: { ...baseState.agent!, online: false },
+    });
+    expect(
+      (screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it("disables the box while no agent can be chosen", () => {
+    composer({ agent: undefined, agents: [] });
+    expect(
+      (screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement).disabled,
+    ).toBe(true);
+  });
+
+  it("shows Stop only while a turn runs, and stops it", () => {
+    const fake = composer();
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+    fake.set({ status: "running" });
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(fake.runtime.stop).toHaveBeenCalledOnce();
+  });
+});
+
+describe("Chat.Ask", () => {
+  const ask = (
+    overrides: Partial<Extract<ChatItem<AgentConfirmation>, { kind: "ask" }>> = {},
+  ) =>
+    ({
+      kind: "ask",
+      id: asId("item", "turn_1.3"),
+      turnId,
+      question: "Allow Claude to run npm test?",
+      choices: [
+        { id: "allow", label: "Allow once", effect: "allow_once" },
+        { id: "reject", label: "Reject", effect: "reject_once" },
+      ],
+      form: undefined,
+      approval: "presence",
+      answer: { state: "open" },
+      ...overrides,
+    }) as const;
+
+  function renderAsk(item: ReturnType<typeof ask>) {
+    const fake = fakeRuntime({ items: [item] });
+    mount(
+      fake.runtime,
+      <Chat.Ask item={item}>
+        {item.choices.map((choice) => (
+          <Chat.AskChoice key={choice.id} choice={choice}>
+            {choice.label}
+          </Chat.AskChoice>
+        ))}
+      </Chat.Ask>,
+    );
+    return fake;
+  }
+
+  it("is a group named by its question, whose choice answers it", () => {
+    const fake = renderAsk(ask());
+    const group = screen.getByRole("group", { name: "Allow Claude to run npm test?" });
+    expect([group.dataset.approval, group.dataset.state]).toEqual(["presence", "open"]);
+    fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
+    expect(fake.runtime.answer).toHaveBeenCalledWith("turn_1.3", "allow");
+  });
+
+  it("declines on Escape", () => {
+    const fake = renderAsk(ask());
+    fireEvent.keyDown(screen.getByRole("group"), { key: "Escape" });
+    expect(fake.runtime.answer).toHaveBeenCalledWith("turn_1.3", "reject");
+  });
+
+  it("is answered on the computer when its approval is computer: choices disabled, Escape inert", () => {
+    const fake = renderAsk(ask({ approval: "computer" }));
+    expect(
+      (screen.getByRole("button", { name: "Allow once" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    fireEvent.keyDown(screen.getByRole("group"), { key: "Escape" });
+    expect(fake.runtime.answer).not.toHaveBeenCalled();
+  });
+
+  it("disables its choices once answered, marking the one taken", () => {
+    renderAsk(ask({ answer: { state: "answered", choice: "allow" } }));
+    const allow = screen.getByRole("button", { name: "Allow once" }) as HTMLButtonElement;
+    expect([allow.disabled, allow.getAttribute("aria-pressed")]).toEqual([true, "true"]);
+  });
+});
+
+describe("useChat", () => {
+  function Probe() {
+    const chat = useChat();
+    return (
+      <button type="button" onClick={() => chat.choose("host_mac/claude")}>
+        {chat.status}:{chat.agents.length}
+      </button>
+    );
+  }
+
+  it("gives the app the state and the commands", () => {
+    const fake = fakeRuntime();
+    mount(fake.runtime, <Probe />);
+    fireEvent.click(screen.getByRole("button", { name: "idle:1" }));
+    expect(fake.runtime.choose).toHaveBeenCalledWith("host_mac/claude");
+  });
+
+  it("refuses to render outside Chat.Root", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(() => render(<Probe />)).toThrow("useChat must be rendered inside Chat.Root.");
+  });
+});
