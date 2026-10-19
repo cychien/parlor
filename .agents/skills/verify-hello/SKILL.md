@@ -45,7 +45,13 @@ $H up --target ios --seed baseline            # Capacitor app on "iPhone 17 Pro"
 - mac: a `parlor_app` process runs in the instance tree and holds a connection to the server port.
 - iOS: `UIKitApplication:dev.parlor.hello` runs on the simulator and the webview holds a connection to the server port.
 
-`up` refuses to start when the 1-minute load average exceeds the core count (override the limit with `HELLO_MAX_LOAD`) or when 3 instances are already running (`HELLO_MAX_INSTANCES`), unless `--force`. The refusal prints the load, the core count, and the running instance ids; when the load is the reason it also lists the busiest processes with pid, ppid, elapsed time, and cwd, and flags the ppid-1 ones under the harness home as leftovers that `$H reap --kill` removes. Wait for the load to drop or `down` one instead of forcing.
+`up` is refused, unless `--force`, by any of these rules, and the message says which one:
+
+- load: the 1-minute load average is at or above 0.7 x cores; `HELLO_MAX_LOAD` replaces that limit with an absolute number.
+- native: a `mac` or `ios` instance is requested while another native instance is still starting (not yet ready); web instances are never held back by it.
+- instance cap: `HELLO_MAX_INSTANCES` is set and that many instances are running; it is unset by default.
+
+A fixed instance count was either too low on an idle machine or too high under load; the load average and one native build at a time track what actually overloads the machine. The refusal prints the load, the core count, and the running instance ids; when the load is the reason it also lists the busiest processes with pid, ppid, elapsed time, and cwd, and flags the ppid-1 ones under the harness home as leftovers that `$H reap --kill` removes. Wait for the load to drop or for the native instance to be ready, or `down` one, instead of forcing.
 
 A launch that fails or crashes prints the log tail, then removes the instance. Add `--keep-on-failure` to keep the snapshot and log for inspection, then `$H down <id>`. Timeouts are 2 minutes for web and 30 for mac and iOS. The iOS target gets `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` automatically, so `xcode-select` can stay on the Command Line Tools. Android is not covered: this machine has no Android SDK.
 
