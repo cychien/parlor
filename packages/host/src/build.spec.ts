@@ -1,8 +1,9 @@
-import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { type ChildProcess, spawn } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { parseConfig } from "@parlor/config";
 import { describe, expect, it } from "vitest";
@@ -109,4 +110,81 @@ describe("buildServer", () => {
       child.kill();
     }
   }, 120_000);
+});
+
+const SHUTDOWN_BOUND_MS = 2000;
+const GENERATED_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", ".parlor");
+
+function exited(child: ChildProcess): Promise<number | null> {
+  return new Promise((resolve) => child.once("exit", (code) => resolve(code)));
+}
+
+function productionEnv(port: number): NodeJS.ProcessEnv {
+  const { CI: _ci, TEST: _test, ...env } = process.env;
+  return { ...env, PORT: String(port) };
+}
+
+describe("built node-server shutdown", () => {
+  it.each([
+    ["without a client", false],
+    ["with an open sync stream", true],
+  ])(
+    "exits cleanly and promptly on SIGTERM %s",
+    async (_name, withStream) => {
+      await mkdir(GENERATED_DIR, { recursive: true });
+      const rootDir = await mkdtemp(join(GENERATED_DIR, "shutdown-"));
+      await writeFile(
+        join(rootDir, "server.ts"),
+        [
+          'import { createRegistry } from "@parlor/core/registry";',
+          'import { createDatabase } from "@parlor/data";',
+          'import { createServer } from "@parlor/server";',
+          `const database = await createDatabase({ dataDir: ${JSON.stringify(join(rootDir, "pglite"))} });`,
+          "export default createServer({ actions: createRegistry({}), database });",
+        ].join("\n"),
+      );
+      const config = parseConfig({ app: { id: "dev.parlor.host", name: "Host" } });
+      const result = await buildServer(
+        { config, rootDir, configFile: "parlor.config.ts" },
+        { preset: "node-server" },
+      );
+
+      const port = await freePort();
+      const child = spawn(
+        process.execPath,
+        [join(result.outputDir, "server", "index.mjs")],
+        { env: productionEnv(port), stdio: "ignore" },
+      );
+      const exitCode = exited(child);
+      const controller = new AbortController();
+      try {
+        const url = `http://localhost:${port}/_parlor/sync/stream`;
+        let response: Response | undefined;
+        for (let i = 0; i < 100 && !response; i++) {
+          response = await fetch(url, {
+            headers: { accept: "text/event-stream" },
+            signal: controller.signal,
+          }).catch(() => undefined);
+          if (!response) await new Promise((r) => setTimeout(r, 100));
+        }
+        if (!response) throw new Error("server did not start");
+        if (withStream) await response.body!.getReader().read();
+        else controller.abort();
+
+        const startedAt = Date.now();
+        child.kill("SIGTERM");
+        const killTimer = setTimeout(() => child.kill("SIGKILL"), 15_000);
+        await exitCode;
+        clearTimeout(killTimer);
+
+        expect(Date.now() - startedAt).toBeLessThan(SHUTDOWN_BOUND_MS);
+        expect(child.signalCode).toBeNull();
+      } finally {
+        controller.abort();
+        child.kill("SIGKILL");
+        await rm(rootDir, { recursive: true, force: true });
+      }
+    },
+    120_000,
+  );
 });

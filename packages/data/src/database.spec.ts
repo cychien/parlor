@@ -90,4 +90,10 @@ describe("createDatabase with PGlite", () => {
     const rows = await handle.db.execute(sql`select count(*)::int as c from tasks`);
     expect(rows.rows).toEqual([{ c: 1 }]);
   });
+
+  it("closes idempotently", async () => {
+    const handle = await createDatabase({ dataDir: "memory://" });
+    await handle.close();
+    await expect(handle.close()).resolves.toBeUndefined();
+  });
 });

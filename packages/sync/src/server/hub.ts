@@ -5,8 +5,13 @@ import { parseNotifyPayload } from "./store.js";
 
 export type SyncSubscriber = (event: SyncEvent) => void;
 
+interface Subscription {
+  readonly notify: SyncSubscriber;
+  readonly onStop: (() => void) | undefined;
+}
+
 export class SyncHub {
-  readonly #subscribers = new Map<string, Set<SyncSubscriber>>();
+  readonly #subscribers = new Map<string, Set<Subscription>>();
   #unlisten: Unlisten | undefined;
   #starting: Promise<void> | undefined;
 
@@ -30,15 +35,16 @@ export class SyncHub {
   }
 
   publish(scope: string, event: SyncEvent): void {
-    for (const subscriber of this.#subscribers.get(scope) ?? []) subscriber(event);
+    for (const { notify } of this.#subscribers.get(scope) ?? []) notify(event);
   }
 
-  subscribe(scope: string, subscriber: SyncSubscriber): () => void {
+  subscribe(scope: string, notify: SyncSubscriber, onStop?: () => void): () => void {
+    const subscription: Subscription = { notify, onStop };
     const set = this.#subscribers.get(scope) ?? new Set();
-    set.add(subscriber);
+    set.add(subscription);
     this.#subscribers.set(scope, set);
     return () => {
-      set.delete(subscriber);
+      set.delete(subscription);
       if (set.size === 0) this.#subscribers.delete(scope);
     };
   }
@@ -51,6 +57,8 @@ export class SyncHub {
   }
 
   async stop(): Promise<void> {
+    const subscriptions = [...this.#subscribers.values()].flatMap((set) => [...set]);
+    for (const { onStop } of subscriptions) onStop?.();
     await this.#unlisten?.();
     this.#unlisten = undefined;
     this.#starting = undefined;

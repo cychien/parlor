@@ -78,6 +78,8 @@ export function createServer<T extends ActionMap>(
     onClient: agentUi?.touch,
   });
   const hub = database ? new SyncHub(database) : undefined;
+  const inflight = new Set<Promise<unknown>>();
+  let closing: Promise<void> | undefined;
 
   if (cors !== false) app.use(corsMiddleware(cors));
 
@@ -131,10 +133,18 @@ export function createServer<T extends ActionMap>(
     ...(agentUi
       ? { installUiManifest: (source: UiManifestSource) => agentUi.install(source) }
       : {}),
-    fetch: (request) => Promise.resolve(app.fetch(request)),
-    close: async () => {
-      agentUi?.close();
-      await hub?.stop();
+    fetch: (request) => {
+      const response = Promise.resolve(app.fetch(request));
+      const settled = () => void inflight.delete(response);
+      inflight.add(response);
+      response.then(settled, settled);
+      return response;
     },
+    close: () =>
+      (closing ??= (async () => {
+        agentUi?.close();
+        await Promise.all([hub?.stop(), Promise.allSettled([...inflight])]);
+        await database?.close?.();
+      })()),
   };
 }

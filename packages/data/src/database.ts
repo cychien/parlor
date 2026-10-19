@@ -40,6 +40,11 @@ export function resolveDatabaseUrl(
   return env.DATABASE_URL || undefined;
 }
 
+function once(run: () => Promise<void>): () => Promise<void> {
+  let result: Promise<void> | undefined;
+  return () => (result ??= run());
+}
+
 function pgliteHandle(dataDir: string): DatabaseHandle {
   const client = new PGlite(dataDir);
   const db = drizzlePglite(client);
@@ -53,7 +58,7 @@ function pgliteHandle(dataDir: string): DatabaseHandle {
       return () => unlisten();
     },
     migrate: (folder) => migratePglite(db, { migrationsFolder: folder }),
-    close: () => client.close(),
+    close: once(() => client.close()),
   };
 }
 
@@ -82,10 +87,10 @@ function nodePostgresHandle(url: string): DatabaseHandle {
       };
     },
     migrate: (folder) => migratePg(db, { migrationsFolder: folder }),
-    close: async () => {
+    close: once(async () => {
       await Promise.all([...listeners].map((client) => client.end()));
       await pool.end();
-    },
+    }),
   };
 }
 
