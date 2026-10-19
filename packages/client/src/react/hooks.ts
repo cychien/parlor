@@ -13,6 +13,7 @@ import {
 import { ACTION_QUERY_PREFIX, actionQueryKey } from "../query-keys.js";
 import type { RegisteredActions } from "../register.js";
 import { useFramework } from "./provider.js";
+import { actionRetry } from "./retry.js";
 
 type Actions = RegisteredActions;
 type Name = keyof Actions & string;
@@ -28,9 +29,11 @@ export function useActionQuery<K extends Name>(
   options?: ActionQueryOptions<K>,
 ): UseQueryResult<ActionOutput<Actions[K]>, ActionError> {
   const { client, readTags } = useFramework();
+  const queryClient = useQueryClient();
   const queryKey = actionQueryKey(name, input);
   return useQuery({
     ...options,
+    retry: options?.retry ?? actionRetry(queryClient.getDefaultOptions().queries?.retry),
     queryKey,
     queryFn: async ({ signal }) => {
       const envelope = await client.invoke(name, input, { signal });
