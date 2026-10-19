@@ -1,5 +1,14 @@
 import { useAgentConfirmations, useAgentView } from "@parlor/client/react";
-import { lazy, Suspense, useCallback, useEffect, useId, useRef, useState } from "react";
+import {
+  lazy,
+  startTransition,
+  Suspense,
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 
 import { agentPanel } from "./views.js";
@@ -26,8 +35,10 @@ export function AgentPanel() {
     if (open) region.current?.querySelector("textarea")?.focus();
   }, [open]);
   const toggle = () => {
-    setOpen(!open);
-    setEverOpened(true);
+    startTransition(() => {
+      setOpen(!open);
+      setEverOpened(true);
+    });
   };
   const close = () => {
     setOpen(false);
@@ -62,11 +73,9 @@ export function AgentPanel() {
               Close
             </button>
           </header>
-          {everOpened ? (
-            <Suspense fallback={<p className="sidebar-note">Loading...</p>}>
-              <AgentSidebar />
-            </Suspense>
-          ) : null}
+          <Suspense fallback={<p className="sidebar-note">Loading...</p>}>
+            {everOpened ? <AgentSidebar /> : null}
+          </Suspense>
         </section>,
         document.body,
       )}

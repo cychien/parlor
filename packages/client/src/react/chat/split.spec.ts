@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 
 const REACT_ENTRY = join(dirname(fileURLToPath(import.meta.url)), "..", "index.ts");
 const CHAT_PARTS_MARKER = "Chat.AskChoice must be rendered inside Chat.Ask.";
+const RUNTIME_MARKER = "npx @parlor/agent-host connect";
 
 async function emittedChunks(entrySource: string, lazySource: string) {
   const root = await mkdtemp(join(tmpdir(), "parlor-chat-split-"));
@@ -41,5 +42,22 @@ console.log(Chat.Root, Chat.Thread, Chat.Composer, Chat.AskChoice);`,
     );
     const holding = chunks.filter((chunk) => chunk.code.includes(CHAT_PARTS_MARKER));
     expect(holding.map((chunk) => chunk.entry)).toEqual([false]);
+  }, 60_000);
+
+  it("ship with their runtime in one chunk, so opening the chat is not a waterfall", async () => {
+    const chunks = await emittedChunks(
+      `import("./lazy.ts");`,
+      `import { Chat } from ${JSON.stringify(REACT_ENTRY)};
+console.log(Chat.Root, Chat.AskChoice);`,
+    );
+    const holding = (marker: string) =>
+      chunks.filter((chunk) => chunk.code.includes(marker)).length;
+    expect([holding(CHAT_PARTS_MARKER), holding(RUNTIME_MARKER)]).toEqual([1, 1]);
+    expect(
+      chunks.filter(
+        (chunk) =>
+          chunk.code.includes(CHAT_PARTS_MARKER) && chunk.code.includes(RUNTIME_MARKER),
+      ),
+    ).toHaveLength(1);
   }, 60_000);
 });

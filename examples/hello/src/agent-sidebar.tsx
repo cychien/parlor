@@ -28,7 +28,16 @@ export default function AgentSidebar() {
 }
 
 function Computers() {
-  const { agents, agent, choose, connect, hosts } = useChat();
+  const { agents, agent, choose, connect, hosts, status } = useChat();
+  if (status === "loading") return null;
+  if (status === "unavailable") {
+    return (
+      <div className="sidebar-note" data-state="unavailable">
+        <p className="sidebar-note-title">Chat is not available</p>
+        <p>This app could not reach its chat service. Try again in a moment.</p>
+      </div>
+    );
+  }
   if (agents.length === 0) {
     return (
       <div className="sidebar-note" data-state="no-agents">
