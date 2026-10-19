@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createSyncClient } from "./sync-client.js";
+import { createSyncClient, SyncUnauthorized } from "./sync-client.js";
 
 function sseBody(frames: string[], { end = false } = {}) {
   const encoder = new TextEncoder();
@@ -232,6 +232,92 @@ describe("createSyncClient negotiation retries", () => {
     const before = polls();
     await vi.advanceTimersByTimeAsync(30_000);
     expect(polls()).toBe(before);
+    client.stop();
+  });
+});
+
+describe("createSyncClient refused credentials", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("reports a 401 and keeps negotiating instead of polling with a dead credential", async () => {
+    let signedIn = false;
+    const request = vi.fn(async (path: string) => {
+      if (path.endsWith("/sync/token")) {
+        if (!signedIn) return new Response(null, { status: 401 });
+        return Response.json({
+          protocol: 1,
+          transport: "sse",
+          endpoint: "/_parlor/sync/stream",
+          pollIntervalMs: 2000,
+        });
+      }
+      if (path.includes("/sync/stream")) {
+        return new Response(
+          sseBody(['event: handshake\ndata: {"protocol":1,"capabilities":[]}\n\n']),
+          { status: 200 },
+        );
+      }
+      return Response.json({ events: [], cursor: "" });
+    });
+    const onUnauthorized = vi.fn();
+    const onError = vi.fn();
+    const client = createSyncClient({
+      request,
+      onEvents: vi.fn(),
+      onError,
+      onUnauthorized,
+      reconnectBaseMs: 1000,
+    });
+    client.start();
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(onUnauthorized).toHaveBeenCalled();
+    expect(onUnauthorized.mock.calls[0]![0]).toBeInstanceOf(SyncUnauthorized);
+    expect(onError).not.toHaveBeenCalled();
+    expect(client.transport).toBeUndefined();
+    expect(
+      request.mock.calls.filter(([p]) => String(p).includes("/sync?since=")),
+    ).toHaveLength(0);
+
+    signedIn = true;
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(client.transport).toBe("sse");
+    client.stop();
+  });
+
+  it("stops a poll-only client from polling once its credential is refused", async () => {
+    let refused = false;
+    const request = vi.fn(async (path: string) => {
+      if (refused) return new Response(null, { status: 401 });
+      if (path.endsWith("/sync/token"))
+        return Response.json({
+          protocol: 1,
+          transport: "poll",
+          endpoint: "",
+          pollIntervalMs: 100,
+        });
+      return Response.json({ events: [], cursor: "" });
+    });
+    const onUnauthorized = vi.fn();
+    const client = createSyncClient({
+      request,
+      onEvents: vi.fn(),
+      onUnauthorized,
+      reconnectBaseMs: 1000,
+    });
+    client.start();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(client.transport).toBe("poll");
+
+    refused = true;
+    await vi.advanceTimersByTimeAsync(200);
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+    const polls = () =>
+      request.mock.calls.filter(([p]) => String(p).includes("/sync?since=")).length;
+    const after = polls();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(polls()).toBe(after);
     client.stop();
   });
 });

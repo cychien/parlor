@@ -4,4 +4,5 @@ export {
   type SyncClient,
   type SyncClientOptions,
   type SyncRequest,
+  SyncUnauthorized,
 } from "./sync-client.js";
