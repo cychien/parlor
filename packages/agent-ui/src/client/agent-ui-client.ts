@@ -4,6 +4,7 @@ import type { AnyRouter } from "@tanstack/router-core";
 import {
   type AgentOrigin,
   type ClientMessage,
+  MAX_WATCHED_THREADS,
   parseUiFrame,
   type PresenceUpdate,
   type QuerySnapshot,
@@ -351,6 +352,7 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
     );
   };
 
+  const watched = new Map<string, number>();
   let lastPresence: string | undefined;
   let gone = false;
   let presenceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -364,6 +366,9 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
       ...(options.buildId === undefined ? {} : { buildId: options.buildId }),
       ops: UI_OPS,
       canConfirm: confirmations.watched(),
+      ...(watched.size > 0
+        ? { watching: [...watched.keys()].slice(0, MAX_WATCHED_THREADS) }
+        : {}),
     };
   };
   const reportPresence = () => {
@@ -466,10 +471,17 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
     closed: detachPresence,
     receive,
     watch(threadId) {
-      // TODO: ref-count threadId in a watched set; send presence with `watching` whenever
-      //   the set changes, and on every later presence.
-      void threadId;
-      throw new Error("not implemented");
+      watched.set(threadId, (watched.get(threadId) ?? 0) + 1);
+      schedulePresence();
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        const remaining = (watched.get(threadId) ?? 1) - 1;
+        if (remaining > 0) watched.set(threadId, remaining);
+        else watched.delete(threadId);
+        schedulePresence();
+      };
     },
     start() {
       registry.resume();

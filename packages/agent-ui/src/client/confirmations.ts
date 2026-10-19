@@ -47,6 +47,7 @@ const signatureOf = (prompt: ConfirmationPrompt) =>
     prompt.input,
     prompt.origin.via,
     prompt.origin.name,
+    prompt.threadId,
   ]);
 
 const sameItems = (a: readonly AgentConfirmation[], b: readonly AgentConfirmation[]) =>
@@ -102,6 +103,7 @@ export function createConfirmationStore(
     input: prompt.input,
     origin: prompt.origin,
     expiresAt: env.now() + prompt.expiresInMs,
+    threadId: prompt.threadId,
     approve: () => respond(prompt.id, true),
     decline: () => respond(prompt.id, false),
   });

@@ -18,6 +18,7 @@ export interface ConnectedClient {
   readonly visible: boolean;
   readonly ops: readonly UiOp[];
   readonly canConfirm: boolean;
+  readonly watching: readonly string[];
   readonly seenAt: number;
 }
 
@@ -103,6 +104,7 @@ export class ClientDirectory {
       visible: update.visible,
       ops: update.ops ? update.ops.filter(isUiOp) : LEGACY_UI_OPS,
       canConfirm: update.canConfirm ?? false,
+      watching: update.watching ?? [],
       seenAt: this.#now(),
     };
     if (entry) {

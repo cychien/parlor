@@ -117,12 +117,9 @@ export function createAgentUi(options: AgentUiOptions & AgentUiDependencies): Ag
     },
     tools,
     async contextFor(request, origin, signal, chat) {
-      if (chat) {
-        // TODO: the same context with `clientId: chat.clientId`, skipping presence selection.
-        throw new Error("not implemented");
-      }
       return {
         scope: request ? await options.audience(request) : "default",
+        ...(chat ? { clientId: chat.clientId } : {}),
         origin,
         signal,
         webOrigin: webOrigin ?? (request ? new URL(request.url).origin : undefined),
