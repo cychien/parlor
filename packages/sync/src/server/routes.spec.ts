@@ -117,6 +117,16 @@ describe("sync routes", () => {
     expect(frames[1]).toContain(live.id);
     expect(frames.join("")).not.toContain('"elsewhere"');
   });
+
+  it("answers a keep-alive stream request with Connection: close so a closing server does not wait on the socket", async () => {
+    const response = await app.fetch(
+      new Request("http://app.test/_parlor/sync/stream?since=", {
+        headers: { connection: "keep-alive" },
+      }),
+    );
+    expect(response.headers.get("connection")).toBe("close");
+    await response.body!.cancel();
+  });
 });
 
 describe("sync stream catch-up", () => {
