@@ -29,6 +29,7 @@ import {
 } from "jose";
 
 import { accountActions } from "./account.js";
+import { AUDIT_MIGRATION, createAuditLog } from "./audit.js";
 import {
   ACCESS_TOKEN_TTL_S,
   AUTH_PLUGIN,
@@ -268,7 +269,12 @@ export function betterAuthProvider({
 
   return {
     name: AUTH_PLUGIN,
-    migrations: [...AUTH_MIGRATIONS, HOSTS_MIGRATION, TURN_KEYS_MIGRATION],
+    migrations: [
+      ...AUTH_MIGRATIONS,
+      HOSTS_MIGRATION,
+      TURN_KEYS_MIGRATION,
+      AUDIT_MIGRATION,
+    ],
     enforcing: true,
     setup(host: PluginHost) {
       const { database } = host;
@@ -278,6 +284,7 @@ export function betterAuthProvider({
         horizonMs: ACCESS_TOKEN_TTL_S * 1000 + SKEW_MS,
       });
       revocations = set;
+      const auditLog = createAuditLog(database);
       bridge.revoke = (notice) =>
         database.transaction((tx) => RevocationSet.revoke(tx, notice));
       grantKeys = createGrantKeys(database);
@@ -298,7 +305,10 @@ export function betterAuthProvider({
           ...hostAccountActions(hostDeps).actions,
         }),
         routes: [...authRoutes({ instance, settings, host }), ...hostRoutes(hostDeps)],
-        close: () => set.stop(),
+        audit: (record) => auditLog.record(record),
+        close: async () => {
+          await Promise.all([set.stop(), auditLog.stop()]);
+        },
       };
     },
     async authenticate(request: Request): Promise<Principal> {

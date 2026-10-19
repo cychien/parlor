@@ -369,6 +369,7 @@ describe("a database from before host grants", () => {
         "auth/0002_revocations_revoked_at",
         "auth/0003_hosts",
         "auth/0005_turn_keys",
+        "auth/0006_audit",
       ]);
       expect(
         rowsOf(await old.db.execute(sql`select id from parlor_auth_revocations`)),
