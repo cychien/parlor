@@ -218,7 +218,7 @@ describe("createAgentUiClient writes", () => {
   });
 
   it("answers a set request by writing through the view's set and reading the value back", async () => {
-    const { client, replies, settle } = setup();
+    const { client, replies, answered } = setup();
     let value = { title: "", notes: "" };
     client.views
       .track(form, {
@@ -231,7 +231,7 @@ describe("createAgentUiClient writes", () => {
     client.receive(
       request("w1", "set", { view: "form", value: { title: "Buy stamps" } }),
     );
-    await settle();
+    await answered(1);
     expect(replies()).toEqual([
       {
         type: "reply",
@@ -243,9 +243,9 @@ describe("createAgentUiClient writes", () => {
   });
 
   it("answers a refused write with the error code and shows the agent as busy only while it runs", async () => {
-    const { client, replies, settle } = setup();
+    const { client, replies, answered } = setup();
     client.receive(request("w1", "set", { view: "form", value: { title: "x" } }));
-    await settle();
+    await answered(1);
     expect(replies()).toEqual([
       {
         type: "reply",
@@ -261,13 +261,13 @@ describe("createAgentUiClient writes", () => {
   });
 
   it("answers a malformed set request with an internal error instead of running it, and still runs a well-formed one", async () => {
-    const { client, replies, settle } = setup();
+    const { client, replies, answered } = setup();
     const set = vi.fn();
     client.views
       .track(form, { get: () => ({ title: "", notes: "" }), set })
       .mount(undefined);
     client.receive(request("w1", "set", { view: "form", value: "title" }));
-    await settle();
+    await answered(1);
     expect(replies()[0]).toMatchObject({
       id: "w1",
       ok: false,
@@ -275,7 +275,7 @@ describe("createAgentUiClient writes", () => {
     });
     expect(set).not.toHaveBeenCalled();
     client.receive(request("w2", "set", { view: "form", value: { title: "x" } }));
-    await settle();
+    await answered(2);
     expect(replies()[1]).toMatchObject({ id: "w2", ok: true });
     expect(set).toHaveBeenCalledTimes(1);
   });
@@ -299,9 +299,9 @@ describe("createAgentUiClient highlight", () => {
   });
 
   it("answers not_mounted for a view that is not on screen", async () => {
-    const { client, replies, settle } = setup();
+    const { client, replies, answered } = setup();
     client.receive(request("h1", "highlight", { view: "nope" }));
-    await settle();
+    await answered(1);
     expect(replies()[0]).toMatchObject({ ok: false, error: { code: "not_mounted" } });
   });
 });
@@ -321,9 +321,9 @@ describe("createAgentUiClient confirmations", () => {
     });
 
   it("shows the server's list through the confirmation store and never queues it as a request", async () => {
-    const { client, replies, settle } = setup();
+    const { client, replies, quiet } = setup();
     client.receive(frame("c1"));
-    await settle();
+    await quiet();
     expect(client.confirmations.get().map((c) => c.id)).toEqual(["c1"]);
     expect(replies()).toEqual([]);
     client.receive(frame());
@@ -331,11 +331,11 @@ describe("createAgentUiClient confirmations", () => {
   });
 
   it("answers over the channel when the user approves or declines", async () => {
-    const { client, sent, settle } = setup();
+    const { client, sent } = setup();
     client.receive(frame("c1", "c2"));
     client.confirmations.get()[0]!.approve();
     client.confirmations.get()[0]!.decline();
-    await settle();
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
     expect(sent).toEqual([
       { type: "answer", id: "c1", approve: true },
       { type: "answer", id: "c2", approve: false },
@@ -343,10 +343,10 @@ describe("createAgentUiClient confirmations", () => {
   });
 
   it("does not wait behind a card: a screen request runs while one is showing", async () => {
-    const { client, replies, settle } = setup();
+    const { client, replies, answered } = setup();
     client.receive(frame("c1"));
     client.receive(request("r1"));
-    await settle();
+    await answered(1);
     expect(client.confirmations.get().map((item) => item.id)).toEqual(["c1"]);
     expect(replies().map((r) => r.id)).toEqual(["r1"]);
   });
@@ -363,10 +363,10 @@ describe("createAgentUiClient confirmations", () => {
   });
 
   it("stays busy for a card while a request finishes, and for the request while a card waits", async () => {
-    const { client, settle } = setup();
+    const { client, answered } = setup();
     client.receive(frame("c1"));
     client.receive(request("r1"));
-    await settle();
+    await answered(1);
     expect(client.activity.get().busy).toBe(true);
     expect(client.activity.get().last?.op).toBe("screen");
     client.receive(frame());
@@ -374,14 +374,14 @@ describe("createAgentUiClient confirmations", () => {
   });
 
   it("reports that it can confirm only while something renders the cards", async () => {
-    const { browser, client, sent, settle } = setup();
+    const { browser, client, sent } = setup();
     vi.spyOn(browser.document, "hasFocus").mockReturnValue(true);
     client.opened();
-    await settle();
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
     const off = client.confirmations.subscribe(() => {});
-    await settle();
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
     off();
-    await settle();
+    await vi.waitFor(() => expect(sent).toHaveLength(3));
     expect(
       sent
         .filter((m) => m.type === "presence")
@@ -469,16 +469,16 @@ describe("createAgentUiClient leaving", () => {
     client.opened();
     await vi.waitFor(() => expect(sent).toHaveLength(1));
     browser.window.dispatchEvent(new browser.window.Event("pagehide"));
-    expect(sent.at(-1)).toEqual({ type: "leave" });
+    await vi.waitFor(() => expect(sent.at(-1)).toEqual({ type: "leave" }));
   });
 
   it("announces itself again when the page comes back from the back-forward cache", async () => {
-    const { browser, client, sent, settle } = setup();
+    const { browser, client, sent } = setup();
     client.opened();
-    await settle();
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
     browser.window.dispatchEvent(new browser.window.Event("pagehide"));
     browser.window.dispatchEvent(new browser.window.Event("pageshow"));
-    await settle();
+    await vi.waitFor(() => expect(sent).toHaveLength(3));
     expect(sent.map((message) => message.type)).toEqual([
       "presence",
       "leave",
@@ -490,20 +490,20 @@ describe("createAgentUiClient leaving", () => {
 describe("createAgentUiClient lifecycle ordering", () => {
   it("sends the presence of a restored page only after the leave from before it went away was delivered", async () => {
     let deliverLeave!: () => void;
-    const { browser, client, sent, settle } = setup({
+    const { browser, client, sent, quiet } = setup({
       hold: (message) =>
         message.type === "leave"
           ? new Promise<void>((resolve) => (deliverLeave = resolve))
           : undefined,
     });
     client.opened();
-    await settle();
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
     browser.window.dispatchEvent(new browser.window.Event("pagehide"));
     browser.window.dispatchEvent(new browser.window.Event("pageshow"));
-    await settle();
+    await quiet();
     expect(sent.map((message) => message.type)).toEqual(["presence", "leave"]);
     deliverLeave();
-    await settle();
+    await vi.waitFor(() => expect(sent).toHaveLength(3));
     expect(sent.map((message) => message.type)).toEqual([
       "presence",
       "leave",
@@ -513,7 +513,7 @@ describe("createAgentUiClient lifecycle ordering", () => {
 
   it("sends presence after a leave that failed, once it has failed", async () => {
     let failLeave!: () => void;
-    const { browser, client, sent, settle } = setup({
+    const { browser, client, sent, quiet } = setup({
       hold: (message) =>
         message.type === "leave"
           ? new Promise<void>(
@@ -522,13 +522,13 @@ describe("createAgentUiClient lifecycle ordering", () => {
           : undefined,
     });
     client.opened();
-    await settle();
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
     browser.window.dispatchEvent(new browser.window.Event("pagehide"));
     browser.window.dispatchEvent(new browser.window.Event("pageshow"));
-    await settle();
+    await quiet();
     expect(sent.map((message) => message.type)).toEqual(["presence", "leave"]);
     failLeave();
-    await settle();
+    await vi.waitFor(() => expect(sent).toHaveLength(3));
     expect(sent.map((message) => message.type)).toEqual([
       "presence",
       "leave",
@@ -539,14 +539,14 @@ describe("createAgentUiClient lifecycle ordering", () => {
 
 describe("createAgentUiClient after leaving", () => {
   it("stays silent about presence while the page is gone, even when focus and visibility change after pagehide", async () => {
-    const { browser, client, sent, settle } = setup();
+    const { browser, client, sent, quiet } = setup();
     client.opened();
-    await settle();
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
     browser.window.dispatchEvent(new browser.window.Event("pagehide"));
     vi.spyOn(browser.document, "hasFocus").mockReturnValue(false);
     browser.window.dispatchEvent(new browser.window.Event("blur"));
     browser.document.dispatchEvent(new browser.window.Event("visibilitychange"));
-    await settle();
+    await quiet();
     expect(sent.map((message) => message.type)).toEqual(["presence", "leave"]);
   });
 });
