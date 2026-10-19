@@ -3,16 +3,16 @@ import {
   useActionQuery,
   useAgentConfirmations,
 } from "@parlor/client/react";
+import { useId } from "react";
 
 export function ConfirmationCards() {
   const confirmations = useAgentConfirmations();
-  if (confirmations.length === 0) return null;
   return (
-    <section aria-label="Agent requests" className="confirmations">
+    <div aria-live="polite" className="confirmations">
       {confirmations.map((confirmation) => (
         <ConfirmationCard key={confirmation.id} confirmation={confirmation} />
       ))}
-    </section>
+    </div>
   );
 }
 
@@ -48,17 +48,21 @@ function ConfirmationCard({
 }: {
   readonly confirmation: AgentConfirmation;
 }) {
+  const whoId = useId();
   const agent = confirmation.origin.name ?? "An agent";
   const id = idOf(confirmation.input);
   const verb = ACTION_VERBS[confirmation.action] ?? "make a change";
   const known = confirmation.action in ACTION_VERBS;
   return (
     <div
-      role="alertdialog"
-      aria-label={`Confirm ${confirmation.action}`}
+      role="group"
+      aria-labelledby={whoId}
       className="card"
+      onKeyDown={(event) => {
+        if (event.key === "Escape") confirmation.decline();
+      }}
     >
-      <p className="card-who">
+      <p id={whoId} className="card-who">
         <strong>{agent}</strong> wants to {verb}
       </p>
       <p className="card-what">
