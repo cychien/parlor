@@ -51,6 +51,8 @@ const STATUS_BY_CODE = {
   declined: 403,
   confirmation_timeout: 504,
   confirmation_unavailable: 503,
+  unauthenticated: 401,
+  forbidden: 403,
   internal: 500,
 } as const satisfies Record<ActionErrorCode, number>;
 

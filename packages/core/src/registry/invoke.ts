@@ -1,10 +1,14 @@
 import type { ActionContext, AnyAction, DataProvider, Tag } from "../action.js";
-import { isMutating, needsConfirmation } from "../action.js";
+import { isMutating, needsConfirmation, needsPrincipal } from "../action.js";
 import { ActionError } from "../errors.js";
+import { ANONYMOUS, type Principal } from "../principal.js";
 import { readTagsFor, writeTagsFor } from "../tags.js";
 import type { ActionRegistry } from "./registry.js";
 
-export type InvokeContext = Omit<ActionContext, "db">;
+/** A caller that names no principal is anonymous: missing identity never widens access. */
+export type InvokeContext = Omit<ActionContext, "db" | "principal"> & {
+  readonly principal?: Principal | undefined;
+};
 
 export interface WriteEvent {
   readonly action: AnyAction;
@@ -25,6 +29,8 @@ export interface InvokeOptions {
   readonly data?: DataProvider | undefined;
   readonly onWrite?: ((event: WriteEvent) => Promise<void>) | undefined;
   readonly confirm?: ((call: PreparedCall) => Promise<void>) | undefined;
+  /** An enforcing auth provider is installed: non-public actions refuse anonymous callers. */
+  readonly enforcing?: boolean | undefined;
 }
 
 export interface InvokeResult {
@@ -42,6 +48,13 @@ export async function invokeAction(
 ): Promise<InvokeResult> {
   const action = registry.get(name);
   if (!action) throw new ActionError("not_found", `Unknown action "${name}"`);
+  const principal = ctx.principal ?? ANONYMOUS;
+  if (
+    principal.kind === "anonymous" &&
+    needsPrincipal(action, options.enforcing === true)
+  ) {
+    throw new ActionError("unauthenticated", `Sign in to call "${name}".`);
+  }
 
   const parsed = await action.input.safeParseAsync(rawInput ?? {});
   if (!parsed.success) {
@@ -58,22 +71,26 @@ export async function invokeAction(
         `"${name}" needs the user's approval, but nothing here can ask for it.`,
       );
     }
-    await confirm({ action, name, input, ctx });
+    await confirm({ action, name, input, ctx: { ...ctx, principal } });
   }
   const reads = readTagsFor(action, input);
 
   if (!data) {
-    const result = await action.run(input, { ...ctx, db: undefined as never });
+    const result = await action.run(input, { ...ctx, principal, db: undefined as never });
     return { data: result, reads, writes: writeTagsFor(action, result) };
   }
 
   if (!isMutating(action)) {
-    const result = await action.run(input, { ...ctx, db: data.read() as never });
+    const result = await action.run(input, {
+      ...ctx,
+      principal,
+      db: data.read() as never,
+    });
     return { data: result, reads, writes: [] };
   }
 
   return data.transaction(async (tx) => {
-    const result = await action.run(input, { ...ctx, db: tx as never });
+    const result = await action.run(input, { ...ctx, principal, db: tx as never });
     const writes = writeTagsFor(action, result);
     await onWrite?.({ action, name, tags: writes, ctx, tx });
     return { data: result, reads, writes };

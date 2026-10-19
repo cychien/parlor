@@ -1,5 +1,7 @@
 import type { z } from "zod";
 
+import type { Principal, PrincipalKind } from "./principal.js";
+
 export type ActionSource = "ui" | "agent" | "http" | "mcp";
 
 export interface DataRegister {}
@@ -18,6 +20,7 @@ export interface DataProvider<TDb = unknown> {
 export interface ActionContext {
   readonly scope: string;
   readonly source: ActionSource;
+  readonly principal: Principal;
   readonly db: ParlorDatabase;
   readonly signal?: AbortSignal | undefined;
 }
@@ -37,10 +40,16 @@ export interface ActionConfig<TInput extends z.ZodType, TOutput> {
   readonly writes?: readonly TagSource[] | undefined;
   /**
    * Ask the user to approve each call from an agent (source `mcp` or `agent`) in the app
-   * before it runs. Calls from the app's own UI and plain HTTP never ask. A UX guard, not a
-   * security boundary: the source is self-declared until auth exists.
+   * before it runs. Calls from the app's own UI and plain HTTP never ask. With an enforcing
+   * auth provider the source comes from the caller's credential, so this is a boundary;
+   * without one it stays a UX guard over a self-declared header.
    */
   readonly confirm?: boolean | undefined;
+  /**
+   * Callable without signing in. Only read when the server has an enforcing auth provider,
+   * which otherwise answers an anonymous caller with `unauthenticated`.
+   */
+  readonly public?: boolean | undefined;
   readonly run: (
     input: z.output<TInput>,
     ctx: ActionContext,
@@ -77,6 +86,22 @@ const CONFIRMED_SOURCES: ReadonlySet<ActionSource> = new Set(["mcp", "agent"]);
 
 export function needsConfirmation(action: AnyAction, source: ActionSource): boolean {
   return action.confirm === true && CONFIRMED_SOURCES.has(source);
+}
+
+const SOURCE_BY_KIND = {
+  anonymous: "http",
+  user: "ui",
+  agent: "mcp",
+  host: "http",
+} as const satisfies Record<PrincipalKind, ActionSource>;
+
+export function sourceOfPrincipal(principal: Principal): ActionSource {
+  if (principal.kind === "agent" && principal.turn) return "agent";
+  return SOURCE_BY_KIND[principal.kind];
+}
+
+export function needsPrincipal(action: AnyAction, enforcing: boolean): boolean {
+  return enforcing && action.public !== true;
 }
 
 export type ActionInput<A> =

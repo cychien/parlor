@@ -14,8 +14,10 @@ export {
   isAction,
   isMutating,
   needsConfirmation,
+  needsPrincipal,
   type ParlorDatabase,
   type ReadTags,
+  sourceOfPrincipal,
   type TableLike,
   type Tag,
   type TagSource,
@@ -26,4 +28,30 @@ export {
   type ActionErrorBody,
   type ActionErrorCode,
 } from "./errors.js";
+export {
+  asId,
+  type DeviceId,
+  type GrantId,
+  type HostId,
+  type Id,
+  type IdKind,
+  type ItemId,
+  type ThreadId,
+  type TurnId,
+  type UserId,
+} from "./ids.js";
+export {
+  ANONYMOUS,
+  type AgentIdentity,
+  type AgentPrincipal,
+  type AnonymousPrincipal,
+  type AuthenticatedPrincipal,
+  type HostPrincipal,
+  isAuthenticated,
+  type Principal,
+  type PrincipalKind,
+  type TurnBinding,
+  type UserPrincipal,
+  userOf,
+} from "./principal.js";
 export { readTagsFor, tableName, tagsOverlap, writeTagsFor } from "./tags.js";
