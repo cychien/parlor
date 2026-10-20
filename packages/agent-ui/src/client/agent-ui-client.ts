@@ -77,6 +77,8 @@ export interface AgentUiClient extends ClientChannel {
   readonly confirmations: ConfirmationStore;
   screen(): Promise<ScreenSnapshot>;
   start(): () => void;
+  /** Forgets what belongs to the signed-in user: the pending confirmations. */
+  reset(): void;
   /** Declares a chat thread shown here until the returned function runs (presence `watching`). */
   watch(threadId: string): () => void;
 }
@@ -487,6 +489,9 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
         else watched.delete(threadId);
         schedulePresence();
       };
+    },
+    reset() {
+      confirmations.replace([]);
     },
     start() {
       registry.resume();

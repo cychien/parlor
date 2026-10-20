@@ -7,6 +7,7 @@ import {
   type ReactNode,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
@@ -55,20 +56,27 @@ function identityOf(session: SessionSnapshot): string {
 }
 
 /** Counts changes of the signed-in user after the first settled answer. */
-function useIdentityEpoch(auth: SessionSource | undefined, onChange: () => void): number {
+function useSettledIdentityEpoch(auth: SessionSource | undefined): number {
   const source = auth ?? NO_SESSION;
   const identity = identityOf(useSyncExternalStore(source.subscribe, source.current));
-  const settled = useRef<string | undefined>(undefined);
-  const [epoch, setEpoch] = useState(0);
-  useEffect(() => {
-    if (identity === "loading") return;
-    if (settled.current !== undefined && settled.current !== identity) {
-      onChange();
-      setEpoch((current) => current + 1);
-    }
-    settled.current = identity;
-  }, [identity, onChange]);
-  return epoch;
+  const [tracked, setTracked] = useState<{
+    readonly settled: string | undefined;
+    readonly epoch: number;
+  }>({ settled: undefined, epoch: 0 });
+  if (identity !== "loading" && tracked.settled !== identity) {
+    setTracked({
+      settled: identity,
+      epoch: tracked.settled === undefined ? 0 : tracked.epoch + 1,
+    });
+  }
+  return tracked.epoch;
+}
+
+const IdentityEpochContext = createContext(0);
+
+/** Changes whenever the signed-in user does; state kept per user is keyed on it. */
+export function useIdentityEpoch(): number {
+  return useContext(IdentityEpochContext);
 }
 
 export function FrameworkProvider({
@@ -91,8 +99,15 @@ export function FrameworkProvider({
       bridge,
     };
   });
-  const [resetQueries] = useState(() => () => void ownQueryClient.resetQueries());
-  const epoch = useIdentityEpoch(auth, resetQueries);
+  const epoch = useSettledIdentityEpoch(auth);
+  const appliedEpoch = useRef(epoch);
+
+  useLayoutEffect(() => {
+    if (appliedEpoch.current === epoch) return;
+    appliedEpoch.current = epoch;
+    void ownQueryClient.resetQueries();
+    value.agentUi.reset();
+  }, [epoch, ownQueryClient, value]);
 
   useEffect(() => value.readTags.attach(ownQueryClient), [value, ownQueryClient]);
 
@@ -114,12 +129,14 @@ export function FrameworkProvider({
 
   return (
     <FrameworkContext.Provider value={value}>
-      <QueryClientProvider client={ownQueryClient}>
-        {sync && (
-          <SyncConnection key={epoch} value={value} queryClient={ownQueryClient} />
-        )}
-        {children}
-      </QueryClientProvider>
+      <IdentityEpochContext.Provider value={epoch}>
+        <QueryClientProvider client={ownQueryClient}>
+          {sync && (
+            <SyncConnection key={epoch} value={value} queryClient={ownQueryClient} />
+          )}
+          {children}
+        </QueryClientProvider>
+      </IdentityEpochContext.Provider>
     </FrameworkContext.Provider>
   );
 }

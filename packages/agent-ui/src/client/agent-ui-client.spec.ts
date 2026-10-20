@@ -360,6 +360,15 @@ describe("createAgentUiClient confirmations", () => {
     expect(client.confirmations.get()).toEqual([]);
   });
 
+  it("drops every pending card on reset and is idle again", () => {
+    const { client } = setup();
+    client.receive(frame("c1", "c2"));
+    expect(client.activity.get().busy).toBe(true);
+    client.reset();
+    expect(client.confirmations.get()).toEqual([]);
+    expect(client.activity.get().busy).toBe(false);
+  });
+
   it("answers over the channel when the user approves or declines", async () => {
     const { client, sent } = setup();
     client.receive(frame("c1", "c2"));
