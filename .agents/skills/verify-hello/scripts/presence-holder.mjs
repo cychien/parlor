@@ -78,7 +78,8 @@ async function onEvent({ method, params, sessionId }) {
     targets.delete(params.targetId);
     attaching.delete(params.targetId);
   } else if (method === "Target.detachedFromTarget") {
-    for (const [id, held] of targets) if (held.sessionId === params.sessionId) targets.delete(id);
+    for (const [id, held] of targets)
+      if (held.sessionId === params.sessionId) targets.delete(id);
   } else if (
     method === "WebAuthn.credentialAdded" ||
     method === "WebAuthn.credentialAsserted" ||
@@ -123,7 +124,12 @@ async function attachNow(info) {
     note({ type: "attached", targetId: info.targetId, url: info.url });
   } catch (error) {
     held.error = error.message;
-    note({ type: "attach_failed", targetId: info.targetId, url: info.url, error: error.message });
+    note({
+      type: "attach_failed",
+      targetId: info.targetId,
+      url: info.url,
+      error: error.message,
+    });
   }
 }
 
@@ -168,7 +174,11 @@ async function poll() {
         try {
           await restore(held);
         } catch (failure) {
-          note({ type: "restore_failed", targetId: held.targetId, error: failure.message });
+          note({
+            type: "restore_failed",
+            targetId: held.targetId,
+            error: failure.message,
+          });
         }
       }
     }
@@ -225,7 +235,8 @@ const server = createServer(async (request, response) => {
   };
   try {
     if (request.method === "GET" && request.url === "/state") return reply(200, report());
-    const match = request.method === "POST" && request.url.match(/^\/presence\/(on|off)$/);
+    const match =
+      request.method === "POST" && request.url.match(/^\/presence\/(on|off)$/);
     if (match) {
       await attached();
       await poll();
@@ -238,6 +249,8 @@ const server = createServer(async (request, response) => {
   }
 });
 server.listen(0, "127.0.0.1", () => {
-  process.stdout.write(`${JSON.stringify({ ready: true, port: server.address().port, pid: process.pid })}\n`);
+  process.stdout.write(
+    `${JSON.stringify({ ready: true, port: server.address().port, pid: process.pid })}\n`,
+  );
 });
 process.on("SIGTERM", () => process.exit(0));

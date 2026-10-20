@@ -44,7 +44,9 @@ export async function presence(check, info, mode, { profile, label = "presence" 
   const name = `${label}.${profile ?? "default"}.${mode}`;
   check.save(`${name}.json`, result.stdout || result.stderr);
   if (result.status !== 0)
-    throw new Error(`presence ${mode} for ${profile ?? "default"} failed: ${result.stderr}`);
+    throw new Error(
+      `presence ${mode} for ${profile ?? "default"} failed: ${result.stderr}`,
+    );
   check.log(`presence ${mode} on ${profile ?? "default"}`);
   return JSON.parse(result.stdout.trim().split("\n").pop());
 }
@@ -63,8 +65,11 @@ export async function profileBrowser(check, info, profile, user) {
 
 /** `$H sql {id} --write "{statement}"`: one read-write transaction; `{affectedRows, rows}`. */
 export async function sqlWrite(check, info, statement) {
-  const result = await helloCli(["sql", info.id, "--write", statement], { timeout: 240_000 });
-  if (result.status !== 0) throw new Error(`sql --write failed: ${result.stderr.slice(-800)}`);
+  const result = await helloCli(["sql", info.id, "--write", statement], {
+    timeout: 240_000,
+  });
+  if (result.status !== 0)
+    throw new Error(`sql --write failed: ${result.stderr.slice(-800)}`);
   return JSON.parse(result.stdout);
 }
 
@@ -115,7 +120,8 @@ export function dialogProcesses(home) {
     return false;
   };
   return table.filter(
-    (p) => /(^|\/)osascript(\s|$)/.test(p.command) && p.pid !== process.pid && descends(p.pid),
+    (p) =>
+      /(^|\/)osascript(\s|$)/.test(p.command) && p.pid !== process.pid && descends(p.pid),
   );
 }
 
@@ -150,9 +156,13 @@ function run(argv) {
 
 /** The dialog an `osascript` process shows: title, message texts and button labels. */
 export async function readDialog(pid) {
-  const result = await runAsync("osascript", ["-l", "JavaScript", "-e", READ_DIALOG, String(pid)], {
-    timeout: 15_000,
-  });
+  const result = await runAsync(
+    "osascript",
+    ["-l", "JavaScript", "-e", READ_DIALOG, String(pid)],
+    {
+      timeout: 15_000,
+    },
+  );
   try {
     const dialog = JSON.parse(result.stdout.trim());
     if (!dialog || !dialog.windows) return undefined;
@@ -164,9 +174,13 @@ export async function readDialog(pid) {
 }
 
 export async function clickDialog(pid, label) {
-  const result = await runAsync("osascript", ["-l", "JavaScript", "-e", CLICK_DIALOG, String(pid), label], {
-    timeout: 15_000,
-  });
+  const result = await runAsync(
+    "osascript",
+    ["-l", "JavaScript", "-e", CLICK_DIALOG, String(pid), label],
+    {
+      timeout: 15_000,
+    },
+  );
   if (result.status !== 0)
     throw new Error(`clicking "${label}" in dialog ${pid} failed: ${result.stderr}`);
   return Date.now();
@@ -186,21 +200,25 @@ export async function screenshotDialog(check, pid, name) {
 
 /** Waits for a `Parlor Host` dialog of this host that satisfies `accept(dialog)`. */
 export async function waitDialog(host, accept, ms) {
-  return waitFor(async () => {
-    for (const p of dialogProcesses(host.home)) {
-      const dialog = await readDialog(p.pid);
-      if (dialog && dialog.title === "Parlor Host" && accept(dialog)) return dialog;
-    }
-    return undefined;
-  }, ms, 300);
+  return waitFor(
+    async () => {
+      for (const p of dialogProcesses(host.home)) {
+        const dialog = await readDialog(p.pid);
+        if (dialog && dialog.title === "Parlor Host" && accept(dialog)) return dialog;
+      }
+      return undefined;
+    },
+    ms,
+    300,
+  );
 }
 
 /** Records every dialog this host shows until `stop()`; each with when it was first seen. */
 export function watchDialogs(host) {
   const seen = new Map();
-  let running = true;
+  const stopped = new AbortController();
   const loop = (async () => {
-    while (running) {
+    while (!stopped.signal.aborted) {
       for (const p of dialogProcesses(host.home)) {
         if (seen.has(p.pid)) continue;
         const dialog = await readDialog(p.pid);
@@ -212,7 +230,7 @@ export function watchDialogs(host) {
   return {
     seen: () => [...seen.values()],
     async stop() {
-      running = false;
+      stopped.abort();
       await loop;
       return [...seen.values()];
     },
@@ -228,7 +246,8 @@ export function deviceApproval(dialog, hostName, email) {
   );
   for (const text of dialog?.texts ?? []) {
     const match = text.trim().match(pattern);
-    if (match) return { deviceName: match[1], platform: match[2], appName: match[3], text };
+    if (match)
+      return { deviceName: match[1], platform: match[2], appName: match[3], text };
   }
   return undefined;
 }
@@ -242,7 +261,11 @@ export async function answerDeviceDialog(
   host,
   { hostName, email = "alice@example.com", answer = "Allow", label, ms = 60_000 },
 ) {
-  const dialog = await waitDialog(host, (d) => Boolean(deviceApproval(d, hostName, email)), ms);
+  const dialog = await waitDialog(
+    host,
+    (d) => Boolean(deviceApproval(d, hostName, email)),
+    ms,
+  );
   if (!dialog) return undefined;
   const approval = deviceApproval(dialog, hostName, email);
   await screenshotDialog(check, dialog.pid, `${label}.dialog.png`);
@@ -270,9 +293,11 @@ export async function sendApproving(
     label,
     onPoll: async () => {
       if (dialog || pending) return;
-      const found = (await Promise.all(
-        dialogProcesses(session.host.home).map((p) => readDialog(p.pid)),
-      )).find((d) => d && deviceApproval(d, session.hostName, email));
+      const found = (
+        await Promise.all(
+          dialogProcesses(session.host.home).map((p) => readDialog(p.pid)),
+        )
+      ).find((d) => d && deviceApproval(d, session.hostName, email));
       if (!found) return;
       pending = true;
       await screenshotDialog(check, found.pid, `${label}.dialog.png`);

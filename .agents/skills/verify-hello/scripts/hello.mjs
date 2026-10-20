@@ -801,7 +801,9 @@ function describeProcess(p) {
 function browserPorts(state, browsers) {
   if (browsers === "none") return [];
   const main = state.cdpPort ? [state.cdpPort] : [];
-  return browsers === "all" ? [...main, ...Object.values(state.profileCdpPorts ?? {})] : main;
+  return browsers === "all"
+    ? [...main, ...Object.values(state.profileCdpPorts ?? {})]
+    : main;
 }
 
 function instanceSurvivors(state, { browsers = "main" } = {}) {
@@ -1639,7 +1641,8 @@ async function cdpConnect(url) {
 
 function requireCdpPort(state) {
   const port = recordedCdpPort(state);
-  if (!port) fail(`instance ${state.id} has no CDP port for this browser; recreate it with up`);
+  if (!port)
+    fail(`instance ${state.id} has no CDP port for this browser; recreate it with up`);
   return port;
 }
 
@@ -1773,7 +1776,9 @@ async function setBrowserPresence(state, mode) {
   if (mode !== "on" && mode !== "off") fail("usage: browser ID presence on|off");
   const port = requireCdpPort(state);
   try {
-    await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(3000) });
+    await fetch(`http://127.0.0.1:${port}/json/version`, {
+      signal: AbortSignal.timeout(3000),
+    });
   } catch {
     fail(
       `no browser on CDP port ${port}; start it first (browser ${state.id} open / or signin), then presence ${mode}`,
@@ -1794,7 +1799,9 @@ async function setBrowserPresence(state, mode) {
   const report = await response.json();
   process.stdout.write(`${JSON.stringify({ profile: key, ...report })}\n`);
   if (!response.ok || !report.targets?.some((t) => t.authenticator))
-    fail(`no tab of this browser holds a virtual authenticator: ${JSON.stringify(report)}`);
+    fail(
+      `no tab of this browser holds a virtual authenticator: ${JSON.stringify(report)}`,
+    );
 }
 
 function stopHolders(state) {
