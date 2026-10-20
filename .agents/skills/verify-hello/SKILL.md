@@ -241,6 +241,22 @@ Top level also takes `agents` (the `hostHello` agent list; default one ready age
 
 Reading a thread afterwards: `$H host <id> call --host NAME` only reaches host actions; the user view is `POST /_parlor/chat/actions/open` or `items` with `$H token <id> --as alice`, or the thread log in the page (see `features/chat.md`).
 
+## Real host (Parlor Host)
+
+`$H host` plays a computer without an agent. To run the real `parlor-host` with Claude Code and Codex, give it an isolated HOME so the developer's own `~/.parlor` is never touched:
+
+```sh
+$H agent-home HOME                    # creates HOME, prints whether claude and codex are logged in under it
+$H parlor-host ID HOME connect URL    # the unpublished host CLI from instance ID's snapshot, as parlor-host, with HOME=HOME
+$H up --no-auth --home HOME           # hello without auth under plain parlor dev; the dev host it spawns runs in HOME
+```
+
+- `agent-home` creates an empty `HOME/.parlor`, links `HOME/.codex/auth.json` to the developer's Codex file login and `HOME/Library/Keychains` to the login Keychain (Claude Code keeps its login there, and macOS finds that Keychain under `$HOME/Library/Keychains`), and writes `HOME/bin/open`, a shim that appends the URL it is given to `HOME/opened-urls.log` instead of opening a browser. The host's own Keychain items (service `dev.parlor.host`, account the app origin) land in the developer's login Keychain: delete them with `security delete-generic-password -s dev.parlor.host -a ORIGIN`.
+- Everything the isolated host starts gets `HOME`, the shim first on `PATH`, and no inherited `CLAUDE*`, `ANTHROPIC_*`, `CODEX_*` or `OPENAI_*` variable.
+- Keep HOME short, such as `~/.cache/parlor-verify-hello/h/<id>`: the control socket path under it must stay below 104 bytes.
+- `up --no-auth` rewrites `server.ts` in the snapshot, removing the `auth` option and the imports only it used, and is refused without `--home`. The instance has no users: `signin`, `token`, `mcp` and `doctor` do not apply to it.
+- `scripts/phase4-kit.mjs` is the library of the phase 4 check scripts: instance and host lifecycle, the pty terminal (`Terminal`), the consent flow (`connectHost`), the browser helpers (`Browser`, in-page helpers for the sidebar), the proxy client and the cleanup that removes homes, Keychain items and leftover processes.
+
 ## Evidence
 
 ```sh
