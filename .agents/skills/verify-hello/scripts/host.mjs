@@ -685,6 +685,13 @@ export function createHostCommand(deps) {
       }
     };
 
+    const holdUntil = async (ms, released) => {
+      const deadline = Date.now() + ms;
+      while (Date.now() < deadline && !released()) {
+        await sleepFor(Math.min(20, Math.max(0, deadline - Date.now())));
+      }
+    };
+
     const steps = {
       async reply(step) {
         const kind = step.kind ?? "reply";
@@ -707,7 +714,10 @@ export function createHostCommand(deps) {
           sent += chunk;
           if (step.holdAfterDelta?.n === index + 1) {
             note("pause", { ms: step.holdAfterDelta.ms, afterDelta: index + 1 });
-            await sleepFor(step.holdAfterDelta.ms);
+            await holdUntil(
+              step.holdAfterDelta.ms,
+              () => step.stopOnCancel && turn.cancelSeenAt !== undefined,
+            );
           }
           if (interval > 0 && index < chunks.length - 1) {
             await sleepFor(Math.max(0, startedAt + (index + 1) * interval - Date.now()));
