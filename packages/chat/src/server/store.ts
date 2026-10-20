@@ -212,11 +212,18 @@ interface ItemInsert {
   readonly body: unknown;
 }
 
-async function lockThread(
+interface LogLock {
+  readonly lastSeq: number;
+  readonly turnState: string | undefined;
+}
+
+/** The only place the log is locked: the thread row, then the turn row. */
+async function lockLog(
   tx: ChatDb,
   owner: ChatOwner,
   threadId: ThreadId,
-): Promise<number> {
+  turnId?: TurnId,
+): Promise<LogLock> {
   const [row] = await query(
     tx,
     sql`select last_seq from parlor_chat_threads
@@ -225,7 +232,13 @@ async function lockThread(
     z.object({ last_seq: count }),
   );
   if (!row) throw threadMissing();
-  return row.last_seq;
+  if (turnId === undefined) return { lastSeq: row.last_seq, turnState: undefined };
+  const [turn] = await query(
+    tx,
+    sql`select state from parlor_chat_turns where id = ${turnId} for update`,
+    z.object({ state: z.string() }),
+  );
+  return { lastSeq: row.last_seq, turnState: turn?.state };
 }
 
 async function insertItems(
@@ -393,7 +406,7 @@ async function expireLapsed(tx: ChatDb, owner: ChatOwner): Promise<void> {
     z.object({ thread_id: idSchema("thread") }),
   );
   for (const { thread_id: threadId } of lapsed) {
-    const lastSeq = await lockThread(tx, owner, threadId);
+    const { lastSeq } = await lockLog(tx, owner, threadId);
     const expired = await query(
       tx,
       sql`update parlor_chat_turns
@@ -440,13 +453,8 @@ async function lockRunningTurn(
     }),
   );
   if (!found) throw turnMissing();
-  const lastSeq = await lockThread(tx, owner, found.thread_id);
-  const [turn] = await query(
-    tx,
-    sql`select state from parlor_chat_turns where id = ${turnId} for update`,
-    z.object({ state: z.string() }),
-  );
-  if (turn?.state !== "running") {
+  const { lastSeq, turnState } = await lockLog(tx, owner, found.thread_id, turnId);
+  if (turnState !== "running") {
     throw new ActionError("forbidden", "The turn is not running.");
   }
   return {
@@ -552,7 +560,7 @@ export const sqlChatStore: ChatStore = {
           on conflict (id) do nothing`,
       );
     }
-    const lastSeq = await lockThread(tx, owner, threadId);
+    const { lastSeq } = await lockLog(tx, owner, threadId);
     if (turn) {
       const prompt = items.find((draft) => draft.kind === "prompt");
       if (!prompt) throw new ActionError("invalid_input", "A turn starts with a prompt.");
