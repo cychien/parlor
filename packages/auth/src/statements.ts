@@ -1,7 +1,15 @@
-import type { DeviceSignature, PresenceSignature } from "@parlor/capabilities";
+import {
+  canonicalBytes,
+  decodeBase64url,
+  type DeviceSignature,
+  encodeBase64url,
+  type PresenceSignature,
+} from "@parlor/capabilities";
 import type { AnswerToSign, LoggedItem, PromptToSign } from "@parlor/chat";
 import type { DeviceId } from "@parlor/core";
 import type { PresenceKey } from "@parlor/server";
+
+import { derToRaw, verifyEs256 } from "./es256.js";
 
 export interface PromptStatement {
   readonly v: 1;
@@ -47,21 +55,37 @@ export interface PinnedDevice {
 
 export type VerifyOutcome = "valid" | "invalid" | "stale" | "presence_required";
 
+const FUTURE_SKEW_MS = 5 * 60_000;
+const USER_PRESENT = 0x01;
+const USER_VERIFIED = 0x04;
+const AUTH_DATA_MIN_BYTES = 37;
+
 export interface VerifyOptions {
   readonly requirePresence: boolean;
   readonly now: number;
   readonly maxAgeMs: number;
 }
 
+const sha256 = async (bytes: Uint8Array): Promise<Uint8Array> =>
+  new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes)));
+
+const digestOf = async (bytes: Uint8Array) => encodeBase64url(await sha256(bytes));
+
 export async function promptStatement(
   app: string,
   prompt: PromptToSign,
   at: number,
 ): Promise<PromptStatement> {
-  void app;
-  void prompt;
-  void at;
-  throw new Error("not implemented");
+  return {
+    v: 1,
+    kind: "prompt",
+    app,
+    threadId: prompt.threadId,
+    turnId: prompt.turnId,
+    agent: `${prompt.agent.hostId}/${prompt.agent.agentId}`,
+    digest: await digestOf(new TextEncoder().encode(prompt.text)),
+    at,
+  };
 }
 
 export async function answerStatement(
@@ -69,10 +93,20 @@ export async function answerStatement(
   answer: AnswerToSign,
   at: number,
 ): Promise<AnswerStatement> {
-  void app;
-  void answer;
-  void at;
-  throw new Error("not implemented");
+  return {
+    v: 1,
+    kind: "answer",
+    app,
+    threadId: answer.threadId,
+    askId: answer.askId,
+    choice:
+      answer.values === undefined
+        ? answer.choice
+        : await digestOf(
+            canonicalBytes({ choice: answer.choice, values: answer.values }),
+          ),
+    at,
+  };
 }
 
 /** The host rebuilds what the device signed from the logged prompt, never from the wire. */
@@ -80,15 +114,83 @@ export async function signedPrompt(
   app: string,
   item: LoggedItem<"prompt">,
 ): Promise<Signed<PromptStatement> | undefined> {
-  void app;
-  void item;
-  throw new Error("not implemented");
+  const { signed, agent, text } = item.body;
+  if (!signed) return undefined;
+  return {
+    statement: await promptStatement(
+      app,
+      { threadId: item.threadId, turnId: item.turnId, agent, text },
+      signed.at,
+    ),
+    deviceId: signed.deviceId,
+    signature: signed.signature,
+  };
 }
 
 /** Sorted-key JSON at every level, UTF-8; never re-encoded on the way. */
 export function statementBytes(statement: Statement): Uint8Array {
-  void statement;
-  throw new Error("not implemented");
+  return canonicalBytes(statement);
+}
+
+interface ClientData {
+  readonly type?: unknown;
+  readonly challenge?: unknown;
+  readonly origin?: unknown;
+  readonly crossOrigin?: unknown;
+}
+
+async function assertionHolds(
+  statement: Statement,
+  signature: DeviceSignature,
+  presenceKey: PinnedDevice["presenceKey"],
+): Promise<boolean> {
+  if (presenceKey?.format !== "webauthn" || signature.presence !== "user") return false;
+  if (
+    signature.authenticatorData === undefined ||
+    signature.clientDataJSON === undefined
+  ) {
+    return false;
+  }
+  if (signature.keyId !== presenceKey.credentialId) return false;
+  if (new URL(statement.app).hostname !== presenceKey.rpId) return false;
+  const clientDataBytes = decodeBase64url(signature.clientDataJSON);
+  const clientData = JSON.parse(new TextDecoder().decode(clientDataBytes)) as ClientData;
+  const challenge = await digestOf(statementBytes(statement));
+  if (
+    clientData.type !== "webauthn.get" ||
+    clientData.challenge !== challenge ||
+    clientData.origin !== statement.app ||
+    clientData.crossOrigin === true
+  ) {
+    return false;
+  }
+  const authData = decodeBase64url(signature.authenticatorData);
+  const flags = authData[32];
+  if (authData.length < AUTH_DATA_MIN_BYTES || flags === undefined) return false;
+  if ((flags & USER_PRESENT) === 0 || (flags & USER_VERIFIED) === 0) return false;
+  const rpIdHash = await sha256(new TextEncoder().encode(presenceKey.rpId));
+  if (encodeBase64url(authData.slice(0, 32)) !== encodeBase64url(rpIdHash)) return false;
+  const raw = derToRaw(decodeBase64url(signature.signature));
+  if (!raw) return false;
+  const signed = new Uint8Array([...authData, ...(await sha256(clientDataBytes))]);
+  return verifyEs256(presenceKey.publicKey, raw, signed);
+}
+
+async function signatureHolds(
+  statement: Statement,
+  signature: DeviceSignature,
+  pinned: PinnedDevice,
+): Promise<boolean> {
+  if (signature.format === "webauthn") {
+    return assertionHolds(statement, signature, pinned.presenceKey);
+  }
+  const bytes = statementBytes(statement);
+  const raw = decodeBase64url(signature.signature);
+  if (signature.presence === "none") return verifyEs256(pinned.signingKey, raw, bytes);
+  const { presenceKey } = pinned;
+  return presenceKey?.format === "es256-raw"
+    ? verifyEs256(presenceKey.publicKey, raw, bytes)
+    : false;
 }
 
 export async function verifyStatement(
@@ -96,13 +198,16 @@ export async function verifyStatement(
   pinned: PinnedDevice,
   options: VerifyOptions,
 ): Promise<VerifyOutcome> {
-  // TODO: deviceId matches; now - at within maxAgeMs else stale; requirePresence and no
-  //   presence -> presence_required. es256-raw: subtle.verify over statementBytes with the
-  //   pinned key. webauthn: clientDataJSON.challenge === b64url(sha256(statementBytes)),
-  //   origin === statement.app, authenticatorData UP and UV set, then verify over
-  //   authData || sha256(clientDataJSON) with pinned.presenceKey.
-  void signed;
-  void pinned;
-  void options;
-  throw new Error("not implemented");
+  const { statement, signature } = signed;
+  if (signed.deviceId !== pinned.deviceId) return "invalid";
+  if (options.now - statement.at > options.maxAgeMs) return "stale";
+  if (statement.at - options.now > FUTURE_SKEW_MS) return "invalid";
+  if (options.requirePresence && signature.presence !== "user") {
+    return "presence_required";
+  }
+  try {
+    return (await signatureHolds(statement, signature, pinned)) ? "valid" : "invalid";
+  } catch {
+    return "invalid";
+  }
 }

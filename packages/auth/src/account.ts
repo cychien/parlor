@@ -8,6 +8,7 @@ import { type ActionsOf, createRegistry } from "@parlor/core/registry";
 import type { PluginHost } from "@parlor/server";
 import { z } from "zod";
 
+import type { DeviceAccountActions } from "./devices.js";
 import { grantIdOf } from "./grants.js";
 import type { HostAccountActions } from "./hosts.js";
 import type { BetterAuthInstance } from "./provider.js";
@@ -44,7 +45,8 @@ interface RefreshToken {
 }
 
 export type AccountActions = ActionsOf<ReturnType<typeof accountActions>> &
-  HostAccountActions;
+  HostAccountActions &
+  DeviceAccountActions;
 
 interface AccountDeps {
   readonly instance: BetterAuthInstance;
