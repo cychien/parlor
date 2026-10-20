@@ -8,19 +8,12 @@ import {
 } from "@parlor/chat";
 import type { TurnId } from "@parlor/core";
 
-/** What streams now, per turn. */
 export interface OpenTurns {
   readonly turns: ReadonlyMap<TurnId, OpenTurn>;
 }
 
 export const NO_OPEN_TURNS: OpenTurns = { turns: new Map() };
 
-/**
- * A delta carries the text length it starts at: text already shown is skipped and a hole
- * freezes the item until its durable twin arrives, so a reload mid-stream neither repeats
- * nor loses text. `settled` changes nothing: the final durable item can trail it, so an
- * open item leaves only with its twin or with its turn's end.
- */
 export function applyFrame(open: OpenTurns, frame: ChatFrame): OpenTurns {
   if (frame.type === "settled") return open;
   const turn = open.turns.get(frame.turnId);
@@ -35,7 +28,6 @@ export function applyFrame(open: OpenTurns, frame: ChatFrame): OpenTurns {
   return { turns: next };
 }
 
-/** A snapshot read late may trail the frames already applied: keep the longer text. */
 export function mergeSnapshot(open: OpenTurns, snapshot: readonly OpenTurn[]): OpenTurns {
   const turns = new Map<TurnId, OpenTurn>(snapshot.map((turn) => [turn.turnId, turn]));
   for (const [turnId, local] of open.turns) {
@@ -65,7 +57,6 @@ export function mergeSnapshot(open: OpenTurns, snapshot: readonly OpenTurn[]): O
   return { turns };
 }
 
-/** Drops what is durable by now and what belongs to a turn that is over. */
 export function pruneOpen(
   open: OpenTurns,
   durable: ReadonlyMap<string, LoggedItem>,

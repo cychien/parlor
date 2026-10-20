@@ -30,7 +30,6 @@ export interface Assertion {
   readonly aud?: string | undefined;
 }
 
-/** A user's computer as the server sees it: it makes its own key and signs for it. */
 export class Computer {
   readonly codeVerifier = base64url(randomBytes(32));
   readonly state = base64url(randomBytes(12));

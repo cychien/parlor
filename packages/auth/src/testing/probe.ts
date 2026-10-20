@@ -3,7 +3,6 @@ import { createRegistry } from "@parlor/core/registry";
 import type { ServerPlugin } from "@parlor/server";
 import { z } from "zod";
 
-/** Stands in for a chat host action: callable by a host principal and nobody else. */
 export const probePlugin: ServerPlugin = {
   name: "probe",
   setup: () => ({

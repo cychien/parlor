@@ -29,7 +29,6 @@ import type { ChatDb, ChatStore, StoredHost } from "./store.js";
 
 export { CHAT_TAG, HOSTS_TAG, HOST_GRANTS_TAG };
 
-/** What a transactional unit of work produced, and the thread whose event announces it. */
 export interface Written<T> {
   readonly result: T;
   readonly threadId: ThreadId;
@@ -93,7 +92,6 @@ async function activeHosts(
 
 const summaryOf = ({ grantId: _grantId, ...summary }: StoredHost): HostSummary => summary;
 
-/** What the user's devices call. */
 export function userChatActions(deps: ChatActionDeps) {
   const { enforcing } = deps;
   return {

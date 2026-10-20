@@ -160,7 +160,6 @@ export interface ChatStore {
   turnHolder(db: ChatDb, turnId: TurnId): Promise<TurnHolder | undefined>;
 }
 
-/** A computer as stored: its grant decides whether it may still be offered. */
 export interface StoredHost extends HostSummary {
   readonly grantId: GrantId;
 }
@@ -229,7 +228,6 @@ async function lockThread(
   return row.last_seq;
 }
 
-/** Appends under the thread's lock, so `seq` stays gap-free; returns the new last `seq`. */
 async function insertItems(
   tx: ChatDb,
   threadId: ThreadId,
@@ -252,7 +250,6 @@ async function insertItems(
   return next;
 }
 
-/** Which of `ids` exist already, and in which thread. */
 async function itemThreads(
   tx: ChatDb,
   ids: readonly ItemId[],
@@ -330,7 +327,6 @@ async function createTurn(
   );
 }
 
-/** Whether a user's item belongs in the log; throws when it names something that is not there. */
 async function admitsUserItem(
   tx: ChatDb,
   threadId: ThreadId,
@@ -387,7 +383,6 @@ async function admitsUserItem(
   return true;
 }
 
-/** Turns of the owner whose host stopped extending the lease: failed `host_lost`, with an event. */
 async function expireLapsed(tx: ChatDb, owner: ChatOwner): Promise<void> {
   const lapsed = await query(
     tx,
@@ -422,7 +417,6 @@ async function expireLapsed(tx: ChatDb, owner: ChatOwner): Promise<void> {
   }
 }
 
-/** Locks a running turn of this host, thread first so every path takes locks in one order. */
 async function lockRunningTurn(
   tx: ChatDb,
   owner: ChatOwner,

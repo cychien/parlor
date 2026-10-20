@@ -1,17 +1,11 @@
 import type { ClientChannel, SyncEvent } from "@parlor/sync";
 import type { SyncClient } from "@parlor/sync/client";
 
-/** The live sync connection, for features loaded after it started (the chat runtime). */
 export interface FrameworkSync {
   addChannel(channel: ClientChannel): () => void;
   onEvents(listener: (events: readonly SyncEvent[]) => void): () => void;
 }
 
-/**
- * Stands between features and the sync client, which is replaced whenever the signed-in
- * user changes: channels and listeners outlive any one client, and each new client is
- * handed all of them.
- */
 export class SyncBridge implements FrameworkSync {
   readonly #channels = new Set<ClientChannel>();
   readonly #listeners = new Set<(events: readonly SyncEvent[]) => void>();

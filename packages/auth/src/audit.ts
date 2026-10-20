@@ -43,7 +43,6 @@ const FLUSH_MS = 250;
 const FLUSH_AT = 100;
 const KEEP_AT_MOST = 10_000;
 
-/** Calls an agent made, calls that stopped at the door, and anything a user was asked to confirm. */
 function audited({ principal, stage, confirmation }: ActionAudit): boolean {
   return principal.kind === "agent" || stage === "refused" || confirmation !== undefined;
 }
@@ -69,15 +68,9 @@ function rowOf(audit: ActionAudit): SQL {
     ${audit.confirmation ?? null})`;
 }
 
-/**
- * Append-only record of what agents did and what was refused. Writes are batched off the
- * request path; a batch that fails to write is kept and written with the next one.
- */
 export interface AuditLog {
   record(audit: ActionAudit): void;
-  /** Writes what is queued; rejects when the write fails, leaving it queued. */
   flush(): Promise<void>;
-  /** Writes what is queued and stops the timer; a failure is logged. */
   stop(): Promise<void>;
 }
 

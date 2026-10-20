@@ -76,7 +76,6 @@ function transcriptOf(history: readonly LoggedItem[]): string[] {
   return kept.reverse();
 }
 
-/** The end of `line` that fits `budget` UTF-8 bytes, on a character boundary. */
 function tailWithin(line: string, budget: number): string {
   const room = budget - byteLength(ELLIPSIS);
   const chars = [...line];

@@ -47,10 +47,8 @@ export interface TestApp {
 }
 
 export interface TestAppOptions {
-  /** Replaces the default `whoami` and `ping` actions. */
   readonly actions?: ActionRegistry | undefined;
   readonly plugins?: readonly ServerPlugin[] | undefined;
-  /** Sees every database call the app makes, e.g. to count queries. */
   readonly wrap?: ((provider: DataProvider) => DataProvider) | undefined;
 }
 

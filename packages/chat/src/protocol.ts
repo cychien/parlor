@@ -120,7 +120,6 @@ function openItemOf(
   return undefined;
 }
 
-/** Hand-written so the browser's chat chunk carries no zod. */
 export function parseChatFrame(data: string): ChatFrame | undefined {
   let value: unknown;
   try {

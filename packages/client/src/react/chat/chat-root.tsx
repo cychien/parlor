@@ -13,9 +13,7 @@ export interface ChatRootProps {
 /**
  * Owns one chat runtime for its subtree: the `chat` channel on the existing sync stream,
  * its thread in presence `watching` so inline confirmations reach this client, and the
- * confirmation subscription. Renders no DOM of its own. An app that never renders this
- * pays nothing for it; one that loads it lazily gets the runtime in the same chunk, so
- * opening the chat is one request for code and one for the thread.
+ * confirmation subscription. Renders no DOM of its own.
  */
 export function Root({ threadId, children }: ChatRootProps): ReactNode {
   const { client, agentUi, auth, sync } = useFramework();

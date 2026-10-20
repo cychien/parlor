@@ -126,7 +126,6 @@ export const drivers: readonly Driver[] = [
   ...(url ? [{ name: "node-postgres" as const, url }] : []),
 ];
 
-/** node-postgres gets a database of its own, so spec files running in parallel never share tables. */
 async function scratchDatabase(baseUrl: string): Promise<DatabaseHandle> {
   const name = `parlor_test_${randomBytes(6).toString("hex")}`;
   const onServer = async (statement: string) => {

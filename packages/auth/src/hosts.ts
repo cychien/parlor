@@ -352,11 +352,6 @@ interface RemovedGrant {
   readonly host_id: string;
 }
 
-/**
- * Deleting the key row is what keeps a host out for good: `RevocationSet` forgets a
- * revocation after its horizon, but a host assertion's `iat` is always fresh, so only a grant
- * with no row stays refused.
- */
 async function removeGrant(
   deps: HostGrantDeps,
   match: { readonly hostId: string } | { readonly grantId: string },

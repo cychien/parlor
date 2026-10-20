@@ -13,10 +13,6 @@ const signature = z.object({
   clientDataJSON: z.string().optional(),
 });
 
-/**
- * A device's signature over the statement the item implies; the backend stores it as is
- * and only the host, holding its own pinned key, verifies it.
- */
 const signed = z.object({ deviceId: idSchema("device"), at: z.number(), signature });
 
 const agentRef = z.object({ hostId: idSchema("host"), agentId: z.string().min(1) });

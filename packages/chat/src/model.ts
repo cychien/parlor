@@ -93,7 +93,6 @@ export interface ThreadPage {
   readonly hasMore: boolean;
 }
 
-/** The sidebar's whole first paint, in one round trip. */
 export interface ChatSnapshot {
   readonly threads: readonly ThreadSummary[];
   readonly hosts: readonly HostSummary[];
@@ -103,7 +102,6 @@ export interface ChatSnapshot {
 /** The device's keys as the account has them; the host compares them with its own pins. */
 export type ClaimedDevice = DeviceKeys;
 
-/** Everything a host needs to run the turn it claimed, in one response. */
 export interface ClaimedTurn {
   /** The thread id; every chat write returns it as `id`, which becomes its sync tag. */
   readonly id: ThreadId;
@@ -119,7 +117,6 @@ export interface ClaimedTurn {
   readonly leaseUntil: number;
 }
 
-/** Answers and stop requests a running turn must react to. */
 export interface TurnSignals {
   readonly turnId: TurnId;
   readonly items: readonly LoggedItem<Exclude<UserItemKind, "prompt">>[];

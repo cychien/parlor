@@ -15,7 +15,6 @@ export function useChatState(part: string): ChatState {
   return useSyncExternalStore(runtime.subscribe, runtime.get, runtime.get);
 }
 
-/** Whether a prompt written now would go anywhere. */
 export function canSend(state: ChatState): boolean {
   const { agent } = state;
   return (

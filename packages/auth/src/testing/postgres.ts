@@ -21,7 +21,6 @@ async function admin<T>(url: string, run: (client: pg.Client) => Promise<T>): Pr
   }
 }
 
-/** A database of its own on the server, so parallel spec files never share tables. */
 export async function createScratchDatabase(baseUrl: string): Promise<ScratchDatabase> {
   const name = `parlor_test_${randomBytes(6).toString("hex")}`;
   await admin(baseUrl, (client) => client.query(`create database ${name}`));

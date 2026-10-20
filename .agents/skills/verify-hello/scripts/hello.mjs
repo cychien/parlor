@@ -1428,7 +1428,6 @@ function axi(state, args, options = {}) {
   });
 }
 
-/** Same as axi, without blocking this process: a page waiting on a local listener needs the event loop. */
 function axiAsync(state, args) {
   return new Promise((settle, abort) => {
     const child = spawn("npx", ["-y", "chrome-devtools-axi", ...args], {
@@ -1512,7 +1511,6 @@ async function cmdBrowser([id, action, ...args]) {
   return print(axi(state, [action, ...args]));
 }
 
-/** HELLO_BROWSER_PROFILE=bob drives a second Chrome (own cookies) on the same instance. */
 function browserProfile() {
   return process.env.HELLO_BROWSER_PROFILE || undefined;
 }

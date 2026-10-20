@@ -22,7 +22,6 @@ const NO_LOCAL_HOST: CapabilityHandle<LocalAgentHost> = {
   reason: "Parlor Host cannot be reached from this client",
 };
 
-/** Everything `Chat.Root` wires from the framework, loaded together with the runtime. */
 export function createRootRuntime(input: RootRuntimeInput): ChatRuntime {
   const { client, agentUi, auth, sync, threadId } = input;
   return createChatRuntime({

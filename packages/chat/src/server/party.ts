@@ -53,7 +53,6 @@ export function chatAction<P extends Party, I extends z.ZodType, O>(
   });
 }
 
-/** The owner of every chat row while no auth provider tells people apart. */
 export const DEV_USER_ID: UserId = asId("user", "dev");
 
 type PartyResolvers = {

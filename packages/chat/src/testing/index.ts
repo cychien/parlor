@@ -28,10 +28,6 @@ export type FakeHostStep =
   | { readonly kind: "wait_for_answer"; readonly askId: string }
   | { readonly kind: "finish"; readonly outcome: TurnOutcome };
 
-/**
- * A computer without an agent, for phase 3 tests: it speaks the host actions and the
- * `/stream` and `/heartbeat` routes over real HTTP, the way Parlor Host does.
- */
 export interface FakeHost {
   call<K extends HostActionName>(
     name: K,

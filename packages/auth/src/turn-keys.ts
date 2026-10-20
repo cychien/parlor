@@ -52,15 +52,8 @@ function unseal(secret: string, sealed: string): string {
   return Buffer.concat([decipher.update(body), decipher.final()]).toString("utf8");
 }
 
-/**
- * The ES256 key every instance over one database signs and verifies turn tokens with. The
- * private half is sealed with a key derived from the app's secret, so a leaked table alone
- * mints nothing.
- */
 export interface TurnKeyStore {
-  /** Loads on first use; creates the key if the database has none. */
   keys(): Promise<TurnTokenKeys>;
-  /** Re-reads the table, for a token signed by a key another instance created. */
   refresh(): Promise<TurnTokenKeys>;
 }
 

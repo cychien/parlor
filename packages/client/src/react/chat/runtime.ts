@@ -86,7 +86,6 @@ export interface ChatCommands {
 export interface ChatRuntime extends ChatCommands {
   subscribe(listener: () => void): () => void;
   get(): ChatState;
-  /** Registers the channel, `watching` and the sync subscription; returns the stop. */
   start(): () => void;
 }
 
@@ -119,12 +118,6 @@ const isActive = (turn: TurnStatus) =>
 
 const bySeq = (a: LoggedItem, b: LoggedItem) => a.seq - b.seq;
 
-/**
- * One store, three inputs, folded by `foldThread`: `open` on mount; sync events tagged
- * `["parlor_chat", threadId]`, answered with `items` after the last seq; and `chat`
- * channel frames for token deltas. Turn and prompt ids are minted here, so a retried send
- * is a no-op.
- */
 export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
   const { calls, agentUi } = deps;
   const listeners = new Set<() => void>();
