@@ -6,7 +6,11 @@ export type {
 } from "@parlor/agent-ui/client";
 export type { AgentActivityState } from "./agent-ui/activity-state.js";
 export * as Chat from "./agent-ui/chat.js";
-export type { ChatAskChoiceProps, ChatAskProps } from "./chat/chat-ask.js";
+export type {
+  ChatAskChoiceProps,
+  ChatAskFormProps,
+  ChatAskProps,
+} from "./chat/chat-ask.js";
 export type { ChatRootProps } from "./chat/chat-root.js";
 export type { ChatThreadProps } from "./chat/chat-thread.js";
 export type {

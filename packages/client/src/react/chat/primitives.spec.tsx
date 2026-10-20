@@ -1,7 +1,7 @@
 import type { AgentConfirmation } from "@parlor/agent-ui/client";
 import type { ChatItem } from "@parlor/chat";
 import { asId } from "@parlor/core";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import * as Chat from "../agent-ui/chat.js";
@@ -301,6 +301,106 @@ describe("Chat.Ask", () => {
     renderAsk(ask({ answer: { state: "answered", choice: "allow" } }));
     const allow = screen.getByRole("button", { name: "Allow once" }) as HTMLButtonElement;
     expect([allow.disabled, allow.getAttribute("aria-pressed")]).toEqual([true, "true"]);
+  });
+});
+
+describe("Chat.AskForm", () => {
+  const form = {
+    type: "object",
+    properties: {
+      name: { type: "string", title: "Your name" },
+      age: { type: "integer" },
+      ratio: { type: "number" },
+      subscribe: { type: "boolean" },
+    },
+    required: ["name"],
+  };
+
+  const ask = (
+    overrides: Partial<Extract<ChatItem<AgentConfirmation>, { kind: "ask" }>> = {},
+  ) =>
+    ({
+      kind: "ask",
+      id: asId("item", "turn_1.4"),
+      turnId,
+      question: "Tell me about you",
+      choices: [
+        { id: "accept", label: "Submit", effect: "allow_once" },
+        { id: "decline", label: "Decline", effect: "reject_once" },
+      ],
+      form,
+      approval: undefined,
+      answer: { state: "open" },
+      ...overrides,
+    }) as const;
+
+  function renderForm(item: ReturnType<typeof ask>) {
+    const fake = fakeRuntime({ items: [item] });
+    mount(
+      fake.runtime,
+      <Chat.Ask item={item}>
+        <Chat.AskForm>
+          <button type="submit">Submit</button>
+        </Chat.AskForm>
+      </Chat.Ask>,
+    );
+    return fake;
+  }
+
+  const input = (name: string) =>
+    document.querySelector<HTMLInputElement>(`input[name="${name}"]`)!;
+
+  it("has one input per schema property, typed by the property", () => {
+    renderForm(ask());
+    expect(
+      ["name", "age", "ratio", "subscribe"].map((name) => [name, input(name).type]),
+    ).toEqual([
+      ["name", "text"],
+      ["age", "number"],
+      ["ratio", "number"],
+      ["subscribe", "checkbox"],
+    ]);
+    expect(screen.getByLabelText("Your name")).toBe(input("name"));
+    expect(input("name").required).toBe(true);
+    expect(input("age").step).toBe("1");
+  });
+
+  it("answers with the allow choice and the values typed per the schema", () => {
+    const fake = renderForm(ask());
+    fireEvent.change(input("name"), { target: { value: "Ada" } });
+    fireEvent.change(input("age"), { target: { value: "36" } });
+    fireEvent.change(input("ratio"), { target: { value: "1.5" } });
+    fireEvent.click(input("subscribe"));
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    expect(fake.runtime.answer).toHaveBeenCalledWith("turn_1.4", "accept", {
+      name: "Ada",
+      age: 36,
+      ratio: 1.5,
+      subscribe: true,
+    });
+  });
+
+  it("leaves blank fields out and reports an unchecked box as false", () => {
+    const fake = renderForm(ask());
+    fireEvent.change(input("name"), { target: { value: "Ada" } });
+    fireEvent.submit(screen.getByRole("button", { name: "Submit" }).closest("form")!);
+    expect(fake.runtime.answer).toHaveBeenCalledWith("turn_1.4", "accept", {
+      name: "Ada",
+      subscribe: false,
+    });
+  });
+
+  it("is disabled once answered and while the ask is answered on the computer", () => {
+    renderForm(ask({ answer: { state: "answered", choice: "accept" } }));
+    expect(input("name").closest("fieldset")!.disabled).toBe(true);
+    cleanup();
+    renderForm(ask({ approval: "computer" }));
+    expect(input("name").closest("fieldset")!.disabled).toBe(true);
+  });
+
+  it("renders nothing for an ask without a form", () => {
+    renderForm(ask({ form: undefined }));
+    expect(document.querySelector("form")).toBeNull();
   });
 });
 

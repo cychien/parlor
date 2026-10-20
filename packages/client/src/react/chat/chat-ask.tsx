@@ -6,8 +6,10 @@ import {
   type KeyboardEvent,
   type ReactNode,
   use,
+  useMemo,
 } from "react";
 
+import { type AskField, askFields, askValues } from "./ask-fields.js";
 import { useChatRuntime } from "./context.js";
 
 type AskItem = Extract<ChatItem<AgentConfirmation>, { kind: "ask" }>;
@@ -77,5 +79,59 @@ export function AskChoice({ choice, onClick, ...props }: ChatAskChoiceProps): Re
         if (!event.defaultPrevented) runtime.answer(ask.id, choice.id).catch(report);
       }}
     />
+  );
+}
+
+const isAllow = (choice: AskItem["choices"][number]) => choice.effect.startsWith("allow");
+
+export type ChatAskFormProps = ComponentProps<"form">;
+
+/**
+ * A form ask's `<form>`: one `<input name="{property}">` per property of its schema (`number`
+ * for numbers and integers, `checkbox` for booleans, text otherwise). Submitting answers the
+ * ask with its allow choice and the values typed per the schema. Its children, a submit
+ * button for one, go after the inputs. Everything is disabled once the ask is not open or
+ * is answered on the computer. Renders nothing for an ask without a form.
+ */
+export function AskForm({ onSubmit, children, ...props }: ChatAskFormProps): ReactNode {
+  const runtime = useChatRuntime("Chat.AskForm");
+  const ask = use(AskScope);
+  if (!ask) throw new Error("Chat.AskForm must be rendered inside Chat.Ask.");
+  const { form } = ask;
+  const fields = useMemo(() => (form ? askFields(form) : []), [form]);
+  const accept = ask.choices.find(isAllow);
+  if (!form || !accept) return null;
+  return (
+    <form
+      {...props}
+      onSubmit={(event) => {
+        onSubmit?.(event);
+        event.preventDefault();
+        runtime
+          .answer(ask.id, accept.id, askValues(fields, event.currentTarget))
+          .catch(report);
+      }}
+    >
+      <fieldset disabled={ask.approval === "computer" || ask.answer.state !== "open"}>
+        {fields.map((field) => (
+          <AskInput key={field.name} field={field} />
+        ))}
+        {children}
+      </fieldset>
+    </form>
+  );
+}
+
+function AskInput({ field }: { readonly field: AskField }): ReactNode {
+  return (
+    <label data-type={field.type}>
+      <span>{field.label}</span>
+      <input
+        name={field.name}
+        type={field.type}
+        required={field.required && field.type !== "checkbox"}
+        step={field.type === "number" ? (field.integer ? 1 : "any") : undefined}
+      />
+    </label>
   );
 }
