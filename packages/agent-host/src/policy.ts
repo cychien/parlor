@@ -26,9 +26,7 @@ export const DEV_POLICY: RemotePolicy = { deviceApproval: "off", answers: "off" 
  * app's `confirm: true`, and asking twice only teaches users to click through.
  */
 export function isAppTool(ask: AgentAsk, appServer: string): boolean {
-  void ask;
-  void appServer;
-  throw new Error("not implemented");
+  return ask.kind === "permission" && ask.mcp?.server === appServer;
 }
 
 /** The ask item's `approval`; `undefined` lets any trusted device answer without presence. */
@@ -36,8 +34,6 @@ export function approvalFor(
   policy: RemotePolicy,
   ask: AgentAsk,
 ): "presence" | "computer" | undefined {
-  // TODO: a question or answers "off" -> undefined; else policy.answers.
-  void policy;
-  void ask;
-  throw new Error("not implemented");
+  if (ask.kind === "question" || policy.answers === "off") return undefined;
+  return policy.answers;
 }
