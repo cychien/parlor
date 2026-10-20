@@ -46,8 +46,12 @@
     "tsx": "^4.23.15"
   },
   "devDependencies": {
+    "@parlor/data": "workspace:*",
     "@types/node": "catalog:",
+    "better-auth": "1.7.7",
+    "srvx": "^1.0.5",
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "zod": "catalog:"
   }
 }
