@@ -36,7 +36,7 @@ Preconditions: an instance with phase 3 code (`$H up --seed baseline`, `$H docto
 
 ## Gotchas
 
-- `host` talks to `server.url`, never the Vite proxy; assertions are bound to that URL. The pair URL uses the web origin, because the browser reaches the consent page through Vite.
+- `host` talks to `server.url`, never the Vite proxy; assertions are bound to the app's public origin (the web origin) plus the request's path, as a host behind a proxy signs them, so `host` rewrites a `server.url` URL to the web origin when it signs. The pair URL uses the web origin, because the browser reaches the consent page through Vite.
 - Each assertion lives 60 s and is single use: mint one per request with `assert`, never reuse the printed value for a second call.
 - `seed`, `sql`, `stop` and `start` restart the instance's Chrome with a fresh profile (sign in again) and the server, which forgets live turns; start a new `play` afterwards and check `host list` against the connected computers on `/settings`.
 - `play` waits for a turn at the moment it starts, so start it before sending, or send first and start within the `--wait-claim` window (60 s).

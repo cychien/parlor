@@ -77,6 +77,12 @@ export async function compactJws(privateJwk, header, payload) {
   return `${signingInput}.${await signBytes(privateJwk, new TextEncoder().encode(signingInput))}`;
 }
 
+export function publicUrlOf(host, url) {
+  return host.web && host.server && url.startsWith(`${host.server}/`)
+    ? `${host.web}${url.slice(host.server.length)}`
+    : url;
+}
+
 export function hostAssertionClaims(
   host,
   { method, url, iatOffset = 0, jti, now = Date.now() },
@@ -86,7 +92,7 @@ export function hostAssertionClaims(
     aud: HOST_AUDIENCE,
     gid: host.grantId,
     htm: method,
-    htu: url,
+    htu: publicUrlOf(host, url),
     iat,
     exp: iat + ASSERTION_TTL_SECONDS,
     jti: jti ?? randomUUID(),
@@ -1489,6 +1495,7 @@ export function createHostCommand(deps) {
       user,
       platform: request.platform,
       server: urls(state).server,
+      web: urls(state).web,
       ...key,
       pending: undefined,
       lastExchange: undefined,
