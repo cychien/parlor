@@ -50,6 +50,7 @@ export interface TestAppOptions {
   readonly actions?: ActionRegistry | undefined;
   readonly plugins?: readonly ServerPlugin[] | undefined;
   readonly wrap?: ((provider: DataProvider) => DataProvider) | undefined;
+  readonly secret?: string | undefined;
 }
 
 /** A hello-like app on Better Auth's memory adapter, with revocations in `database`. */
@@ -61,7 +62,7 @@ export function createTestApp(
     origin: ORIGIN,
     signInPage: "/sign-in",
     appName: "Hello",
-    secret: "a-test-secret-that-is-long-enough-for-better-auth",
+    secret: options.secret ?? "a-test-secret-that-is-long-enough-for-better-auth",
     emailAndPassword: {
       enabled: true,
       // scrypt dominates these tests under a parallel run; hashing is not what they check.

@@ -136,6 +136,7 @@ export function betterAuthProvider({
   let grantKeys: GrantKeys | undefined;
   let turnKeys: TurnKeyStore | undefined;
   const clientNames = new Map<string, Promise<string>>();
+  const authenticatedAt = new WeakMap<object, number>();
 
   const installed = () => {
     if (!grantKeys || !turnKeys) throw new Error("The auth provider is not installed.");
@@ -147,8 +148,17 @@ export function betterAuthProvider({
     return revocations;
   };
 
+  let preparingTurnKeys = false;
   const ready = async (): Promise<void> => {
-    await Promise.all([started().ready(), installed().turnKeys.keys()]);
+    await started().ready();
+    if (!preparingTurnKeys) {
+      preparingTurnKeys = true;
+      installed()
+        .turnKeys.keys()
+        .catch(() => {
+          preparingTurnKeys = false;
+        });
+    }
   };
 
   const loadKeys = async () => {
@@ -238,13 +248,16 @@ export function betterAuthProvider({
     };
   };
 
+  const publicUrlOf = (request: Request): string =>
+    new URL(new URL(request.url).pathname, settings.origin).href;
+
   const hostOf = async (
     request: Request,
     assertion: HostAssertion,
   ): Promise<HostPrincipal> => {
     const grant = await verifyHostAssertion(
       assertion,
-      { method: request.method, url: request.url },
+      { method: request.method, url: publicUrlOf(request) },
       installed().grantKeys,
       Date.now(),
     );
@@ -266,6 +279,30 @@ export function betterAuthProvider({
       throw new AuthFailure("revoked", "This computer was disconnected.");
     }
     return agentPrincipalOf(claims);
+  };
+
+  const authenticateRequest = async (request: Request): Promise<Principal> => {
+    await ready();
+    const credential = credentialOf(request.headers.get("authorization"));
+    switch (credential?.kind) {
+      case "host":
+        return hostOf(request, credential.assertion);
+      case "turn":
+        return turnOf(credential.token);
+      case "access":
+        return agentOf(credential.token);
+      case "session": {
+        const user = await userOf(request);
+        if (!user)
+          throw new AuthFailure("invalid", "The session is invalid or has ended.");
+        return user;
+      }
+      case undefined:
+        break;
+    }
+    const { authCookies } = await instance.$context;
+    if (!hasCookie(request, authCookies.sessionToken.name)) return ANONYMOUS;
+    return (await userOf(request)) ?? ANONYMOUS;
   };
 
   return {
@@ -311,27 +348,10 @@ export function betterAuthProvider({
       };
     },
     async authenticate(request: Request): Promise<Principal> {
-      await ready();
-      const credential = credentialOf(request.headers.get("authorization"));
-      switch (credential?.kind) {
-        case "host":
-          return hostOf(request, credential.assertion);
-        case "turn":
-          return turnOf(credential.token);
-        case "access":
-          return agentOf(credential.token);
-        case "session": {
-          const user = await userOf(request);
-          if (!user)
-            throw new AuthFailure("invalid", "The session is invalid or has ended.");
-          return user;
-        }
-        case undefined:
-          break;
-      }
-      const { authCookies } = await instance.$context;
-      if (!hasCookie(request, authCookies.sessionToken.name)) return ANONYMOUS;
-      return (await userOf(request)) ?? ANONYMOUS;
+      const startedAt = Date.now();
+      const principal = await authenticateRequest(request);
+      if (principal.kind !== "anonymous") authenticatedAt.set(principal, startedAt);
+      return principal;
     },
     challenge(): Response {
       const metadata = `${settings.origin}/.well-known/oauth-protected-resource${new URL(settings.resource).pathname}`;
@@ -366,7 +386,7 @@ export function betterAuthProvider({
         principal.kind === "user"
           ? ({ kind: "session", id: principal.sessionId } as const)
           : ({ kind: "grant", id: principal.grantId } as const);
-      return started().signal([notice]);
+      return started().signal([notice], authenticatedAt.get(principal));
     },
   };
 }

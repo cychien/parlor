@@ -38,7 +38,7 @@ const keyOf = ({ kind, id }: RevocationNotice) => `${kind}:${id}`;
 
 interface Watch {
   readonly controllers: Set<WeakRef<AbortController>>;
-  readonly since: number;
+  since: number;
 }
 
 const owner = Symbol("parlor.revocation.owner");
@@ -100,19 +100,24 @@ export class RevocationSet {
     return at !== undefined && at >= Math.max(issuedAt, this.#now() - this.#horizonMs);
   }
 
-  /** Aborts when any of the notices is revoked from now on. */
-  signal(notices: readonly RevocationNotice[]): AbortSignal {
+  /**
+   * Aborts when any of the notices is revoked at or after `since` (default: now). The
+   * watch is registered first and the revocations already known are checked after, so one
+   * that landed between `since` and this call still aborts it.
+   */
+  signal(notices: readonly RevocationNotice[], since: number = this.#now()): AbortSignal {
     const controller = new AbortController();
     // The signal pins its controller, so a watch lives exactly as long as its holder.
     Object.defineProperty(controller.signal, owner, { value: controller });
-    const since = this.#now();
     for (const notice of notices) {
       const key = keyOf(notice);
-      let watch = this.#watches.get(key);
-      if (!watch) this.#watches.set(key, (watch = { controllers: new Set(), since }));
-      watch.controllers.add(new WeakRef(controller));
+      const watch = this.#watches.get(key);
+      if (watch) watch.since = Math.min(watch.since, since);
+      else this.#watches.set(key, { controllers: new Set(), since });
+      this.#watches.get(key)!.controllers.add(new WeakRef(controller));
       this.#forget.register(controller.signal, key);
     }
+    this.#abortIfRevoked(controller, notices, since);
     return controller.signal;
   }
 
@@ -220,6 +225,27 @@ export class RevocationSet {
     if (!watch || revocation.at < watch.since) return;
     this.#watches.delete(key);
     for (const ref of watch.controllers) ref.deref()?.abort();
+  }
+
+  #abortIfRevoked(
+    controller: AbortController,
+    notices: readonly RevocationNotice[],
+    since: number,
+  ): void {
+    const floor = Math.max(since, this.#now() - this.#horizonMs);
+    if (this.#mode === "following") {
+      const hit = notices.some(
+        (notice) => (this.#revoked.get(keyOf(notice)) ?? -1) >= floor,
+      );
+      if (hit) controller.abort();
+      return;
+    }
+    Promise.all(notices.map((notice) => this.#lookup(notice))).then(
+      (found) => {
+        if (found.some((at) => at !== undefined && at >= floor)) controller.abort();
+      },
+      () => controller.abort(),
+    );
   }
 
   #sweepExpired(): void {

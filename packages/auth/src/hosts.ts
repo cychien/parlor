@@ -19,6 +19,7 @@ import {
   type Migration,
   type PluginHost,
   pluginRoute,
+  readBoundedText,
   SHELL_ORIGINS,
   REVOCATION_HORIZON_MS,
 } from "@parlor/server";
@@ -106,6 +107,9 @@ export interface GrantKeys {
 
 const GRANT_KEY_TTL_MS = 5 * 60_000;
 const GRANT_KEY_CACHE_SIZE = 10_000;
+/** A missing grant is remembered briefly; grant ids are never reused, so a miss stays one. */
+export const GRANT_MISS_TTL_MS = 5_000;
+const GRANT_MISS_CACHE_SIZE = 1_000;
 const REPLAY_CACHE_SIZE = 100_000;
 const CLOCK_SKEW_MS = 5_000;
 
@@ -149,6 +153,7 @@ export function createGrantKeys(
   const ttlMs = Math.min(options.ttlMs ?? GRANT_KEY_TTL_MS, REVOCATION_HORIZON_MS);
   const now = options.now ?? Date.now;
   const cache = new Map<string, { readonly key: GrantKey; readonly loadedAt: number }>();
+  const misses = new Map<string, number>();
   const loading = new Map<string, Promise<GrantKey | undefined>>();
 
   const load = async (grantId: GrantId): Promise<GrantKey | undefined> => {
@@ -158,7 +163,13 @@ export function createGrantKeys(
         where grant_id = ${grantId}`),
     );
     const row = rows[0];
-    if (!row) return undefined;
+    if (!row) {
+      misses.set(grantId, now());
+      while (misses.size > GRANT_MISS_CACHE_SIZE) {
+        misses.delete(misses.keys().next().value as string);
+      }
+      return undefined;
+    }
     const key: GrantKey = {
       grantId: asId("grant", row.grant_id),
       userId: asId("user", row.user_id),
@@ -178,6 +189,11 @@ export function createGrantKeys(
       const hit = cache.get(grantId);
       if (hit && now() - hit.loadedAt < ttlMs) return hit.key;
       cache.delete(grantId);
+      const missedAt = misses.get(grantId);
+      if (missedAt !== undefined) {
+        if (now() - missedAt < GRANT_MISS_TTL_MS) return undefined;
+        misses.delete(grantId);
+      }
       let pending = loading.get(grantId);
       if (!pending) {
         pending = load(grantId).finally(() => loading.delete(grantId));
@@ -205,7 +221,13 @@ const withoutQuery = (url: string): string => {
   return parsed.href;
 };
 
-function claimJti(keys: GrantKeys, grantId: string, jti: string, now: number): boolean {
+function claimJti(
+  keys: GrantKeys,
+  grantId: string,
+  jti: string,
+  now: number,
+  rememberUntil: number,
+): boolean {
   let seen = replays.get(keys);
   if (!seen) replays.set(keys, (seen = new Map()));
   for (const [id, expiresAt] of seen) {
@@ -215,7 +237,7 @@ function claimJti(keys: GrantKeys, grantId: string, jti: string, now: number): b
   const id = `${grantId}:${jti}`;
   if (seen.has(id)) return false;
   while (seen.size >= REPLAY_CACHE_SIZE) seen.delete(seen.keys().next().value as string);
-  seen.set(id, now + HOST_ASSERTION_TTL_MS);
+  seen.set(id, rememberUntil);
   return true;
 }
 
@@ -282,7 +304,8 @@ export async function verifyHostAssertion(
   if (now - issuedAt > HOST_ASSERTION_TTL_MS || claims.exp * 1000 <= now) {
     throw new AuthFailure("expired", "The host assertion expired.");
   }
-  if (!claimJti(keys, grant.grantId, claims.jti, now)) {
+  const acceptableUntil = Math.min(claims.exp * 1000, issuedAt + HOST_ASSERTION_TTL_MS);
+  if (!claimJti(keys, grant.grantId, claims.jti, now, acceptableUntil)) {
     throw new AuthFailure("invalid", "The host assertion was already used.");
   }
   return grant;
@@ -494,8 +517,8 @@ function sameText(a: string, b: string): boolean {
 async function bodyOf(
   request: Request,
 ): Promise<{ readonly json: boolean; readonly fields: unknown }> {
-  const text = await request.text();
-  if (text.length > MAX_BODY_BYTES) return { json: false, fields: undefined };
+  const text = await readBoundedText(request, MAX_BODY_BYTES);
+  if (text === undefined) return { json: false, fields: undefined };
   if ((request.headers.get("content-type") ?? "").includes("application/json")) {
     try {
       return { json: true, fields: JSON.parse(text) as unknown };

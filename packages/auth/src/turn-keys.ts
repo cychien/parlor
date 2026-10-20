@@ -77,28 +77,57 @@ export function createTurnKeyStore(options: TurnKeyStoreOptions): TurnKeyStore {
       ),
     );
 
-  const create = async (secret: string): Promise<void> => {
+  const replace = async (secret: string, retiring: string | undefined): Promise<void> => {
     const pair = await generateKeyPair("ES256", { extractable: true });
     const publicKey = await exportJWK(pair.publicKey);
     const privateKey = await exportJWK(pair.privateKey);
     const kid = crypto.randomUUID();
     await database.transaction(async (tx) => {
-      await (tx as Database).execute(sql`
+      const db = tx as Database;
+      if (retiring !== undefined) {
+        await db.execute(
+          sql`update parlor_auth_turn_keys set active = false where kid = ${retiring} and active`,
+        );
+      }
+      await db.execute(sql`
         insert into parlor_auth_turn_keys (kid, public_key, private_key)
         values (${kid}, ${JSON.stringify(publicKey)}::jsonb, ${seal(secret, JSON.stringify(privateKey))})
         on conflict do nothing`);
     });
   };
 
-  const build = async (): Promise<TurnTokenKeys> => {
+  const signingKeyOf = async (
+    secret: string,
+    row: KeyRow,
+  ): Promise<CryptoKey | undefined> => {
+    try {
+      return await crypto.subtle.importKey(
+        "jwk",
+        JSON.parse(unseal(secret, row.private_key)) as JsonWebKey,
+        KEY_ALGORITHM,
+        false,
+        ["sign"],
+      );
+    } catch {
+      return undefined;
+    }
+  };
+
+  const build = async (mayReplace: boolean): Promise<TurnTokenKeys> => {
     const secret = await options.secret();
     let rows = await read();
-    if (!rows.some((row) => row.active)) {
-      await create(secret);
+    let active = rows.find((row) => row.active);
+    let privateKey = active && (await signingKeyOf(secret, active));
+    if (!privateKey && !mayReplace)
+      throw new Error("The turn signing key cannot be opened.");
+    if (!privateKey) {
+      await replace(secret, active?.kid);
       rows = await read();
+      active = rows.find((row) => row.active);
+      privateKey = active && (await signingKeyOf(secret, active));
     }
-    const active = rows.find((row) => row.active);
-    if (!active) throw new Error("The turn signing key could not be created.");
+    if (!active || !privateKey)
+      throw new Error("The turn signing key could not be created.");
     const verifyKeys = await Promise.all(
       rows.map(async (row) => {
         const key = await crypto.subtle.importKey(
@@ -111,18 +140,11 @@ export function createTurnKeyStore(options: TurnKeyStoreOptions): TurnKeyStore {
         return [row.kid, key] as const;
       }),
     );
-    const privateKey = await crypto.subtle.importKey(
-      "jwk",
-      JSON.parse(unseal(secret, active.private_key)) as JsonWebKey,
-      KEY_ALGORITHM,
-      false,
-      ["sign"],
-    );
     return { issuer, kid: active.kid, privateKey, publicKeys: new Map(verifyKeys) };
   };
 
   const load = (): Promise<TurnTokenKeys> => {
-    loaded ??= build().catch((error: unknown) => {
+    loaded ??= build(true).catch((error: unknown) => {
       loaded = undefined;
       throw error;
     });
@@ -135,7 +157,7 @@ export function createTurnKeyStore(options: TurnKeyStoreOptions): TurnKeyStore {
       const current = await load();
       if (now() - refreshedAt < REFRESH_MIN_INTERVAL_MS) return current;
       refreshedAt = now();
-      loaded = build().catch(() => current);
+      loaded = build(false).catch(() => current);
       return loaded;
     },
   };

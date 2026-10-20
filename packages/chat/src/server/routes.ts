@@ -1,5 +1,5 @@
 import { ActionError, type TurnId } from "@parlor/core";
-import { type AnyPluginRoute, pluginRoute } from "@parlor/server";
+import { type AnyPluginRoute, pluginRoute, readBoundedText } from "@parlor/server";
 import { z } from "zod";
 
 import { idSchema } from "../id-schemas.js";
@@ -67,27 +67,6 @@ const tooLarge = () =>
     { status: 413 },
   );
 
-async function readBounded(request: Request, limit: number): Promise<string | undefined> {
-  const declared = Number(request.headers.get("content-length"));
-  if (declared > limit) return undefined;
-  const reader = request.body?.getReader();
-  if (!reader) return "";
-  const decoder = new TextDecoder();
-  let text = "";
-  let size = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > limit) {
-      await reader.cancel();
-      return undefined;
-    }
-    text += decoder.decode(value, { stream: true });
-  }
-  return text + decoder.decode();
-}
-
 /** Plain routes only a host principal reaches, by type: no browser session, no agent token. */
 export function chatRoutes(deps: ChatRouteDeps): readonly AnyPluginRoute[] {
   const holders = new Map<TurnId, TurnHolder>();
@@ -110,7 +89,7 @@ export function chatRoutes(deps: ChatRouteDeps): readonly AnyPluginRoute[] {
       path: "/stream",
       access: ["host"],
       handle: async (request, caller) => {
-        const text = await readBounded(request, MAX_STREAM_BODY_BYTES);
+        const text = await readBoundedText(request, MAX_STREAM_BODY_BYTES);
         if (text === undefined) return tooLarge();
         const parsed = streamBatch.safeParse(parseJson(text));
         if (!parsed.success) {
