@@ -1,4 +1,9 @@
+import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
+
 import type { AgentInfo } from "@parlor/chat";
+
+import { agentPath } from "./shell-path.js";
 
 /** The app picks an agent by `id` only, never by command, so no remote party chooses what runs. */
 export interface AgentProfile {
@@ -57,18 +62,110 @@ export const AGENT_PROFILES: readonly AgentProfile[] = [
 
 export const DETECT_TIMEOUT_MS = 3_000;
 
-/** Built-ins plus the user's own `agents.json`, which only this computer's user edits. */
-export async function loadProfiles(file: string): Promise<readonly AgentProfile[]> {
-  void file;
-  throw new Error("not implemented");
+type Fields = Readonly<Record<string, unknown>>;
+
+const isFields = (value: unknown): value is Fields =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isStrings = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((entry) => typeof entry === "string");
+
+function launchOf(value: unknown): AgentLaunch | undefined {
+  if (!isFields(value)) return undefined;
+  if (
+    value.kind === "native" &&
+    typeof value.command === "string" &&
+    isStrings(value.args)
+  ) {
+    return { kind: "native", command: value.command, args: value.args };
+  }
+  if (
+    value.kind === "adapter" &&
+    typeof value.package === "string" &&
+    typeof value.version === "string" &&
+    (value.args === undefined || isStrings(value.args))
+  ) {
+    return {
+      kind: "adapter",
+      package: value.package,
+      version: value.version,
+      args: value.args,
+    };
+  }
+  return undefined;
 }
 
-/** What `hostReport` sends. */
+function profileOf(value: unknown): AgentProfile | undefined {
+  if (!isFields(value)) return undefined;
+  const launch = launchOf(value.launch);
+  const { id, name, binary } = value;
+  if (!launch || typeof id !== "string" || typeof name !== "string") return undefined;
+  if (typeof binary !== "string" || id === "") return undefined;
+  return { id, name, launch, binary };
+}
+
+/** Built-ins plus the user's own `agents.json`, which only this computer's user edits. */
+export async function loadProfiles(file: string): Promise<readonly AgentProfile[]> {
+  let text: string;
+  try {
+    text = await readFile(file, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return AGENT_PROFILES;
+    throw error;
+  }
+  const listed: unknown = JSON.parse(text);
+  if (!Array.isArray(listed))
+    throw new Error(`${file} must hold a JSON array of agent profiles.`);
+  const own = listed.map((entry, at) => {
+    const profile = profileOf(entry);
+    if (!profile) throw new Error(`${file}: entry ${at + 1} is not an agent profile.`);
+    return profile;
+  });
+  const ids = new Set(own.map((profile) => profile.id));
+  return [...AGENT_PROFILES.filter((profile) => !ids.has(profile.id)), ...own];
+}
+
+function versionOf(binary: string, path: string): Promise<string | "missing" | "broken"> {
+  return new Promise((resolve) => {
+    execFile(
+      binary,
+      ["--version"],
+      { timeout: DETECT_TIMEOUT_MS, env: { ...process.env, PATH: path } },
+      (error, stdout) => {
+        if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT")
+          resolve("missing");
+        else if (error) resolve("broken");
+        else resolve(stdout.trim());
+      },
+    );
+  });
+}
+
+/** What `hostReport` sends: the installed agents; one that is not installed is left out. */
 export async function detectAgents(
   profiles: readonly AgentProfile[],
 ): Promise<AgentInfo[]> {
-  // TODO: PATH from the login shell once ($SHELL -ilc), since a LaunchAgent or GUI app
-  //   does not inherit it; `<binary> --version` capped at DETECT_TIMEOUT_MS each.
-  void profiles;
-  throw new Error("not implemented");
+  const path = await agentPath();
+  const found = await Promise.all(
+    profiles.map(async (profile): Promise<AgentInfo | undefined> => {
+      const output = await versionOf(profile.binary, path);
+      if (output === "missing") return undefined;
+      if (output === "broken") {
+        return {
+          id: profile.id,
+          name: profile.name,
+          ready: false,
+          problem: `\`${profile.binary} --version\` failed: check that ${profile.name} runs in a terminal.`,
+        };
+      }
+      const version = /\d+\.\d+\.\d+[\w.-]*/.exec(output)?.[0];
+      return {
+        id: profile.id,
+        name: profile.name,
+        ready: true,
+        ...(version ? { version } : {}),
+      };
+    }),
+  );
+  return found.filter((agent): agent is AgentInfo => agent !== undefined);
 }
