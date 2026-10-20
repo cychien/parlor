@@ -23,6 +23,13 @@ const script: FakeAgentScript = {
       { kind: "thought", text: "thinking" },
       { kind: "reply", chunks: Array.from({ length: 40 }, (_, n) => `c${n} `) },
       { kind: "tool", title: "ls", toolKind: "read", askPermission: false },
+      {
+        kind: "tool",
+        title: "mcp__hello__createTask",
+        toolKind: "other",
+        mcp: { server: "hello", tool: "createTask" },
+        askPermission: false,
+      },
       { kind: "plan", entries: ["one", "two"] },
       { kind: "reply", chunks: ["end"] },
     ],
@@ -84,6 +91,8 @@ describe("acpLauncher against the fake agent over real stdio", () => {
       ...Array<string>(40).fill("text"),
       "tool_start",
       "tool_update",
+      "tool_start",
+      "tool_update",
       "plan",
       "text",
     ]);
@@ -94,12 +103,19 @@ describe("acpLauncher against the fake agent over real stdio", () => {
       ...Array.from({ length: 40 }, (_, n) => `c${n} `),
       "end",
     ]);
-    expect(updates.at(-3)).toEqual({
+    expect(updates.at(-5)).toEqual({
       kind: "tool_update",
       toolCallId: "tool-1",
       title: undefined,
       status: "completed",
       detail: undefined,
+    });
+    expect(updates.at(-4)).toEqual({
+      kind: "tool_start",
+      toolCallId: "tool-2",
+      title: "createTask",
+      toolKind: "other",
+      mcp: { server: "hello", tool: "createTask" },
     });
   });
 

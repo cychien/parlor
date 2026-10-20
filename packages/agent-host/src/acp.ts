@@ -266,6 +266,15 @@ function mcpRefOf(call: ToolCall | ToolCallUpdate): McpToolRef | undefined {
   return undefined;
 }
 
+/** An MCP tool's title by its own name, not the agent's `mcp__hello__createTask` key. */
+function readableTitle(title: string, mcp: McpToolRef): string {
+  const keys = [
+    `${MCP_PREFIX}${mcp.server}__${mcp.tool}`,
+    `mcp.${mcp.server}.${mcp.tool}`,
+  ];
+  return keys.includes(title) ? mcp.tool : title;
+}
+
 function detailOf(update: ToolCallUpdate): string | undefined {
   const texts = (update.content ?? []).flatMap((content) =>
     content.type === "content" && content.content.type === "text"
@@ -292,14 +301,16 @@ function updateOf(update: SessionUpdate): AgentUpdate | undefined {
       const text = textOf(update.content);
       return text === undefined ? undefined : { kind: "thought", text };
     }
-    case "tool_call":
+    case "tool_call": {
+      const mcp = mcpRefOf(update);
       return {
         kind: "tool_start",
         toolCallId: update.toolCallId,
-        title: update.title,
+        title: mcp ? readableTitle(update.title, mcp) : update.title,
         toolKind: toolKindOf(update.kind),
-        mcp: mcpRefOf(update),
+        mcp,
       };
+    }
     case "tool_call_update":
       return {
         kind: "tool_update",
