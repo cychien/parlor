@@ -368,7 +368,6 @@ describe("an app the host cannot speak to", () => {
       expect(written).toContain("Update Parlor Host to use Hello");
       expect(app.seen.map((seen) => seen.path)).toEqual([
         "/_parlor/chat/actions/hostHello",
-        "/_parlor/chat/actions/hostHello",
       ]);
     } finally {
       output.mockRestore();

@@ -288,6 +288,11 @@ export function createHostDaemon(deps: DaemonDeps): HostDaemon {
     async connect(appOrigin) {
       const grant = await deps.grants.get(appOrigin);
       if (!grant) throw new Error(`This computer is not connected to ${appOrigin}.`);
+      const current = links.get(appOrigin);
+      if (current?.link.grant.grantId === grant.grantId) {
+        await report(current);
+        return;
+      }
       await closeLink(appOrigin, "replaced");
       await report(open(grant, deps.keys));
     },
