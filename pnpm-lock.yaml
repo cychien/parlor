@@ -379,6 +379,9 @@ importers:
 
   packages/cli:
     dependencies:
+      '@parlor/agent-host':
+        specifier: workspace:*
+        version: link:../agent-host
       '@parlor/agent-ui':
         specifier: workspace:*
         version: link:../agent-ui

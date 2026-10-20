@@ -17,6 +17,7 @@ export function serverEnv(
     ...base,
     PORT: String(config.server.port),
     PARLOR_WEB_ORIGIN: `http://localhost:${config.web.port}`,
+    PARLOR_DEV: "1",
     ...appServerEnv(config),
   };
 }
