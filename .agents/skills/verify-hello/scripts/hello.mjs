@@ -125,6 +125,11 @@ const USAGE = `usage: hello.mjs <command> [args]
                           any other axi command (screenshot FILE, wait TEXT, eval JS, console) passes through
   browser ID focus on|off make the selected page report document.hasFocus() true or false, firing blur
                           or focus; open, click, fill undo off, and after a click or fill off needs a fresh tab
+  browser ID presence on|off
+                          a CDP virtual authenticator (ctap2, internal, resident key, user verification)
+                          on every tab of this browser, held for as long as the browser runs; on answers
+                          with user presence and verification, off fails user verification
+                          (HELLO_BROWSER_PROFILE picks the profile's browser)
   host ID pair --as USER --name NAME [--out DIR] [--no-approve] [--no-exchange]
                           pair a fake computer with the user's account (host-initiated, PKCE, ES256)
   host ID exchange|assert|call|request|play|hello|online|send|stream|seed-thread|list
@@ -525,7 +530,14 @@ function pickPort([from, to], reserved) {
 }
 
 function reservedPorts() {
-  return new Set(allStates().flatMap((s) => [s.ports.server, s.ports.web, s.cdpPort]));
+  return new Set(
+    allStates().flatMap((s) => [
+      s.ports.server,
+      s.ports.web,
+      s.cdpPort,
+      ...Object.values(s.profileCdpPorts ?? {}),
+    ]),
+  );
 }
 
 function allocateCdpPort() {
@@ -788,7 +800,8 @@ function describeProcess(p) {
 
 function browserPorts(state, browsers) {
   if (browsers === "none") return [];
-  return state.cdpPort ? [state.cdpPort] : [];
+  const main = state.cdpPort ? [state.cdpPort] : [];
+  return browsers === "all" ? [...main, ...Object.values(state.profileCdpPorts ?? {})] : main;
 }
 
 function instanceSurvivors(state, { browsers = "main" } = {}) {
@@ -1090,7 +1103,8 @@ function printInfo(state) {
         dataDir: join(appDir(state), ".parlor", "pglite"),
         log: logPath(state),
         browserSession: browserSession(state),
-        browserCdpPort: state.cdpPort ?? null,
+        browserCdpPort: recordedCdpPort(state) ?? null,
+        browserCdpPorts: { default: state.cdpPort ?? null, ...state.profileCdpPorts },
         noAuth: state.noAuth ?? false,
         home: state.home ?? null,
         simulator: state.simulator ?? null,
@@ -1454,10 +1468,26 @@ async function cmdScreenshot([id, file]) {
   process.stdout.write(`${path}\n`);
 }
 
+function recordedCdpPort(state, profile = browserProfile()) {
+  return profile ? state.profileCdpPorts?.[profile] : state.cdpPort;
+}
+
+/** A profile's browser gets its own CDP port the first time it is used. */
+function cdpPortFor(state) {
+  const profile = browserProfile();
+  const recorded = recordedCdpPort(state, profile);
+  if (recorded || !profile || !state.cdpPort) return recorded;
+  const port = allocateCdpPort();
+  state.profileCdpPorts = { ...state.profileCdpPorts, [profile]: port };
+  writeState(state);
+  return port;
+}
+
 function axiEnv(state) {
+  const port = cdpPortFor(state);
   const chromeArgs = [
     process.env.CHROME_DEVTOOLS_AXI_CHROME_ARGS,
-    state.cdpPort && !browserProfile() && `--remote-debugging-port=${state.cdpPort}`,
+    port && `--remote-debugging-port=${port}`,
   ].filter(Boolean);
   return {
     ...process.env,
@@ -1551,6 +1581,7 @@ async function cmdBrowser([id, action, ...args]) {
   if (action === "fill")
     return print(axiOnElement(state, "fill", args[0], args[1], args[2] ?? ""));
   if (action === "focus") return setBrowserFocus(state, args[0]);
+  if (action === "presence") return setBrowserPresence(state, args[0]);
   if (action === "snapshot") {
     const result = axi(state, ["snapshot", "--full"]);
     if (args[0]) writeFileSync(resolve(args[0]), result.stdout);
@@ -1558,7 +1589,7 @@ async function cmdBrowser([id, action, ...args]) {
   }
   if (!action)
     fail(
-      "usage: browser ID signin [USER] | open [PATH] | click ROLE NAME | fill ROLE NAME TEXT | snapshot [FILE] | focus on|off | <axi command>",
+      "usage: browser ID signin [USER] | open [PATH] | click ROLE NAME | fill ROLE NAME TEXT | snapshot [FILE] | focus on|off | presence on|off | <axi command>",
     );
   return print(axi(state, [action, ...args]));
 }
@@ -1606,16 +1637,20 @@ async function cdpConnect(url) {
   };
 }
 
+function requireCdpPort(state) {
+  const port = recordedCdpPort(state);
+  if (!port) fail(`instance ${state.id} has no CDP port for this browser; recreate it with up`);
+  return port;
+}
+
 async function cdpPageTargets(state) {
-  if (!state.cdpPort) fail(`instance ${state.id} has no CDP port; recreate it with up`);
+  const port = requireCdpPort(state);
   try {
-    const targets = await (
-      await fetch(`http://127.0.0.1:${state.cdpPort}/json/list`)
-    ).json();
+    const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
     return targets.filter((target) => target.type === "page");
   } catch {
     return fail(
-      `no browser on CDP port ${state.cdpPort}; run: hello.mjs browser ${state.id} stop, then browser ${state.id} open /`,
+      `no browser on CDP port ${port}; run: hello.mjs browser ${state.id} stop, then browser ${state.id} open /`,
     );
   }
 }
@@ -1651,7 +1686,7 @@ async function setBrowserFocus(state, mode) {
   const page = await cdpConnect(target.webSocketDebuggerUrl);
   if ((await pageFocusReport(page)).hasFocus !== wanted) {
     const { webSocketDebuggerUrl } = await (
-      await fetch(`http://127.0.0.1:${state.cdpPort}/json/version`)
+      await fetch(`http://127.0.0.1:${requireCdpPort(state)}/json/version`)
     ).json();
     const browser = await cdpConnect(webSocketDebuggerUrl);
     let frontId = target.id;
@@ -1681,6 +1716,90 @@ async function setBrowserFocus(state, mode) {
     fail(
       `page still reports hasFocus ${report.hasFocus} after focus ${mode}; a click or fill gives a tab real input focus that only a fresh tab sheds: hello.mjs browser ${state.id} closepage <id>, then newpage <url>, then focus ${mode}`,
     );
+}
+
+const HOLDER = join(SKILL_DIR, "scripts", "presence-holder.mjs");
+
+function profileKey() {
+  return browserProfile() ?? "default";
+}
+
+async function holderState(holder) {
+  if (!holder) return undefined;
+  try {
+    const response = await fetch(`http://127.0.0.1:${holder.port}/state`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    return response.ok ? await response.json() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function spawnHolder(state, port, mode) {
+  const logFile = join(instanceDir(state.id), `presence-${profileKey()}.log`);
+  const err = openSync(logFile, "a");
+  return new Promise((settle, abort) => {
+    const child = spawn(
+      process.execPath,
+      [HOLDER, "--cdp-port", String(port), "--presence", mode],
+      { cwd: HOME, detached: true, stdio: ["ignore", "pipe", err] },
+    );
+    closeSync(err);
+    let stdout = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      abort(new CliError(`the presence holder did not start in 15 s; see ${logFile}`));
+    }, 15_000);
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+      const line = stdout.split("\n").find((l) => l.includes('"ready"'));
+      if (!line) return;
+      clearTimeout(timer);
+      child.removeAllListeners("exit");
+      child.stdout.destroy();
+      child.unref();
+      const { port: controlPort, pid } = JSON.parse(line);
+      settle({ port: controlPort, pid, log: logFile });
+    });
+    child.on("exit", (code) => {
+      clearTimeout(timer);
+      abort(new CliError(`the presence holder exited ${code}; see ${logFile}`));
+    });
+  });
+}
+
+async function setBrowserPresence(state, mode) {
+  if (mode !== "on" && mode !== "off") fail("usage: browser ID presence on|off");
+  const port = requireCdpPort(state);
+  try {
+    await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(3000) });
+  } catch {
+    fail(
+      `no browser on CDP port ${port}; start it first (browser ${state.id} open / or signin), then presence ${mode}`,
+    );
+  }
+  const key = profileKey();
+  let holder = state.presence?.[key];
+  const current = await holderState(holder);
+  if (!current || current.cdpPort !== port) {
+    holder = { ...(await spawnHolder(state, port, mode)), cdpPort: port };
+    state.presence = { ...state.presence, [key]: holder };
+    writeState(state);
+  }
+  const response = await fetch(`http://127.0.0.1:${holder.port}/presence/${mode}`, {
+    method: "POST",
+    signal: AbortSignal.timeout(10_000),
+  });
+  const report = await response.json();
+  process.stdout.write(`${JSON.stringify({ profile: key, ...report })}\n`);
+  if (!response.ok || !report.targets?.some((t) => t.authenticator))
+    fail(`no tab of this browser holds a virtual authenticator: ${JSON.stringify(report)}`);
+}
+
+function stopHolders(state) {
+  for (const holder of Object.values(state.presence ?? {})) signal(holder.pid, "SIGTERM");
+  delete state.presence;
 }
 
 async function cmdToken(args) {
@@ -1758,9 +1877,24 @@ async function cmdSync([id]) {
   );
 }
 
+function stopBrowsers(state) {
+  const saved = process.env.HELLO_BROWSER_PROFILE;
+  try {
+    for (const profile of [undefined, ...Object.keys(state.profileCdpPorts ?? {})]) {
+      if (profile) process.env.HELLO_BROWSER_PROFILE = profile;
+      else delete process.env.HELLO_BROWSER_PROFILE;
+      axi(state, ["stop"], { allowFailure: true });
+    }
+  } finally {
+    if (saved === undefined) delete process.env.HELLO_BROWSER_PROFILE;
+    else process.env.HELLO_BROWSER_PROFILE = saved;
+  }
+}
+
 async function teardown(state, { saveLog }) {
-  axi(state, ["stop"], { allowFailure: true });
-  await stopProcesses(state);
+  stopBrowsers(state);
+  stopHolders(state);
+  await stopProcesses(state, { browsers: "all" });
   if (state.simulator && !state.simulator.bootedBefore) {
     xcrun(["simctl", "shutdown", state.simulator.udid], { allowFailure: true });
   }
