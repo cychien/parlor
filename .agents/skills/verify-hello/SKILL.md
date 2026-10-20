@@ -259,6 +259,7 @@ $H up --no-auth --home HOME           # hello without auth under plain parlor de
 - Everything the isolated host starts gets `HOME`, the shim first on `PATH`, and no inherited `CLAUDE*`, `ANTHROPIC_*`, `CODEX_*` or `OPENAI_*` variable.
 - Keep HOME short, such as `~/.cache/parlor-verify-hello/h/<id>`: the control socket path under it must stay below 104 bytes.
 - `up --no-auth` rewrites `server.ts` in the snapshot, removing the `auth` option and the imports only it used, and is refused without `--home`. The instance has no users: `signin`, `token`, `mcp` and `doctor` do not apply to it.
+- `scripts/phase5-kit.mjs` extends it for the phase 5 scripts: `presence` and `profileBrowser` (WebAuthn presence before sign-in), `sqlWrite`, `openThread`, and the host's local dialogs (`dialogProcesses` finds the `osascript` processes the host of a HOME started, `readDialog`, `clickDialog` and `screenshotDialog` act on one by pid through System Events, `answerDeviceDialog` and `sendApproving` answer a device approval).
 - `scripts/phase4-kit.mjs` is the library of the phase 4 check scripts: instance and host lifecycle, the pty terminal (`Terminal`), the consent flow (`connectHost`), the browser helpers (`Browser`, in-page helpers for the sidebar), the proxy client and the cleanup that removes homes, Keychain items and leftover processes.
 
 ### Agent tiers
