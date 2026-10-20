@@ -98,6 +98,11 @@ export interface PluginHost {
   readonly auth?: AuthProvider | undefined;
   callerOf(request: Request): Promise<Caller>;
   /**
+   * Resolves once the database holds every plugin's tables. Work a plugin starts on its own,
+   * such as a timer, waits for it; request handlers need not, as the server awaits it first.
+   */
+  ready?(): Promise<void>;
+  /**
    * Records a sync event for writes made outside an action's transaction, such as through
    * a library that holds its own connection. With `tx`, the event commits with that
    * transaction instead of its own. Does nothing when sync is off.

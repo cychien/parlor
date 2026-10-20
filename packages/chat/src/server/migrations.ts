@@ -53,6 +53,9 @@ export const CHAT_MIGRATIONS: readonly Migration[] = [
         on parlor_chat_turns (host_id, state, created_at) where state = 'queued';
       create unique index parlor_chat_turns_one_running
         on parlor_chat_turns (thread_id) where state = 'running';
+      create index parlor_chat_turns_thread_state on parlor_chat_turns (thread_id, state);
+      create index parlor_chat_turns_lease
+        on parlor_chat_turns (lease_until) where state = 'running';
 
       create index parlor_chat_items_signals
         on parlor_chat_items (turn_id, seq) where kind in ('answer', 'cancel');
@@ -66,8 +69,11 @@ export const CHAT_MIGRATIONS: readonly Migration[] = [
         name text not null,
         platform text not null,
         agents jsonb not null,
-        online_until timestamptz not null
+        online_until timestamptz not null,
+        announced_online boolean not null
       );
-      create index parlor_chat_hosts_owner on parlor_chat_hosts (owner_id, scope);`,
+      create index parlor_chat_hosts_owner on parlor_chat_hosts (owner_id, scope);
+      create index parlor_chat_hosts_lapse
+        on parlor_chat_hosts (online_until) where announced_online;`,
   },
 ];

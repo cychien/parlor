@@ -55,3 +55,40 @@ describe.each(drivers)("applying chat/0001_threads on $name", (driver) => {
     ]);
   });
 });
+
+describe.each(drivers)("the indexes of chat/0001_threads on $name", (driver) => {
+  let handle: DatabaseHandle;
+  beforeAll(async () => {
+    handle = await openDatabase(driver);
+    await resetDatabase(handle);
+    const app = serveChat(handle);
+    await app.action("alice", "hosts", {});
+    await app.server.close();
+  }, 60_000);
+  afterAll(async () => {
+    await handle.close();
+  });
+
+  const definitionOf = async (name: string) =>
+    (
+      await rows(handle, `select indexdef from pg_indexes where indexname = '${name}'`)
+    ).map((row) => (row as { indexdef: string }).indexdef);
+
+  it("serves the queue count and the claim's earlier-turn check by thread and state", async () => {
+    expect(await definitionOf("parlor_chat_turns_thread_state")).toEqual([
+      "CREATE INDEX parlor_chat_turns_thread_state ON public.parlor_chat_turns USING btree (thread_id, state)",
+    ]);
+  });
+
+  it("serves the lapsed lease scan by lease time", async () => {
+    expect(await definitionOf("parlor_chat_turns_lease")).toEqual([
+      "CREATE INDEX parlor_chat_turns_lease ON public.parlor_chat_turns USING btree (lease_until) WHERE (state = 'running'::text)",
+    ]);
+  });
+
+  it("serves the lapsed computer scan by liveness time", async () => {
+    expect(await definitionOf("parlor_chat_hosts_lapse")).toEqual([
+      "CREATE INDEX parlor_chat_hosts_lapse ON public.parlor_chat_hosts USING btree (online_until) WHERE announced_online",
+    ]);
+  });
+});

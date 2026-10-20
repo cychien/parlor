@@ -324,7 +324,13 @@ describe.each(drivers)("exactly-once turns on $name", (driver) => {
         handle,
         "select id, kind, body from parlor_chat_items where kind = 'event'",
       ),
-    ).toEqual([{ id: "u1.lost", kind: "event", body: { event: "host_lost" } }]);
+    ).toEqual([
+      {
+        id: expect.stringMatching(/^lost\.[0-9a-f-]{36}$/),
+        kind: "event",
+        body: { event: "host_lost" },
+      },
+    ]);
   });
 
   it("refuses every host action until the computer said hello", async () => {

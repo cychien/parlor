@@ -1,21 +1,23 @@
-import { ActionError, type TurnId } from "@parlor/core";
+import { ActionError, type HostId } from "@parlor/core";
 import { type AnyPluginRoute, pluginRoute, readBoundedText } from "@parlor/server";
 import { z } from "zod";
 
 import { idSchema } from "../id-schemas.js";
+import type { ChatOwner } from "../model.js";
 import type { HostStreamBatch } from "../protocol.js";
 import type { LiveRelay } from "./live.js";
-import type { ChatDb, ChatStore, TurnHolder } from "./store.js";
+import type { ChatDb, ChatStore } from "./store.js";
 
 export const MAX_STREAM_BODY_BYTES = 64 * 1024;
 const MAX_FRAMES_PER_BATCH = 512;
-const MAX_REMEMBERED_HOLDERS = 1024;
 
 export interface ChatRouteDeps {
   readonly db: () => ChatDb;
   readonly store: ChatStore;
   readonly relay: LiveRelay;
   readonly heartbeatMs: number;
+  readonly reconcile: (owner: ChatOwner) => Promise<void>;
+  readonly announceHost: (scope: string, hostId: HostId) => Promise<void>;
 }
 
 const streamBatch = z.object({
@@ -69,20 +71,6 @@ const tooLarge = () =>
 
 /** Plain routes only a host principal reaches, by type: no browser session, no agent token. */
 export function chatRoutes(deps: ChatRouteDeps): readonly AnyPluginRoute[] {
-  const holders = new Map<TurnId, TurnHolder>();
-  const holderOf = async (turnId: TurnId): Promise<TurnHolder | undefined> => {
-    const known = holders.get(turnId);
-    if (known) return known;
-    const found = await deps.store.turnHolder(deps.db(), turnId);
-    if (!found) return undefined;
-    if (holders.size >= MAX_REMEMBERED_HOLDERS) {
-      const oldest = holders.keys().next();
-      if (!oldest.done) holders.delete(oldest.value);
-    }
-    holders.set(turnId, found);
-    return found;
-  };
-
   return [
     pluginRoute({
       method: "POST",
@@ -98,7 +86,7 @@ export function chatRoutes(deps: ChatRouteDeps): readonly AnyPluginRoute[] {
           });
         }
         const batch = parsed.data;
-        const holder = await holderOf(batch.turnId);
+        const holder = await deps.store.turnHolder(deps.db(), batch.turnId);
         const { principal } = caller;
         const owns =
           holder !== undefined &&
@@ -106,7 +94,9 @@ export function chatRoutes(deps: ChatRouteDeps): readonly AnyPluginRoute[] {
           holder.owner.userId === principal.userId &&
           holder.owner.scope === caller.scope;
         if (!owns) throw new ActionError("forbidden", "This turn is not yours.");
-        deps.relay.accept(holder, batch);
+        const { live, ...heldBy } = holder;
+        if (!live) throw new ActionError("forbidden", "The turn is not running.");
+        deps.relay.accept(heldBy, batch);
         return new Response(null, { status: 204 });
       },
     }),
@@ -116,12 +106,17 @@ export function chatRoutes(deps: ChatRouteDeps): readonly AnyPluginRoute[] {
       access: ["host"],
       handle: async (_request, caller) => {
         const { principal } = caller;
-        await deps.store.heartbeat(
+        const owner = { scope: caller.scope, userId: principal.userId };
+        const { returned } = await deps.store.heartbeat(
           deps.db(),
-          { scope: caller.scope, userId: principal.userId },
+          owner,
           principal,
           2 * deps.heartbeatMs,
         );
+        if (returned) await deps.announceHost(owner.scope, principal.hostId);
+        await deps.reconcile(owner).catch((error: unknown) => {
+          console.warn("[parlor] chat: reconciling lapsed turns failed:", error);
+        });
         return new Response(null, { status: 204 });
       },
     }),

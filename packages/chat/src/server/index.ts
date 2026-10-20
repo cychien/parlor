@@ -1,6 +1,8 @@
+import type { Tag } from "@parlor/core";
 import { REVOCATION_HORIZON_MS, type ServerPlugin } from "@parlor/server";
 
-import { CHAT_TAG, type ChatActionDeps, chatActions } from "./actions.js";
+import type { ChatOwner } from "../model.js";
+import { CHAT_TAG, type ChatActionDeps, chatActions, HOSTS_TAG } from "./actions.js";
 import { inProcessRelay, type LiveRelay } from "./live.js";
 import { CHAT_MIGRATIONS } from "./migrations.js";
 import { chatRoutes } from "./routes.js";
@@ -45,8 +47,10 @@ export { chatRoutes, type ChatRouteDeps, MAX_STREAM_BODY_BYTES } from "./routes.
 export {
   type ChatDb,
   type ChatStore,
+  type Lapsed,
   type NewTurn,
   sqlChatStore,
+  type StreamTurn,
   type TurnHolder,
   type UserDraft,
 } from "./store.js";
@@ -112,9 +116,40 @@ export function chat(options: ChatOptions = {}): ServerPlugin {
           return result;
         });
       const heartbeatMs = DEFAULT_HEARTBEAT_MS;
+      const reconcile = async (owner?: ChatOwner) => {
+        if (!(await sqlChatStore.hasLapsed(db(), owner))) return;
+        await database.transaction(async (tx) => {
+          for (const change of await sqlChatStore.expireLapsed(tx as ChatDb, owner)) {
+            const tags: Tag[] = [
+              ...change.threads.map((threadId) => [CHAT_TAG, threadId]),
+              ...change.hosts.map((hostId) => [HOSTS_TAG, hostId]),
+            ];
+            await host.announce(change.scope, tags, tx);
+          }
+        });
+      };
+      const pruneHosts: ChatActionDeps["pruneHosts"] = async (owner, hostIds) => {
+        try {
+          await database.transaction((tx) =>
+            sqlChatStore.pruneHosts(tx as ChatDb, owner, hostIds),
+          );
+        } catch (error) {
+          console.warn("[parlor] chat: pruning revoked computers failed:", error);
+        }
+      };
+      const sweep = setInterval(() => {
+        (host.ready?.() ?? Promise.resolve())
+          .then(() => reconcile())
+          .catch((error: unknown) => {
+            console.warn("[parlor] chat: sweeping lapsed turns failed:", error);
+          });
+      }, heartbeatMs);
+      sweep.unref();
       const actions = chatActions({
         enforcing: auth.enforcing,
         transact,
+        reconcile,
+        pruneHosts,
         auth,
         store: sqlChatStore,
         relay,
@@ -127,9 +162,19 @@ export function chat(options: ChatOptions = {}): ServerPlugin {
       });
       return {
         actions,
-        routes: chatRoutes({ db, store: sqlChatStore, relay, heartbeatMs }),
+        routes: chatRoutes({
+          db,
+          store: sqlChatStore,
+          relay,
+          heartbeatMs,
+          reconcile,
+          announceHost: (scope, hostId) => host.announce(scope, [[HOSTS_TAG, hostId]]),
+        }),
         channel: relay.channel,
-        close: () => relay.close(),
+        close: () => {
+          clearInterval(sweep);
+          relay.close();
+        },
       };
     },
   };

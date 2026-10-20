@@ -45,6 +45,10 @@ export interface ChatActionDeps {
     scope: string,
     work: (tx: ChatDb) => Promise<Written<T>>,
   ) => Promise<T>;
+  /** Commits the lapsed leases and liveness of `owner`, with the sync events they owe. */
+  readonly reconcile: (owner: ChatOwner) => Promise<void>;
+  /** Drops the owner's computer rows whose grant is gone; best effort, never fails a read. */
+  readonly pruneHosts: (owner: ChatOwner, hostIds: readonly HostId[]) => Promise<void>;
   readonly auth: AuthProvider;
   readonly store: ChatStore;
   readonly relay: LiveRelay;
@@ -87,6 +91,13 @@ async function activeHosts(
   const holding = await Promise.all(
     hosts.map((host) => hostActive.call(deps.auth, host.grantId)),
   );
+  const gone = hosts.filter((_host, at) => !holding[at]);
+  if (gone.length > 0) {
+    await deps.pruneHosts(
+      owner,
+      gone.map((host) => host.id),
+    );
+  }
   return hosts.filter((_host, at) => holding[at]);
 }
 
@@ -315,6 +326,7 @@ export function hostChatActions(deps: ChatActionDeps) {
       run: async (_input, host, ctx): Promise<ClaimedTurn> => {
         const db = dbOf(ctx);
         await requireWelcome(host, db);
+        await deps.reconcile(host);
         const claimed = await deps.transact(ctx.scope, async (tx) => {
           const taken = await deps.store.claimTurn(tx, host, host.host, deps.leaseMs);
           if (!taken) throw new ActionError("not_found", "No turn is waiting.");
@@ -405,17 +417,18 @@ export function hostChatActions(deps: ChatActionDeps) {
           z.object({ state: z.literal("failed"), reason: z.enum(TURN_FAILURES) }),
         ]),
       }),
-      writes: [CHAT_TAG],
       run: async (input, host, ctx): Promise<{ readonly id: string }> => {
-        const db = dbOf(ctx);
-        await requireWelcome(host, db);
-        const finished = await deps.store.finishTurn(
-          db,
-          host,
-          host.host,
-          input.turnId,
-          input.outcome,
-        );
+        await requireWelcome(host, dbOf(ctx));
+        const finished = await deps.transact(ctx.scope, async (tx) => {
+          const result = await deps.store.finishTurn(
+            tx,
+            host,
+            host.host,
+            input.turnId,
+            input.outcome,
+          );
+          return { result, threadId: result.threadId };
+        });
         deps.relay.settle(host, finished.threadId, input.turnId);
         return { id: finished.threadId };
       },

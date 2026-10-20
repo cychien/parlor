@@ -101,6 +101,25 @@ describe("the host-only routes", () => {
     expect(accepted).toEqual([]);
   });
 
+  it("refuses a batch for a turn that waits in the queue", async () => {
+    await app.action("alice", "send", {
+      threadId: "t1",
+      turnId: "u2",
+      itemId: "p2",
+      clientId: "tab",
+      prompt: { text: "and then", agent: agentRef },
+    });
+    const reply = await app.post("alice-host", "stream", {
+      turnId: "u2",
+      frames: [delta(0, "x")],
+    });
+    expect(reply.status).toBe(403);
+    expect(reply.body).toEqual({
+      error: { code: "forbidden", message: "The turn is not running." },
+    });
+    expect(accepted).toEqual([]);
+  });
+
   it("refuses a batch over the size limit with 413", async () => {
     const reply = await app.post("alice-host", "stream", {
       turnId: "u1",
@@ -138,7 +157,10 @@ describe("the host-only routes", () => {
   );
 
   it("renews a computer's liveness with one update and no sync event", async () => {
-    await app.action("alice-host", "hostReport", { online: false, agents: [] });
+    await rows(
+      handle,
+      "update parlor_chat_hosts set online_until = now() - interval '1 second' where id = 'mac'",
+    );
     expect(
       await rows(
         handle,

@@ -200,6 +200,7 @@ export function createServer<T extends ActionMap>(
     database,
     ...(auth ? { auth } : {}),
     callerOf: callers,
+    ready,
     announce: async (target, tags, within) => {
       if (!syncEnabled || !database || tags.length === 0) return;
       if (within !== undefined) {

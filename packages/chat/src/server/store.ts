@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import {
   ActionError,
   asId,
@@ -61,11 +63,23 @@ export interface TurnHolder {
   readonly hostId: HostId;
 }
 
+/** A turn's holder with whether it runs now: running, and its lease not yet lapsed. */
+export interface StreamTurn extends TurnHolder {
+  readonly live: boolean;
+}
+
+/** What one reconciliation changed in a scope, for the sync events it must emit. */
+export interface Lapsed {
+  readonly scope: string;
+  readonly threads: readonly ThreadId[];
+  readonly hosts: readonly HostId[];
+}
+
 /**
  * The thread log in SQL. Every function filters by the owner's scope and user in the same
  * statement, so another user's thread id reads as not found. Appends lock the thread row
- * to assign gap-free `seq`, insert `on conflict (id) do nothing`, and run in the action's
- * transaction so the thread's sync event commits with them.
+ * to assign gap-free `seq` and run in the action's transaction so the thread's sync event
+ * commits with them.
  */
 export interface ChatStore {
   listThreads(db: ChatDb, owner: ChatOwner): Promise<ThreadSummary[]>;
@@ -98,6 +112,14 @@ export interface ChatStore {
     host: HostPrincipal,
     leaseMs: number,
   ): Promise<Omit<ClaimedTurn, "context" | "token" | "device"> | undefined>;
+  /** Whether anything waits for `expireLapsed`; one read, so the idle path writes nothing. */
+  hasLapsed(db: ChatDb, owner: ChatOwner | undefined): Promise<boolean>;
+  /**
+   * Fails the running turns whose lease lapsed (`host_lost`) and marks the computers whose
+   * liveness lapsed offline, for `owner` or, without one, for everyone. Commit it apart
+   * from any claim, because a claim that finds nothing aborts its own transaction.
+   */
+  expireLapsed(tx: ChatDb, owner: ChatOwner | undefined): Promise<Lapsed[]>;
   /**
    * Puts a claimed turn back in the queue when the host never learned of the claim.
    * Refused (false) once the turn has an agent item or is no longer running.
@@ -149,15 +171,20 @@ export interface ChatStore {
       readonly ttlMs: number;
     },
   ): Promise<{ readonly onlineUntil: number }>;
-  /** One UPDATE of `online_until`, no sync event. */
+  /**
+   * One UPDATE of `online_until`. `returned` is true when the sidebar had been told the
+   * computer was offline, so the caller announces its return.
+   */
   heartbeat(
     db: ChatDb,
     owner: ChatOwner,
     host: HostPrincipal,
     ttlMs: number,
-  ): Promise<void>;
+  ): Promise<{ readonly returned: boolean }>;
   listHosts(db: ChatDb, owner: ChatOwner): Promise<StoredHost[]>;
-  turnHolder(db: ChatDb, turnId: TurnId): Promise<TurnHolder | undefined>;
+  /** Drops the owner's computer rows whose grant is gone. */
+  pruneHosts(tx: ChatDb, owner: ChatOwner, hostIds: readonly HostId[]): Promise<void>;
+  turnHolder(db: ChatDb, turnId: TurnId): Promise<StreamTurn | undefined>;
 }
 
 export interface StoredHost extends HostSummary {
@@ -215,6 +242,8 @@ interface ItemInsert {
 interface LogLock {
   readonly lastSeq: number;
   readonly turnState: string | undefined;
+  /** Running and its lease has not lapsed: the only turn a host may write to. */
+  readonly leased: boolean;
 }
 
 /** The only place the log is locked: the thread row, then the turn row. */
@@ -232,13 +261,20 @@ async function lockLog(
     z.object({ last_seq: count }),
   );
   if (!row) throw threadMissing();
-  if (turnId === undefined) return { lastSeq: row.last_seq, turnState: undefined };
+  if (turnId === undefined) {
+    return { lastSeq: row.last_seq, turnState: undefined, leased: false };
+  }
   const [turn] = await query(
     tx,
-    sql`select state from parlor_chat_turns where id = ${turnId} for update`,
-    z.object({ state: z.string() }),
+    sql`select state, coalesce(state = 'running' and lease_until >= now(), false) as leased
+      from parlor_chat_turns where id = ${turnId} and thread_id = ${threadId} for update`,
+    z.object({ state: z.string(), leased: z.boolean() }),
   );
-  return { lastSeq: row.last_seq, turnState: turn?.state };
+  return {
+    lastSeq: row.last_seq,
+    turnState: turn?.state,
+    leased: turn?.leased ?? false,
+  };
 }
 
 async function insertItems(
@@ -390,23 +426,51 @@ async function admitsUserItem(
     await tx.execute(
       sql`update parlor_chat_turns
         set state = 'cancelled', outcome = '{"state":"cancelled"}'::jsonb, finished_at = now()
-        where id = ${turnId}`,
+        where id = ${turnId} and state = 'queued'`,
     );
   }
   return true;
 }
 
-async function expireLapsed(tx: ChatDb, owner: ChatOwner): Promise<void> {
+const lostItemId = () => asId("item", `lost.${randomUUID()}`);
+
+const ownedBy = (owner: ChatOwner | undefined) =>
+  owner ? sql`and owner_id = ${owner.userId} and scope = ${owner.scope}` : sql``;
+
+async function lapsedFor(db: ChatDb, owner: ChatOwner | undefined): Promise<boolean> {
+  const [found] = await query(
+    db,
+    sql`select (
+        exists (select 1 from parlor_chat_turns
+          where state = 'running' and lease_until < now() ${ownedBy(owner)})
+        or exists (select 1 from parlor_chat_hosts
+          where announced_online and online_until <= now() ${ownedBy(owner)})
+      ) as lapsed`,
+    z.object({ lapsed: z.boolean() }),
+  );
+  return found?.lapsed ?? false;
+}
+
+async function expireLapsed(tx: ChatDb, owner: ChatOwner | undefined): Promise<Lapsed[]> {
+  const changes = new Map<string, { threads: ThreadId[]; hosts: HostId[] }>();
+  const changed = (scope: string) => {
+    let change = changes.get(scope);
+    if (!change) changes.set(scope, (change = { threads: [], hosts: [] }));
+    return change;
+  };
   const lapsed = await query(
     tx,
-    sql`select distinct thread_id from parlor_chat_turns
-      where owner_id = ${owner.userId} and scope = ${owner.scope}
-        and state = 'running' and lease_until < now()
+    sql`select distinct scope, owner_id, thread_id from parlor_chat_turns
+      where state = 'running' and lease_until < now() ${ownedBy(owner)}
       order by thread_id`,
-    z.object({ thread_id: idSchema("thread") }),
+    z.object({
+      scope: z.string(),
+      owner_id: idSchema("user"),
+      thread_id: idSchema("thread"),
+    }),
   );
-  for (const { thread_id: threadId } of lapsed) {
-    const { lastSeq } = await lockLog(tx, owner, threadId);
+  for (const { scope, owner_id: userId, thread_id: threadId } of lapsed) {
+    const { lastSeq } = await lockLog(tx, { scope, userId }, threadId);
     const expired = await query(
       tx,
       sql`update parlor_chat_turns
@@ -416,18 +480,29 @@ async function expireLapsed(tx: ChatDb, owner: ChatOwner): Promise<void> {
         returning id`,
       z.object({ id: idSchema("turn") }),
     );
+    if (expired.length === 0) continue;
     await insertItems(
       tx,
       threadId,
       lastSeq,
       expired.map(({ id }) => ({
-        id: asId("item", `${id}.lost`),
+        id: lostItemId(),
         turnId: id,
         kind: "event",
         body: { event: "host_lost" } satisfies ChatItemBody<"event">,
       })),
     );
+    changed(scope).threads.push(threadId);
   }
+  const offline = await query(
+    tx,
+    sql`update parlor_chat_hosts set announced_online = false
+      where announced_online and online_until <= now() ${ownedBy(owner)}
+      returning id, scope`,
+    z.object({ id: idSchema("host"), scope: z.string() }),
+  );
+  for (const { id, scope } of offline) changed(scope).hosts.push(id);
+  return [...changes].map(([scope, change]) => ({ scope, ...change }));
 }
 
 async function lockRunningTurn(
@@ -453,10 +528,8 @@ async function lockRunningTurn(
     }),
   );
   if (!found) throw turnMissing();
-  const { lastSeq, turnState } = await lockLog(tx, owner, found.thread_id, turnId);
-  if (turnState !== "running") {
-    throw new ActionError("forbidden", "The turn is not running.");
-  }
+  const { lastSeq, leased } = await lockLog(tx, owner, found.thread_id, turnId);
+  if (!leased) throw new ActionError("forbidden", "The turn is not running.");
   return {
     threadId: found.thread_id,
     lastSeq,
@@ -603,8 +676,13 @@ export const sqlChatStore: ChatStore = {
     );
   },
 
+  async hasLapsed(db, owner) {
+    return lapsedFor(db, owner);
+  },
+
+  expireLapsed,
+
   async claimTurn(tx, owner, host, leaseMs) {
-    await expireLapsed(tx, owner);
     const [claimed] = await query(
       tx,
       sql`select t.id, t.thread_id, t.agent_id, t.client_id, t.prompt_item_id
@@ -653,7 +731,7 @@ export const sqlChatStore: ChatStore = {
       tx,
       sql`update parlor_chat_turns set state = 'queued', lease_until = null
         where id = ${turnId} and host_id = ${host.hostId} and owner_id = ${owner.userId}
-          and scope = ${owner.scope} and state = 'running'
+          and scope = ${owner.scope} and state = 'running' and lease_until >= now()
           and not exists (
             select 1 from parlor_chat_items i
             where i.turn_id = parlor_chat_turns.id and i.author <> 'user')
@@ -747,14 +825,16 @@ export const sqlChatStore: ChatStore = {
     const [row] = await query(
       tx,
       sql`insert into parlor_chat_hosts
-        (id, scope, owner_id, grant_id, protocol, name, platform, agents, online_until)
+        (id, scope, owner_id, grant_id, protocol, name, platform, agents, online_until,
+          announced_online)
         values (${host.hostId}, ${owner.scope}, ${owner.userId}, ${host.grantId},
           ${report.protocol}, ${report.name}, ${report.platform},
-          ${JSON.stringify(report.agents)}::jsonb, ${leaseSql(ttlMs)})
+          ${JSON.stringify(report.agents)}::jsonb, ${leaseSql(ttlMs)}, ${report.online})
         on conflict (id) do update set
           grant_id = excluded.grant_id, protocol = excluded.protocol, name = excluded.name,
           platform = excluded.platform, agents = excluded.agents,
-          online_until = excluded.online_until
+          online_until = excluded.online_until,
+          announced_online = excluded.announced_online
         where parlor_chat_hosts.owner_id = excluded.owner_id
           and parlor_chat_hosts.scope = excluded.scope
         returning ${ms("online_until")} as online_until`,
@@ -766,11 +846,17 @@ export const sqlChatStore: ChatStore = {
   },
 
   async heartbeat(db, owner, host, ttlMs) {
-    await db.execute(
-      sql`update parlor_chat_hosts set online_until = ${leaseSql(ttlMs)}
-        where id = ${host.hostId} and owner_id = ${owner.userId}
-          and scope = ${owner.scope} and grant_id = ${host.grantId}`,
+    const [beat] = await query(
+      db,
+      sql`update parlor_chat_hosts as h
+        set online_until = ${leaseSql(ttlMs)}, announced_online = true
+        from (select announced_online as was from parlor_chat_hosts where id = ${host.hostId}) as prev
+        where h.id = ${host.hostId} and h.owner_id = ${owner.userId}
+          and h.scope = ${owner.scope} and h.grant_id = ${host.grantId}
+        returning prev.was as was`,
+      z.object({ was: z.boolean() }),
     );
+    return { returned: beat !== undefined && !beat.was };
   },
 
   async listHosts(db, owner) {
@@ -793,15 +879,26 @@ export const sqlChatStore: ChatStore = {
     );
   },
 
+  async pruneHosts(tx, owner, hostIds) {
+    if (hostIds.length === 0) return;
+    await tx.execute(
+      sql`delete from parlor_chat_hosts
+        where owner_id = ${owner.userId} and scope = ${owner.scope} and id in (${inList(hostIds)})`,
+    );
+  },
+
   async turnHolder(db, turnId) {
     const [row] = await query(
       db,
-      sql`select scope, owner_id, thread_id, host_id from parlor_chat_turns where id = ${turnId}`,
+      sql`select scope, owner_id, thread_id, host_id,
+          coalesce(state = 'running' and lease_until >= now(), false) as live
+        from parlor_chat_turns where id = ${turnId}`,
       z.object({
         scope: z.string(),
         owner_id: idSchema("user"),
         thread_id: idSchema("thread"),
         host_id: idSchema("host"),
+        live: z.boolean(),
       }),
     );
     return row
@@ -809,6 +906,7 @@ export const sqlChatStore: ChatStore = {
           owner: { scope: row.scope, userId: row.owner_id },
           threadId: row.thread_id,
           hostId: row.host_id,
+          live: row.live,
         }
       : undefined;
   },
