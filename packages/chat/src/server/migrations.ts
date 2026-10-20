@@ -76,4 +76,14 @@ export const CHAT_MIGRATIONS: readonly Migration[] = [
       create index parlor_chat_hosts_lapse
         on parlor_chat_hosts (online_until) where announced_online;`,
   },
+  {
+    id: "chat/0002_answer_retry",
+    sql: `
+      drop index parlor_chat_items_one_answer;
+      create index parlor_chat_items_answers
+        on parlor_chat_items (thread_id, (body->>'askId')) where kind = 'answer';
+      create index parlor_chat_items_rejections
+        on parlor_chat_items (thread_id, (body->>'itemId'))
+        where kind = 'event' and body->>'event' = 'answer_rejected';`,
+  },
 ];

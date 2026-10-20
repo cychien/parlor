@@ -45,13 +45,16 @@ export interface ThreadSummary {
 
 export type TurnState = "queued" | "running" | "done" | "failed" | "cancelled";
 
-export type TurnFailure =
-  | "agent_exited"
-  | "agent_unavailable"
-  | "device_rejected"
-  | "signature_invalid"
-  | "prompt_expired"
-  | "host_lost";
+export const TURN_FAILURES = [
+  "agent_exited",
+  "agent_unavailable",
+  "device_rejected",
+  "signature_invalid",
+  "prompt_expired",
+  "host_lost",
+] as const;
+
+export type TurnFailure = (typeof TURN_FAILURES)[number];
 
 export type TurnOutcome =
   | { readonly state: "done"; readonly stopReason: string }
@@ -83,6 +86,8 @@ export interface TurnStatus {
   readonly turnId: TurnId;
   readonly state: TurnState;
   readonly agent: AgentRef;
+  /** Why a `failed` turn failed. */
+  readonly failure?: TurnFailure | undefined;
 }
 
 export interface ThreadPage {

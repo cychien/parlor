@@ -236,6 +236,43 @@ describe("foldThread", () => {
     expect(answered[1]).toMatchObject({ answer: { state: "answered", choice: "yes" } });
   });
 
+  it("keeps an ask open when the host rejected its answer, and settles it on the next one", () => {
+    seq = 0;
+    const ask = item("ask", "u1.1", turn1, {
+      question: "Run rm?",
+      choices: [{ id: "yes", label: "Yes", effect: "allow_once" }],
+      approval: "presence",
+    });
+    const first = item("answer", "a1", turn1, { askId: ask.id, choice: "yes" });
+    const rejection = item("event", "u1.2", turn1, {
+      event: "answer_rejected",
+      itemId: first.id,
+    });
+    const running = turns([turn1, "running"]);
+    const rows = fold({ items: [prompt("p1"), ask, first, rejection], turns: running });
+    expect(rows.map((row) => row.kind)).toEqual(["prompt", "ask", "event"]);
+    expect(rows[1]).toMatchObject({ kind: "ask", answer: { state: "open" } });
+    const second = item("answer", "a2", turn1, { askId: ask.id, choice: "yes" });
+    const settled = fold({
+      items: [prompt("p1"), ask, first, rejection, second],
+      turns: running,
+    });
+    expect(settled[1]).toMatchObject({ answer: { state: "answered", choice: "yes" } });
+  });
+
+  it("gives a failed turn's prompt the reason the turn failed", () => {
+    seq = 0;
+    const rows = fold({
+      items: [prompt("p1"), prompt("p2", turn2)],
+      turns: [
+        { turnId: turn1, state: "failed", agent, failure: "prompt_expired" },
+        { turnId: turn2, state: "done", agent },
+      ],
+    });
+    expect(rows[0]).toMatchObject({ kind: "prompt", failure: "prompt_expired" });
+    expect(rows[1]).toMatchObject({ kind: "prompt", failure: undefined });
+  });
+
   it("closes an unanswered ask once its turn ended", () => {
     seq = 0;
     const ask = item("ask", "u1.1", turn1, {

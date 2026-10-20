@@ -11,14 +11,14 @@ import { z } from "zod";
 
 import { idSchema } from "../id-schemas.js";
 import { chatItemBodies, hostItemDraft, type LoggedItem } from "../items.js";
-import type {
-  AgentInfo,
-  ChatOwner,
-  ChatSnapshot,
-  ClaimedTurn,
-  HostSummary,
-  TurnFailure,
-  TurnSignals,
+import {
+  type AgentInfo,
+  type ChatOwner,
+  type ChatSnapshot,
+  type ClaimedTurn,
+  type HostSummary,
+  TURN_FAILURES,
+  type TurnSignals,
 } from "../model.js";
 import { HOST_PROTOCOL, type HostWelcome } from "../protocol.js";
 import { CHAT_TAG, HOSTS_TAG } from "../tags.js";
@@ -65,15 +65,6 @@ const threadId = idSchema("thread");
 const turnId = idSchema("turn");
 const itemId = idSchema("item");
 const afterSeq = z.number().int().min(0);
-
-const TURN_FAILURES = [
-  "agent_exited",
-  "agent_unavailable",
-  "device_rejected",
-  "signature_invalid",
-  "prompt_expired",
-  "host_lost",
-] as const satisfies readonly TurnFailure[];
 
 const MIN_HOST_PROTOCOL = 1;
 const CONTEXT_HISTORY_ITEMS = 200;

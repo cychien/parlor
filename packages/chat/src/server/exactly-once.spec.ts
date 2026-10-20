@@ -274,7 +274,6 @@ describe.each(drivers)("exactly-once turns on $name", (driver) => {
           body: {
             question: "Run it?",
             choices: [{ id: "yes", label: "Yes", effect: "allow_once" }],
-            approval: "presence",
           },
         },
       ],
@@ -301,6 +300,107 @@ describe.each(drivers)("exactly-once turns on $name", (driver) => {
       answer: { askId: "nope", choice: "yes" },
     });
     expect(ghost.status).toBe(404);
+  });
+
+  it("tells the sidebar why a turn failed", async () => {
+    await send("t1", "u1");
+    await claim();
+    await app.action("alice-host", "hostFinish", {
+      turnId: "u1",
+      outcome: { state: "failed", reason: "prompt_expired" },
+    });
+    const opened = data(await app.action("alice", "open", { threadId: "t1" })) as {
+      page: { turns: unknown[] };
+    };
+    expect(opened.page.turns).toEqual([
+      {
+        turnId: "u1",
+        state: "failed",
+        agent: agentRef,
+        failure: "prompt_expired",
+      },
+    ]);
+  });
+
+  describe("answers to a question the host asked", () => {
+    const ask = (approval?: "presence" | "computer") =>
+      app.action("alice-host", "hostAppend", {
+        turnId: "u1",
+        items: [
+          {
+            id: "u1.1",
+            kind: "ask",
+            body: {
+              question: "Run it?",
+              choices: [{ id: "yes", label: "Yes", effect: "allow_once" }],
+              ...(approval ? { approval } : {}),
+            },
+          },
+        ],
+      });
+    const answer = (itemId: string, signed?: unknown) =>
+      app.action("alice", "answer", {
+        threadId: "t1",
+        turnId: "u1",
+        itemId,
+        answer: { askId: "u1.1", choice: "yes", ...(signed ? { signed } : {}) },
+      });
+    const signature = (format: "es256-raw" | "webauthn", presence: "none" | "user") => ({
+      deviceId: "device-1",
+      at: 1,
+      signature: { keyId: "key-1", presence, format, signature: "c2ln" },
+    });
+    const answers = () =>
+      rows(handle, "select id from parlor_chat_items where kind = 'answer' order by seq");
+
+    beforeEach(async () => {
+      await send("t1", "u1");
+      await claim();
+    });
+
+    it("takes another answer once the host rejected the one before it", async () => {
+      await ask();
+      expect((await answer("a1")).status).toBe(200);
+      expect((await answer("a2")).status).toBe(400);
+      await app.action("alice-host", "hostAppend", {
+        turnId: "u1",
+        items: [
+          {
+            id: "u1.2",
+            kind: "event",
+            body: { event: "answer_rejected", itemId: "a1" },
+          },
+        ],
+      });
+      expect((await answer("a2")).status).toBe(200);
+      expect((await answer("a3")).status).toBe(400);
+      expect(await answers()).toEqual([{ id: "a1" }, { id: "a2" }]);
+    });
+
+    it("refuses an answer to a question that is answered on the computer, writing nothing", async () => {
+      await ask("computer");
+      const refused = await answer("a1", signature("webauthn", "user"));
+      expect(refused.status).toBe(403);
+      expect(refused.body).toMatchObject({ error: { code: "forbidden" } });
+      expect(await answers()).toEqual([]);
+    });
+
+    it("refuses an answer to a presence question unless it carries a presence signature", async () => {
+      await ask("presence");
+      expect((await answer("a1")).status).toBe(403);
+      expect((await answer("a2", signature("es256-raw", "none"))).status).toBe(403);
+      expect((await answer("a3", signature("webauthn", "none"))).status).toBe(403);
+      expect(await answers()).toEqual([]);
+      expect((await answer("a4", signature("webauthn", "user"))).status).toBe(200);
+      expect(await answers()).toEqual([{ id: "a4" }]);
+    });
+
+    it("admits one of two answers sent at once", async () => {
+      await ask();
+      const replies = await Promise.all([answer("a1"), answer("a2")]);
+      expect(replies.map((answered) => answered.status).sort()).toEqual([200, 400]);
+      expect(await answers()).toHaveLength(1);
+    });
   });
 
   it("fails a turn whose host stopped renewing its lease and moves on", async () => {
