@@ -16,6 +16,7 @@ import {
   type AuthProvider,
   type Delegation,
   type PluginHost,
+  REVOCATION_HORIZON_MS,
   type TurnDelegation,
 } from "@parlor/server";
 import type { BetterAuthOptions } from "better-auth";
@@ -31,7 +32,6 @@ import {
 import { accountActions } from "./account.js";
 import { AUDIT_MIGRATION, createAuditLog } from "./audit.js";
 import {
-  ACCESS_TOKEN_TTL_S,
   AUTH_PLUGIN,
   bridgeOf,
   MCP_SCOPE,
@@ -48,7 +48,7 @@ import {
   verifyHostAssertion,
 } from "./hosts.js";
 import { AUTH_MIGRATIONS } from "./migrations.js";
-import { type RevocationNotice, RevocationSet } from "./revocation.js";
+import { RevocationSet } from "./revocation.js";
 import { authRoutes } from "./routes.js";
 import {
   agentPrincipalOf,
@@ -115,9 +115,6 @@ export interface BetterAuthProviderOptions {
   readonly instance: BetterAuthInstance;
 }
 
-/** Clock skew a revocation must outlast beyond the access token's own lifetime. */
-const SKEW_MS = 60_000;
-
 function hasCookie(request: Request, name: string): boolean {
   const cookie = request.headers.get("cookie");
   if (!cookie) return false;
@@ -148,6 +145,10 @@ export function betterAuthProvider({
   const started = () => {
     if (!revocations) throw new Error("The auth provider is not installed.");
     return revocations;
+  };
+
+  const ready = async (): Promise<void> => {
+    await Promise.all([started().ready(), installed().turnKeys.keys()]);
   };
 
   const loadKeys = async () => {
@@ -281,7 +282,7 @@ export function betterAuthProvider({
       if (!database) throw new Error("The auth plugin needs a database.");
       const set = new RevocationSet({
         database,
-        horizonMs: ACCESS_TOKEN_TTL_S * 1000 + SKEW_MS,
+        horizonMs: REVOCATION_HORIZON_MS,
       });
       revocations = set;
       const auditLog = createAuditLog(database);
@@ -296,8 +297,6 @@ export function betterAuthProvider({
       const hostDeps = {
         host,
         settings,
-        revoke: (tx: unknown, notice: RevocationNotice) =>
-          RevocationSet.revoke(tx, notice),
       };
       return {
         actions: createRegistry({
@@ -312,7 +311,7 @@ export function betterAuthProvider({
       };
     },
     async authenticate(request: Request): Promise<Principal> {
-      await started().ready();
+      await ready();
       const credential = credentialOf(request.headers.get("authorization"));
       switch (credential?.kind) {
         case "host":
@@ -347,7 +346,7 @@ export function betterAuthProvider({
       );
     },
     async delegate(host: HostPrincipal, turn: TurnDelegation): Promise<Delegation> {
-      await started().ready();
+      await ready();
       return delegate(await installed().turnKeys.keys(), host, turn, Date.now());
     },
     async hostActive(grantId: GrantId): Promise<boolean> {
