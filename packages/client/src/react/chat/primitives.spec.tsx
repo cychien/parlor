@@ -205,10 +205,20 @@ describe("Chat.Composer", () => {
     expect(send.disabled).toBe(false);
   });
 
-  it("cannot send to an agent that is offline", () => {
+  it("can send to an agent whose computer is offline, to queue the prompt", () => {
     composer({
       draft: "hello",
       agent: { ...baseState.agent!, online: false },
+    });
+    expect(
+      (screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it("cannot send to an agent that is not ready", () => {
+    composer({
+      draft: "hello",
+      agent: { ...baseState.agent!, ready: false },
     });
     expect(
       (screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled,

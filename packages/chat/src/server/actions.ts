@@ -164,9 +164,6 @@ export function userChatActions(deps: ChatActionDeps) {
           (candidate) => candidate.id === input.prompt.agent.hostId,
         );
         if (!host) throw new ActionError("not_found", "Computer not found");
-        if (!host.online) {
-          throw new ActionError("invalid_input", `${host.name} is offline.`);
-        }
         return deps.transact(ctx.scope, async (tx) => {
           await deps.store.appendUserItems(tx, user, {
             threadId: input.threadId,

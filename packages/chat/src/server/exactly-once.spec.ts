@@ -494,18 +494,38 @@ describe.each(drivers)("exactly-once turns on $name", (driver) => {
     expect(data(current)).toMatchObject({ accepted: true, protocol: 2 });
   });
 
-  it("sends only to a computer of the sender that is online", async () => {
+  it("queues a prompt for an offline computer whose grant holds, up to maxQueued, and hands it over when it returns", async () => {
     await app.action("alice-host", "hostReport", { online: false, agents: [] });
-    const offline = await send("t1", "u1");
-    expect(offline.status).toBe(400);
-    expect(offline.body).toEqual({
-      error: { code: "invalid_input", message: "Alice's Mac is offline." },
-    });
-    expect(await rows(handle, "select 1 from parlor_chat_threads")).toEqual([]);
-    const hosts = data(await app.action("alice", "hosts", {}));
-    expect(hosts).toMatchObject([
+    for (const n of [1, 2, 3, 4]) expect((await send("t1", `u${n}`)).status).toBe(200);
+    const fifth = await send("t1", "u5");
+    expect(fifth.status).toBe(400);
+    expect(fifth.body).toMatchObject({ error: { code: "invalid_input" } });
+    expect(data(await app.action("alice", "hosts", {}))).toMatchObject([
       { id: "mac", name: "Alice's Mac", online: false, agents: [] },
     ]);
+    await app.action("alice-host", "hostReport", { online: true, agents: [] });
+    expect(data(await claim())).toMatchObject({ turnId: "u1" });
+  });
+
+  it("refuses a prompt for a computer whose grant is gone, online or not", async () => {
+    await app.action("alice-host", "hostReport", { online: false, agents: [] });
+    app.auth.revokedGrants.add("g-mac");
+    const refused = await send("t1", "u1");
+    expect(refused.status).toBe(404);
+    expect(refused.body).toMatchObject({ error: { code: "not_found" } });
+    expect(await rows(handle, "select 1 from parlor_chat_threads")).toEqual([]);
+  });
+
+  it("sends only to a computer of the sender", async () => {
+    const stranger = await app.action("bob", "send", {
+      threadId: "t1",
+      turnId: "u1",
+      itemId: "p1",
+      clientId: "tab-1",
+      prompt: { text: "hello", agent: agentRef },
+    });
+    expect(stranger.status).toBe(404);
+    expect(await rows(handle, "select 1 from parlor_chat_threads")).toEqual([]);
     void alice;
   });
 });
