@@ -3,6 +3,7 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import type { AgentConnection, AgentSession } from "./acp.js";
+import type { AppGrant } from "./grants.js";
 import type { ProxySession } from "./mcp-proxy.js";
 
 export interface LiveSession {
@@ -10,9 +11,12 @@ export interface LiveSession {
   readonly proxy: ProxySession;
 }
 
+export type PooledGrant = Pick<AppGrant, "appOrigin" | "grantId">;
+
 /**
  * Processes per (app, agent), so two apps never share an agent process or its MCP
- * servers; sessions per (app, thread, agent), so a thread keeps its context across turns.
+ * servers; sessions per (grant, thread, agent), so a thread keeps its context across
+ * turns and never carries it to another account.
  */
 export interface SessionPool {
   process(appOrigin: string, agentId: string): AgentConnection | undefined;
@@ -25,19 +29,24 @@ export interface SessionPool {
     agentId: string,
     start: (signal: AbortSignal) => Promise<AgentConnection>,
   ): Promise<AgentConnection>;
-  session(appOrigin: string, threadId: string, agentId: string): LiveSession | undefined;
+  session(grant: PooledGrant, threadId: string, agentId: string): LiveSession | undefined;
   remember(
-    appOrigin: string,
+    grant: PooledGrant,
     threadId: string,
     agentId: string,
     session: LiveSession,
   ): void;
   /** The last session id, from `sessions.json`, for `session/resume` after a restart. */
-  resumable(appOrigin: string, threadId: string, agentId: string): string | undefined;
+  resumable(grant: PooledGrant, threadId: string, agentId: string): string | undefined;
   drop(appOrigin: string, agentId?: string): Promise<void>;
+  /** Erases the grant's remembered session ids, once the grant is gone. */
+  forget(grant: PooledGrant): Promise<void>;
 }
 
 const keyOf = (...parts: readonly string[]) => parts.join("\u0000");
+
+const sessionKeyOf = (grant: PooledGrant, threadId: string, agentId: string) =>
+  keyOf(grant.appOrigin, grant.grantId, threadId, agentId);
 
 function readRemembered(file: string): Record<string, string> {
   try {
@@ -65,7 +74,7 @@ export function createSessionPool(stateFile: string): SessionPool {
     { readonly live: LiveSession; readonly owner: string }
   >();
   const remembered = readRemembered(stateFile);
-  let saving: Promise<unknown> = Promise.resolve();
+  let saving: Promise<void> = Promise.resolve();
 
   const save = () => {
     const snapshot = `${JSON.stringify(remembered, null, 2)}\n`;
@@ -77,9 +86,10 @@ export function createSessionPool(stateFile: string): SessionPool {
         await rename(staged, stateFile);
       })
       .catch(() => undefined);
+    return saving;
   };
 
-  const forget = (owner: string) => {
+  const discard = (owner: string) => {
     processes.delete(owner);
     for (const [key, entry] of sessions) {
       if (entry.owner !== owner) continue;
@@ -101,7 +111,7 @@ export function createSessionPool(stateFile: string): SessionPool {
     };
     processes.set(owner, tracked);
     void connection.exited.then(() => {
-      if (processes.get(owner) === tracked) forget(owner);
+      if (processes.get(owner) === tracked) discard(owner);
     });
     return tracked;
   };
@@ -137,20 +147,20 @@ export function createSessionPool(stateFile: string): SessionPool {
       launching.set(owner, { controller, connection });
       return connection;
     },
-    session: (appOrigin, threadId, agentId) =>
-      sessions.get(keyOf(appOrigin, threadId, agentId))?.live,
-    remember(appOrigin, threadId, agentId, live) {
-      const owner = keyOf(appOrigin, agentId);
+    session: (grant, threadId, agentId) =>
+      sessions.get(sessionKeyOf(grant, threadId, agentId))?.live,
+    remember(grant, threadId, agentId, live) {
+      const owner = keyOf(grant.appOrigin, agentId);
       if (owners.get(live.session) !== owner || processes.get(owner) === undefined) {
         throw new Error("Remember a session opened through the pool's own process.");
       }
-      const key = keyOf(appOrigin, threadId, agentId);
+      const key = sessionKeyOf(grant, threadId, agentId);
       sessions.set(key, { live, owner });
       remembered[key] = live.session.id;
-      save();
+      void save();
     },
-    resumable: (appOrigin, threadId, agentId) =>
-      remembered[keyOf(appOrigin, threadId, agentId)],
+    resumable: (grant, threadId, agentId) =>
+      remembered[sessionKeyOf(grant, threadId, agentId)],
     async drop(appOrigin, agentId) {
       const owned = ownedBy(appOrigin, agentId);
       for (const [owner, pending] of launching) {
@@ -159,8 +169,15 @@ export function createSessionPool(stateFile: string): SessionPool {
         pending.controller.abort();
       }
       const dropped = [...processes].filter(([owner]) => owned(owner));
-      for (const [owner] of dropped) forget(owner);
+      for (const [owner] of dropped) discard(owner);
       await Promise.all(dropped.map(([, connection]) => connection.kill()));
+    },
+    async forget(grant) {
+      const prefix = keyOf(grant.appOrigin, grant.grantId, "");
+      for (const key of Object.keys(remembered)) {
+        if (key.startsWith(prefix)) delete remembered[key];
+      }
+      await save();
     },
   };
 }

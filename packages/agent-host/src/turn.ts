@@ -199,7 +199,7 @@ export async function runTurn(
   }
 
   const origin = grant.appOrigin;
-  let live: LiveSession | undefined = pool.session(origin, threadId, agentId);
+  let live: LiveSession | undefined = pool.session(grant, threadId, agentId);
   let connection: AgentConnection | undefined = pool.process(origin, agentId);
   const fresh = live === undefined;
   if (live) {
@@ -208,7 +208,7 @@ export async function runTurn(
   } else {
     const switched = deps.profiles.some(
       (other) =>
-        other.id !== agentId && pool.session(origin, threadId, other.id) !== undefined,
+        other.id !== agentId && pool.session(grant, threadId, other.id) !== undefined,
     );
     if (switched) await event("agent_switched", profile.name);
     try {
@@ -225,11 +225,11 @@ export async function runTurn(
       const session: AgentSession = await connection.openSession({
         cwd: grant.workspace,
         mcpServers: [proxy.server],
-        resume: pool.resumable(origin, threadId, agentId),
+        resume: pool.resumable(grant, threadId, agentId),
         pinAskMode: true,
       });
       live = { session, proxy };
-      pool.remember(origin, threadId, agentId, live);
+      pool.remember(grant, threadId, agentId, live);
     } catch (error) {
       proxy?.dispose();
       proxy = undefined;

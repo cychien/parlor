@@ -1,5 +1,5 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import {
   createServer,
@@ -159,6 +159,27 @@ function hostRoutes(options: {
   };
 }
 
+const claimedTurn = (turnId: string, agentId: string, context: string, text: string) => ({
+  id: "t1",
+  turnId,
+  agent: { hostId: "h-A", agentId },
+  clientId: "tab",
+  prompt: {
+    id: `p-${turnId}`,
+    threadId: "t1",
+    turnId,
+    seq: 1,
+    at: Date.now(),
+    author: "user",
+    kind: "prompt",
+    body: { text, agent: { hostId: "h-A", agentId } },
+  },
+  device: undefined,
+  context,
+  token: { token: "turn-1", expiresAt: Date.now() + 60_000 },
+  leaseUntil: Date.now() + 60_000,
+});
+
 const grantFor = (origin: string, name: string, workspace: string): AppGrant => ({
   appOrigin: origin,
   appName: name,
@@ -218,26 +239,8 @@ describe("the host daemon", () => {
         },
       ]),
     );
-    const turn = (origin: string) => () => ({
-      id: "t1",
-      turnId: "u1",
-      agent: { hostId: "h-A", agentId: "fake" },
-      clientId: "tab",
-      prompt: {
-        id: "p1",
-        threadId: "t1",
-        turnId: "u1",
-        seq: 1,
-        at: Date.now(),
-        author: "user",
-        kind: "prompt",
-        body: { text: "probe", agent: { hostId: "h-A", agentId: "fake" } },
-      },
-      device: undefined,
-      context: `<parlor-context>${origin}</parlor-context>`,
-      token: { token: "turn-1", expiresAt: Date.now() + 60_000 },
-      leaseUntil: Date.now() + 60_000,
-    });
+    const turn = (origin: string) => () =>
+      claimedTurn("u1", "fake", `<parlor-context>${origin}</parlor-context>`, "probe");
     const a = await stubApp(hostRoutes({ wake: true, turn: turn("A") }));
     const b = await stubApp(hostRoutes({ wake: false }));
     apps.push(a, b);
@@ -437,4 +440,113 @@ describe("disconnecting through the daemon", () => {
       await rm(root, { recursive: true, force: true });
     }
   }, 30_000);
+
+  it("T4-15: a session remembered under one grant is never resumed under the next", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pr-"));
+    const agentLog = join(root, "agent.log");
+    vi.stubEnv("FAKE_AGENT_LOG", agentLog);
+    const claims: (() => unknown)[] = [];
+    const routes = hostRoutes({ wake: true });
+    const app = await stubApp((request, body, response) => {
+      if (request.url === "/_parlor/auth/hosts/revoke") return (json(response, {}), true);
+      const next = request.url?.endsWith("/hostClaim") ? claims.shift() : undefined;
+      if (next) return (json(response, { data: next(), tags: [] }), true);
+      return routes(request, body, response);
+    });
+    const finished = () =>
+      app.seen.filter((seen) => seen.path.endsWith("/hostFinish")).length;
+    const remembered = () =>
+      existsSync(paths.sessions)
+        ? Object.keys(JSON.parse(readFileSync(paths.sessions, "utf8")) as object)
+        : [];
+    const received = () =>
+      readFileSync(agentLog, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { method: string; text?: string });
+
+    const paths = hostPaths(join(root, ".parlor", "host"));
+    const script = join(root, "script.json");
+    await writeFile(
+      script,
+      JSON.stringify({ fallback: "echo", advertise: { resume: true }, steps: {} }),
+    );
+    mkdirSync(paths.root, { recursive: true });
+    await writeFile(
+      paths.agents,
+      JSON.stringify([
+        {
+          id: "fake-a",
+          name: "Fake A",
+          launch: { kind: "native", command: process.execPath, args: [FAKE, script] },
+          binary: process.execPath,
+        },
+      ]),
+    );
+    const workspace = join(root, "Parlor", "hello");
+    const alice = grantFor(app.origin, "Hello", workspace);
+    const bob: AppGrant = {
+      ...alice,
+      grantId: asId("grant", "host:Bob"),
+      account: { userId: asId("user", "bob"), name: "Bob", email: "bob@example.com" },
+    };
+    const keys = memoryHostKeys();
+    const grants = fileGrantStore(paths.grants);
+    const host = createHostDaemon({
+      release: {
+        version: "0.0.0",
+        protocols: { min: 1, max: HOST_PROTOCOL },
+        control: 1,
+      },
+      paths,
+      grants,
+      keys,
+      pool: createSessionPool(paths.sessions),
+      proxy: createMcpProxy("parlor-host"),
+      launcher: acpLauncher(),
+      prompter: {
+        confirmPairing: async () => false,
+        approveDevice: async () => false,
+        answerHere: async () => undefined,
+        turnStarted: () => undefined,
+      },
+      policy: DEV_POLICY,
+    });
+    try {
+      await host.start();
+      await (await keys.create(app.origin)).keep(alice.grantId);
+      await grants.save(alice);
+      claims.push(() =>
+        claimedTurn("u-alice", "fake-a", "<parlor-context>Alice</parlor-context>", "hi"),
+      );
+      await host.connect(app.origin);
+      await vi.waitFor(() => expect(finished()).toBe(1), { timeout: 15_000 });
+      await vi.waitFor(() => expect(remembered()).toHaveLength(1));
+
+      await host.disconnect(app.origin);
+      expect(remembered()).toEqual([]);
+
+      await (await keys.create(app.origin)).keep(bob.grantId);
+      await grants.save(bob);
+      claims.push(() =>
+        claimedTurn("u-bob", "fake-a", "<parlor-context>Bob</parlor-context>", "hi"),
+      );
+      await host.connect(app.origin);
+      await vi.waitFor(() => expect(finished()).toBe(2), { timeout: 15_000 });
+
+      const methods = received().map((entry) => entry.method);
+      expect(methods).not.toContain("session/resume");
+      expect(methods.filter((method) => method === "session/new")).toHaveLength(2);
+      const prompts = received().filter((entry) => entry.method === "session/prompt");
+      expect(prompts.map((entry) => entry.text!.split("\n\n")[0])).toEqual([
+        "<parlor-context>Alice</parlor-context>",
+        "<parlor-context>Bob</parlor-context>",
+      ]);
+    } finally {
+      await host.stop();
+      await app.close();
+      vi.unstubAllEnvs();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 60_000);
 });

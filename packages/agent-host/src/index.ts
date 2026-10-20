@@ -88,7 +88,12 @@ export {
   isAppTool,
   type RemotePolicy,
 } from "./policy.js";
-export { createSessionPool, type LiveSession, type SessionPool } from "./pool.js";
+export {
+  createSessionPool,
+  type LiveSession,
+  type PooledGrant,
+  type SessionPool,
+} from "./pool.js";
 export { type LocalPrompter, terminalPrompter } from "./prompter.js";
 export { type HostRelease } from "./service.js";
 export { runTurn, type TurnDeps } from "./turn.js";

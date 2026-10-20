@@ -159,10 +159,11 @@ export function createHostDaemon(deps: DaemonDeps): HostDaemon {
     if (state) logEvent("link_closed", { appOrigin: origin, reason });
   };
 
-  const forget = async (origin: string) => {
-    devTokens.delete(origin);
-    await deps.grants.remove(origin);
-    await deps.keys.remove(origin);
+  const forget = async (grant: AppGrant) => {
+    devTokens.delete(grant.appOrigin);
+    await deps.grants.remove(grant.appOrigin);
+    await deps.keys.remove(grant.appOrigin);
+    await deps.pool.forget(grant);
   };
 
   const open = (grant: AppGrant, keys: HostKeys): LinkState => {
@@ -178,7 +179,7 @@ export function createHostDaemon(deps: DaemonDeps): HostDaemon {
       onRevoked: () => {
         if (links.get(origin) !== state) return;
         if (grant.dev) void reattach(grant);
-        else void closeLink(origin, "revoked").then(() => forget(origin));
+        else void closeLink(origin, "revoked").then(() => forget(grant));
       },
       onIncompatible: (refused, welcome) => {
         state.incompatible = incompatibleMessage(refused, welcome);
@@ -290,6 +291,7 @@ export function createHostDaemon(deps: DaemonDeps): HostDaemon {
         return;
       }
       await closeLink(appOrigin, "replaced");
+      if (current) await deps.pool.forget(current.link.grant);
       await report(open(grant, deps.keys));
     },
     async disconnect(appOrigin) {
@@ -306,7 +308,7 @@ export function createHostDaemon(deps: DaemonDeps): HostDaemon {
         });
       }
       await closeLink(appOrigin, "disconnected");
-      await forget(appOrigin);
+      await forget(grant);
     },
     async stop() {
       await Promise.all(
