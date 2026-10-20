@@ -260,6 +260,35 @@ describe("foldThread", () => {
     expect(settled[1]).toMatchObject({ answer: { state: "answered", choice: "yes" } });
   });
 
+  it("settles an ask the computer answered with the choice it took, and shows no row for the event", () => {
+    seq = 0;
+    const ask = item("ask", "u1.1", turn1, {
+      question: "Run rm?",
+      choices: [
+        { id: "yes", label: "Yes", effect: "allow_once" },
+        { id: "no", label: "No", effect: "reject_once" },
+      ],
+      approval: "computer",
+    });
+    const taken = item("event", "u1.2", turn1, {
+      event: "answered_on_computer",
+      itemId: ask.id,
+      choice: "no",
+    });
+    const running = turns([turn1, "running"]);
+    expect(fold({ items: [prompt("p1"), ask], turns: running })[1]).toMatchObject({
+      answer: { state: "open" },
+    });
+    const rows = fold({ items: [prompt("p1"), ask, taken], turns: running });
+    expect(rows.map((row) => row.kind)).toEqual(["prompt", "ask"]);
+    expect(rows[1]).toMatchObject({ answer: { state: "answered", choice: "no" } });
+    const finished = fold({
+      items: [prompt("p1"), ask, taken],
+      turns: turns([turn1, "done"]),
+    });
+    expect(finished[1]).toMatchObject({ answer: { state: "answered", choice: "no" } });
+  });
+
   it("gives a failed turn's prompt the reason the turn failed", () => {
     seq = 0;
     const rows = fold({

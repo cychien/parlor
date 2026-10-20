@@ -297,6 +297,20 @@ describe("Chat.Ask", () => {
     expect(fake.runtime.answer).not.toHaveBeenCalled();
   });
 
+  it("shows the choice the computer took while the buttons stay disabled", () => {
+    renderAsk(
+      ask({ approval: "computer", answer: { state: "answered", choice: "allow" } }),
+    );
+    const buttons = screen.getAllByRole("button") as HTMLButtonElement[];
+    expect(
+      buttons.map((button) => [button.disabled, button.getAttribute("aria-pressed")]),
+    ).toEqual([
+      [true, "true"],
+      [true, "false"],
+    ]);
+    expect(screen.getByRole("group").dataset.state).toBe("answered");
+  });
+
   it("disables its choices once answered, marking the one taken", () => {
     renderAsk(ask({ answer: { state: "answered", choice: "allow" } }));
     const allow = screen.getByRole("button", { name: "Allow once" }) as HTMLButtonElement;

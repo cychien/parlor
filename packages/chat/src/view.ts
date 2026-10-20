@@ -1,6 +1,6 @@
 import { asId, type DeviceId, type ItemId, type TurnId } from "@parlor/core";
 
-import type { ChatEvent } from "./events.js";
+import type { ChatEvent, FoldedEvent } from "./events.js";
 import type { ChatItemBody, ChatItemKind, LoggedItem } from "./items.js";
 import type {
   AgentRef,
@@ -72,7 +72,7 @@ export type ChatItem<C = unknown> =
       readonly kind: "event";
       readonly id: ItemId;
       readonly turnId: TurnId;
-      readonly event: ChatEvent;
+      readonly event: Exclude<ChatEvent, FoldedEvent>;
       readonly detail: string | undefined;
     };
 
@@ -222,11 +222,25 @@ export function foldThread<C extends ThreadConfirmation>(
       );
     },
     event: (item) => {
+      const { event, itemId, choice } = item.body;
+      if (event === "answered_on_computer") {
+        const at = itemId === undefined ? undefined : asks.get(itemId);
+        const row = at === undefined ? undefined : rows[at];
+        if (
+          at !== undefined &&
+          choice !== undefined &&
+          row?.kind === "ask" &&
+          row.answer.state === "open"
+        ) {
+          rows[at] = { ...row, answer: { state: "answered", choice } };
+        }
+        return;
+      }
       push({
         kind: "event",
         id: item.id,
         turnId: item.turnId,
-        event: item.body.event,
+        event,
         detail: item.body.detail,
       });
     },

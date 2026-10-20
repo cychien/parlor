@@ -524,6 +524,15 @@ export async function runTurn(
             if (!waiting) return;
             const answer =
               choice === undefined ? undefined : answerOf(waiting, { askId: id, choice });
+            if (choice !== undefined && answer) {
+              void write([
+                {
+                  id: nextId(),
+                  kind: "event",
+                  body: { event: "answered_on_computer", itemId: id, choice },
+                },
+              ]);
+            }
             settle(id, answer ?? { kind: "cancelled" });
           });
       }

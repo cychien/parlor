@@ -1200,6 +1200,11 @@ describe("runTurn taking answers only as the policy says", () => {
       }),
     );
     expect(await running).toMatchObject({ state: "done" });
+    expect(eventsOf(run)).toContainEqual({
+      event: "answered_on_computer",
+      itemId: askOf(run)!.id,
+      choice: "allow",
+    });
   }, 30_000);
 
   it("R5-06: closes the dialog of a question answered on the computer when the turn is cancelled", async () => {
