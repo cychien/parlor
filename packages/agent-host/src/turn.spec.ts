@@ -1202,6 +1202,55 @@ describe("runTurn taking answers only as the policy says", () => {
     expect(await running).toMatchObject({ state: "done" });
   }, 30_000);
 
+  it("R5-06: closes the dialog of a question answered on the computer when the turn is cancelled", async () => {
+    const device = await TestDevice.create();
+    const trust = memoryTrust();
+    await trust.pin(APP, pinOf(device));
+    let dialog: AbortSignal | undefined;
+    const answerHere = vi.fn(
+      ({ signal }: { signal?: AbortSignal | undefined }) =>
+        new Promise<string | undefined>((resolve) => {
+          dialog = signal;
+          signal?.addEventListener("abort", () => resolve(undefined));
+        }),
+    );
+    let cancelled = false;
+    const run: ReturnType<typeof harness> = harness(
+      (afterSeq) => {
+        if (!cancelled) return [];
+        const turnId = asId("turn", `u${turns}`);
+        return [
+          {
+            turnId,
+            items: [
+              {
+                id: asId("item", "c1"),
+                threadId: askThread,
+                turnId,
+                seq: afterSeq + 1,
+                at: Date.now(),
+                author: "user",
+                kind: "cancel",
+                body: {},
+              },
+            ],
+          },
+        ];
+      },
+      {
+        trust,
+        policy: { deviceApproval: "local", answers: "computer" },
+        prompter: { answerHere },
+      },
+    );
+    const running = runTurn(await signedClaim(device, askThread, "scripted"), run.deps);
+    await vi.waitFor(() => expect(answerHere).toHaveBeenCalled());
+    expect(dialog?.aborted).toBe(false);
+    cancelled = true;
+    expect(await running).toEqual({ state: "cancelled" });
+    expect(dialog?.aborted).toBe(true);
+  }, 30_000);
+
   it("refuses a chat answer to a question that is answered on the computer", async () => {
     const device = await TestDevice.create();
     const trust = memoryTrust();

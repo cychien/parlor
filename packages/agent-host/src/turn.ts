@@ -76,6 +76,7 @@ class AgentExited extends Error {
 interface Pending {
   readonly ask: AgentAsk;
   readonly approval: ChatItemBody<"ask">["approval"];
+  readonly dialog: AbortController;
   readonly resolve: (answer: AgentAskAnswer) => void;
 }
 
@@ -188,6 +189,17 @@ export async function runTurn(
   let lastWrite = deps.now();
   let appending: Promise<void> = Promise.resolve();
   const pending = new Map<ItemId, Pending>();
+
+  const settle = (id: ItemId, answer: AgentAskAnswer) => {
+    const waiting = pending.get(id);
+    if (!waiting) return;
+    pending.delete(id);
+    waiting.dialog.abort();
+    waiting.resolve(answer);
+  };
+  const settleAll = () => {
+    for (const id of [...pending.keys()]) settle(id, { kind: "cancelled" });
+  };
 
   const nextId = (): ItemId => {
     const id = asId("item", `${turnId}.${fold.nextId}`);
@@ -478,10 +490,7 @@ export async function runTurn(
       if (cancelled) return;
       cancelled = true;
       void session.cancel();
-      for (const [id, waiting] of pending) {
-        pending.delete(id);
-        waiting.resolve({ kind: "cancelled" });
-      }
+      settleAll();
     };
 
     const ask = async (question: AgentAsk): Promise<AgentAskAnswer> => {
@@ -494,8 +503,9 @@ export async function runTurn(
       const approval =
         wanted === "presence" && device && !device.presenceKey ? "computer" : wanted;
       const id = nextId();
+      const dialog = new AbortController();
       const answered = new Promise<AgentAskAnswer>((resolve) =>
-        pending.set(id, { ask: question, approval, resolve }),
+        pending.set(id, { ask: question, approval, dialog, resolve }),
       );
       await write([{ id, kind: "ask", body: askBody(question, approval) }]);
       if (approval === "computer") {
@@ -507,16 +517,14 @@ export async function runTurn(
             agent: profile.name,
             question: question.kind === "permission" ? question.title : question.message,
             choices,
+            signal: dialog.signal,
           })
           .then((choice) => {
             const waiting = pending.get(id);
             if (!waiting) return;
-            pending.delete(id);
-            waiting.resolve(
-              choice === undefined
-                ? { kind: "cancelled" }
-                : (answerOf(waiting, { askId: id, choice }) ?? { kind: "cancelled" }),
-            );
+            const answer =
+              choice === undefined ? undefined : answerOf(waiting, { askId: id, choice });
+            settle(id, answer ?? { kind: "cancelled" });
           });
       }
       return answered;
@@ -599,8 +607,7 @@ export async function runTurn(
             );
             continue;
           }
-          pending.delete(item.body.askId);
-          waiting.resolve(answer);
+          settle(item.body.askId, answer);
         }
       }
     };
@@ -632,10 +639,7 @@ export async function runTurn(
             ]);
     } finally {
       polling = false;
-      for (const [id, waiting] of pending) {
-        pending.delete(id);
-        waiting.resolve({ kind: "cancelled" });
-      }
+      settleAll();
     }
 
     const interrupted = failure !== undefined || cancelled || stop === "cancelled";
