@@ -288,6 +288,16 @@ button.danger {
   border-bottom: 1px solid var(--line);
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.header-slot {
+  display: contents;
+}
+
 .agent-sidebar h2 {
   margin: 0;
   font-size: 18px;
@@ -321,6 +331,11 @@ button.danger {
   gap: 4px;
   padding: 12px 16px;
   border-bottom: 1px solid var(--line);
+}
+
+.picker:has(+ .picker) {
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 
 .picker select {

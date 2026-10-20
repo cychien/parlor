@@ -82,7 +82,10 @@ export interface ChatCommands {
     values?: Readonly<Record<string, string | number | boolean>>,
   ): Promise<void>;
   choose(agentKey: string): void;
+  /** `undefined` opens the most recent thread, if there is one. */
   openThread(threadId: string | undefined): void;
+  /** Starts a blank thread; it exists on the server once the first prompt is sent. */
+  newThread(): void;
 }
 
 export interface ChatRuntime extends ChatCommands {
@@ -107,6 +110,8 @@ export const HOST_GRANTS_TAG = "parlor_auth_hosts";
 
 interface PendingSend {
   readonly text: string;
+  readonly agent: string;
+  readonly openedIn: ThreadId | undefined;
   readonly threadId: ThreadId;
   readonly turnId: TurnId;
   readonly itemId: ItemId;
@@ -151,6 +156,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
   let chosen: string | undefined;
   let sending = false;
   let pendingSend: PendingSend | undefined;
+  let startedNew = false;
   let connect: ConnectOption = {
     kind: "command",
     command: `npx @parlor/agent-host connect ${deps.appOrigin}`,
@@ -244,10 +250,11 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     if (epoch !== generation) return;
     threads = snapshot.threads;
     hosts = snapshot.hosts;
-    thread = snapshot.page.thread;
-    threadId = snapshot.page.thread?.id ?? target;
-    absorb(snapshot.page);
-    open = mergeSnapshot(open, channelOpen ? snapshot.page.open : []);
+    const page = startedNew && target === undefined ? undefined : snapshot.page;
+    thread = page?.thread;
+    threadId = page?.thread?.id ?? target;
+    if (page) absorb(page);
+    open = mergeSnapshot(open, channelOpen && page ? page.open : []);
     const replay = beforeLoad;
     beforeLoad = [];
     loaded = "yes";
@@ -256,6 +263,15 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     }
     open = pruneOpen(open, items, turns);
     watch();
+  };
+
+  const refreshLists = async () => {
+    const epoch = generation;
+    const fresh = await calls.call("open", {});
+    if (epoch !== generation || threadId !== undefined) return;
+    threads = fresh.threads;
+    hosts = fresh.hosts;
+    emit();
   };
 
   const refreshHosts = async () => {
@@ -316,6 +332,28 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
 
   const activeTurn = (): TurnStatus | undefined => [...turns].reverse().find(isActive);
 
+  const switchTo = (target: ThreadId | undefined, blank: boolean) => {
+    generation += 1;
+    threadId = target;
+    startedNew = blank;
+    thread = undefined;
+    items = new Map();
+    turns = [];
+    open = NO_OPEN_TURNS;
+    beforeLoad = [];
+    pendingSend = undefined;
+    stopIds.clear();
+    answerIds.clear();
+    watch();
+    if (blank && loaded === "yes") {
+      emit();
+      return;
+    }
+    loaded = "no";
+    emit();
+    void loadFirst().then(emit);
+  };
+
   const runtime: ChatRuntime = {
     subscribe(listener) {
       listeners.add(listener);
@@ -333,15 +371,22 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
         return;
       }
       const [hostId, agentId] = target.key.split("/") as [string, string];
+      const retrying =
+        pendingSend?.text === prompt &&
+        pendingSend.agent === target.key &&
+        pendingSend.openedIn === threadId;
       const attempt =
-        pendingSend?.text === prompt
+        retrying && pendingSend
           ? pendingSend
           : (pendingSend = {
               text: prompt,
+              agent: target.key,
+              openedIn: threadId,
               threadId: threadId ?? mint("thread"),
               turnId: mint("turn"),
               itemId: mint("item"),
             });
+      const epoch = generation;
       sending = true;
       emit();
       try {
@@ -355,6 +400,8 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
           });
           pendingSend = undefined;
           if (draft.trim() === prompt) draft = "";
+          if (epoch !== generation) return;
+          startedNew = false;
           threadId = attempt.threadId;
           watch();
           await load(threadId);
@@ -399,17 +446,10 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       emit();
     },
     openThread(target) {
-      generation += 1;
-      threadId = target === undefined ? undefined : asId("thread", target);
-      thread = undefined;
-      items = new Map();
-      turns = [];
-      open = NO_OPEN_TURNS;
-      beforeLoad = [];
-      loaded = "no";
-      watch();
-      emit();
-      void loadFirst().then(emit);
+      switchTo(target === undefined ? undefined : asId("thread", target), false);
+    },
+    newThread() {
+      switchTo(undefined, true);
     },
     start() {
       running = true;
@@ -447,11 +487,14 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
           staleAfterLoad = true;
         } else {
           if (mine && threadId !== undefined) void refresh();
-          else if (mine) void load(undefined).then(emit, () => {});
+          else if (mine && !startedNew && draft.trim() === "") {
+            void load(undefined).then(emit, () => {});
+          } else if (mine) void refreshLists().catch(() => {});
           if (computers) void refreshHosts().catch(() => {});
         }
       });
       const offConfirmations = agentUi.confirmations.subscribe(emit);
+      emit();
       void initial();
       return () => {
         running = false;

@@ -6,15 +6,22 @@ import {
   useChat,
 } from "@parlor/client/react";
 import { useEffect } from "react";
+import { createPortal } from "react-dom";
 
 import { ConfirmationCard, focusComposer } from "./agent-requests.js";
 import { sidebarView } from "./sidebar-view.js";
 
-export default function AgentSidebar() {
+export default function AgentSidebar({
+  headerActions,
+}: {
+  readonly headerActions: HTMLElement | null;
+}) {
   return (
     <Chat.Root>
       <PublishThread />
+      {headerActions ? createPortal(<NewChat />, headerActions) : null}
       <Computers />
+      <Threads />
       <Chat.Confirmations className="requests">
         {(confirmation) =>
           confirmation.threadId === undefined ? (
@@ -37,6 +44,42 @@ function PublishThread() {
     return () => sidebarView.set({ threadId: undefined });
   }, [threadId]);
   return null;
+}
+
+function NewChat() {
+  const { threads, thread, newThread } = useChat();
+  if (threads.length === 0) return null;
+  return (
+    <button type="button" disabled={thread === undefined} onClick={newThread}>
+      New chat
+    </button>
+  );
+}
+
+function Threads() {
+  const { threads, thread, openThread } = useChat();
+  if (threads.length === 0) return null;
+  return (
+    <div className="picker">
+      <select
+        name="thread"
+        aria-label="Conversation"
+        value={thread?.id ?? ""}
+        onChange={(event) => openThread(event.target.value)}
+      >
+        {thread ? null : (
+          <option value="" disabled>
+            New conversation
+          </option>
+        )}
+        {threads.map((choice) => (
+          <option key={choice.id} value={choice.id}>
+            {choice.title}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
 }
 
 function Computers() {

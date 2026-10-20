@@ -82,7 +82,7 @@ function snapshot(overrides: Partial<ChatSnapshot["page"]> = {}): ChatSnapshot {
 
 function setup(
   options: {
-    open?: () => Promise<ChatSnapshot>;
+    open?: (input: { threadId?: string }) => Promise<ChatSnapshot>;
     items?: (afterSeq: number) => LoggedItem[];
     threadId?: string;
     localHost?: CapabilityHandle<LocalAgentHost>;
@@ -556,6 +556,242 @@ describe("createChatRuntime send", () => {
     finish();
     await first;
     expect(h.calls.filter((c) => c.name === "send")).toHaveLength(1);
+  });
+});
+
+describe("createChatRuntime switching threads", () => {
+  const twoAgents: HostSummary = {
+    ...claudeOnMac(),
+    agents: [
+      { id: "claude", name: "Claude Code", ready: true },
+      { id: "codex", name: "Codex", ready: true },
+    ],
+  };
+  const inThread = (id: string) => ({
+    ...snapshot({
+      thread: thread(id),
+      turns: [turn(`turn_of_${id}`, "running")],
+    }),
+    hosts: [twoAgents],
+    threads: [thread("thr_1"), thread("thr_2")],
+  });
+  const switching = (options: { sendFails?: boolean } = {}) => {
+    const sent: { threadId: string; turnId: string; itemId: string }[] = [];
+    const cancels: { threadId: string; turnId: string; itemId: string }[] = [];
+    let failures = 0;
+    const h = setup();
+    h.call.mockImplementation(async (name: string, input: unknown) => {
+      h.calls.push({ name, input });
+      if (name === "open") {
+        return inThread((input as { threadId?: string }).threadId ?? "thr_1");
+      }
+      if (name === "send") {
+        sent.push(input as (typeof sent)[number]);
+        if (options.sendFails && ++failures === 1) throw new Error("network");
+      }
+      if (name === "cancel") {
+        cancels.push(input as (typeof cancels)[number]);
+        if (cancels.length === 1) throw new Error("network");
+      }
+      return { id: "x" };
+    });
+    return { h, sent, cancels };
+  };
+
+  it("sends a prompt that failed in one thread to the thread that is open when it is sent again", async () => {
+    const { h, sent } = switching({ sendFails: true });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().thread?.id).toBe("thr_1"));
+    h.runtime.setDraft("hello");
+    await expect(h.runtime.send()).rejects.toThrow("network");
+
+    h.runtime.openThread("thr_2");
+    await vi.waitFor(() => expect(h.runtime.get().thread?.id).toBe("thr_2"));
+    await h.runtime.send();
+
+    expect(sent.map((s) => s.threadId)).toEqual(["thr_1", "thr_2"]);
+    expect(sent[1]!.turnId).not.toBe(sent[0]!.turnId);
+    expect(sent[1]!.itemId).not.toBe(sent[0]!.itemId);
+    expect(h.runtime.get().thread?.id).toBe("thr_2");
+  });
+
+  it("sends a failed prompt to a different agent as a new prompt", async () => {
+    const { h, sent } = switching({ sendFails: true });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("running"));
+    h.runtime.setDraft("hello");
+    await expect(h.runtime.send()).rejects.toThrow("network");
+    h.runtime.choose("host_mac/codex");
+    await h.runtime.send();
+
+    expect(sent.map((s) => s.threadId)).toEqual(["thr_1", "thr_1"]);
+    expect(sent[1]!.turnId).not.toBe(sent[0]!.turnId);
+    expect(sent[1]!.itemId).not.toBe(sent[0]!.itemId);
+  });
+
+  it("makes a stop retried after visiting another thread a new request", async () => {
+    const { h, cancels } = switching();
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("running"));
+    await expect(h.runtime.stop()).rejects.toThrow("network");
+
+    h.runtime.openThread("thr_2");
+    await vi.waitFor(() => expect(h.runtime.get().thread?.id).toBe("thr_2"));
+    h.runtime.openThread("thr_1");
+    await vi.waitFor(() => expect(h.runtime.get().thread?.id).toBe("thr_1"));
+    await h.runtime.stop();
+
+    expect(cancels.map((c) => c.threadId)).toEqual(["thr_1", "thr_1"]);
+    expect(cancels[1]!.itemId).not.toBe(cancels[0]!.itemId);
+  });
+
+  it("stays in the thread the user opened while a send is still in flight", async () => {
+    const { h } = switching();
+    let finish!: () => void;
+    const inner = h.call.getMockImplementation()!;
+    h.call.mockImplementation(async (name: string, input: unknown) => {
+      if (name === "send") {
+        h.calls.push({ name, input });
+        await new Promise<void>((resolve) => (finish = resolve));
+        return { id: "thr_1" };
+      }
+      return inner(name, input);
+    });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().thread?.id).toBe("thr_1"));
+    h.runtime.setDraft("hello");
+    const sending = h.runtime.send();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("sending"));
+    h.runtime.openThread("thr_2");
+    await vi.waitFor(() => expect(h.runtime.get().thread?.id).toBe("thr_2"));
+    finish();
+    await sending;
+    await flush();
+    expect(h.runtime.get().thread?.id).toBe("thr_2");
+    expect(h.calls.filter((c) => c.name === "open").at(-1)?.input).toEqual({
+      threadId: "thr_2",
+    });
+  });
+});
+
+describe("createChatRuntime a new thread", () => {
+  const several = () =>
+    setup({
+      open: async (input) => ({
+        ...snapshot({
+          thread: thread(input.threadId ?? "thr_1"),
+          items: [logged(1, "item_p", "prompt", "earlier")],
+          turns: [turn("turn_1", "done")],
+        }),
+        threads: [thread("thr_2"), thread("thr_1")],
+      }),
+    });
+
+  it("starts blank beside the older threads, keeping the computers and the draft", async () => {
+    const h = several();
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    h.runtime.setDraft("half typed");
+    h.runtime.newThread();
+
+    const state = h.runtime.get();
+    expect(state.status).toBe("idle");
+    expect(state.thread).toBeUndefined();
+    expect(state.items).toEqual([]);
+    expect(state.threads.map((t) => t.id)).toEqual(["thr_2", "thr_1"]);
+    expect(state.agents.map((a) => a.key)).toEqual(["host_mac/claude"]);
+    expect(state.draft).toBe("half typed");
+    expect(h.names()).toEqual(["open"]);
+    expect(h.stopWatching).toHaveBeenCalledOnce();
+  });
+
+  it("creates the thread with the first prompt and moves into it", async () => {
+    const h = several();
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    h.runtime.newThread();
+    h.runtime.setDraft("a fresh start");
+    await h.runtime.send();
+
+    const { threadId } = h.calls.find((c) => c.name === "send")!.input as {
+      threadId: string;
+    };
+    expect(["thr_1", "thr_2"]).not.toContain(threadId);
+    expect(h.watch).toHaveBeenLastCalledWith(threadId);
+    expect(h.calls.at(-1)).toEqual({ name: "open", input: { threadId } });
+  });
+
+  it("is not moved to another thread by a sync event while it is blank, only its list is refreshed", async () => {
+    let listed = [thread("thr_2"), thread("thr_1")];
+    const h = setup({
+      open: async (input) => ({
+        ...snapshot({ thread: thread(input.threadId ?? "thr_2") }),
+        threads: listed,
+      }),
+    });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    h.runtime.newThread();
+    h.runtime.setDraft("typing");
+    listed = [thread("thr_3"), thread("thr_2"), thread("thr_1")];
+    h.tags(["parlor_chat", "thr_3"]);
+
+    await vi.waitFor(() =>
+      expect(h.runtime.get().threads.map((t) => t.id)).toEqual([
+        "thr_3",
+        "thr_2",
+        "thr_1",
+      ]),
+    );
+    expect(h.runtime.get().thread).toBeUndefined();
+    expect(h.runtime.get().draft).toBe("typing");
+    expect(h.watch).toHaveBeenCalledTimes(1);
+  });
+
+  describe("when the user has no thread yet", () => {
+    const withoutThreads = () => {
+      let created = false;
+      const h = setup({
+        open: async () =>
+          created
+            ? { ...snapshot(), threads: [thread("thr_1")] }
+            : { ...snapshot({ thread: undefined }), threads: [] },
+      });
+      return { h, create: () => (created = true) };
+    };
+
+    it("is not moved by a sync event while a draft is typed", async () => {
+      const { h, create } = withoutThreads();
+      h.runtime.start();
+      await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+      h.runtime.setDraft("typing");
+      create();
+      h.tags(["parlor_chat", "thr_1"]);
+      await vi.waitFor(() => expect(h.runtime.get().threads).toHaveLength(1));
+      expect(h.runtime.get().thread).toBeUndefined();
+    });
+
+    it("follows the thread another client starts when nothing is typed", async () => {
+      const { h, create } = withoutThreads();
+      h.runtime.start();
+      await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+      create();
+      h.tags(["parlor_chat", "thr_1"]);
+      await vi.waitFor(() => expect(h.runtime.get().thread?.id).toBe("thr_1"));
+    });
+  });
+
+  it("stays blank when asked for while the first read is still running", async () => {
+    const release: ((value: ChatSnapshot) => void)[] = [];
+    const h = setup({ open: () => new Promise((resolve) => release.push(resolve)) });
+    h.runtime.start();
+    h.runtime.newThread();
+    await vi.waitFor(() => expect(release).toHaveLength(2));
+    release[0]!({ ...snapshot(), threads: [thread("thr_stale")] });
+    release[1]!({ ...snapshot(), threads: [thread("thr_1")] });
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    expect(h.runtime.get().thread).toBeUndefined();
+    expect(h.runtime.get().threads.map((t) => t.id)).toEqual(["thr_1"]);
   });
 });
 
