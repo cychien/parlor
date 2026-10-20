@@ -53,6 +53,18 @@ export interface AgentConnection {
   kill(): Promise<void>;
 }
 
+/** `openSession` would not run the session; `leftOpen` when the agent still holds it. */
+export class SessionRefused extends Error {
+  override readonly name = "SessionRefused";
+  constructor(
+    message: string,
+    readonly leftOpen: boolean,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+  }
+}
+
 export interface AgentCapabilities {
   readonly resume: boolean;
   readonly close: boolean;
@@ -197,7 +209,7 @@ export interface AgentModes {
 
 /** The agent side of ACP in this file's own terms, for the fake agent. */
 export interface AcpAgentHandlers {
-  readonly capabilities: Pick<AgentCapabilities, "resume" | "mcpHttp">;
+  readonly capabilities: Pick<AgentCapabilities, "resume" | "close" | "mcpHttp">;
   newSession(
     input: OpenSessionInput,
   ): Promise<{ readonly id: string; readonly modes?: AgentModes | undefined }>;
@@ -726,23 +738,41 @@ export function acpLauncher(): AgentLauncher {
           } catch (error) {
             throw loginProblem(error);
           }
+          const sessionId = opened.id;
+          const close = async (): Promise<boolean> => {
+            sessions.delete(sessionId);
+            if (!capabilities.close) return false;
+            return context.request(methods.agent.session.close, { sessionId }).then(
+              () => true,
+              () => false,
+            );
+          };
           const modes = input.pinAskMode ? opened.modes : undefined;
           const pinned = modes ? askingModeOf(modes) : undefined;
           if (modes && pinned === undefined) {
-            throw new Error(
+            throw new SessionRefused(
               `${profile.name} offers no mode that asks before it acts, so it cannot take a turn from an app.`,
+              !(await close()),
             );
           }
           const state: LiveState = { handlers: undefined, calls: new Map(), pinned };
-          sessions.set(opened.id, state);
+          sessions.set(sessionId, state);
           if (pinned !== undefined && pinned !== modes?.currentModeId) {
-            await context.request(methods.agent.session.setMode, {
-              sessionId: opened.id,
-              modeId: pinned,
-            });
+            try {
+              await context.request(methods.agent.session.setMode, {
+                sessionId,
+                modeId: pinned,
+              });
+            } catch (error) {
+              throw new SessionRefused(
+                `${profile.name} did not switch to a mode that asks before it acts.`,
+                !(await close()),
+                { cause: error },
+              );
+            }
           }
           const session: AgentSession = {
-            id: opened.id,
+            id: sessionId,
             resumed: opened.resumed,
             prompt: async (blocks, handlers) => {
               if (state.handlers)
@@ -750,7 +780,7 @@ export function acpLauncher(): AgentLauncher {
               state.handlers = handlers;
               try {
                 const request: PromptRequest = {
-                  sessionId: opened.id,
+                  sessionId,
                   prompt: blocks.map((block) => ({ type: "text", text: block.text })),
                 };
                 const response = await context.request(
@@ -764,14 +794,10 @@ export function acpLauncher(): AgentLauncher {
             },
             cancel: () =>
               context
-                .notify(methods.agent.session.cancel, { sessionId: opened.id })
+                .notify(methods.agent.session.cancel, { sessionId })
                 .catch(() => undefined),
             close: async () => {
-              sessions.delete(opened.id);
-              if (!capabilities.close) return;
-              await context
-                .request(methods.agent.session.close, { sessionId: opened.id })
-                .catch(() => undefined);
+              await close();
             },
           };
           return session;
@@ -792,7 +818,10 @@ export function serveAcpAgent(handlers: AcpAgentHandlers, io: AcpStdio): Promise
       agentCapabilities: {
         loadSession: false,
         mcpCapabilities: { http: handlers.capabilities.mcpHttp, sse: false },
-        sessionCapabilities: handlers.capabilities.resume ? { resume: {} } : {},
+        sessionCapabilities: {
+          ...(handlers.capabilities.resume ? { resume: {} } : {}),
+          ...(handlers.capabilities.close ? { close: {} } : {}),
+        },
       },
       authMethods: [],
     }))
@@ -818,6 +847,12 @@ export function serveAcpAgent(handlers: AcpAgentHandlers, io: AcpStdio): Promise
       return {};
     })
     .onRequest(methods.agent.session.setMode, () => ({}))
+    .onRequest(methods.agent.session.close, () => {
+      if (!handlers.capabilities.close) {
+        throw RequestError.methodNotFound(methods.agent.session.close);
+      }
+      return {};
+    })
     .onRequest(methods.agent.session.prompt, async ({ params, client }) => {
       const sessionId = params.sessionId;
       const cancelled = new AbortController();

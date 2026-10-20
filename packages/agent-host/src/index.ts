@@ -17,6 +17,7 @@ export {
   type OpenSessionInput,
   type PromptBlock,
   serveAcpAgent,
+  SessionRefused,
   type StdioMcpServer,
   type StopReason,
   type ToolKind,

@@ -26,6 +26,7 @@ export interface FakeAgentScript {
   readonly advertise?:
     | {
         readonly resume?: boolean | undefined;
+        readonly close?: boolean | undefined;
         readonly mcpHttp?: boolean | undefined;
         readonly modes?: AgentModes | undefined;
       }
@@ -286,6 +287,7 @@ export function serveFakeAgent(script: FakeAgentScript, io: AcpStdio): Promise<v
     {
       capabilities: {
         resume: script.advertise?.resume === true,
+        close: script.advertise?.close === true,
         mcpHttp: script.advertise?.mcpHttp === true,
       },
       newSession: async (input) => {

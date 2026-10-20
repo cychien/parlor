@@ -71,6 +71,11 @@ const bypassOnly: FakeAgentScript = {
   steps: {},
 };
 
+const bypassClosable: FakeAgentScript = {
+  ...bypassOnly,
+  advertise: { ...bypassOnly.advertise, close: true },
+};
+
 type Logged =
   | {
       readonly kind: "stream";
@@ -106,6 +111,7 @@ beforeAll(async () => {
   vi.stubEnv("FAKE_AGENT_LOG", agentLog);
   await writeFile(join(dir, "script.json"), JSON.stringify(script));
   await writeFile(join(dir, "bypass.json"), JSON.stringify(bypassOnly));
+  await writeFile(join(dir, "bypass-close.json"), JSON.stringify(bypassClosable));
   proxy = createMcpProxy("parlor-host");
   await proxy.listen(join(dir, "run", "proxy.sock"));
   pool = createSessionPool(join(dir, "sessions.json"));
@@ -122,6 +128,7 @@ interface AgentLogEntry {
   readonly at: number;
   readonly method: string;
   readonly pid: number;
+  readonly sessionId?: string;
   readonly text?: string;
 }
 
@@ -214,6 +221,11 @@ function harness(
         ...fakeAgentProfile(ENTRY, join(dir, "bypass.json")),
         id: "fake-bypass",
         name: "Fake bypass",
+      },
+      {
+        ...fakeAgentProfile(ENTRY, join(dir, "bypass-close.json")),
+        id: "fake-bypass-close",
+        name: "Fake bypass with close",
       },
     ],
     launcher: options.launcher ?? acpLauncher(),
@@ -620,4 +632,39 @@ describe("runTurn against the fake agent over real stdio", () => {
       body: { event: "turn_failed", detail: expect.stringContaining("Fake bypass") },
     });
   }, 30_000);
+
+  const refusedTurns = async (origin: string, agentId: string) => {
+    const received: AgentLogEntry[][] = [];
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const run = harness(undefined, { appOrigin: origin });
+      const before = agentLogEntries().length;
+      expect(
+        await runTurn(claim(asId("thread", "t414"), agentId, "hello"), run.deps),
+      ).toEqual({ state: "failed", reason: "agent_unavailable" });
+      received.push(agentLogEntries().slice(before));
+    }
+    expect(received.flat().map((entry) => entry.method)).not.toContain("session/prompt");
+    return received;
+  };
+
+  it("T4-14: a refused session the agent cannot close takes its process with it", async () => {
+    const received = await refusedTurns("http://localhost:5314", "fake-bypass");
+    const pids = received.map(
+      (turn) => turn.find((entry) => entry.method === "session/new")!.pid,
+    );
+    expect(new Set(pids).size).toBe(3);
+    for (const pid of pids) expect(alive(pid)).toBe(false);
+  }, 60_000);
+
+  it("T4-14: a refused session the agent can close is closed before the turn ends", async () => {
+    const received = await refusedTurns("http://localhost:5315", "fake-bypass-close");
+    for (const turn of received) {
+      const opened = turn.find((entry) => entry.method === "session/new")!;
+      expect(turn.filter((entry) => entry.method === "session/close")).toEqual([
+        expect.objectContaining({ pid: opened.pid, sessionId: expect.any(String) }),
+      ]);
+    }
+    const closed = received.flat().filter((entry) => entry.method === "session/close");
+    expect(new Set(closed.map((entry) => entry.sessionId)).size).toBe(3);
+  }, 60_000);
 });

@@ -11,14 +11,15 @@ import type {
 } from "@parlor/chat";
 import { ActionError, asId, type ItemId } from "@parlor/core";
 
-import type {
-  AgentAsk,
-  AgentAskAnswer,
-  AgentConnection,
-  AgentExit,
-  AgentLauncher,
-  AgentSession,
-  StopReason,
+import {
+  type AgentAsk,
+  type AgentAskAnswer,
+  type AgentConnection,
+  type AgentExit,
+  type AgentLauncher,
+  type AgentSession,
+  SessionRefused,
+  type StopReason,
 } from "./acp.js";
 import type { AgentProfile } from "./agents.js";
 import { finishFold, foldUpdate, startFold, type TurnFold } from "./fold.js";
@@ -232,6 +233,9 @@ export async function runTurn(
     } catch (error) {
       proxy?.dispose();
       proxy = undefined;
+      if (error instanceof SessionRefused && error.leftOpen) {
+        await pool.drop(origin, agentId);
+      }
       const message = error instanceof Error ? error.message : String(error);
       return fail("agent_unavailable", "turn_failed", message);
     }
