@@ -101,7 +101,10 @@ const USAGE = `usage: hello.mjs <command> [args]
                           so plain parlor dev installs devAuth, and needs --home
   doctor ID               read-only health check; exit 1 when the instance is not worth driving
   seed ID DATASET         load a fixture straight into PGlite (stops and restarts a running instance)
-  sql ID QUERY            read-only SQL against the instance's PGlite (stops and restarts it)
+  sql ID QUERY            read-only SQL against the instance's PGlite (stops and restarts it, keeps
+                          its browsers and their profiles)
+  sql ID --write STATEMENT
+                          the same in one read-write transaction; prints {affectedRows, rows}
   stop ID | start ID      stop or start the processes, keeping the snapshot and its data
   sync ID                 copy the current checkout into a running instance (tsx and Vite reload)
   mcp ID tools | resources [--as USER]
@@ -783,7 +786,12 @@ function describeProcess(p) {
   return `pid ${p.pid} ppid ${p.ppid} pgid ${p.pgid} elapsed ${p.elapsed} cwd ${p.cwd ?? "?"} ${command}`;
 }
 
-function instanceSurvivors(state) {
+function browserPorts(state, browsers) {
+  if (browsers === "none") return [];
+  return state.cdpPort ? [state.cdpPort] : [];
+}
+
+function instanceSurvivors(state, { browsers = "main" } = {}) {
   const table = processTable();
   const found = new Map();
   const add = (p, reason) => {
@@ -794,7 +802,9 @@ function instanceSurvivors(state) {
   for (const p of ownedProcesses(state, table)) add(p, "instance process");
   for (const p of processesUnder(instanceDir(state.id), table))
     add(p, "cwd or command under the instance dir");
-  const ports = [...Object.values(state.ports), state.cdpPort].filter(Boolean);
+  const ports = [...Object.values(state.ports), ...browserPorts(state, browsers)].filter(
+    Boolean,
+  );
   for (const port of ports) {
     for (const pid of listenerPids(port)) {
       const p = table.find((row) => row.pid === pid);
@@ -810,20 +820,20 @@ async function waitUntil(done, ms) {
   return done();
 }
 
-async function killSurvivors(state) {
-  let survivors = instanceSurvivors(state);
+async function killSurvivors(state, options) {
+  let survivors = instanceSurvivors(state, options);
   for (let round = 0; survivors.length > 0 && round < 3; round += 1) {
     log(
       `killing leftovers of ${state.id}:\n  ${survivors.map(describeProcess).join("\n  ")}`,
     );
     for (const p of survivors) signal(p.pid, "SIGKILL");
-    await waitUntil(() => instanceSurvivors(state).length === 0, 3000);
-    survivors = instanceSurvivors(state);
+    await waitUntil(() => instanceSurvivors(state, options).length === 0, 3000);
+    survivors = instanceSurvivors(state, options);
   }
   return survivors;
 }
 
-async function stopProcesses(state) {
+async function stopProcesses(state, options = {}) {
   state.processes = ownedProcesses(state).map(({ pid, command }) => ({ pid, command }));
   writeState(state);
   let owned = ownedProcesses(state);
@@ -841,7 +851,7 @@ async function stopProcesses(state) {
       allowFailure: true,
     });
   }
-  const survivors = await killSurvivors(state);
+  const survivors = await killSurvivors(state, options);
   if (survivors.length > 0) {
     fail(
       `${state.id} still has ${survivors.length} process(es) after SIGKILL, so its state in ${instanceDir(state.id)} is kept:\n  ` +
@@ -905,11 +915,11 @@ async function loadDataset(state, name) {
   return summary;
 }
 
-async function withStopped(state, task) {
+async function withStopped(state, task, options) {
   const wasRunning = isRunning(state);
   if (wasRunning) {
     log(`stopping ${state.id} so PGlite can be opened directly`);
-    await stopProcesses(state);
+    await stopProcesses(state, options);
   }
   try {
     return await task();
@@ -1699,18 +1709,31 @@ async function cmdSeed([id, name]) {
   });
 }
 
-async function cmdSql([id, query]) {
-  const state = readState(id);
-  if (!query) fail("usage: sql ID QUERY");
-  await withStopped(state, async () => {
-    const rows = await withDatabase(state, (client) =>
-      client.transaction(async (tx) => {
-        await tx.exec("set transaction read only");
-        return (await tx.query(query)).rows;
-      }),
-    );
-    process.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
+async function cmdSql(args) {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { write: { type: "boolean" } },
   });
+  const [id, query] = positionals;
+  const state = readState(id);
+  if (!query) fail("usage: sql ID QUERY | sql ID --write STATEMENT");
+  await withStopped(
+    state,
+    async () => {
+      const result = await withDatabase(state, (client) =>
+        client.transaction(async (tx) => {
+          if (!values.write) await tx.exec("set transaction read only");
+          return tx.query(query);
+        }),
+      );
+      const out = values.write
+        ? { affectedRows: result.affectedRows ?? 0, rows: result.rows }
+        : result.rows;
+      process.stdout.write(`${JSON.stringify(out, null, 2)}\n`);
+    },
+    { browsers: "none" },
+  );
 }
 
 async function cmdStop([id]) {
