@@ -1,5 +1,7 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,7 +17,7 @@ import type {
 import { asId, type ThreadId } from "@parlor/core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { acpLauncher } from "./acp.js";
+import { acpLauncher, type AgentLauncher } from "./acp.js";
 import type { AppGrant } from "./grants.js";
 import type { AppLink } from "./link.js";
 import { createMcpProxy, type McpProxy } from "./mcp-proxy.js";
@@ -26,6 +28,7 @@ import { type FakeAgentScript, fakeAgentProfile } from "./testing/fake-agent.js"
 import { runTurn, type TurnDeps } from "./turn.js";
 
 const ENTRY = fileURLToPath(new URL("../bin/fake-agent.mjs", import.meta.url));
+const BIN = fileURLToPath(new URL("../bin/parlor-host-dev.mjs", import.meta.url));
 const CONTEXT = "<parlor-context>You work for Alice in Hello.</parlor-context>";
 
 const script: FakeAgentScript = {
@@ -56,6 +59,7 @@ const script: FakeAgentScript = {
       { kind: "reply", chunks: ["Starting"] },
       { kind: "exit", code: 7 },
     ],
+    probe: [{ kind: "call_app", tool: "listTasks", input: {} }],
   },
 };
 
@@ -76,6 +80,7 @@ let dir: string;
 let proxy: McpProxy;
 let pool: SessionPool;
 let agentLog: string;
+const origins = new Set<string>();
 
 const grant: AppGrant = {
   appOrigin: "http://localhost:5301",
@@ -98,7 +103,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await pool.drop(grant.appOrigin);
+  for (const origin of [grant.appOrigin, ...origins]) await pool.drop(origin);
   await proxy.close();
   vi.unstubAllEnvs();
   await rm(dir, { recursive: true, force: true });
@@ -112,15 +117,30 @@ interface AgentLogEntry {
 }
 
 const agentLogEntries = (): AgentLogEntry[] =>
-  readFileSync(agentLog, "utf8")
+  (existsSync(agentLog) ? readFileSync(agentLog, "utf8") : "")
     .trim()
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line) as AgentLogEntry);
 
-function harness(signals: (afterSeq: number) => TurnSignals[] = () => []) {
+interface HarnessOptions {
+  readonly appOrigin?: string;
+  readonly launcher?: AgentLauncher;
+  readonly proxy?: McpProxy;
+}
+
+let harnesses = 0;
+
+function harness(
+  signals: (afterSeq: number) => TurnSignals[] = () => [],
+  options: HarnessOptions = {},
+) {
+  harnesses += 1;
+  const issuedBy = `h${harnesses}`;
+  const issued: string[] = [];
   const logged: Logged[] = [];
   const now = () => Date.now();
+  if (options.appOrigin) origins.add(options.appOrigin);
   const calls = {
     call: async (name: string, input: Record<string, unknown>) => {
       switch (name) {
@@ -130,10 +150,11 @@ function harness(signals: (afterSeq: number) => TurnSignals[] = () => []) {
             at: now(),
             items: input.items as HostItemDraft[],
           });
+          issued.push(`${issuedBy}-renewed-${logged.length}`);
           return {
             id: "t1",
             leaseUntil: now() + 60_000,
-            token: { token: `renewed-${logged.length}`, expiresAt: now() + 60_000 },
+            token: { token: issued.at(-1)!, expiresAt: now() + 60_000 },
           };
         case "hostFinish":
           logged.push({
@@ -150,7 +171,7 @@ function harness(signals: (afterSeq: number) => TurnSignals[] = () => []) {
     },
   };
   const link = {
-    grant: { ...grant, workspace: dir },
+    grant: { ...grant, appOrigin: options.appOrigin ?? grant.appOrigin, workspace: dir },
     protocol: 1,
     start: () => undefined,
     stop: async () => undefined,
@@ -181,9 +202,9 @@ function harness(signals: (afterSeq: number) => TurnSignals[] = () => []) {
         name: "Fake B",
       },
     ],
-    launcher: acpLauncher(),
+    launcher: options.launcher ?? acpLauncher(),
     pool,
-    proxy,
+    proxy: options.proxy ?? proxy,
     policy: DEV_POLICY,
     prompter,
     now,
@@ -195,11 +216,16 @@ function harness(signals: (afterSeq: number) => TurnSignals[] = () => []) {
       .flatMap((entry) => (entry.kind === "stream" ? entry.frames : []))
       .map((frame) => (frame.type === "delta" ? frame.text : ""))
       .join("");
-  return { deps, logged, appended, streamedText };
+  return { deps, logged, appended, streamedText, issued };
 }
 
 let turns = 0;
-function claim(threadId: ThreadId, agentId: string, text: string): ClaimedTurn {
+function claim(
+  threadId: ThreadId,
+  agentId: string,
+  text: string,
+  token = `turn-${turns + 1}`,
+): ClaimedTurn {
   turns += 1;
   const turnId = asId("turn", `u${turns}`);
   const prompt: LoggedItem<"prompt"> = {
@@ -220,13 +246,65 @@ function claim(threadId: ThreadId, agentId: string, text: string): ClaimedTurn {
     prompt,
     device: undefined,
     context: CONTEXT,
-    token: { token: `turn-${turns}`, expiresAt: Date.now() + 60_000 },
+    token: { token, expiresAt: Date.now() + 60_000 },
     leaseUntil: Date.now() + 60_000,
   };
 }
 
 const prompts = () =>
   agentLogEntries().filter((entry) => entry.method === "session/prompt");
+
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+interface StubApp {
+  readonly origin: string;
+  readonly bearers: string[];
+  close(): Promise<void>;
+}
+
+async function stubMcpApp(): Promise<StubApp> {
+  const bearers: string[] = [];
+  const server: Server = createServer((request, response) => {
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk: string) => (body += chunk));
+    request.on("end", () => {
+      const message = JSON.parse(body) as { id?: number; method: string };
+      if (message.method === "tools/call") {
+        bearers.push(request.headers.authorization ?? "");
+      }
+      if (message.id === undefined) return void response.writeHead(202).end();
+      const result =
+        message.method === "initialize"
+          ? {
+              protocolVersion: "2025-06-18",
+              capabilities: { tools: {} },
+              serverInfo: { name: "stub", version: "1" },
+            }
+          : { content: [{ type: "text", text: "[]" }] };
+      response
+        .writeHead(200, { "content-type": "application/json" })
+        .end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return {
+    origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    bearers,
+    close: () =>
+      new Promise((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
+  };
+}
 
 describe("runTurn against the fake agent over real stdio", () => {
   it("C12: an agent killed mid-turn ends the turn, the next one relaunches with context, a switch says so", async () => {
@@ -393,4 +471,118 @@ describe("runTurn against the fake agent over real stdio", () => {
       body: { event: "agent_exited", detail: "exit code 7" },
     });
   }, 30_000);
+
+  it("T4-07: a revocation during a cold launch kills the agent before it gets the prompt", async () => {
+    const origin = "http://localhost:5307";
+    let started: () => void = () => undefined;
+    const launched = new Promise<void>((resolve) => (started = resolve));
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const launcher: AgentLauncher = {
+      launch: async (profile, options) => {
+        const connection = await acpLauncher().launch(profile, options);
+        started();
+        await gate;
+        return connection;
+      },
+    };
+    const run = harness(undefined, { appOrigin: origin, launcher });
+    const before = agentLogEntries().length;
+    const running = runTurn(claim(asId("thread", "t407"), "fake-a", "hello"), run.deps);
+    await launched;
+    const pid = agentLogEntries()
+      .slice(before)
+      .find((entry) => entry.method === "initialize")!.pid;
+
+    await pool.drop(origin);
+    release();
+
+    expect(await running).toEqual({ state: "failed", reason: "agent_unavailable" });
+    await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 5_000 });
+    expect(
+      agentLogEntries()
+        .slice(before)
+        .filter((entry) => entry.method === "session/prompt"),
+    ).toEqual([]);
+    expect(pool.process(origin, "fake-a")).toBeUndefined();
+  }, 30_000);
+
+  it("T4-08: two threads starting one agent at once share one process", async () => {
+    const origin = "http://localhost:5308";
+    let launches = 0;
+    const launcher: AgentLauncher = {
+      launch: (profile, options) => {
+        launches += 1;
+        return acpLauncher().launch(profile, options);
+      },
+    };
+    const before = agentLogEntries().length;
+    const outcomes = await Promise.all([
+      runTurn(
+        claim(asId("thread", "t408a"), "fake-a", "hello"),
+        harness(undefined, { appOrigin: origin, launcher }).deps,
+      ),
+      runTurn(
+        claim(asId("thread", "t408b"), "fake-a", "hello"),
+        harness(undefined, { appOrigin: origin, launcher }).deps,
+      ),
+    ]);
+    expect(outcomes).toEqual([
+      { state: "done", stopReason: "end_turn" },
+      { state: "done", stopReason: "end_turn" },
+    ]);
+    expect(launches).toBe(1);
+    const pids = new Set(
+      agentLogEntries()
+        .slice(before)
+        .filter((entry) => entry.method === "session/prompt")
+        .map((entry) => entry.pid),
+    );
+    expect(pids.size).toBe(1);
+
+    await pool.drop(origin);
+    for (const pid of pids) expect(alive(pid)).toBe(false);
+  }, 30_000);
+
+  it("T4-11: a thread id two apps share never crosses from one app to the other", async () => {
+    const [a, b] = await Promise.all([stubMcpApp(), stubMcpApp()]);
+    const appProxy = createMcpProxy(BIN);
+    await appProxy.listen(join(dir, "run", "apps.sock"));
+    try {
+      const thread = asId("thread", "t1");
+      const turnOn = async (app: StubApp, token: string) => {
+        const run = harness(undefined, { appOrigin: app.origin, proxy: appProxy });
+        const before = agentLogEntries().length;
+        expect(await runTurn(claim(thread, "fake-a", "probe", token), run.deps)).toEqual({
+          state: "done",
+          stopReason: "end_turn",
+        });
+        const prompt = agentLogEntries()
+          .slice(before)
+          .find((entry) => entry.method === "session/prompt")!;
+        return { prompt, tokens: [token, ...run.issued].map((t) => `Bearer ${t}`) };
+      };
+
+      const first = await turnOn(a, "turn-a1");
+      const other = await turnOn(b, "turn-b1");
+      const again = await turnOn(a, "turn-a2");
+
+      expect(other.prompt.pid).not.toBe(first.prompt.pid);
+      expect(other.prompt.text!.startsWith(CONTEXT)).toBe(true);
+      expect(again.prompt.pid).toBe(first.prompt.pid);
+      expect(again.prompt.text!.startsWith(CONTEXT)).toBe(false);
+
+      expect(a.bearers).toHaveLength(2);
+      expect(b.bearers).toHaveLength(1);
+      for (const bearer of a.bearers) {
+        expect([...first.tokens, ...again.tokens]).toContain(bearer);
+      }
+      for (const bearer of b.bearers) expect(other.tokens).toContain(bearer);
+    } finally {
+      await pool.drop(a.origin);
+      await pool.drop(b.origin);
+      await appProxy.close();
+      await Promise.all([a.close(), b.close()]);
+    }
+  }, 60_000);
 });

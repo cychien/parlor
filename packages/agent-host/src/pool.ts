@@ -12,19 +12,32 @@ export interface LiveSession {
 
 /**
  * Processes per (app, agent), so two apps never share an agent process or its MCP
- * servers; sessions per (thread, agent), so a thread keeps its context across turns.
+ * servers; sessions per (app, thread, agent), so a thread keeps its context across turns.
  */
 export interface SessionPool {
   process(appOrigin: string, agentId: string): AgentConnection | undefined;
-  adopt(appOrigin: string, agentId: string, connection: AgentConnection): void;
-  session(threadId: string, agentId: string): LiveSession | undefined;
-  remember(threadId: string, agentId: string, session: LiveSession): void;
+  /**
+   * The running process, or the one `start` launches for every turn that asks meanwhile.
+   * A `drop` during the launch aborts `signal` and kills whatever `start` returns.
+   */
+  launch(
+    appOrigin: string,
+    agentId: string,
+    start: (signal: AbortSignal) => Promise<AgentConnection>,
+  ): Promise<AgentConnection>;
+  session(appOrigin: string, threadId: string, agentId: string): LiveSession | undefined;
+  remember(
+    appOrigin: string,
+    threadId: string,
+    agentId: string,
+    session: LiveSession,
+  ): void;
   /** The last session id, from `sessions.json`, for `session/resume` after a restart. */
-  resumable(threadId: string, agentId: string): string | undefined;
+  resumable(appOrigin: string, threadId: string, agentId: string): string | undefined;
   drop(appOrigin: string, agentId?: string): Promise<void>;
 }
 
-const keyOf = (first: string, second: string) => `${first}\u0000${second}`;
+const keyOf = (...parts: readonly string[]) => parts.join("\u0000");
 
 function readRemembered(file: string): Record<string, string> {
   try {
@@ -34,12 +47,18 @@ function readRemembered(file: string): Record<string, string> {
   }
 }
 
+interface Launching {
+  readonly controller: AbortController;
+  readonly connection: Promise<AgentConnection>;
+}
+
 /**
- * Sessions live inside their process: `process()` hands out the adopted connection with
- * its sessions tracked, so dropping a process forgets every session it held.
+ * Sessions live inside their process: `launch()` hands out the connection with its
+ * sessions tracked, so dropping a process forgets every session it held.
  */
 export function createSessionPool(stateFile: string): SessionPool {
   const processes = new Map<string, AgentConnection>();
+  const launching = new Map<string, Launching>();
   const owners = new WeakMap<AgentSession, string>();
   const sessions = new Map<
     string,
@@ -69,43 +88,77 @@ export function createSessionPool(stateFile: string): SessionPool {
     }
   };
 
+  const adopt = (owner: string, connection: AgentConnection): AgentConnection => {
+    const tracked: AgentConnection = {
+      capabilities: connection.capabilities,
+      exited: connection.exited,
+      kill: () => connection.kill(),
+      openSession: async (input) => {
+        const session = await connection.openSession(input);
+        owners.set(session, owner);
+        return session;
+      },
+    };
+    processes.set(owner, tracked);
+    void connection.exited.then(() => {
+      if (processes.get(owner) === tracked) forget(owner);
+    });
+    return tracked;
+  };
+
+  const ownedBy = (appOrigin: string, agentId: string | undefined) => (owner: string) =>
+    agentId === undefined
+      ? owner.startsWith(keyOf(appOrigin, ""))
+      : owner === keyOf(appOrigin, agentId);
+
   return {
     process: (appOrigin, agentId) => processes.get(keyOf(appOrigin, agentId)),
-    adopt(appOrigin, agentId, connection) {
+    launch(appOrigin, agentId, start) {
       const owner = keyOf(appOrigin, agentId);
-      const tracked: AgentConnection = {
-        capabilities: connection.capabilities,
-        exited: connection.exited,
-        kill: () => connection.kill(),
-        openSession: async (input) => {
-          const session = await connection.openSession(input);
-          owners.set(session, owner);
-          return session;
-        },
-      };
-      processes.set(owner, tracked);
-      void connection.exited.then(() => {
-        if (processes.get(owner) === tracked) forget(owner);
-      });
+      const running = processes.get(owner);
+      if (running) return Promise.resolve(running);
+      const pending = launching.get(owner);
+      if (pending) return pending.connection;
+      const controller = new AbortController();
+      const connection = (async () => {
+        try {
+          const started = await start(controller.signal);
+          if (controller.signal.aborted) {
+            await started.kill();
+            throw new Error(
+              "This computer stopped serving the app while the agent started.",
+            );
+          }
+          return adopt(owner, started);
+        } finally {
+          if (launching.get(owner)?.controller === controller) launching.delete(owner);
+        }
+      })();
+      launching.set(owner, { controller, connection });
+      return connection;
     },
-    session: (threadId, agentId) => sessions.get(keyOf(threadId, agentId))?.live,
-    remember(threadId, agentId, live) {
-      const owner = owners.get(live.session);
-      if (owner === undefined || processes.get(owner) === undefined) {
+    session: (appOrigin, threadId, agentId) =>
+      sessions.get(keyOf(appOrigin, threadId, agentId))?.live,
+    remember(appOrigin, threadId, agentId, live) {
+      const owner = keyOf(appOrigin, agentId);
+      if (owners.get(live.session) !== owner || processes.get(owner) === undefined) {
         throw new Error("Remember a session opened through the pool's own process.");
       }
-      const key = keyOf(threadId, agentId);
+      const key = keyOf(appOrigin, threadId, agentId);
       sessions.set(key, { live, owner });
       remembered[key] = live.session.id;
       save();
     },
-    resumable: (threadId, agentId) => remembered[keyOf(threadId, agentId)],
+    resumable: (appOrigin, threadId, agentId) =>
+      remembered[keyOf(appOrigin, threadId, agentId)],
     async drop(appOrigin, agentId) {
-      const dropped = [...processes].filter(
-        ([owner]) =>
-          owner.startsWith(`${appOrigin}\u0000`) &&
-          (agentId === undefined || owner === keyOf(appOrigin, agentId)),
-      );
+      const owned = ownedBy(appOrigin, agentId);
+      for (const [owner, pending] of launching) {
+        if (!owned(owner)) continue;
+        launching.delete(owner);
+        pending.controller.abort();
+      }
+      const dropped = [...processes].filter(([owner]) => owned(owner));
       for (const [owner] of dropped) forget(owner);
       await Promise.all(dropped.map(([, connection]) => connection.kill()));
     },

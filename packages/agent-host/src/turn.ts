@@ -197,38 +197,38 @@ export async function runTurn(
     );
   }
 
-  let live: LiveSession | undefined = pool.session(threadId, agentId);
-  let connection: AgentConnection | undefined = pool.process(grant.appOrigin, agentId);
+  const origin = grant.appOrigin;
+  let live: LiveSession | undefined = pool.session(origin, threadId, agentId);
+  let connection: AgentConnection | undefined = pool.process(origin, agentId);
   const fresh = live === undefined;
   if (live) {
     proxy = live.proxy;
     proxy.begin(claimed.token);
   } else {
     const switched = deps.profiles.some(
-      (other) => other.id !== agentId && pool.session(threadId, other.id) !== undefined,
+      (other) =>
+        other.id !== agentId && pool.session(origin, threadId, other.id) !== undefined,
     );
     if (switched) await event("agent_switched", profile.name);
     try {
-      if (!connection) {
+      connection = await pool.launch(origin, agentId, async (signal) => {
         await mkdir(grant.workspace, { recursive: true, mode: 0o700 });
-        const launched = await deps.launcher.launch(profile, {
+        return deps.launcher.launch(profile, {
           cwd: grant.workspace,
           env: await agentEnvironment(),
-          signal: new AbortController().signal,
+          signal,
         });
-        pool.adopt(grant.appOrigin, agentId, launched);
-        connection = pool.process(grant.appOrigin, agentId)!;
-      }
-      proxy = deps.proxy.open(appServer, grant.appOrigin);
+      });
+      proxy = deps.proxy.open(appServer, origin);
       proxy.begin(claimed.token);
       const session: AgentSession = await connection.openSession({
         cwd: grant.workspace,
         mcpServers: [proxy.server],
-        resume: pool.resumable(threadId, agentId),
+        resume: pool.resumable(origin, threadId, agentId),
         pinAskMode: true,
       });
       live = { session, proxy };
-      pool.remember(threadId, agentId, live);
+      pool.remember(origin, threadId, agentId, live);
     } catch (error) {
       proxy?.dispose();
       proxy = undefined;
@@ -379,7 +379,7 @@ export async function runTurn(
   void write(final.closed);
 
   if (failure) {
-    await pool.drop(grant.appOrigin, agentId);
+    await pool.drop(origin, agentId);
     const detail =
       failure instanceof AgentExited ? exitDetail(failure.exit) : failure.message;
     return fail("agent_exited", "agent_exited", detail);
