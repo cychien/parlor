@@ -86,6 +86,8 @@ export const DEVICES_MIGRATION: Migration = {
       revoked_at timestamptz
     );
     create index parlor_auth_devices_user on parlor_auth_devices (user_id);
+    create unique index parlor_auth_devices_signing_key on parlor_auth_devices
+      (user_id, (signing_key->>'x'), (signing_key->>'y')) where revoked_at is null;
 
     create table parlor_auth_device_challenges (
       challenge text primary key,
@@ -270,19 +272,26 @@ export function deviceAccountActions(deps: DeviceActionDeps) {
           );
           if (consumed.length === 0)
             throw invalid("This challenge is unknown or expired.");
-          const [existing] = rowsOf<{ readonly id: string }>(
-            await tx.execute(sql`
-              select id from parlor_auth_devices
-              where user_id = ${user.userId} and revoked_at is null
-                and signing_key->>'x' = ${signing.x!} and signing_key->>'y' = ${signing.y!}`),
-          );
-          if (existing) return { id: asId("device", existing.id), added: false };
           const id = asId("device", randomBytes(16).toString("base64url"));
-          await tx.execute(sql`
-            insert into parlor_auth_devices (id, user_id, name, platform, signing_key, presence_key)
-            values (${id}, ${user.userId}, ${input.name}, ${input.platform},
-              ${JSON.stringify(signing)}::jsonb,
-              ${presence ? JSON.stringify(presence.stored) : null}::jsonb)`);
+          const [inserted] = rowsOf<{ readonly id: string }>(
+            await tx.execute(sql`
+              insert into parlor_auth_devices (id, user_id, name, platform, signing_key, presence_key)
+              values (${id}, ${user.userId}, ${input.name}, ${input.platform},
+                ${JSON.stringify(signing)}::jsonb,
+                ${presence ? JSON.stringify(presence.stored) : null}::jsonb)
+              on conflict (user_id, (signing_key->>'x'), (signing_key->>'y'))
+                where revoked_at is null do nothing
+              returning id`),
+          );
+          if (!inserted) {
+            const [existing] = rowsOf<{ readonly id: string }>(
+              await tx.execute(sql`
+                select id from parlor_auth_devices
+                where user_id = ${user.userId} and revoked_at is null
+                  and signing_key->>'x' = ${signing.x!} and signing_key->>'y' = ${signing.y!}`),
+            );
+            return { id: asId("device", existing!.id), added: false };
+          }
           return { id, added: true };
         });
         if (enrolled.added) {

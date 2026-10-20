@@ -131,6 +131,16 @@ describe("the auth client's device", () => {
     ]);
   });
 
+  it("R5-04: shares one enrollment between calls made at once", async () => {
+    const { auth, calls } = await signedIn(new TestDeviceKey());
+    const [first, second] = await Promise.all([auth.device(), auth.device()]);
+    expect(second).toBe(first);
+    expect(calls.filter((call) => call.startsWith("actions/"))).toEqual([
+      "actions/deviceChallenge",
+      "actions/enrollDevice",
+    ]);
+  });
+
   async function pinnedFor(auth: AuthClient, deviceId: string) {
     const whoami = await server.fetch(
       new Request(`${ORIGIN}/_parlor/actions/whoami`, {

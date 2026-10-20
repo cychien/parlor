@@ -6,7 +6,13 @@ import type {
   PresencePublicKey,
   PresenceSignature,
 } from "@parlor/capabilities";
-import { encodeBase64url, enrollmentBytes } from "@parlor/capabilities/encoding";
+import {
+  decodeBase64url,
+  encodeBase64url,
+  enrollmentBytes,
+} from "@parlor/capabilities/encoding";
+
+import type { Browser } from "./app.js";
 
 const P256 = { name: "ECDSA", namedCurve: "P-256" } as const;
 const ES256 = { name: "ECDSA", hash: "SHA-256" } as const;
@@ -104,4 +110,28 @@ export class TestDeviceKey implements DeviceKey {
       payload,
     )) as PresenceSignature;
   }
+}
+
+export async function enroll(
+  browser: Browser,
+  device: TestDeviceKey,
+  tweak: (input: Record<string, any>) => void = () => {},
+) {
+  const { challenge } = (await browser.account("deviceChallenge")).body.data;
+  const keys = await device.publicKeys({
+    rpId: "hello.example",
+    userId: "u",
+    userName: "u",
+    challenge: decodeBase64url(challenge),
+  });
+  const input: Record<string, any> = {
+    name: "Chrome on macOS",
+    platform: "web",
+    challenge,
+    signing: keys.signing,
+    ...(keys.presence ? { presence: keys.presence } : {}),
+    proof: keys.proof,
+  };
+  tweak(input);
+  return browser.account("enrollDevice", input);
 }

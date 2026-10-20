@@ -12,7 +12,7 @@ import {
   signUp as signUpAs,
   type TestApp,
 } from "./testing/app.js";
-import { TestDeviceKey } from "./testing/device.js";
+import { enroll, TestDeviceKey } from "./testing/device.js";
 
 let database: DatabaseHandle;
 let app: TestApp;
@@ -53,30 +53,6 @@ const userIdOf = async (browser: Browser) =>
     (await (await browser.post("/_parlor/actions/whoami", {})).json()).data.principal
       .userId,
   );
-
-async function enroll(
-  browser: Browser,
-  device: TestDeviceKey,
-  tweak: (input: Record<string, any>) => void = () => {},
-) {
-  const { challenge } = (await browser.account("deviceChallenge")).body.data;
-  const keys = await device.publicKeys({
-    rpId: "hello.example",
-    userId: "u",
-    userName: "u",
-    challenge: decodeBase64url(challenge),
-  });
-  const input: Record<string, any> = {
-    name: "Chrome on macOS",
-    platform: "web",
-    challenge,
-    signing: keys.signing,
-    ...(keys.presence ? { presence: keys.presence } : {}),
-    proof: keys.proof,
-  };
-  tweak(input);
-  return browser.account("enrollDevice", input);
-}
 
 describe("auth/0004_devices", () => {
   it("is a free migration id whose statements are plain", () => {
@@ -203,6 +179,25 @@ describe("enrolling a device", () => {
     const again = await enroll(alice, device);
     expect(again.body.data.id).toBe(first.body.data.id);
     expect(await rows(sql`select id from parlor_auth_devices`)).toHaveLength(1);
+  });
+
+  it("R5-04: the schema holds one active device per account and signing key", async () => {
+    const alice = await signUp("Alice");
+    await enroll(alice, new TestDeviceKey());
+    const userId = await userIdOf(alice);
+    const [{ id, signing_key: key }] = await rows<{ id: string; signing_key: unknown }>(
+      sql`select id, signing_key from parlor_auth_devices`,
+    );
+    const duplicate = (rowId: string) =>
+      database.db.execute(sql`
+        insert into parlor_auth_devices (id, user_id, name, platform, signing_key)
+        values (${rowId}, ${userId}, 'Copy', 'web', ${JSON.stringify(key)}::jsonb)`);
+    await expect(duplicate("copy-1")).rejects.toThrow();
+    await database.db.execute(
+      sql`update parlor_auth_devices set revoked_at = now() where id = ${id}`,
+    );
+    await duplicate("copy-2");
+    await expect(duplicate("copy-3")).rejects.toThrow();
   });
 
   it("refuses a proof made over another challenge or other keys", async () => {
