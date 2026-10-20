@@ -352,6 +352,7 @@ export async function runTurn(
     const known = await deps.trust.get(origin, signed.deviceId);
     const keys = claimed.device;
     if (known && !keys) {
+      await deps.trust.forget(origin, known.deviceId);
       return refuse(
         "device_rejected",
         "device_rejected",

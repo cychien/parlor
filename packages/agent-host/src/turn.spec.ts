@@ -901,11 +901,12 @@ describe("runTurn trusting the device that sent the prompt", () => {
     expect((await trust.get(APP, device.id))?.signingKey).toEqual(device.keys.signingKey);
   });
 
-  it("refuses a pinned device the account no longer lists, as not approved", async () => {
+  it("R5-03: refuses a pinned device the account no longer lists with no dialog, and drops its pin", async () => {
     const device = await TestDevice.create();
     const trust = memoryTrust();
     await trust.pin(APP, pinOf(device));
-    const run = harness(undefined, { trust, policy });
+    const approveDevice = vi.fn(async () => true);
+    const run = harness(undefined, { trust, policy, prompter: { approveDevice } });
     const turn = await signedClaim(device, asId("thread", "t5-gone"), "revoked-prompt", {
       device: undefined,
     });
@@ -913,7 +914,9 @@ describe("runTurn trusting the device that sent the prompt", () => {
       state: "failed",
       reason: "device_rejected",
     });
+    expect(approveDevice).not.toHaveBeenCalled();
     expect(ranAgentFor("revoked-prompt")).toBe(false);
+    expect(await trust.get(APP, device.id)).toBeUndefined();
   });
 
   it("refuses an unsigned prompt, and a prompt from a device the account does not know", async () => {

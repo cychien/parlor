@@ -192,6 +192,13 @@ export function userChatActions(deps: ChatActionDeps) {
       input: z.object({ threadId, turnId, itemId, answer: chatItemBodies.answer.body }),
       writes: [CHAT_TAG],
       run: async (input, user, ctx): Promise<{ readonly id: string }> => {
+        const { signed } = input.answer;
+        if (signed && deps.auth.device) {
+          const device = await deps.auth.device(user.userId, signed.deviceId);
+          if (!device) {
+            throw new ActionError("forbidden", "This device cannot answer.");
+          }
+        }
         await deps.store.appendUserItems(dbOf(ctx), user, {
           threadId: input.threadId,
           turnId: input.turnId,

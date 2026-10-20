@@ -354,8 +354,20 @@ describe.each(drivers)("exactly-once turns on $name", (driver) => {
       rows(handle, "select id from parlor_chat_items where kind = 'answer' order by seq");
 
     beforeEach(async () => {
+      app.auth.activeDevices.add("device-1");
       await send("t1", "u1");
       await claim();
+    });
+
+    it("R5-03: refuses an answer signed by a device the account revoked, writing nothing", async () => {
+      await ask("presence");
+      app.auth.activeDevices.delete("device-1");
+      const refused = await answer("a1", signature("webauthn", "user"));
+      expect(refused.status).toBe(403);
+      expect(refused.body).toMatchObject({ error: { code: "forbidden" } });
+      expect(await answers()).toEqual([]);
+      app.auth.activeDevices.add("device-1");
+      expect((await answer("a2", signature("webauthn", "user"))).status).toBe(200);
     });
 
     it("takes another answer once the host rejected the one before it", async () => {
