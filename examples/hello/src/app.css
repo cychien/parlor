@@ -592,6 +592,34 @@ button.danger {
   gap: 8px;
 }
 
+.card .ask-form fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.card .ask-form label {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.card .ask-form label[data-type="checkbox"] {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.card .ask-form label[data-type="checkbox"] input {
+  order: -1;
+}
+
+.card .ask-form .actions {
+  margin-top: 12px;
+}
+
 @keyframes caret {
   to {
     visibility: hidden;

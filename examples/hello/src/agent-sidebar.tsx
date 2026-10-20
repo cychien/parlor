@@ -240,6 +240,34 @@ function PromptMeta({ item }: { readonly item: PromptItem }) {
   return text ? <p className="item-meta">{text}</p> : null;
 }
 
+function AskActions({ item }: { readonly item: AskItem }) {
+  return (
+    <div className="actions">
+      {item.choices.map((choice) =>
+        item.form && choice.effect.startsWith("allow") ? (
+          <button
+            key={choice.id}
+            type="submit"
+            className="primary"
+            onClick={focusComposer}
+          >
+            {choice.label}
+          </button>
+        ) : (
+          <Chat.AskChoice
+            key={choice.id}
+            choice={choice}
+            className={choice.effect.startsWith("allow") ? "primary" : undefined}
+            onClick={focusComposer}
+          >
+            {choice.label}
+          </Chat.AskChoice>
+        ),
+      )}
+    </div>
+  );
+}
+
 function AskCard({ item }: { readonly item: AskItem }) {
   const { items } = useChat();
   const prompt = items.find(
@@ -259,18 +287,13 @@ function AskCard({ item }: { readonly item: AskItem }) {
           {item.approval === "computer" ? (
             <p className="item-meta">{`Approve on ${hostName}`}</p>
           ) : null}
-          <div className="actions">
-            {item.choices.map((choice) => (
-              <Chat.AskChoice
-                key={choice.id}
-                choice={choice}
-                className={choice.effect.startsWith("allow") ? "primary" : undefined}
-                onClick={focusComposer}
-              >
-                {choice.label}
-              </Chat.AskChoice>
-            ))}
-          </div>
+          {item.form ? (
+            <Chat.AskForm className="ask-form">
+              <AskActions item={item} />
+            </Chat.AskForm>
+          ) : (
+            <AskActions item={item} />
+          )}
         </>
       )}
     </Chat.Ask>
