@@ -275,11 +275,21 @@ function AskCard({ item }: { readonly item: AskItem }) {
       candidate.kind === "prompt" && candidate.turnId === item.turnId,
   );
   const hostName = useHostName(prompt?.agent.hostId);
+  const actions = item.form ? (
+    <Chat.AskForm className="ask-form">
+      <AskActions item={item} />
+    </Chat.AskForm>
+  ) : (
+    <AskActions item={item} />
+  );
   return (
     <Chat.Ask item={item} className="card">
       <p className="card-what">{item.question}</p>
       {item.answer.state === "answered" ? (
-        <p className="item-meta">Answered</p>
+        <>
+          <p className="item-meta">Answered</p>
+          {item.approval === "computer" ? actions : null}
+        </>
       ) : item.answer.state === "closed" ? (
         <p className="item-meta">No longer needed</p>
       ) : (
@@ -287,13 +297,7 @@ function AskCard({ item }: { readonly item: AskItem }) {
           {item.approval === "computer" ? (
             <p className="item-meta">{`Approve on ${hostName}`}</p>
           ) : null}
-          {item.form ? (
-            <Chat.AskForm className="ask-form">
-              <AskActions item={item} />
-            </Chat.AskForm>
-          ) : (
-            <AskActions item={item} />
-          )}
+          {actions}
         </>
       )}
     </Chat.Ask>
@@ -309,7 +313,6 @@ const TOOL_STATE = {
 } as const;
 
 const EVENTS = {
-  device_pending: "Waiting for this device to be approved",
   device_rejected: "This device was not approved",
   agent_started: "Agent started",
   agent_exited: "Agent exited",
@@ -360,6 +363,7 @@ function Item({ item }: { readonly item: ChatItem<AgentConfirmation> }) {
     case "confirm":
       return <ConfirmationCard confirmation={item.confirmation} />;
     case "event":
+      if (item.event === "device_pending") return null;
       return (
         <p className="event">
           {EVENTS[item.event]}

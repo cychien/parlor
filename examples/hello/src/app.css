@@ -395,6 +395,10 @@ button.danger {
   flex: none;
 }
 
+.thread > li:empty {
+  display: none;
+}
+
 .thread > li > p,
 .thread > li > ul {
   margin: 0;
