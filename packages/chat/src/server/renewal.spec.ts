@@ -65,7 +65,7 @@ describe.each(drivers)("renewing a turn on $name", (driver) => {
     (
       (await rows(
         handle,
-        "select extract(epoch from lease_until) * 1000 as lease from parlor_chat_turns where id = 'u1'",
+        "select (extract(epoch from lease_until) * 1000)::bigint as lease from parlor_chat_turns where id = 'u1'",
       )) as { lease: string }[]
     ).map((row) => Number(row.lease))[0]!;
 
@@ -90,9 +90,9 @@ describe.each(drivers)("renewing a turn on $name", (driver) => {
     expect(
       await rows(handle, "select id from parlor_chat_items where kind <> 'prompt'"),
     ).toEqual([]);
-    expect(await rows(handle, "select last_seq from parlor_chat_threads")).toEqual([
-      { last_seq: 1 },
-    ]);
+    expect(
+      await rows(handle, "select last_seq::int as last_seq from parlor_chat_threads"),
+    ).toEqual([{ last_seq: 1 }]);
     expect(await rows(handle, "select id from sync_events")).toEqual(eventsBefore);
     expect(payloads).toEqual([]);
   });
