@@ -24,6 +24,6 @@ export function canSend(state: ChatState): boolean {
     agent !== undefined &&
     agent.online &&
     agent.ready &&
-    (state.status === "idle" || state.status === "running")
+    (state.status === "idle" || state.status === "running" || state.status === "waiting")
   );
 }

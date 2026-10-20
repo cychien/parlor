@@ -4,14 +4,17 @@ import {
   CHAT_CHANNEL,
   CHAT_TAG,
   type ChatFrame,
+  type AnswerToSign,
   type ChatItem,
   foldThread,
   type HostSummary,
   HOSTS_TAG,
   isPromptTooLong,
+  type ItemSignature,
   type LoggedItem,
   parseChatFrame,
   PROMPT_LIMIT_MESSAGE,
+  type PromptToSign,
   type ThreadSummary,
   type TurnStatus,
 } from "@parlor/chat";
@@ -29,7 +32,7 @@ import type { ClientChannel } from "@parlor/sync";
 
 import { generateClientId } from "../../action-client.js";
 import type { PluginClient } from "../../plugin-client.js";
-import type { DeviceSource, HostAuthorizer } from "../../session.js";
+import type { DeviceSource, HostAuthorizer, SessionDevice } from "../../session.js";
 import {
   applyFrame,
   mergeSnapshot,
@@ -53,8 +56,17 @@ export type ConnectOption =
   | { readonly kind: "command"; readonly command: string }
   | { readonly kind: "here"; start(): Promise<void> };
 
-/** `unavailable`: this backend has no chat, or the first read failed. */
-export type ChatStatus = "loading" | "idle" | "sending" | "running" | "unavailable";
+/**
+ * `waiting`: a prompt waits for a computer that must still approve this device.
+ * `unavailable`: this backend has no chat, or the first read failed.
+ */
+export type ChatStatus =
+  | "loading"
+  | "idle"
+  | "sending"
+  | "waiting"
+  | "running"
+  | "unavailable";
 
 export interface ChatState {
   readonly status: ChatStatus;
@@ -75,6 +87,8 @@ export interface ChatCommands {
   /** Signs the draft (or `text`) and sends it to the chosen agent; idempotent per call. */
   send(text?: string): Promise<void>;
   stop(): Promise<void>;
+  /** Sends a prompt again as a new turn in its thread, signed anew. */
+  resend(promptItemId: string): Promise<void>;
   /** A `presence` ask triggers the OS prompt first; a `computer` ask refuses. */
   answer(
     askId: string,
@@ -128,7 +142,15 @@ const exceedsPromptLimit = (error: ActionError): boolean =>
     (issue) => issue.code === "too_big" && issue.path.join(".") === "prompt.text",
   ) ?? false;
 
+class NeedsDevice extends Error {
+  override readonly name = "NeedsDevice";
+}
+
 const readable = (error: unknown): string => {
+  if (error instanceof NeedsDevice) return error.message;
+  if (error instanceof Error && error.name === "NotAllowedError") {
+    return "The presence check was cancelled.";
+  }
   if (!(error instanceof ActionError)) return "Could not reach the server.";
   if (error.issues === undefined) return error.message;
   return exceedsPromptLimit(error)
@@ -167,6 +189,8 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
   let channelOpen = false;
   let staleAfterLoad = false;
   let generation = 0;
+  let device: SessionDevice | undefined;
+  const resends = new Map<ItemId, PendingSend>();
   const answerIds = new Map<string, ItemId>();
   const stopIds = new Map<TurnId, ItemId>();
 
@@ -198,9 +222,11 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
           ? "loading"
           : sending
             ? "sending"
-            : turns.some(isActive) || open.turns.size > 0
-              ? "running"
-              : "idle";
+            : turns.some(awaitsApproval)
+              ? "waiting"
+              : turns.some(isActive) || open.turns.size > 0
+                ? "running"
+                : "idle";
     return {
       status,
       thread,
@@ -210,7 +236,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
         open: [...open.turns.values()],
         turns,
         confirmations: agentUi.confirmations.get().filter((c) => c.threadId === threadId),
-        deviceId: undefined,
+        deviceId: device?.id,
       }),
       hosts,
       agents,
@@ -330,6 +356,66 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     }
   };
 
+  const awaitsApproval = (turn: TurnStatus): boolean => {
+    if (!isActive(turn)) return false;
+    let waiting = false;
+    for (const item of [...items.values()].sort(bySeq)) {
+      if (item.turnId !== turn.turnId) continue;
+      if (item.kind === "event" && item.body.event === "device_pending") waiting = true;
+      else if (item.author !== "user") waiting = false;
+    }
+    return waiting;
+  };
+
+  const deviceOf = async (): Promise<SessionDevice | undefined> => {
+    const found = await deps.auth?.device?.();
+    device = found ?? device;
+    return found;
+  };
+
+  const signPrompt = async (prompt: PromptToSign): Promise<ItemSignature | undefined> =>
+    (await deviceOf())?.signPrompt(prompt);
+
+  const submit = async (
+    attempt: PendingSend,
+    agentKey: string,
+    settle: () => void,
+  ): Promise<void> => {
+    const [hostId, agentId] = agentKey.split("/") as [string, string];
+    const epoch = generation;
+    sending = true;
+    emit();
+    try {
+      await reporting(async () => {
+        const agent = { hostId: asId("host", hostId), agentId };
+        const signed = deps.auth?.device
+          ? await signPrompt({
+              threadId: attempt.threadId,
+              turnId: attempt.turnId,
+              agent,
+              text: attempt.text,
+            })
+          : undefined;
+        await calls.call("send", {
+          threadId: attempt.threadId,
+          turnId: attempt.turnId,
+          itemId: attempt.itemId,
+          clientId: deps.clientId,
+          prompt: { text: attempt.text, agent, ...(signed ? { signed } : {}) },
+        });
+        settle();
+        if (epoch !== generation) return;
+        startedNew = false;
+        threadId = attempt.threadId;
+        watch();
+        await load(threadId);
+      });
+    } finally {
+      sending = false;
+      emit();
+    }
+  };
+
   const activeTurn = (): TurnStatus | undefined => [...turns].reverse().find(isActive);
 
   const switchTo = (target: ThreadId | undefined, blank: boolean) => {
@@ -370,7 +456,6 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       if (!prompt || isPromptTooLong(prompt) || !target || sending || loaded !== "yes") {
         return;
       }
-      const [hostId, agentId] = target.key.split("/") as [string, string];
       const retrying =
         pendingSend?.text === prompt &&
         pendingSend.agent === target.key &&
@@ -386,30 +471,30 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
               turnId: mint("turn"),
               itemId: mint("item"),
             });
-      const epoch = generation;
-      sending = true;
-      emit();
-      try {
-        await reporting(async () => {
-          await calls.call("send", {
-            threadId: attempt.threadId,
-            turnId: attempt.turnId,
-            itemId: attempt.itemId,
-            clientId: deps.clientId,
-            prompt: { text: prompt, agent: { hostId: asId("host", hostId), agentId } },
-          });
-          pendingSend = undefined;
-          if (draft.trim() === prompt) draft = "";
-          if (epoch !== generation) return;
-          startedNew = false;
-          threadId = attempt.threadId;
-          watch();
-          await load(threadId);
-        });
-      } finally {
-        sending = false;
-        emit();
+      await submit(attempt, target.key, () => {
+        pendingSend = undefined;
+        if (draft.trim() === prompt) draft = "";
+      });
+    },
+    async resend(promptItemId) {
+      const prompt = state.items.find(
+        (item) => item.kind === "prompt" && item.id === promptItemId,
+      );
+      if (prompt?.kind !== "prompt" || sending || loaded !== "yes" || !threadId) return;
+      const key = `${prompt.agent.hostId}/${prompt.agent.agentId}`;
+      let attempt = resends.get(prompt.id);
+      if (!attempt) {
+        attempt = {
+          text: prompt.text,
+          agent: key,
+          openedIn: threadId,
+          threadId,
+          turnId: mint("turn"),
+          itemId: mint("item"),
+        };
+        resends.set(prompt.id, attempt);
       }
+      await submit(attempt, key, () => resends.delete(prompt.id));
     },
     async stop() {
       const turn = activeTurn();
@@ -431,13 +516,34 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       const itemId = answerIds.get(askId) ?? mint("item");
       answerIds.set(askId, itemId);
       const target = threadId;
+      const toSign: AnswerToSign = {
+        threadId: target,
+        askId: ask.id,
+        choice,
+        ...(values ? { values } : {}),
+      };
       await reporting(async () => {
+        const found = deps.auth?.device ? await deviceOf() : undefined;
+        if (ask.approval === "presence" && !found) {
+          throw new NeedsDevice(
+            "This question needs a device that can confirm it is you.",
+          );
+        }
+        const signed = await found?.signAnswer(toSign, {
+          presence: ask.approval === "presence",
+        });
         await calls.call("answer", {
           threadId: target,
           turnId: ask.turnId,
           itemId,
-          answer: { askId: ask.id, choice, ...(values ? { values } : {}) },
+          answer: {
+            askId: ask.id,
+            choice,
+            ...(values ? { values } : {}),
+            ...(signed ? { signed } : {}),
+          },
         });
+        answerIds.delete(askId);
         await refresh();
       });
     },

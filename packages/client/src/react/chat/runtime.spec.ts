@@ -1,9 +1,12 @@
 import type { AgentConfirmation, AgentUiClient } from "@parlor/agent-ui/client";
 import type { CapabilityHandle, LocalAgentHost } from "@parlor/capabilities";
 import type {
+  AnswerToSign,
   ChatSnapshot,
   HostSummary,
+  ItemSignature,
   LoggedItem,
+  PromptToSign,
   ThreadSummary,
   TurnStatus,
 } from "@parlor/chat";
@@ -1039,5 +1042,317 @@ describe("createChatRuntime adding a computer", () => {
       authorize: authorizeHost,
     });
     expect(h.names()).toEqual(["open", "hosts"]);
+  });
+});
+
+describe("createChatRuntime device signatures", () => {
+  const deviceId = asId("device", "dev_1");
+  const signature = (presence: "none" | "user"): ItemSignature => ({
+    deviceId,
+    at: 1,
+    signature: {
+      keyId: "k",
+      presence,
+      format: presence === "user" ? "webauthn" : "es256-raw",
+      signature: "s",
+    },
+  });
+  const device = () => {
+    const signPrompt = vi.fn(async (_prompt: PromptToSign) => signature("none"));
+    const signAnswer = vi.fn(
+      async (_answer: AnswerToSign, options: { presence: boolean }) =>
+        signature(options.presence ? "user" : "none"),
+    );
+    const source = {
+      device: vi.fn(async () => ({ id: deviceId, signPrompt, signAnswer })),
+    };
+    return { signPrompt, signAnswer, source };
+  };
+  const itemOf = (
+    seq: number,
+    id: string,
+    kind: "ask" | "event",
+    body: unknown,
+    turnId = "turn_1",
+  ) =>
+    ({
+      id: asId("item", id),
+      threadId: asId("thread", "thr_1"),
+      turnId: asId("turn", turnId),
+      seq,
+      at: seq,
+      author: kind === "ask" ? "agent" : "system",
+      kind,
+      body,
+    }) as unknown as LoggedItem;
+  const askOf = (approval?: "presence" | "computer") =>
+    itemOf(2, "turn_1.1", "ask", {
+      question: "Run it?",
+      choices: [{ id: "yes", label: "Yes", effect: "allow_once" }],
+      ...(approval ? { approval } : {}),
+    });
+  const asking = (approval?: "presence" | "computer", more: LoggedItem[] = []) =>
+    snapshot({
+      items: [logged(1, "item_p", "prompt", "go"), askOf(approval), ...more],
+      turns: [turn("turn_1", "running")],
+    });
+  const answerCalls = (h: ReturnType<typeof setup>) =>
+    h.calls.filter((call) => call.name === "answer").map((call) => call.input) as {
+      itemId: string;
+      answer: { signed?: ItemSignature };
+    }[];
+
+  it("signs the prompt it sends with the device, over the facts the host rebuilds it from", async () => {
+    const d = device();
+    const h = setup({ auth: d.source });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    h.runtime.setDraft("  write a long reply ");
+    await h.runtime.send();
+    const send = h.calls.find((c) => c.name === "send")!.input as {
+      threadId: string;
+      turnId: string;
+      prompt: unknown;
+    };
+    expect(d.signPrompt).toHaveBeenCalledWith({
+      threadId: send.threadId,
+      turnId: send.turnId,
+      agent: { hostId: "host_mac", agentId: "claude" },
+      text: "write a long reply",
+    });
+    expect(send.prompt).toEqual({
+      text: "write a long reply",
+      agent: { hostId: "host_mac", agentId: "claude" },
+      signed: signature("none"),
+    });
+  });
+
+  it("sends an unsigned prompt where the device cannot sign", async () => {
+    const h = setup({ auth: { device: async () => undefined } });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    await h.runtime.send("hi");
+    expect(h.calls.find((c) => c.name === "send")!.input).toMatchObject({
+      prompt: { text: "hi" },
+    });
+    expect(
+      (h.calls.find((c) => c.name === "send")!.input as { prompt: object }).prompt,
+    ).not.toHaveProperty("signed");
+  });
+
+  it("recognizes the prompts it signed as its own", async () => {
+    const d = device();
+    const signed = logged(1, "item_p", "prompt", "go") as LoggedItem<"prompt">;
+    const mine = {
+      ...signed,
+      body: { ...signed.body, signed: signature("none") },
+    } as LoggedItem;
+    const h = setup({
+      auth: d.source,
+      open: async () => snapshot({ items: [mine], turns: [turn("turn_1", "done")] }),
+    });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    expect(h.runtime.get().items[0]).toMatchObject({ kind: "prompt", mine: false });
+    await h.runtime.send("another");
+    expect(h.runtime.get().items[0]).toMatchObject({ kind: "prompt", mine: true });
+  });
+
+  it("asks the device for presence before it answers a presence question", async () => {
+    const d = device();
+    const h = setup({ auth: d.source, open: async () => asking("presence") });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().items).toHaveLength(2));
+    await h.runtime.answer("turn_1.1", "yes");
+    expect(d.signAnswer).toHaveBeenCalledWith(
+      { threadId: "thr_1", askId: "turn_1.1", choice: "yes" },
+      { presence: true },
+    );
+    expect(answerCalls(h)[0]!.answer).toEqual({
+      askId: "turn_1.1",
+      choice: "yes",
+      signed: signature("user"),
+    });
+  });
+
+  it("signs an answer to an ordinary question without presence", async () => {
+    const d = device();
+    const h = setup({ auth: d.source, open: async () => asking() });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().items).toHaveLength(2));
+    await h.runtime.answer("turn_1.1", "yes", { name: "x" });
+    expect(d.signAnswer).toHaveBeenCalledWith(
+      { threadId: "thr_1", askId: "turn_1.1", choice: "yes", values: { name: "x" } },
+      { presence: false },
+    );
+  });
+
+  it("does not answer a presence question from a device that cannot sign", async () => {
+    const h = setup({
+      auth: { device: async () => undefined },
+      open: async () => asking("presence"),
+    });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().items).toHaveLength(2));
+    await expect(h.runtime.answer("turn_1.1", "yes")).rejects.toThrow();
+    expect(answerCalls(h)).toEqual([]);
+    expect(h.runtime.get().error).toMatch(/confirm it is you/);
+  });
+
+  it("never answers a question that is answered on the computer", async () => {
+    const d = device();
+    const h = setup({ auth: d.source, open: async () => asking("computer") });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().items).toHaveLength(2));
+    await expect(h.runtime.answer("turn_1.1", "yes")).rejects.toThrow(/on your computer/);
+    expect(answerCalls(h)).toEqual([]);
+    expect(d.signAnswer).not.toHaveBeenCalled();
+  });
+
+  it("says the presence check was cancelled when the user declines it", async () => {
+    const d = device();
+    d.signAnswer.mockRejectedValueOnce(new DOMException("no", "NotAllowedError"));
+    const h = setup({ auth: d.source, open: async () => asking("presence") });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().items).toHaveLength(2));
+    await expect(h.runtime.answer("turn_1.1", "yes")).rejects.toThrow();
+    expect(h.runtime.get().error).toBe("The presence check was cancelled.");
+    expect(answerCalls(h)).toEqual([]);
+  });
+
+  it("answers again with a new item once the host rejected the first answer", async () => {
+    const d = device();
+    let rejected = false;
+    const rejection = itemOf(4, "turn_1.2", "event", {
+      event: "answer_rejected",
+      itemId: "item_a1",
+    });
+    const h = setup({
+      auth: d.source,
+      open: async () => asking("presence", rejected ? [rejection] : []),
+      items: () => (rejected ? [rejection] : []),
+    });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().items).toHaveLength(2));
+    await h.runtime.answer("turn_1.1", "yes");
+    rejected = true;
+    h.tags(["parlor_chat", "thr_1"]);
+    await vi.waitFor(() =>
+      expect(h.runtime.get().items.find((item) => item.kind === "ask")).toMatchObject({
+        answer: { state: "open" },
+      }),
+    );
+    await h.runtime.answer("turn_1.1", "yes");
+    const [first, second] = answerCalls(h);
+    expect(second!.itemId).not.toBe(first!.itemId);
+  });
+
+  it("is waiting while the computer asks about this device, and running once the agent speaks", async () => {
+    const pending = itemOf(2, "turn_1.1", "event", { event: "device_pending" });
+    const spoke = logged(3, "turn_1.2", "reply", "hi");
+    let page = [logged(1, "item_p", "prompt", "go"), pending];
+    const h = setup({
+      open: async () => snapshot({ items: page, turns: [turn("turn_1", "running")] }),
+    });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("waiting"));
+    page = [...page, spoke];
+    h.tags(["parlor_chat", "thr_1"]);
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("running"));
+  });
+
+  it("is not waiting once the computer refused the device", async () => {
+    const h = setup({
+      open: async () =>
+        snapshot({
+          items: [
+            logged(1, "item_p", "prompt", "go"),
+            itemOf(2, "turn_1.1", "event", { event: "device_pending" }),
+            itemOf(3, "turn_1.2", "event", { event: "device_rejected" }),
+          ],
+          turns: [{ ...turn("turn_1", "failed"), failure: "device_rejected" }],
+        }),
+    });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    expect(h.runtime.get().items[0]).toMatchObject({ failure: "device_rejected" });
+  });
+});
+
+describe("createChatRuntime resend", () => {
+  const expired = () =>
+    snapshot({
+      items: [logged(1, "item_p", "prompt", "add milk")],
+      turns: [{ ...turn("turn_1", "failed"), failure: "prompt_expired" }],
+    });
+
+  it("sends the same text to the same agent as a new turn in the thread, signed again", async () => {
+    const signPrompt = vi.fn(async () => ({
+      deviceId: asId("device", "dev_1"),
+      at: 2,
+      signature: {
+        keyId: "k",
+        presence: "none" as const,
+        format: "es256-raw" as const,
+        signature: "s",
+      },
+    }));
+    const h = setup({
+      open: async () => expired(),
+      auth: {
+        device: async () => ({
+          id: asId("device", "dev_1"),
+          signPrompt,
+          signAnswer: vi.fn(),
+        }),
+      },
+    });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().items).toHaveLength(1));
+    await h.runtime.resend("item_p");
+    const send = h.calls.find((c) => c.name === "send")!.input as {
+      threadId: string;
+      turnId: string;
+      itemId: string;
+      prompt: { text: string; signed: unknown };
+    };
+    expect(send).toMatchObject({
+      threadId: "thr_1",
+      prompt: { text: "add milk", agent: { hostId: "host_mac", agentId: "claude" } },
+    });
+    expect(send.turnId).not.toBe("turn_1");
+    expect(send.itemId).not.toBe("item_p");
+    expect(send.prompt.signed).toMatchObject({ at: 2 });
+    expect(signPrompt).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses its ids when the resend is repeated after a failure, so the retry is a no-op", async () => {
+    let failing = true;
+    const h = setup({ open: async () => expired() });
+    h.call.mockImplementation(async (name: string, input: unknown) => {
+      h.calls.push({ name, input });
+      if (name === "send" && failing) throw new ActionError("internal", "down");
+      if (name === "open") return expired();
+      return { id: "thr_1" };
+    });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().items).toHaveLength(1));
+    await expect(h.runtime.resend("item_p")).rejects.toThrow();
+    failing = false;
+    await h.runtime.resend("item_p");
+    const sends = h.calls.filter((c) => c.name === "send").map((c) => c.input) as {
+      turnId: string;
+      itemId: string;
+    }[];
+    expect(sends).toHaveLength(2);
+    expect(sends[1]).toEqual(sends[0]);
+  });
+
+  it("does nothing for a prompt it does not show", async () => {
+    const h = setup({ open: async () => expired() });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().items).toHaveLength(1));
+    await h.runtime.resend("nope");
+    expect(h.names()).toEqual(["open"]);
   });
 });

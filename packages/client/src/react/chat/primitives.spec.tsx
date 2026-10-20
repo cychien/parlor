@@ -229,6 +229,15 @@ describe("Chat.Composer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     expect(fake.runtime.stop).toHaveBeenCalledOnce();
   });
+
+  it("keeps Stop and Send available while the computer decides about this device", () => {
+    const fake = composer({ draft: "go" });
+    fake.set({ status: "waiting" });
+    expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
 });
 
 describe("Chat.Ask", () => {
