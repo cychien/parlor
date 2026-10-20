@@ -81,7 +81,6 @@ export interface OpenSessionInput {
   readonly resume?: string | undefined;
   /** A remote turn never runs in a bypass mode. */
   readonly pinAskMode: boolean;
-  /** With `pinAskMode`: pin the mode that asks about the most, so every write asks. */
   readonly strictAsk?: boolean | undefined;
 }
 
