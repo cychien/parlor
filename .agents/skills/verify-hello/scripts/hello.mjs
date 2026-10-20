@@ -808,11 +808,28 @@ function browserPorts(state, browsers) {
 
 const AGENT_HOMES_DIR = join(HOME, "h");
 
+function isolatedHomePids() {
+  const marker = new RegExp(`(^|\\s)HOME=${escapeRegExp(AGENT_HOMES_DIR)}/`);
+  return new Set(
+    run("ps", ["-axww", "-E", "-o", "pid=,command="], {
+      allowFailure: true,
+      env: { ...process.env, COLUMNS: "100000" },
+    })
+      .stdout.split("\n")
+      .map((line) => line.match(/^\s*(\d+)\s+(.*)$/))
+      .filter((match) => match && marker.test(match[2]))
+      .map((match) => Number(match[1])),
+  );
+}
+
 /** A real `parlor-host` an isolated HOME runs from the snapshot, with its agents and their children. */
 function hostProcesses(candidates, table) {
   const parents = new Map(table.map((p) => [p.pid, p.ppid]));
+  const isolated = isolatedHomePids();
   const roots = new Set(
-    candidates.filter((p) => isUnder(p.cwd, AGENT_HOMES_DIR)).map((p) => p.pid),
+    candidates
+      .filter((p) => isolated.has(p.pid) || isUnder(p.cwd, AGENT_HOMES_DIR))
+      .map((p) => p.pid),
   );
   const fromHost = (pid) => {
     for (let at = pid, hops = 0; at > 1 && hops < 64; at = parents.get(at), hops += 1) {
