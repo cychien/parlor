@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { CHAT_EVENTS } from "./events.js";
 import { idSchema } from "./id-schemas.js";
+import { MAX_PROMPT_CHARS } from "./limits.js";
 
 const signature = z.object({
   keyId: z.string(),
@@ -31,7 +32,7 @@ export const chatItemBodies = {
   prompt: {
     author: "user",
     body: z.object({
-      text: z.string().min(1).max(32_000),
+      text: z.string().min(1).max(MAX_PROMPT_CHARS),
       agent: agentRef,
       signed: signed.optional(),
     }),

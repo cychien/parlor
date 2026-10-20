@@ -523,6 +523,21 @@ describe("createChatRuntime send", () => {
     expect(h.names()).toEqual(["open"]);
   });
 
+  it("sends nothing for a prompt over the 32,000-character limit and sends the largest allowed one", async () => {
+    const h = setup();
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+
+    h.runtime.setDraft("x".repeat(32_001));
+    await h.runtime.send();
+    expect(h.names()).toEqual(["open"]);
+    expect(h.runtime.get().draft).toHaveLength(32_001);
+
+    h.runtime.setDraft("x".repeat(32_000));
+    await h.runtime.send();
+    expect(h.names().filter((name) => name === "send")).toHaveLength(1);
+  });
+
   it("is sending while the request is in flight and cannot be submitted twice", async () => {
     const h = setup();
     let finish!: () => void;
@@ -625,6 +640,54 @@ describe("createChatRuntime command failures", () => {
     await expect(h.runtime.send()).rejects.toThrow("Failed to fetch");
 
     expect(h.runtime.get().error).toBe("Could not reach the server.");
+  });
+
+  it("names the limit when the server rejects an over-long prompt", async () => {
+    const { h } = failing(
+      "send",
+      new ActionError("invalid_input", 'Invalid input for "send"', {
+        issues: [
+          {
+            code: "too_big",
+            origin: "string",
+            maximum: 32_000,
+            inclusive: true,
+            path: ["prompt", "text"],
+            message: "Too big: expected string to have <=32000 characters",
+          },
+        ],
+      }),
+    );
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    h.runtime.setDraft("hello");
+
+    await expect(h.runtime.send()).rejects.toThrow();
+
+    expect(h.runtime.get().error).toBe("Messages can be at most 32,000 characters.");
+  });
+
+  it("never shows the raw schema message for any other rejected input", async () => {
+    const { h } = failing(
+      "send",
+      new ActionError("invalid_input", 'Invalid input for "send"', {
+        issues: [
+          {
+            code: "invalid_type",
+            expected: "string",
+            path: ["clientId"],
+            message: "Invalid input: expected string, received undefined",
+          },
+        ],
+      }),
+    );
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    h.runtime.setDraft("hello");
+
+    await expect(h.runtime.send()).rejects.toThrow();
+
+    expect(h.runtime.get().error).toBe("That message could not be sent. Try again.");
   });
 
   it("shows a refused stop and clears it when the next stop works", async () => {

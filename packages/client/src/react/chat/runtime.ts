@@ -8,8 +8,10 @@ import {
   foldThread,
   type HostSummary,
   HOSTS_TAG,
+  isPromptTooLong,
   type LoggedItem,
   parseChatFrame,
+  PROMPT_LIMIT_MESSAGE,
   type ThreadSummary,
   type TurnStatus,
 } from "@parlor/chat";
@@ -115,6 +117,19 @@ const mint = <K extends "thread" | "turn" | "item">(kind: K) =>
 
 const isActive = (turn: TurnStatus) =>
   turn.state === "queued" || turn.state === "running";
+
+const exceedsPromptLimit = (error: ActionError): boolean =>
+  error.issues?.some(
+    (issue) => issue.code === "too_big" && issue.path.join(".") === "prompt.text",
+  ) ?? false;
+
+const readable = (error: unknown): string => {
+  if (!(error instanceof ActionError)) return "Could not reach the server.";
+  if (error.issues === undefined) return error.message;
+  return exceedsPromptLimit(error)
+    ? PROMPT_LIMIT_MESSAGE
+    : "That message could not be sent. Try again.";
+};
 
 const bySeq = (a: LoggedItem, b: LoggedItem) => a.seq - b.seq;
 
@@ -289,8 +304,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     try {
       await command();
     } catch (error) {
-      failure =
-        error instanceof ActionError ? error.message : "Could not reach the server.";
+      failure = readable(error);
       emit();
       throw error;
     }
@@ -315,7 +329,9 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     async send(text = draft) {
       const prompt = text.trim();
       const target = state.agent;
-      if (!prompt || !target || sending || loaded !== "yes") return;
+      if (!prompt || isPromptTooLong(prompt) || !target || sending || loaded !== "yes") {
+        return;
+      }
       const [hostId, agentId] = target.key.split("/") as [string, string];
       const attempt =
         pendingSend?.text === prompt

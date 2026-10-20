@@ -1,3 +1,4 @@
+import { isPromptTooLong } from "@parlor/chat";
 import { createContext, use, useSyncExternalStore } from "react";
 
 import type { ChatRuntime, ChatState } from "./runtime.js";
@@ -19,6 +20,7 @@ export function canSend(state: ChatState): boolean {
   const { agent } = state;
   return (
     state.draft.trim() !== "" &&
+    !isPromptTooLong(state.draft) &&
     agent !== undefined &&
     agent.online &&
     agent.ready &&

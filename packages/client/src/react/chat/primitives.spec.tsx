@@ -195,6 +195,16 @@ describe("Chat.Composer", () => {
     expect(fake.runtime.send).toHaveBeenCalledOnce();
   });
 
+  it("cannot send a draft over the 32,000-character limit, by button or Enter", () => {
+    const fake = composer({ draft: "x".repeat(32_001) });
+    const send = screen.getByRole("button", { name: "Send" }) as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Message" }), { key: "Enter" });
+    expect(fake.runtime.send).not.toHaveBeenCalled();
+    fake.set({ draft: "x".repeat(32_000) });
+    expect(send.disabled).toBe(false);
+  });
+
   it("cannot send to an agent that is offline", () => {
     composer({
       draft: "hello",

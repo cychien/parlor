@@ -1,4 +1,4 @@
-import type { TurnState } from "@parlor/chat";
+import { isPromptTooLong, PROMPT_LIMIT_MESSAGE, type TurnState } from "@parlor/chat";
 import {
   type AgentConfirmation,
   Chat,
@@ -114,7 +114,8 @@ function ThreadEmpty() {
 }
 
 function Composer() {
-  const { status, error } = useChat();
+  const { status, error, draft } = useChat();
+  const problem = isPromptTooLong(draft) ? PROMPT_LIMIT_MESSAGE : error;
   return (
     <Chat.Composer className="composer">
       <Chat.Input
@@ -124,9 +125,9 @@ function Composer() {
         rows={2}
         autoFocus
       />
-      {error ? (
+      {problem ? (
         <p className="problem" role="alert">
-          {error}
+          {problem}
         </p>
       ) : null}
       <div className="composer-bar">
