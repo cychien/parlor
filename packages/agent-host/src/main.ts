@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { defineCommand, runMain } from "citty";
 
 import type { AppGrant, GrantStore } from "./grants.js";
+import { printable } from "./prompter.js";
 
 const KEYCHAIN_SERVICE = "dev.parlor.host";
 const DAEMON_READY_MS = 15_000;
@@ -40,7 +41,7 @@ const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
 function fail(message: string): void {
-  process.stderr.write(`${message}\n`);
+  process.stderr.write(`${printable(message)}\n`);
   process.exitCode = 1;
 }
 
@@ -211,7 +212,7 @@ const connect = defineCommand({
       return;
     }
     process.stdout.write(
-      `Connected to ${grant.appName} as ${grant.account.email ?? grant.account.name}. Your agents are ready in its sidebar.\n`,
+      `Connected to ${printable(grant.appName)} as ${printable(grant.account.email ?? grant.account.name)}. Your agents are ready in its sidebar.\n`,
     );
   },
 });

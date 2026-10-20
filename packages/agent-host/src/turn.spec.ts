@@ -63,6 +63,14 @@ const script: FakeAgentScript = {
   },
 };
 
+const bypassOnly: FakeAgentScript = {
+  fallback: "echo",
+  advertise: {
+    modes: { current: "bypassPermissions", available: ["bypassPermissions"] },
+  },
+  steps: {},
+};
+
 type Logged =
   | {
       readonly kind: "stream";
@@ -97,6 +105,7 @@ beforeAll(async () => {
   agentLog = join(dir, "agent.log");
   vi.stubEnv("FAKE_AGENT_LOG", agentLog);
   await writeFile(join(dir, "script.json"), JSON.stringify(script));
+  await writeFile(join(dir, "bypass.json"), JSON.stringify(bypassOnly));
   proxy = createMcpProxy("parlor-host");
   await proxy.listen(join(dir, "run", "proxy.sock"));
   pool = createSessionPool(join(dir, "sessions.json"));
@@ -200,6 +209,11 @@ function harness(
         ...fakeAgentProfile(ENTRY, join(dir, "script.json")),
         id: "fake-b",
         name: "Fake B",
+      },
+      {
+        ...fakeAgentProfile(ENTRY, join(dir, "bypass.json")),
+        id: "fake-bypass",
+        name: "Fake bypass",
       },
     ],
     launcher: options.launcher ?? acpLauncher(),
@@ -585,4 +599,25 @@ describe("runTurn against the fake agent over real stdio", () => {
       await Promise.all([a.close(), b.close()]);
     }
   }, 60_000);
+
+  it("T4-09: an agent with no mode that asks never gets a remote prompt", async () => {
+    const run = harness();
+    const before = agentLogEntries().length;
+    expect(
+      await runTurn(claim(asId("thread", "t409"), "fake-bypass", "hello"), run.deps),
+    ).toEqual({ state: "failed", reason: "agent_unavailable" });
+    const received = agentLogEntries()
+      .slice(before)
+      .map((entry) => entry.method);
+    expect(received).toContain("session/new");
+    expect(received).not.toContain("session/prompt");
+    expect(run.logged.at(-1)).toMatchObject({
+      kind: "finish",
+      outcome: { state: "failed", reason: "agent_unavailable" },
+    });
+    expect(run.appended().at(-1)).toMatchObject({
+      kind: "event",
+      body: { event: "turn_failed", detail: expect.stringContaining("Fake bypass") },
+    });
+  }, 30_000);
 });

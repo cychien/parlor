@@ -36,6 +36,20 @@ const script: FakeAgentScript = {
     ask: [
       { kind: "tool", title: "rm -rf build", toolKind: "execute", askPermission: true },
       { kind: "tool", title: "date", toolKind: "execute", askPermission: true },
+      {
+        kind: "tool",
+        title: "date | tee ~/c5-date.txt",
+        toolKind: "execute",
+        askPermission: true,
+        askTitle: "Run command",
+      },
+      {
+        kind: "tool",
+        title: "touch notes.txt",
+        toolKind: "execute",
+        askPermission: true,
+        askTitle: "Run touch notes.txt",
+      },
     ],
     cancel: [{ kind: "reply", chunks: ["partial"] }, { kind: "wait_for_cancel" }],
     exit: [
@@ -130,6 +144,8 @@ describe("acpLauncher against the fake agent over real stdio", () => {
     const answers: AgentAskAnswer[] = [
       { kind: "declined" },
       { kind: "selected", optionId: "allow" },
+      { kind: "selected", optionId: "allow" },
+      { kind: "selected", optionId: "allow" },
     ];
     const updates: AgentUpdate[] = [];
     await session.prompt(prompt("ask"), {
@@ -152,6 +168,11 @@ describe("acpLauncher against the fake agent over real stdio", () => {
         ],
       },
       expect.objectContaining({ toolCallId: "tool-2", title: "date" }),
+      expect.objectContaining({
+        toolCallId: "tool-3",
+        title: "Run command: date | tee ~/c5-date.txt",
+      }),
+      expect.objectContaining({ toolCallId: "tool-4", title: "Run touch notes.txt" }),
     ]);
     const ends = updates.flatMap((update) =>
       update.kind === "tool_update" ? [[update.toolCallId, update.status]] : [],
@@ -159,6 +180,8 @@ describe("acpLauncher against the fake agent over real stdio", () => {
     expect(ends).toEqual([
       ["tool-1", "failed"],
       ["tool-2", "completed"],
+      ["tool-3", "completed"],
+      ["tool-4", "completed"],
     ]);
   });
 

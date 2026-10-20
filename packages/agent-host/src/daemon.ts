@@ -24,7 +24,7 @@ import { computerName, platformName, workspaceOf } from "./naming.js";
 import type { HostPaths } from "./paths.js";
 import type { RemotePolicy } from "./policy.js";
 import type { SessionPool } from "./pool.js";
-import type { LocalPrompter } from "./prompter.js";
+import { type LocalPrompter, printable } from "./prompter.js";
 import { revokeGrant } from "./revoke.js";
 import type { HostRelease } from "./service.js";
 import { runTurn } from "./turn.js";
@@ -182,7 +182,7 @@ export function createHostDaemon(deps: DaemonDeps): HostDaemon {
       },
       onIncompatible: (refused, welcome) => {
         state.incompatible = incompatibleMessage(refused, welcome);
-        process.stderr.write(`${state.incompatible}\n`);
+        process.stderr.write(`${printable(state.incompatible)}\n`);
       },
     });
     state = { link, keys, claiming: false, again: false, incompatible: undefined };

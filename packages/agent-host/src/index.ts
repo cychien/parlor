@@ -8,6 +8,7 @@ export {
   type AgentConnection,
   type AgentExit,
   type AgentLauncher,
+  type AgentModes,
   type AgentSession,
   type AgentUpdate,
   type AskEffect,

@@ -34,6 +34,11 @@ export interface LocalPrompter {
   }): void;
 }
 
+const UNPRINTABLE = /[\p{Cc}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
+
+/** Text from an app or an agent, as the terminal may show it: no control or bidi characters. */
+export const printable = (text: string) => text.replace(UNPRINTABLE, "");
+
 function ask(question: string): Promise<string | undefined> {
   return new Promise((resolve) => {
     const lines = createInterface({ input: process.stdin, output: process.stdout });
@@ -57,25 +62,27 @@ export function terminalPrompter(): LocalPrompter {
     confirmPairing: async ({ appName, account, matchingCode }) =>
       yes(
         await ask(
-          `Connect this computer to ${appName} as ${account.email ?? account.name}? Code ${matchingCode} [y/N] `,
+          `Connect this computer to ${printable(appName)} as ${printable(account.email ?? account.name)}? Code ${printable(matchingCode)} [y/N] `,
         ),
       ),
     approveDevice: async ({ appName, account, device }) =>
       yes(
         await ask(
-          `Let ${device.name} (${device.platform}) run agents here for ${appName} as ${account.email ?? account.name}? [y/N] `,
+          `Let ${printable(device.name)} (${printable(device.platform)}) run agents here for ${printable(appName)} as ${printable(account.email ?? account.name)}? [y/N] `,
         ),
       ),
     answerHere: async ({ appName, agent, question, choices }) => {
-      const menu = choices.map((choice, at) => `  ${at + 1}. ${choice.label}`).join("\n");
+      const menu = choices
+        .map((choice, at) => `  ${at + 1}. ${printable(choice.label)}`)
+        .join("\n");
       const answer = await ask(
-        `${agent} for ${appName} asks: ${question}\n${menu}\nChoice: `,
+        `${printable(agent)} for ${printable(appName)} asks: ${printable(question)}\n${menu}\nChoice: `,
       );
       return choices[Number(answer?.trim()) - 1]?.id;
     },
     turnStarted: ({ appName, device, agent, preview }) => {
       process.stdout.write(
-        `${agent} is working for ${appName} from ${device}: ${preview}\n`,
+        `${printable(agent)} is working for ${printable(appName)} from ${printable(device)}: ${printable(preview)}\n`,
       );
     },
   };

@@ -5,6 +5,7 @@ import {
   type AcpStdio,
   type AgentAsk,
   type AgentAskAnswer,
+  type AgentModes,
   type AgentUpdate,
   type PromptBlock,
   serveAcpAgent,
@@ -23,7 +24,11 @@ import type { AgentProfile } from "../agents.js";
  */
 export interface FakeAgentScript {
   readonly advertise?:
-    | { readonly resume?: boolean | undefined; readonly mcpHttp?: boolean | undefined }
+    | {
+        readonly resume?: boolean | undefined;
+        readonly mcpHttp?: boolean | undefined;
+        readonly modes?: AgentModes | undefined;
+      }
     | undefined;
   readonly steps: Readonly<Record<string, readonly FakeStep[]>>;
   /** For a prompt no step names: reply with it. */
@@ -43,6 +48,8 @@ export type FakeStep =
       readonly toolKind: ToolKind;
       readonly mcp?: { readonly server: string; readonly tool: string } | undefined;
       readonly askPermission: boolean;
+      /** The permission request's own title, when it differs from the call's. */
+      readonly askTitle?: string | undefined;
     }
   /** Calls an app tool through the MCP server the host passed in `session/new`. */
   | { readonly kind: "call_app"; readonly tool: string; readonly input: unknown }
@@ -211,7 +218,8 @@ export function serveFakeAgent(script: FakeAgentScript, io: AcpStdio): Promise<v
           mcp: step.mcp,
         });
         const allowed =
-          !step.askPermission || (await permit(peer, toolCallId, step.title, step));
+          !step.askPermission ||
+          (await permit(peer, toolCallId, step.askTitle ?? step.title, step));
         await peer.update({
           kind: "tool_update",
           toolCallId,
@@ -283,7 +291,7 @@ export function serveFakeAgent(script: FakeAgentScript, io: AcpStdio): Promise<v
       newSession: async (input) => {
         const id = `fake-session-${sessions.size + 1}`;
         sessions.set(id, input.mcpServers);
-        return { id };
+        return { id, modes: script.advertise?.modes };
       },
       prompt: async (sessionId, blocks: readonly PromptBlock[], peer) => {
         const text = blocks.map((block) => block.text).join("\n");

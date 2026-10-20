@@ -190,10 +190,17 @@ export interface AcpStdio {
   readonly output: WritableStream<Uint8Array>;
 }
 
+export interface AgentModes {
+  readonly current: string;
+  readonly available: readonly string[];
+}
+
 /** The agent side of ACP in this file's own terms, for the fake agent. */
 export interface AcpAgentHandlers {
   readonly capabilities: Pick<AgentCapabilities, "resume" | "mcpHttp">;
-  newSession(input: OpenSessionInput): Promise<{ readonly id: string }>;
+  newSession(
+    input: OpenSessionInput,
+  ): Promise<{ readonly id: string; readonly modes?: AgentModes | undefined }>;
   prompt(
     sessionId: string,
     blocks: readonly PromptBlock[],
@@ -381,17 +388,45 @@ const claudeToolName = (mcp: McpToolRef) => ({
   claudeCode: { toolName: `${MCP_PREFIX}${mcp.server}__${mcp.tool}` },
 });
 
+/** A tool call as the session's updates described it so far. */
+interface KnownCall {
+  readonly title?: string | undefined;
+  readonly mcp?: McpToolRef | undefined;
+}
+
+function commandIn(rawInput: unknown): string | undefined {
+  return isFields(rawInput) && typeof rawInput.command === "string"
+    ? rawInput.command
+    : undefined;
+}
+
+/**
+ * A permission's own title can be generic ("Run command") while the call it is for shows
+ * what runs; the question names both unless one already says the other.
+ */
+function questionOf(asked: string, shown: string | undefined): string {
+  const detail = shown?.trim() ?? "";
+  if (detail === "" || asked.includes(detail)) return asked;
+  if (asked.trim() === "" || detail.includes(asked)) return detail;
+  return `${asked}: ${detail}`;
+}
+
 function permissionAskOf(
   request: RequestPermissionRequest,
-  known: McpToolRef | undefined,
+  known: KnownCall | undefined,
 ): AgentAsk {
   const call = request.toolCall;
+  const mcp = mcpRefOf(call) ?? known?.mcp;
+  const title = call.title ?? "";
   return {
     kind: "permission",
     toolCallId: call.toolCallId,
-    title: call.title ?? "",
+    title: questionOf(
+      mcp ? readableTitle(title, mcp) : title,
+      known?.title ?? commandIn(call.rawInput),
+    ),
     toolKind: toolKindOf(call.kind),
-    mcp: mcpRefOf(call) ?? known,
+    mcp,
     options: request.options.map((option) => ({
       id: option.optionId,
       label: option.name,
@@ -498,14 +533,23 @@ function commandOf(profile: AgentProfile): {
 
 interface LiveState {
   handlers: TurnHandlers | undefined;
-  readonly mcp: Map<string, McpToolRef>;
+  readonly calls: Map<string, KnownCall>;
   readonly pinned: string | undefined;
 }
 
-function pinnedModeOf(modes: SessionModeState | null | undefined): string | undefined {
-  if (!modes || ASK_MODES_BY_PREFERENCE.includes(modes.currentModeId)) return undefined;
+function askingModeOf(modes: SessionModeState): string | undefined {
+  if (ASK_MODES_BY_PREFERENCE.includes(modes.currentModeId)) return modes.currentModeId;
   const available = new Set(modes.availableModes.map((mode) => mode.id));
   return ASK_MODES_BY_PREFERENCE.find((mode) => available.has(mode));
+}
+
+function sessionModesOf(modes: AgentModes | undefined): SessionModeState | undefined {
+  return modes
+    ? {
+        currentModeId: modes.current,
+        availableModes: modes.available.map((id) => ({ id, name: id })),
+      }
+    : undefined;
 }
 
 function signalExit(pid: number | undefined, signal: NodeJS.Signals) {
@@ -565,12 +609,14 @@ export function acpLauncher(): AgentLauncher {
         const state = sessions.get(notification.sessionId);
         if (!state) return;
         const { update } = notification;
-        if (update.sessionUpdate === "tool_call") {
-          const ref = mcpRefOf(update);
-          if (ref) state.mcp.set(update.toolCallId, ref);
-        }
         const mapped = updateOf(update);
         if (!mapped) return;
+        if (mapped.kind === "tool_start") {
+          state.calls.set(mapped.toolCallId, { title: mapped.title, mcp: mapped.mcp });
+        } else if (mapped.kind === "tool_update" && mapped.title) {
+          const known = state.calls.get(mapped.toolCallId);
+          state.calls.set(mapped.toolCallId, { ...known, title: mapped.title });
+        }
         if (mapped.kind === "mode" && state.pinned && mapped.modeId !== state.pinned) {
           void context
             .request(methods.agent.session.setMode, {
@@ -597,7 +643,7 @@ export function acpLauncher(): AgentLauncher {
         .onRequest(methods.client.session.requestPermission, async ({ params }) => {
           const known = sessions
             .get(params.sessionId)
-            ?.mcp.get(params.toolCall.toolCallId);
+            ?.calls.get(params.toolCall.toolCallId);
           const answer = await ask(params.sessionId, permissionAskOf(params, known));
           return permissionAnswerOf(params, answer);
         })
@@ -685,16 +731,16 @@ export function acpLauncher(): AgentLauncher {
           } catch (error) {
             throw loginProblem(error);
           }
-          const pinned = input.pinAskMode ? pinnedModeOf(opened.modes) : undefined;
-          const state: LiveState = {
-            handlers: undefined,
-            mcp: new Map(),
-            pinned: input.pinAskMode
-              ? (pinned ?? opened.modes?.currentModeId)
-              : undefined,
-          };
+          const modes = input.pinAskMode ? opened.modes : undefined;
+          const pinned = modes ? askingModeOf(modes) : undefined;
+          if (modes && pinned === undefined) {
+            throw new Error(
+              `${profile.name} offers no mode that asks before it acts, so it cannot take a turn from an app.`,
+            );
+          }
+          const state: LiveState = { handlers: undefined, calls: new Map(), pinned };
           sessions.set(opened.id, state);
-          if (pinned) {
+          if (pinned !== undefined && pinned !== modes?.currentModeId) {
             await context.request(methods.agent.session.setMode, {
               sessionId: opened.id,
               modeId: pinned,
@@ -756,12 +802,13 @@ export function serveAcpAgent(handlers: AcpAgentHandlers, io: AcpStdio): Promise
       authMethods: [],
     }))
     .onRequest(methods.agent.session.new, async ({ params }) => {
-      const { id } = await handlers.newSession({
+      const { id, modes } = await handlers.newSession({
         cwd: params.cwd,
         mcpServers: stdioServersOf(params.mcpServers),
         pinAskMode: false,
       });
-      return { sessionId: id };
+      const state = sessionModesOf(modes);
+      return { sessionId: id, ...(state ? { modes: state } : {}) };
     })
     .onRequest(methods.agent.session.resume, async ({ params }) => {
       if (!handlers.capabilities.resume) {
@@ -775,6 +822,7 @@ export function serveAcpAgent(handlers: AcpAgentHandlers, io: AcpStdio): Promise
       aliases.set(params.sessionId, id);
       return {};
     })
+    .onRequest(methods.agent.session.setMode, () => ({}))
     .onRequest(methods.agent.session.prompt, async ({ params, client }) => {
       const sessionId = params.sessionId;
       const cancelled = new AbortController();
