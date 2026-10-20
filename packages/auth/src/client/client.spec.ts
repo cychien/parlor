@@ -1,6 +1,7 @@
 import type { SessionSnapshot } from "@parlor/client";
+import { createRegistry } from "@parlor/core/registry";
 import { createDatabase, type DatabaseHandle } from "@parlor/data";
-import type { FrameworkServer } from "@parlor/server";
+import { createServer, type FrameworkServer } from "@parlor/server";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createTestApp, ORIGIN, PASSWORD, signUp } from "../testing/app.js";
@@ -110,6 +111,26 @@ describe("the auth client in a native shell", () => {
       auth.signIn({ email: "alice@example.com", password: "wrong password here" }),
     ).rejects.toMatchObject({ name: "AuthClientError", status: 401 });
     expect(store.token).toBeUndefined();
+  });
+
+  it("reports an anonymous session, without retrying, when the server runs without auth", async () => {
+    const bare = createServer({ actions: createRegistry({}) });
+    let asked = 0;
+    const auth = createAuthClient({
+      baseUrl: ORIGIN,
+      session: memoryStore(),
+      fetch: (input, init) => {
+        asked += 1;
+        return bare.fetch(new Request(input, init));
+      },
+    });
+    try {
+      expect(await settled(auth)).toEqual({ status: "anonymous" });
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      expect(asked).toBe(1);
+    } finally {
+      await bare.close();
+    }
   });
 
   it("waits out an unreachable server instead of signing the user out", async () => {

@@ -73,6 +73,11 @@ function settle(result: BetterAuthResult): void {
   throw new AuthClientError(message || "Authentication failed.", status, code);
 }
 
+const ANONYMOUS_SESSION: SessionSnapshot = { status: "anonymous" };
+
+/** The server answers, but serves no auth routes: it runs without an auth provider. */
+const serverHasNoAuth = (error: { readonly status?: unknown }) => error.status === 404;
+
 export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
   const baseUrl = options.baseUrl ?? injectedServerUrl();
   const basePath = options.basePath ?? DEFAULT_BASE_PATH;
@@ -121,7 +126,7 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
   let retryDelay = RETRY_BASE_MS;
   const retryAfterError = () => {
     const state = betterAuth().useSession.get();
-    if (!state.error) {
+    if (!state.error || serverHasNoAuth(state.error)) {
       retryDelay = RETRY_BASE_MS;
       return;
     }
@@ -139,8 +144,11 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
     const state = betterAuth().useSession.get();
     if (state === last) return snapshot;
     last = state;
-    // Only the server saying there is no session signs the user out, never an unreachable one.
-    if (state.error) return snapshot;
+    if (state.error) {
+      if (serverHasNoAuth(state.error)) snapshot = ANONYMOUS_SESSION;
+      // Only the server saying there is no session signs the user out, never an unreachable one.
+      return snapshot;
+    }
     const user = state.data?.user;
     snapshot = user
       ? { status: "signed-in", user: { id: user.id, name: user.name, email: user.email } }
