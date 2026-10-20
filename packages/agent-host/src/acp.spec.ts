@@ -81,8 +81,11 @@ afterAll(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-async function launch(env: Record<string, string> = {}): Promise<AgentConnection> {
-  const connection = await acpLauncher().launch(fakeAgentProfile(ENTRY, scriptFile), {
+async function launch(
+  env: Record<string, string> = {},
+  file = scriptFile,
+): Promise<AgentConnection> {
+  const connection = await acpLauncher().launch(fakeAgentProfile(ENTRY, file), {
     cwd: dir,
     env: { PATH: process.env.PATH ?? "", ...env },
     signal: new AbortController().signal,
@@ -256,6 +259,47 @@ describe("acpLauncher against the fake agent over real stdio", () => {
     });
     await expect(prompted).rejects.toThrow();
     expect(await connection.exited).toEqual({ kind: "exited", code: 3, stderrTail: "" });
+  });
+
+  describe("pinning the mode that asks", () => {
+    const codexLike: FakeAgentScript = {
+      fallback: "echo",
+      advertise: {
+        modes: {
+          current: "workspace-write",
+          available: ["read-only", "workspace-write"],
+        },
+      },
+      steps: {},
+    };
+
+    async function modesSet(input: { strictAsk?: boolean }): Promise<string[]> {
+      const log = join(dir, `modes-${Math.random().toString(36).slice(2)}.log`);
+      const file = join(dir, "codex-like.json");
+      await writeFile(file, JSON.stringify(codexLike));
+      const connection = await launch({ FAKE_AGENT_LOG: log }, file);
+      await connection.openSession({
+        cwd: dir,
+        mcpServers: [],
+        pinAskMode: true,
+        ...input,
+      });
+      return (existsSync(log) ? readFileSync(log, "utf8") : "")
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { method: string; modeId?: string })
+        .filter((entry) => entry.method === "session/set_mode")
+        .map((entry) => entry.modeId!);
+    }
+
+    it("keeps the agent's own asking mode when asked for no more", async () => {
+      expect(await modesSet({})).toEqual([]);
+    });
+
+    it("moves to the strictest asking mode, so every write asks", async () => {
+      expect(await modesSet({ strictAsk: true })).toEqual(["read-only"]);
+    });
   });
 
   it("kills the whole process group", async () => {

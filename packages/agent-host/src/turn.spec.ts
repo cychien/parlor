@@ -74,6 +74,14 @@ const bypassOnly: FakeAgentScript = {
   steps: {},
 };
 
+const codexLike: FakeAgentScript = {
+  fallback: "echo",
+  advertise: {
+    modes: { current: "workspace-write", available: ["read-only", "workspace-write"] },
+  },
+  steps: {},
+};
+
 const bypassClosable: FakeAgentScript = {
   ...bypassOnly,
   advertise: { ...bypassOnly.advertise, close: true },
@@ -114,6 +122,7 @@ beforeAll(async () => {
   vi.stubEnv("FAKE_AGENT_LOG", agentLog);
   await writeFile(join(dir, "script.json"), JSON.stringify(script));
   await writeFile(join(dir, "bypass.json"), JSON.stringify(bypassOnly));
+  await writeFile(join(dir, "codex.json"), JSON.stringify(codexLike));
   await writeFile(join(dir, "bypass-close.json"), JSON.stringify(bypassClosable));
   proxy = createMcpProxy("parlor-host");
   await proxy.listen(join(dir, "run", "proxy.sock"));
@@ -128,6 +137,7 @@ afterAll(async () => {
 });
 
 interface AgentLogEntry {
+  readonly modeId?: string;
   readonly at: number;
   readonly method: string;
   readonly pid: number;
@@ -224,6 +234,11 @@ function harness(
         ...fakeAgentProfile(ENTRY, join(dir, "script.json")),
         id: "fake-b",
         name: "Fake B",
+      },
+      {
+        ...fakeAgentProfile(ENTRY, join(dir, "codex.json")),
+        id: "fake-codex",
+        name: "Fake Codex",
       },
       {
         ...fakeAgentProfile(ENTRY, join(dir, "bypass.json")),
@@ -697,12 +712,13 @@ async function signedClaim(
   text: string,
   options: {
     readonly at?: number;
+    readonly agent?: string;
     readonly app?: string;
     readonly device?: DeviceKeys | undefined;
     readonly sign?: boolean;
   } = {},
 ): Promise<ClaimedTurn> {
-  const base = claim(thread, "fake-a", text);
+  const base = claim(thread, options.agent ?? "fake-a", text);
   const signed =
     options.sign === false
       ? undefined
@@ -1285,6 +1301,39 @@ describe("runTurn taking answers only as the policy says", () => {
     release("allow");
     expect(await running).toMatchObject({ state: "done" });
   }, 30_000);
+
+  it.each([
+    ["presence", DEFAULT_POLICY, ["read-only"]],
+    [
+      "computer",
+      { deviceApproval: "local", answers: "computer" } as const,
+      ["read-only"],
+    ],
+    ["off", { deviceApproval: "local", answers: "off" } as const, []],
+  ])(
+    "pins the asking mode the policy needs for an agent that starts in workspace-write: answers %s",
+    async (name, policy, expected) => {
+      const device = await TestDevice.create();
+      const trust = memoryTrust();
+      await trust.pin(APP, pinOf(device));
+      const thread = asId("thread", `t5-mode-${name}`);
+      const before = agentLogEntries().length;
+      const run = harness(undefined, { trust, policy });
+      expect(
+        await runTurn(
+          await signedClaim(device, thread, "hello", { agent: "fake-codex" }),
+          run.deps,
+        ),
+      ).toMatchObject({ state: "done" });
+      expect(
+        agentLogEntries()
+          .slice(before)
+          .filter((entry) => entry.method === "session/set_mode")
+          .map((entry) => entry.modeId),
+      ).toEqual(expected);
+    },
+    30_000,
+  );
 
   it("asks on the computer when the device has no presence key to answer with", async () => {
     const device = await TestDevice.create();

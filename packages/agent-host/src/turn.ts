@@ -452,6 +452,7 @@ export async function runTurn(
           mcpServers: [proxy.server],
           resume: pool.resumable(grant, threadId, agentId),
           pinAskMode: true,
+          strictAsk: deps.policy.answers !== "off",
         });
         live = { session, proxy };
         pool.remember(grant, threadId, agentId, live);

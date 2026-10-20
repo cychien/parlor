@@ -81,6 +81,8 @@ export interface OpenSessionInput {
   readonly resume?: string | undefined;
   /** A remote turn never runs in a bypass mode. */
   readonly pinAskMode: boolean;
+  /** With `pinAskMode`: pin the mode that asks about the most, so every write asks. */
+  readonly strictAsk?: boolean | undefined;
 }
 
 export interface StdioMcpServer {
@@ -232,6 +234,7 @@ const AUTH_REQUIRED = -32000;
 const MCP_PREFIX = "mcp__";
 
 const ASK_MODES_BY_PREFERENCE = ["default", "workspace-write", "read-only"];
+const STRICT_ASK_MODES_BY_PREFERENCE = ["default", "read-only", "workspace-write"];
 
 type Fields = Readonly<Record<string, unknown>>;
 
@@ -563,9 +566,13 @@ interface LiveState {
   readonly pinned: string | undefined;
 }
 
-function askingModeOf(modes: SessionModeState): string | undefined {
-  if (ASK_MODES_BY_PREFERENCE.includes(modes.currentModeId)) return modes.currentModeId;
+function askingModeOf(modes: SessionModeState, strict: boolean): string | undefined {
   const available = new Set(modes.availableModes.map((mode) => mode.id));
+  if (strict) {
+    available.add(modes.currentModeId);
+    return STRICT_ASK_MODES_BY_PREFERENCE.find((mode) => available.has(mode));
+  }
+  if (ASK_MODES_BY_PREFERENCE.includes(modes.currentModeId)) return modes.currentModeId;
   return ASK_MODES_BY_PREFERENCE.find((mode) => available.has(mode));
 }
 
@@ -769,7 +776,9 @@ export function acpLauncher(): AgentLauncher {
             );
           };
           const modes = input.pinAskMode ? opened.modes : undefined;
-          const pinned = modes ? askingModeOf(modes) : undefined;
+          const pinned = modes
+            ? askingModeOf(modes, input.strictAsk === true)
+            : undefined;
           if (modes && pinned === undefined) {
             throw new SessionRefused(
               `${profile.name} offers no mode that asks before it acts, so it cannot take a turn from an app.`,
