@@ -42,6 +42,8 @@ export interface TurnDeps {
   readonly now: () => number;
 }
 
+export const PROMPT_MAX_AGE_MS = 10 * 60_000;
+
 const SIGNAL_POLL_MS = 500;
 const MAX_APPEND_ITEMS = 64;
 const APPEND_ATTEMPTS = 5;

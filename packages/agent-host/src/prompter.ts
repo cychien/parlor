@@ -86,3 +86,8 @@ export function terminalPrompter(): LocalPrompter {
     },
   };
 }
+
+/** The macOS background daemon: `osascript` dialogs and notifications. */
+export function macDialogPrompter(): LocalPrompter {
+  throw new Error("not implemented");
+}

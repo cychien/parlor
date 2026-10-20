@@ -3,7 +3,9 @@ import { resolveCapability, type SessionStore, sessionStore } from "@parlor/capa
 import {
   type ActionClient,
   createActionClient,
+  type DeviceSource,
   type HostAuthorizer,
+  type SessionDevice,
   type SessionSnapshot,
   type SessionSource,
 } from "@parlor/client";
@@ -45,7 +47,10 @@ export class AuthClientError extends Error {
   }
 }
 
-export interface AuthClient extends SessionSource, HostAuthorizer {
+/** This device, enrolled through `enrollDevice` on first use and signing with `deviceKey`. */
+export type DeviceHandle = SessionDevice;
+
+export interface AuthClient extends SessionSource, DeviceSource, HostAuthorizer {
   /** Plug into `createActionClient({ headers })` so every surface carries the session. */
   readonly headers: () => Promise<HeadersInit>;
   signIn(input: { readonly email: string; readonly password: string }): Promise<void>;
@@ -183,6 +188,9 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
       } finally {
         await (await store)?.set(undefined);
       }
+    },
+    device: () => {
+      throw new Error("not implemented");
     },
     authorizeHost: async (pairing) => {
       const response = await (options.fetch ?? fetch)(

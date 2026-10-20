@@ -30,6 +30,18 @@ export {
   verifyHostAssertion,
 } from "./hosts.js";
 export {
+  type ConnectedDevice,
+  createDeviceRegistry,
+  type DeviceAccountActions,
+  deviceAccountActions,
+  type DeviceActionDeps,
+  type DeviceRegistry,
+  DEVICES_MIGRATION,
+  DEVICES_TAG,
+  type PresenceKey,
+  type RegisteredDevice,
+} from "./devices.js";
+export {
   AUTH_BASE_PATH,
   MCP_SCOPE,
   parlorAuth,
@@ -65,3 +77,17 @@ export {
   type TurnTokenKeys,
   verifyTurnToken,
 } from "./tokens.js";
+export {
+  answerStatement,
+  type AnswerStatement,
+  type PinnedDevice,
+  promptStatement,
+  type PromptStatement,
+  type Signed,
+  signedPrompt,
+  type Statement,
+  statementBytes,
+  type VerifyOptions,
+  type VerifyOutcome,
+  verifyStatement,
+} from "./statements.js";
