@@ -31,7 +31,8 @@ export { CHAT_TAG, HOSTS_TAG, HOST_GRANTS_TAG };
 
 export interface Written<T> {
   readonly result: T;
-  readonly threadId: ThreadId;
+  /** The thread whose sync event commits with the work; none for a write nobody reads. */
+  readonly threadId: ThreadId | undefined;
 }
 
 export interface ChatActionDeps {
@@ -380,8 +381,9 @@ export function hostChatActions(deps: ChatActionDeps) {
       },
     }),
     hostAppend: chatAction("host", enforcing, {
-      description: "Append finished items of a running turn and extend its lease.",
-      input: z.object({ turnId, items: z.array(hostItemDraft).min(1).max(64) }),
+      description:
+        "Append finished items of a running turn and extend its lease; no items only renews it.",
+      input: z.object({ turnId, items: z.array(hostItemDraft).max(64) }),
       run: async (
         input,
         host,
@@ -401,7 +403,10 @@ export function hostChatActions(deps: ChatActionDeps) {
             input.items,
             deps.leaseMs,
           );
-          return { result, threadId: result.threadId };
+          return {
+            result,
+            threadId: input.items.length > 0 ? result.threadId : undefined,
+          };
         });
         const token = await mint(host, { ...appended, turnId: input.turnId });
         return { id: appended.threadId, leaseUntil: appended.leaseUntil, token };

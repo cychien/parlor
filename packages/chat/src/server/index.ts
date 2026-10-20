@@ -112,7 +112,8 @@ export function chat(options: ChatOptions = {}): ServerPlugin {
       const transact: ChatActionDeps["transact"] = (scope, work) =>
         database.transaction(async (tx) => {
           const { result, threadId } = await work(tx as ChatDb);
-          await host.announce(scope, [[CHAT_TAG, threadId]], tx);
+          if (threadId !== undefined)
+            await host.announce(scope, [[CHAT_TAG, threadId]], tx);
           return result;
         });
       const heartbeatMs = DEFAULT_HEARTBEAT_MS;

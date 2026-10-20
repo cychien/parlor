@@ -80,8 +80,11 @@ export const chatItemBodies = {
       question: z.string(),
       choices: z.array(askChoice),
       form: z.record(z.string(), z.unknown()).optional(),
-      /** Set by the host's policy, never by the app. */
-      approval: z.enum(["presence", "computer"]),
+      /**
+       * Set by the host's policy, never by the app. Absent: any device answers from the
+       * chat, without presence.
+       */
+      approval: z.enum(["presence", "computer"]).optional(),
     }),
   },
   event: {
