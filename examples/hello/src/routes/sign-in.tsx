@@ -25,6 +25,7 @@ function SignIn() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
+  if (session.status === "anonymous") return <Navigate to="/" />;
   if (session.status === "signed-in" && !resumesAuthorization())
     return <Navigate to="/" />;
 

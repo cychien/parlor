@@ -36,9 +36,11 @@ function Layout() {
           <AgentIndicator />
           <AgentPanel />
         </div>
-        <button type="button" className="link" onClick={() => void auth.signOut()}>
-          Sign out
-        </button>
+        {session.status === "signed-in" ? (
+          <button type="button" className="link" onClick={() => void auth.signOut()}>
+            Sign out
+          </button>
+        ) : null}
       </nav>
       <main>
         <Outlet />
