@@ -283,7 +283,7 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
       });
     },
     async stop(options = {}) {
-      if (options.revoke && !down && !grant.dev) {
+      if (options.revoke && !grant.dev) {
         await revokeGrant({
           appOrigin: origin,
           appName: grant.appName,

@@ -220,4 +220,25 @@ describe("an app link", () => {
       authorization: "ParlorHost dev-token",
     });
   });
+
+  it("still revokes from an app it cannot speak to", async () => {
+    const app = stubApp((seen) =>
+      seen.path.endsWith("/hostHello")
+        ? data({
+            id: "h1",
+            accepted: false,
+            reason: "host_too_old",
+            protocols: { min: 2, max: 2 },
+          })
+        : Response.json({}),
+    );
+    const link = createAppLink(grant, deps(app.fetch));
+    link.start();
+    await settle();
+    await link.stop({ revoke: true });
+    expect(app.seen.map((seen) => seen.path)).toEqual([
+      "/_parlor/chat/actions/hostHello",
+      "/_parlor/auth/hosts/revoke",
+    ]);
+  });
 });
