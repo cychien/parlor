@@ -35,7 +35,7 @@ describe.each(drivers)("renewing a turn on $name", (driver) => {
     });
     for (const host of ["alice-host", "alice-host-2"]) {
       await app.action(host, "hostHello", {
-        protocols: { min: 1, max: 1 },
+        protocols: { min: 2, max: 2 },
         hostVersion: "1",
         name: "Mac",
         platform: "darwin",

@@ -65,7 +65,7 @@ const turnId = idSchema("turn");
 const itemId = idSchema("item");
 const afterSeq = z.number().int().min(0);
 
-const MIN_HOST_PROTOCOL = 1;
+const MIN_HOST_PROTOCOL = 2;
 const CONTEXT_HISTORY_ITEMS = 200;
 const TERMINAL: ReadonlySet<string> = new Set(["done", "failed", "cancelled"]);
 

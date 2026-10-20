@@ -15,7 +15,7 @@ import {
 } from "./spec-kit.js";
 
 const HELLO = {
-  protocols: { min: 1, max: 1 },
+  protocols: { min: 2, max: 2 },
   hostVersion: "1.0.0",
   name: "Alice's Mac",
   platform: "darwin",
@@ -456,23 +456,42 @@ describe.each(drivers)("exactly-once turns on $name", (driver) => {
   it("negotiates the host protocol and welcomes only a compatible computer", async () => {
     const tooNew = await app.action("alice-host-2", "hostHello", {
       ...HELLO,
-      protocols: { min: 2, max: 3 },
+      protocols: { min: 3, max: 4 },
     });
     expect(data(tooNew)).toEqual({
       id: "pc",
       accepted: false,
       reason: "app_too_old",
-      protocols: { min: 1, max: 1 },
+      protocols: { min: 2, max: 2 },
     });
     expect((await app.action("alice-host-2", "hostClaim", {})).status).toBe(403);
     const welcome = await app.action("alice-host-2", "hostHello", HELLO);
     expect(data(welcome)).toEqual({
       id: "pc",
       accepted: true,
-      protocol: 1,
+      protocol: 2,
       leaseMs: 60_000,
       heartbeatMs: 30_000,
     });
+  });
+
+  it("R5-02: refuses a host that predates device trust, telling it to update, and welcomes a current one", async () => {
+    const outdated = await app.action("alice-host-2", "hostHello", {
+      ...HELLO,
+      protocols: { min: 1, max: 1 },
+    });
+    expect(data(outdated)).toEqual({
+      id: "pc",
+      accepted: false,
+      reason: "host_too_old",
+      protocols: { min: 2, max: 2 },
+    });
+    expect((await app.action("alice-host-2", "hostClaim", {})).status).toBe(403);
+    const current = await app.action("alice-host-2", "hostHello", {
+      ...HELLO,
+      protocols: { min: 1, max: 2 },
+    });
+    expect(data(current)).toMatchObject({ accepted: true, protocol: 2 });
   });
 
   it("sends only to a computer of the sender that is online", async () => {

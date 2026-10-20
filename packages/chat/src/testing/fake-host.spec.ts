@@ -70,7 +70,7 @@ describe("createFakeHost over real HTTP", () => {
     expect(await host.hello()).toEqual({
       id: "mac",
       accepted: true,
-      protocol: 1,
+      protocol: 2,
       leaseMs: 60_000,
       heartbeatMs: 30_000,
     });

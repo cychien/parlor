@@ -54,7 +54,7 @@ export interface HostStreamBatch {
  * The versioned contract between an app's backend and Parlor Host: host actions, item
  * kinds, frames and cursor rules. Bumped on any change an older peer could misread.
  */
-export const HOST_PROTOCOL = 1;
+export const HOST_PROTOCOL = 2;
 
 export interface ProtocolRange {
   readonly min: number;

@@ -24,7 +24,7 @@ const within = <T>(work: Promise<T>) =>
   ]);
 
 const hello = {
-  protocols: { min: 1, max: 1 },
+  protocols: { min: 2, max: 2 },
   hostVersion: "1.0.0",
   name: "Mac",
   platform: "darwin",

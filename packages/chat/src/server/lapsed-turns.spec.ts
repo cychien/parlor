@@ -22,7 +22,7 @@ import {
 } from "./spec-kit.js";
 
 const HELLO = {
-  protocols: { min: 1, max: 1 },
+  protocols: { min: 2, max: 2 },
   hostVersion: "1.0.0",
   name: "Alice's Mac",
   platform: "darwin",

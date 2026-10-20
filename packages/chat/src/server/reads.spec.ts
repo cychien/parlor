@@ -27,7 +27,7 @@ describe("reading the chat", () => {
     await resetDatabase(handle);
     app = serveChat(handle);
     await app.action("alice-host", "hostHello", {
-      protocols: { min: 1, max: 1 },
+      protocols: { min: 2, max: 2 },
       hostVersion: "1",
       name: "Mac",
       platform: "darwin",
@@ -115,7 +115,7 @@ describe("reading the chat", () => {
     await app.server.close();
     app = serveChat(handle, { chat: { leaseMs: 1 } });
     await app.action("alice-host", "hostHello", {
-      protocols: { min: 1, max: 1 },
+      protocols: { min: 2, max: 2 },
       hostVersion: "1",
       name: "Mac",
       platform: "darwin",

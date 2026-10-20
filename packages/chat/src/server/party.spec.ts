@@ -113,7 +113,7 @@ describe("who may call which chat action", () => {
     app = serveChat(handle, { enforcing: false });
     expect(data(await app.action(undefined, "hosts", {}))).toEqual([]);
     await app.action("alice-host", "hostHello", {
-      protocols: { min: 1, max: 1 },
+      protocols: { min: 2, max: 2 },
       hostVersion: "1",
       name: "Mac",
       platform: "darwin",
