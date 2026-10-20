@@ -154,6 +154,49 @@ importers:
         specifier: 'catalog:'
         version: 5.0.3(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.3(@types/node@24.19.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15))
 
+  packages/agent-host:
+    dependencies:
+      '@agentclientprotocol/sdk':
+        specifier: ^1.9.0
+        version: 1.9.0(zod@4.6.5)
+      '@parlor/auth':
+        specifier: workspace:*
+        version: link:../auth
+      '@parlor/capabilities':
+        specifier: workspace:*
+        version: link:../capabilities
+      '@parlor/chat':
+        specifier: workspace:*
+        version: link:../chat
+      '@parlor/client':
+        specifier: workspace:*
+        version: link:../client
+      '@parlor/core':
+        specifier: workspace:*
+        version: link:../core
+      '@parlor/server':
+        specifier: workspace:*
+        version: link:../server
+      '@parlor/sync':
+        specifier: workspace:*
+        version: link:../sync
+      citty:
+        specifier: ^0.2.2
+        version: 0.2.2
+      tsx:
+        specifier: ^4.23.15
+        version: 4.23.15
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.19.1
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.3(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.3(@types/node@24.19.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15))
+
   packages/agent-ui:
     dependencies:
       '@parlor/core':
@@ -688,6 +731,11 @@ importers:
         version: 5.0.3(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.3(@types/node@24.19.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15))
 
 packages:
+
+  '@agentclientprotocol/sdk@1.9.0':
+    resolution: {integrity: sha512-saCOTPYBK1iqWqJFAYHXbg3+zCoFXyZZFoqQAwdTWkbrZZPpAETr80QOnYr2l+dzPwL0jpNhn3eDY8MoEIDbUA==}
+    peerDependencies:
+      zod: ^3.25.0 || ^4.0.0
 
   '@apideck/better-ajv-errors@0.3.7':
     resolution: {integrity: sha512-TajUJwGWbDwkCx/CZi7tRE8PVB7simCvKJfHUsSdvps+aTM/PDPP4gkLmKnc+x3CE//y9i/nj74GqdL/hwk7Iw==}
@@ -4874,6 +4922,10 @@ packages:
     resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
 
 snapshots:
+
+  '@agentclientprotocol/sdk@1.9.0(zod@4.6.5)':
+    dependencies:
+      zod: 4.6.5
 
   '@apideck/better-ajv-errors@0.3.7(ajv@8.20.0)':
     dependencies:

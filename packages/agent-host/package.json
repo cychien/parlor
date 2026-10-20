@@ -1,0 +1,53 @@
+{
+  "name": "@parlor/agent-host",
+  "version": "0.0.0",
+  "private": true,
+  "bin": {
+    "parlor-host": "./bin/parlor-host-dev.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing/fake-agent.ts"
+  },
+  "publishConfig": {
+    "bin": {
+      "parlor-host": "./dist/main.js"
+    },
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      },
+      "./testing": {
+        "types": "./dist/testing/fake-agent.d.ts",
+        "import": "./dist/testing/fake-agent.js"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^1.9.0",
+    "@parlor/auth": "workspace:*",
+    "@parlor/capabilities": "workspace:*",
+    "@parlor/chat": "workspace:*",
+    "@parlor/client": "workspace:*",
+    "@parlor/core": "workspace:*",
+    "@parlor/server": "workspace:*",
+    "@parlor/sync": "workspace:*",
+    "citty": "^0.2.2",
+    "tsx": "^4.23.15"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
