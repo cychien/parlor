@@ -46,6 +46,8 @@ export const AGENTS = [
   { id: "codex", name: "Codex" },
 ];
 
+export const FAKE_AGENT = { id: "fake", name: "Fake agent" };
+
 /** P4_AGENTS=claude narrows a debugging run; the gate runs with none and gets both. */
 export function selectedAgents() {
   const only = (process.env.P4_AGENTS ?? "").split(",").filter(Boolean);
@@ -686,6 +688,20 @@ export class Browser {
     return this.page(`(L) => L.agents().filter((o) => o.selected).map((o) => o.text)`);
   }
 
+  /** Starts a new chat when the sidebar shows a thread; resolves once the log is empty. */
+  async newChat() {
+    const clicked = await this.page(
+      `(L) => L.clickWhere(L.sidebar(), (b) => b.textContent.trim() === 'New chat' && !b.disabled)`,
+    );
+    if (!clicked) return false;
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      if ((await this.page(`(L) => L.items().length`)) === 0) return true;
+      await sleep(200);
+    }
+    throw new Error("the log still shows the old thread 10 s after New chat");
+  }
+
   async send(text) {
     await this.fill("textbox", "Message", text);
     await this.click("button", "Send");
@@ -1023,29 +1039,70 @@ export async function standUp(
   return { home, info, browser, host, appTab };
 }
 
+async function runForAgent(check, agent, body) {
+  try {
+    await body();
+  } catch (error) {
+    if (error instanceof Inconclusive) {
+      check.log(`${agent.name}: inconclusive: ${error.message}`);
+      return error;
+    }
+    check.expect(
+      `${agent.name}: the check ran to the end`,
+      false,
+      String(error?.stack ?? error),
+    );
+  }
+  return undefined;
+}
+
 /** Runs `body(agent)` for each selected agent on its own instance; one agent failing does not stop the next. */
 export async function forEachAgent(check, body, agents = selectedAgents()) {
   let inconclusive;
   for (const agent of agents) {
     const mark = check.mark();
     try {
-      await body(agent);
-    } catch (error) {
-      if (error instanceof Inconclusive) {
-        inconclusive = error;
-        check.log(`${agent.name}: inconclusive: ${error.message}`);
-      } else {
-        check.expect(
-          `${agent.name}: the check ran to the end`,
-          false,
-          String(error?.stack ?? error),
-        );
-      }
+      inconclusive = (await runForAgent(check, agent, () => body(agent))) ?? inconclusive;
     } finally {
       await check.unwind(mark);
     }
   }
   if (inconclusive && check.results.every((r) => r.ok)) throw inconclusive;
+}
+
+/**
+ * One instance and one pairing for every agent: runs `body(agent, session)` for each agent
+ * in turn, each in a new chat with that agent picked. The runs share one database, so each
+ * must touch its own rows. With `fake` (`{ script, log }`) the fake agent runs alone.
+ */
+export async function forEachAgentOnOneHost(
+  check,
+  { tag, agents = selectedAgents(), fake, seed, extraEnv },
+  body,
+) {
+  const session = await connectedSession(check, {
+    tag,
+    agentIds: fake ? [] : agents.map((agent) => agent.id),
+    seed,
+    extraEnv,
+    fake,
+  });
+  let inconclusive;
+  for (const [index, agent] of (fake ? [session.fake] : agents).entries()) {
+    const failed = await runForAgent(check, agent, async () => {
+      if (index > 0) await session.browser.newChat();
+      const option = agentOption(agent, session.hostName);
+      const chosen = await session.browser.selectAgent(option);
+      if (
+        !check.expect(`${tag}: ${agent.name} is picked`, chosen.includes(option), chosen)
+      )
+        return;
+      await body(agent, session);
+    });
+    inconclusive = failed ?? inconclusive;
+  }
+  if (inconclusive && check.results.every((r) => r.ok)) throw inconclusive;
+  return session;
 }
 
 /** The agent's option text in the picker: `{agent} on {hostName}`. */
@@ -1064,26 +1121,75 @@ export async function waitForAgents(browser, texts, ms = 20_000) {
   return { ok: false, listed };
 }
 
+/** Writes `profiles` into the isolated HOME's `agents.json`, replacing entries with the same id. */
+export function writeAgentProfiles(home, profiles) {
+  const file = join(home, ".parlor", "host", "agents.json");
+  const ids = new Set(profiles.map((profile) => profile.id));
+  const kept = existsSync(file)
+    ? JSON.parse(readFileSync(file, "utf8")).filter((profile) => !ids.has(profile.id))
+    : [];
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, `${JSON.stringify([...kept, ...profiles], null, 2)}\n`);
+  return file;
+}
+
+/**
+ * Makes the fake ACP agent of `packages/agent-host` one of the host's agents before it
+ * connects: writes `script` (a `FakeAgentScript`) to the check dir and its profile to
+ * `agents.json`. With `log` (true, or a file name in the check dir) the agent appends one
+ * line per ACP message there (`FAKE_AGENT_LOG`). Returns an `AGENTS`-shaped descriptor.
+ */
+export function addFakeAgent(
+  check,
+  { home, info, host },
+  { script, log, tag = check.id },
+) {
+  const scriptFile = check.save(`${tag}.fake-script.json`, script);
+  const entry = join(
+    resolve(info.appDir, "..", ".."),
+    "packages",
+    "agent-host",
+    "bin",
+    "fake-agent.mjs",
+  );
+  const profile = {
+    ...FAKE_AGENT,
+    launch: { kind: "native", command: process.execPath, args: [entry, scriptFile] },
+    binary: process.execPath,
+  };
+  writeAgentProfiles(home, [profile]);
+  const logFile = log
+    ? join(check.dir, log === true ? `${tag}.fake-agent.log` : log)
+    : undefined;
+  const env = logFile ? { FAKE_AGENT_LOG: logFile } : {};
+  if (host) host.extraEnv = { ...host.extraEnv, ...env };
+  return {
+    ...FAKE_AGENT,
+    profile,
+    scriptFile,
+    logFile,
+    env,
+    messages: () => (logFile ? readJsonLines(logFile) : []),
+  };
+}
+
 /**
  * Stands up an instance, connects the Mac the way a user does and waits for the picker.
- * `profiles` are user-added agent profiles written to agents.json before the host starts.
+ * `profiles` are user-added agent profiles written to agents.json before the host starts;
+ * `fake` (`{ script, log }`) adds the fake agent, returned as `fake`.
  */
 export async function connectedSession(
   check,
-  { tag, agentIds, extraEnv, seed, profiles },
+  { tag, agentIds, extraEnv, seed, profiles, fake },
 ) {
   const session = await standUp(check, { tag, agentIds, seed, extraEnv });
   const extra = typeof profiles === "function" ? profiles(session) : profiles;
-  if (extra?.length) {
-    mkdirSync(join(session.home, ".parlor", "host"), { recursive: true });
-    writeFileSync(
-      join(session.home, ".parlor", "host", "agents.json"),
-      `${JSON.stringify(extra, null, 2)}\n`,
-    );
-  }
+  if (extra?.length) writeAgentProfiles(session.home, extra);
+  const fakeAgent = fake ? addFakeAgent(check, session, { tag, ...fake }) : undefined;
   const connection = await connectHost(check, { ...session, label: `${tag}-connect` });
   const hostName = scutilName();
   const wanted = [...(extra ?? []).map((p) => `${p.name} on ${hostName}`)];
+  if (fakeAgent) wanted.push(agentOption(fakeAgent, hostName));
   for (const id of agentIds) {
     const agent = AGENTS.find((a) => a.id === id);
     if (agent) wanted.push(agentOption(agent, hostName));
@@ -1094,7 +1200,7 @@ export async function connectedSession(
     throw new Error(
       `${tag}: the picker never listed the agents; terminal:\n${connection.terminal.text.slice(-1200)}`,
     );
-  return { ...session, connection, hostName };
+  return { ...session, connection, hostName, fake: fakeAgent };
 }
 
 export async function cdpCookies(info) {

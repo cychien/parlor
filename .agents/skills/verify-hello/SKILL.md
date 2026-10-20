@@ -257,6 +257,46 @@ $H up --no-auth --home HOME           # hello without auth under plain parlor de
 - `up --no-auth` rewrites `server.ts` in the snapshot, removing the `auth` option and the imports only it used, and is refused without `--home`. The instance has no users: `signin`, `token`, `mcp` and `doctor` do not apply to it.
 - `scripts/phase4-kit.mjs` is the library of the phase 4 check scripts: instance and host lifecycle, the pty terminal (`Terminal`), the consent flow (`connectHost`), the browser helpers (`Browser`, in-page helpers for the sidebar), the proxy client and the cleanup that removes homes, Keychain items and leftover processes.
 
+### Agent tiers
+
+A check that runs an agent through the real host says in its plan which agent it needs:
+
+- `Agent: fake` runs once with the fake ACP agent of `packages/agent-host` (`bin/fake-agent.mjs`, `FakeAgentScript` in `src/testing/fake-agent.ts`). Use it for everything the host, the server, the wire and the UI decide: streaming, tool and permission items, cancel, app calls through the MCP proxy, plans, an agent that exits. A prompt names its step list by its whole text or its last line; steps are `reply`, `thought`, `tool` (with or without `askPermission`), `call_app` (an app tool through the MCP server the host passed in `session/new`; the host allows app tools without asking), `plan`, `wait_for_cancel`, `exit` and `stop`.
+- `Agent: real` runs with Claude Code and with Codex, only when the predicate depends on what a real adapter does: whether it reads a plain request and picks the right tool, how it phrases a permission ask, its own session or resume behavior.
+
+Both go through `forEachAgentOnOneHost(check, options, body)`: one instance with Alice signed in, one pairing, then `body(agent, session)` for each agent in turn on that instance and host. Before each run after the first it clicks `New chat`, and before every run it picks `{agent} on {hostName}` in the picker, so each run starts in its own thread. The runs share one database: give each run its own rows, such as a title with the agent's name, never a row another run also reads or changes. Keep `forEachAgent` (one instance per agent) for checks whose runs cannot share a database. Measured on hello: the fake tier took 49 s end to end (35 s to start, sign in and pair, 7 s for the turn); both real agents on one host took 103 s (35 s setup once, 29 s Claude Code, 27 s Codex).
+
+```js
+const script = {
+  steps: {
+    "add tier task": [
+      { kind: "call_app", tool: "createTask", input: { title: "Tier check" } },
+      { kind: "reply", chunks: ["Added it."] },
+      { kind: "stop", reason: "end_turn" },
+    ],
+  },
+};
+await forEachAgentOnOneHost(
+  check,
+  { tag: "c9", fake: { script, log: true } },
+  async (agent, s) => {
+    await s.browser.send("add tier task");
+    await s.browser.waitSettled({ prompts: 1, ms: 30_000 });
+    check.expect(
+      "the agent got the prompt",
+      agent.messages().some((m) => m.method === "session/prompt"),
+    );
+  },
+);
+
+await forEachAgentOnOneHost(check, { tag: "c4" }, async (agent, s) => {
+  await s.browser.send(`add a task called Tier check ${agent.name}`);
+  await s.browser.waitSettled({ prompts: 1, ms: 180_000 });
+});
+```
+
+`options` are `tag`, `agents` (default `selectedAgents()`, so `P4_AGENTS=claude` narrows a run), `seed`, `extraEnv` and `fake`; with `fake` (`{ script, log }`) the fake agent runs alone. Underneath, `addFakeAgent(check, session, { script, log })` writes the script to the check dir and the `Fake agent` profile (absolute `node` and entry paths, from the instance snapshot) to the isolated HOME's `~/.parlor/host/agents.json` through `writeAgentProfiles`, sets `FAKE_AGENT_LOG` on the host when `log` is given (true, or a file name in the check dir), and returns `{id: "fake", name: "Fake agent", profile, scriptFile, logFile, env, messages}`, shaped like the entries of `AGENTS`. Call it after `standUp` and before `connectHost`, or pass `fake` to `connectedSession`, which returns it as `fake`.
+
 ## Evidence
 
 ```sh
