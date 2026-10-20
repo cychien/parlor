@@ -811,7 +811,9 @@ const AGENT_HOMES_DIR = join(HOME, "h");
 /** A real `parlor-host` an isolated HOME runs from the snapshot, with its agents and their children. */
 function hostProcesses(candidates, table) {
   const parents = new Map(table.map((p) => [p.pid, p.ppid]));
-  const roots = new Set(candidates.filter((p) => isUnder(p.cwd, AGENT_HOMES_DIR)).map((p) => p.pid));
+  const roots = new Set(
+    candidates.filter((p) => isUnder(p.cwd, AGENT_HOMES_DIR)).map((p) => p.pid),
+  );
   const fromHost = (pid) => {
     for (let at = pid, hops = 0; at > 1 && hops < 64; at = parents.get(at), hops += 1) {
       if (roots.has(at)) return true;
@@ -832,7 +834,8 @@ function instanceSurvivors(state, { browsers = "main", hosts = "kill" } = {}) {
   for (const p of ownedProcesses(state, table)) add(p, "instance process");
   const under = processesUnder(instanceDir(state.id), table);
   const kept = hosts === "keep" ? hostProcesses(under, table) : new Set();
-  for (const p of under) if (!kept.has(p.pid)) add(p, "cwd or command under the instance dir");
+  for (const p of under)
+    if (!kept.has(p.pid)) add(p, "cwd or command under the instance dir");
   const ports = [...Object.values(state.ports), ...browserPorts(state, browsers)].filter(
     Boolean,
   );
