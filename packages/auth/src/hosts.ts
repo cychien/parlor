@@ -20,6 +20,7 @@ import {
   type PluginHost,
   pluginRoute,
   SHELL_ORIGINS,
+  REVOCATION_HORIZON_MS,
 } from "@parlor/server";
 import { sql } from "drizzle-orm";
 import { calculateJwkThumbprint, compactVerify, decodeProtectedHeader } from "jose";
@@ -29,7 +30,7 @@ import { signedIn } from "./account.js";
 import { AUTH_PLUGIN, type ParlorAuthSettings } from "./better-auth.js";
 import { type Database, jwkOf, rowsOf } from "./database.js";
 import { escape, failure, page } from "./pages.js";
-import type { RevocationNotice } from "./revocation.js";
+import { RevocationSet } from "./revocation.js";
 import { HOST_ASSERTION_TYP, HOST_AUDIENCE, type HostAssertion } from "./tokens.js";
 
 export const HOST_CLIENT_ID = "parlor-host";
@@ -109,7 +110,7 @@ const REPLAY_CACHE_SIZE = 100_000;
 const CLOCK_SKEW_MS = 5_000;
 
 export interface GrantKeysOptions {
-  /** How long a loaded key is trusted; must stay below the revocation horizon. */
+  /** How long a loaded key is trusted; clamped to the revocation horizon. */
   readonly ttlMs?: number | undefined;
   readonly now?: (() => number) | undefined;
 }
@@ -145,7 +146,7 @@ export function createGrantKeys(
   database: DataProvider,
   options: GrantKeysOptions = {},
 ): GrantKeys {
-  const ttlMs = options.ttlMs ?? GRANT_KEY_TTL_MS;
+  const ttlMs = Math.min(options.ttlMs ?? GRANT_KEY_TTL_MS, REVOCATION_HORIZON_MS);
   const now = options.now ?? Date.now;
   const cache = new Map<string, { readonly key: GrantKey; readonly loadedAt: number }>();
   const loading = new Map<string, Promise<GrantKey | undefined>>();
@@ -338,8 +339,6 @@ export interface ConnectedHost {
 export interface HostGrantDeps {
   readonly host: PluginHost;
   readonly settings: ParlorAuthSettings;
-  /** Records the revocation in the caller's transaction, so it commits with the key's removal. */
-  readonly revoke: (tx: unknown, notice: RevocationNotice) => Promise<void>;
 }
 
 function databaseOf(host: PluginHost): DataProvider {
@@ -352,6 +351,10 @@ interface RemovedGrant {
   readonly host_id: string;
 }
 
+/**
+ * Deletes the grant's key row and revokes the grant in one transaction. The row must go:
+ * `RevocationSet` forgets after its horizon, and a host assertion's `iat` is always fresh.
+ */
 async function removeGrant(
   deps: HostGrantDeps,
   match: { readonly hostId: string } | { readonly grantId: string },
@@ -367,7 +370,7 @@ async function removeGrant(
       ),
     )[0];
     if (!removed) return undefined;
-    await deps.revoke(tx, { kind: "grant", id: removed.grant_id });
+    await RevocationSet.revoke(tx, { kind: "grant", id: removed.grant_id });
     return removed;
   });
 }

@@ -1,4 +1,4 @@
-import type { ServerPlugin } from "@parlor/server";
+import { REVOCATION_HORIZON_MS, type ServerPlugin } from "@parlor/server";
 
 import { CHAT_TAG, type ChatActionDeps, chatActions } from "./actions.js";
 import { inProcessRelay, type LiveRelay } from "./live.js";
@@ -68,7 +68,7 @@ export interface ChatOptions {
 }
 
 /** A lease past the revocation memory would outlive the revocation of its grant. */
-export const MAX_LEASE_MS = 11 * 60_000;
+export const MAX_LEASE_MS = REVOCATION_HORIZON_MS;
 
 function positiveInteger(name: string, value: number): number {
   if (!Number.isInteger(value) || value < 1) {

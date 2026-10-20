@@ -23,6 +23,7 @@ export {
   type PresenceKey,
   type TurnDelegation,
 } from "./auth.js";
+export { REVOCATION_HORIZON_MS } from "./revocation-horizon.js";
 export {
   type Caller,
   type CallerResolver,

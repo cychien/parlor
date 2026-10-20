@@ -4,7 +4,12 @@ import {
   type HostPrincipal,
   type TurnBinding,
 } from "@parlor/core";
-import { AuthFailure, type Delegation, type TurnDelegation } from "@parlor/server";
+import {
+  AuthFailure,
+  type Delegation,
+  REVOCATION_HORIZON_MS,
+  type TurnDelegation,
+} from "@parlor/server";
 import { decodeProtectedHeader, errors, jwtVerify, SignJWT } from "jose";
 import { z } from "zod";
 
@@ -16,13 +21,13 @@ export const TURN_AUDIENCE = "parlor:mcp";
 export const HOST_ASSERTION_TYP = "parlor-host+jwt";
 export const TURN_TOKEN_TYP = "parlor-turn+jwt";
 
+const CLOCK_SKEW_MS = 60_000;
+
 /**
  * A turn token never outlives the revocation horizon, or a revoked grant's token could
  * verify after `RevocationSet` forgot the revocation.
  */
-export const MAX_TURN_TOKEN_TTL_MS = 600_000;
-
-const CLOCK_SKEW_MS = 60_000;
+export const MAX_TURN_TOKEN_TTL_MS = REVOCATION_HORIZON_MS - CLOCK_SKEW_MS;
 
 export type TokenAudience = typeof HOST_AUDIENCE | typeof TURN_AUDIENCE;
 
