@@ -76,6 +76,7 @@ async function onEvent({ method, params, sessionId }) {
     if (held) held.url = params.targetInfo.url;
   } else if (method === "Target.targetDestroyed") {
     targets.delete(params.targetId);
+    attaching.delete(params.targetId);
   } else if (method === "Target.detachedFromTarget") {
     for (const [id, held] of targets) if (held.sessionId === params.sessionId) targets.delete(id);
   } else if (
@@ -98,8 +99,15 @@ async function enable(held) {
   held.authenticatorId = authenticatorId;
 }
 
-async function attach(info) {
-  if (targets.has(info.targetId)) return;
+const attaching = new Map();
+const attached = () => Promise.all(attaching.values());
+
+function attach(info) {
+  if (!attaching.has(info.targetId)) attaching.set(info.targetId, attachNow(info));
+  return attaching.get(info.targetId);
+}
+
+async function attachNow(info) {
   const held = {
     targetId: info.targetId,
     url: info.url,
@@ -207,6 +215,7 @@ function report() {
 await send("Target.setDiscoverTargets", { discover: true });
 const { targetInfos } = await send("Target.getTargets");
 for (const info of targetInfos.filter((t) => t.type === "page")) await attach(info);
+await attached();
 setInterval(() => void poll(), POLL_MS);
 
 const server = createServer(async (request, response) => {
@@ -218,6 +227,7 @@ const server = createServer(async (request, response) => {
     if (request.method === "GET" && request.url === "/state") return reply(200, report());
     const match = request.method === "POST" && request.url.match(/^\/presence\/(on|off)$/);
     if (match) {
+      await attached();
       await poll();
       await setPresence(match[1] === "on");
       return reply(200, report());
