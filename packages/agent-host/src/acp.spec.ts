@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +16,12 @@ import {
 import { type FakeAgentScript, fakeAgentProfile } from "./testing/fake-agent.js";
 
 const ENTRY = fileURLToPath(new URL("../bin/fake-agent.mjs", import.meta.url));
+
+const FORM = {
+  type: "object",
+  properties: { name: { type: "string" }, age: { type: "integer" } },
+  required: ["name"],
+};
 
 const script: FakeAgentScript = {
   steps: {
@@ -51,6 +57,7 @@ const script: FakeAgentScript = {
         askTitle: "Run touch notes.txt",
       },
     ],
+    form: [{ kind: "question", message: "Tell me about you", schema: FORM }],
     cancel: [{ kind: "reply", chunks: ["partial"] }, { kind: "wait_for_cancel" }],
     exit: [
       { kind: "reply", chunks: ["bye"] },
@@ -74,10 +81,10 @@ afterAll(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-async function launch(): Promise<AgentConnection> {
+async function launch(env: Record<string, string> = {}): Promise<AgentConnection> {
   const connection = await acpLauncher().launch(fakeAgentProfile(ENTRY, scriptFile), {
     cwd: dir,
-    env: { PATH: process.env.PATH ?? "" },
+    env: { PATH: process.env.PATH ?? "", ...env },
     signal: new AbortController().signal,
   });
   launched.push(connection);
@@ -183,6 +190,37 @@ describe("acpLauncher against the fake agent over real stdio", () => {
       ["tool-3", "completed"],
       ["tool-4", "completed"],
     ]);
+  });
+
+  it("asks a form through elicitation and hands the answer's values to the agent", async () => {
+    const log = join(dir, "form.log");
+    const connection = await launch({ FAKE_AGENT_LOG: log });
+    const session = await connection.openSession({
+      cwd: dir,
+      mcpServers: [],
+      pinAskMode: true,
+    });
+    const asks: AgentAsk[] = [];
+    const stop = await session.prompt(prompt("form"), {
+      update: () => {},
+      ask: async (ask) => {
+        asks.push(ask);
+        return { kind: "values", values: { name: "Ada", age: 36 } };
+      },
+    });
+    expect(stop).toBe("end_turn");
+    expect(asks).toEqual([
+      { kind: "question", message: "Tell me about you", schema: FORM },
+    ]);
+    const responses = readFileSync(log, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { method: string; result?: unknown })
+      .filter((entry) => entry.method === "response");
+    expect(responses.map((entry) => entry.result)).toContainEqual({
+      action: "accept",
+      content: { name: "Ada", age: 36 },
+    });
   });
 
   it("stops the agent on cancel and keeps what it already said", async () => {

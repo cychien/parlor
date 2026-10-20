@@ -19,6 +19,11 @@ function record(line) {
   } catch {
     return;
   }
+  if (message?.result !== undefined && message.method === undefined) {
+    const response = { at: Date.now(), method: "response", pid: process.pid };
+    appendFileSync(log, `${JSON.stringify({ ...response, result: message.result })}\n`);
+    return;
+  }
   if (typeof message?.method !== "string") return;
   const entry = { at: Date.now(), method: message.method, pid: process.pid };
   if (typeof message.params?.sessionId === "string")
