@@ -21,9 +21,10 @@ import { createHostDaemon } from "./daemon.js";
 import { type AppGrant, fileGrantStore, keychainHostKeys } from "./grants.js";
 import { createMcpProxy } from "./mcp-proxy.js";
 import { hostPaths } from "./paths.js";
-import { DEV_POLICY } from "./policy.js";
+import { DEFAULT_POLICY, DEV_POLICY } from "./policy.js";
 import { createSessionPool } from "./pool.js";
 import { memoryHostKeys } from "./spec-kit.js";
+import { fileTrustStore } from "./trust.js";
 
 const BIN = fileURLToPath(new URL("../bin/parlor-host-dev.mjs", import.meta.url));
 const FAKE = fileURLToPath(new URL("../bin/fake-agent.mjs", import.meta.url));
@@ -229,6 +230,10 @@ describe("the host daemon", () => {
     );
     mkdirSync(join(paths.root), { recursive: true });
     await writeFile(
+      paths.policy,
+      JSON.stringify({ deviceApproval: "off", answers: "off" }),
+    );
+    await writeFile(
       paths.agents,
       JSON.stringify([
         {
@@ -350,6 +355,7 @@ describe("an app the host cannot speak to", () => {
       paths,
       grants,
       keys,
+      trust: fileTrustStore(paths.trust),
       pool: createSessionPool(paths.sessions),
       proxy: createMcpProxy("parlor-host"),
       launcher: acpLauncher(),
@@ -405,6 +411,7 @@ describe("disconnecting through the daemon", () => {
       paths,
       grants,
       keys,
+      trust: fileTrustStore(paths.trust),
       pool: createSessionPool(paths.sessions),
       proxy: createMcpProxy("parlor-host"),
       launcher: acpLauncher(),
@@ -501,6 +508,7 @@ describe("disconnecting through the daemon", () => {
       paths,
       grants,
       keys,
+      trust: fileTrustStore(paths.trust),
       pool: createSessionPool(paths.sessions),
       proxy: createMcpProxy("parlor-host"),
       launcher: acpLauncher(),
@@ -546,6 +554,114 @@ describe("disconnecting through the daemon", () => {
       await host.stop();
       await app.close();
       vi.unstubAllEnvs();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
+
+describe("what the daemon enforces on a grant's turns", () => {
+  it("runs a production grant under the default policy overlaid by policy.json at each turn, and a dev grant under the dev policy", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pe-"));
+    const paths = hostPaths(join(root, ".parlor", "host"));
+    const withClaim = (turnId: string) => {
+      const routes = hostRoutes({ wake: true });
+      let pending: (() => unknown) | undefined = () =>
+        claimedTurn(turnId, "ghost", "<parlor-context>x</parlor-context>", "hi");
+      return stubApp((request, body, response) => {
+        if (request.url === "/_parlor/auth/hosts/revoke")
+          return (json(response, {}), true);
+        if (request.url?.endsWith("/hostClaim") && pending) {
+          const turn = pending;
+          pending = undefined;
+          return (json(response, { data: turn(), tags: [] }), true);
+        }
+        return routes(request, body, response);
+      });
+    };
+    const [first, second, dev] = await Promise.all([
+      withClaim("u-first"),
+      withClaim("u-second"),
+      withClaim("u-dev"),
+    ]);
+    const outcomeOf = (app: StubApp) => {
+      const finish = app.seen.find((seen) => seen.path.endsWith("/hostFinish"));
+      return finish
+        ? (JSON.parse(finish.body) as { outcome: unknown }).outcome
+        : undefined;
+    };
+    const keys = memoryHostKeys();
+    const grants = fileGrantStore(paths.grants);
+    const trust = fileTrustStore(paths.trust);
+    const host = createHostDaemon({
+      release: {
+        version: "0.0.0",
+        protocols: { min: 1, max: HOST_PROTOCOL },
+        control: 1,
+      },
+      paths,
+      grants,
+      keys,
+      trust,
+      pool: createSessionPool(paths.sessions),
+      proxy: createMcpProxy("parlor-host"),
+      launcher: acpLauncher(),
+      prompter: {
+        confirmPairing: async () => false,
+        approveDevice: async () => false,
+        answerHere: async () => undefined,
+        turnStarted: () => undefined,
+      },
+      policy: DEFAULT_POLICY,
+    });
+    const grantOf = (app: StubApp, name: string): AppGrant => ({
+      ...grantFor(app.origin, name, join(root, "Parlor", name)),
+    });
+    try {
+      for (const [app, name] of [
+        [first, "First"],
+        [dev, "Dev"],
+      ] as const) {
+        await (await keys.create(app.origin)).keep(asId("grant", `host:${name}`));
+      }
+      await grants.save(grantOf(first, "First"));
+      await grants.save({ ...grantOf(dev, "Dev"), dev: true });
+      await host.start();
+      await vi.waitFor(() => expect(outcomeOf(first)).toBeDefined(), { timeout: 15_000 });
+      await vi.waitFor(() => expect(outcomeOf(dev)).toBeDefined(), { timeout: 15_000 });
+      expect(outcomeOf(first)).toEqual({ state: "failed", reason: "signature_invalid" });
+      expect(outcomeOf(dev)).toEqual({ state: "failed", reason: "agent_unavailable" });
+
+      await writeFile(paths.policy, JSON.stringify({ deviceApproval: "off" }));
+      await (await keys.create(second.origin)).keep(asId("grant", "host:Second"));
+      await grants.save(grantOf(second, "Second"));
+      await host.connect(second.origin);
+      await vi.waitFor(() => expect(outcomeOf(second)).toBeDefined(), {
+        timeout: 15_000,
+      });
+      expect(outcomeOf(second)).toEqual({ state: "failed", reason: "agent_unavailable" });
+
+      await trust.pin(first.origin, {
+        deviceId: asId("device", "device-1"),
+        signingKey: { kty: "EC", crv: "P-256", x: "x", y: "y" },
+        name: "Chrome",
+        platform: "web",
+        approvedAt: 1,
+        via: "local",
+      });
+      await trust.pin(second.origin, {
+        deviceId: asId("device", "device-1"),
+        signingKey: { kty: "EC", crv: "P-256", x: "x", y: "y" },
+        name: "Chrome",
+        platform: "web",
+        approvedAt: 1,
+        via: "local",
+      });
+      await host.disconnect(first.origin);
+      expect(await trust.get(first.origin, "device-1")).toBeUndefined();
+      expect(await trust.get(second.origin, "device-1")).toBeDefined();
+    } finally {
+      await host.stop();
+      await Promise.all([first.close(), second.close(), dev.close()]);
       await rm(root, { recursive: true, force: true });
     }
   }, 60_000);

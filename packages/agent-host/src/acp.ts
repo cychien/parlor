@@ -28,6 +28,7 @@ import {
 } from "@agentclientprotocol/sdk";
 
 import type { AgentProfile } from "./agents.js";
+import { logEvent } from "./log.js";
 
 /**
  * The only file that knows ACP. The v1 adapter speaks ndjson over stdio through
@@ -522,6 +523,25 @@ function tapUpdates(
   };
 }
 
+/** Logs every request and notification this host sends the agent, by method. */
+function tapSends(stream: Stream): Stream {
+  const writer = stream.writable.getWriter();
+  return {
+    readable: stream.readable,
+    writable: new WritableStream({
+      write(message) {
+        const fields: unknown = message;
+        if (isFields(fields) && typeof fields.method === "string") {
+          logEvent("acp_send", { method: fields.method });
+        }
+        return writer.write(message);
+      },
+      close: () => writer.close(),
+      abort: (reason) => writer.abort(reason),
+    }),
+  };
+}
+
 function commandOf(profile: AgentProfile): {
   readonly command: string;
   readonly args: readonly string[];
@@ -635,9 +655,11 @@ export function acpLauncher(): AgentLauncher {
         state.handlers?.update(mapped);
       };
       const stream = tapUpdates(
-        ndJsonStream(
-          Writable.toWeb(child.stdin) as WritableStream<Uint8Array>,
-          Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>,
+        tapSends(
+          ndJsonStream(
+            Writable.toWeb(child.stdin) as WritableStream<Uint8Array>,
+            Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>,
+          ),
         ),
         deliver,
       );

@@ -1,4 +1,5 @@
 import type { AgentAsk } from "./acp.js";
+import { jsonFile } from "./json-file.js";
 
 /**
  * What this computer enforces on remote turns, whatever the app or its backend says. Set
@@ -36,4 +37,35 @@ export function approvalFor(
 ): "presence" | "computer" | undefined {
   if (ask.kind === "question" || policy.answers === "off") return undefined;
   return policy.answers;
+}
+
+type Overlay = { readonly [K in keyof RemotePolicy]?: unknown };
+
+const choose = <T extends string>(allowed: readonly T[], value: unknown, base: T): T =>
+  allowed.find((candidate) => candidate === value) ?? base;
+
+/** `base` with the settings `parlor-host config` wrote to `file`; read afresh on every call. */
+export async function loadPolicy(
+  file: string,
+  base: RemotePolicy,
+): Promise<RemotePolicy> {
+  let overlay: Overlay;
+  try {
+    overlay = await jsonFile<Overlay>(file).read();
+  } catch {
+    return base;
+  }
+  return {
+    deviceApproval: choose(["local", "off"], overlay.deviceApproval, base.deviceApproval),
+    answers: choose(["presence", "computer", "off"], overlay.answers, base.answers),
+  };
+}
+
+export async function changePolicy(
+  file: string,
+  base: RemotePolicy,
+  change: Partial<RemotePolicy>,
+): Promise<RemotePolicy> {
+  await jsonFile<Overlay>(file).change((overlay) => Object.assign(overlay, change));
+  return loadPolicy(file, base);
 }

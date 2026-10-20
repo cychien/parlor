@@ -5,6 +5,7 @@ export interface HostPaths {
   readonly root: string;
   readonly grants: string;
   readonly trust: string;
+  readonly policy: string;
   readonly sessions: string;
   readonly agents: string;
   readonly control: string;
@@ -21,6 +22,7 @@ export function hostPaths(root: string = join(homedir(), ".parlor", "host")): Ho
     root,
     grants: join(root, "grants.json"),
     trust: join(root, "trust.json"),
+    policy: join(root, "policy.json"),
     sessions: join(root, "sessions.json"),
     agents: join(root, "agents.json"),
     control: join(run, "control.sock"),

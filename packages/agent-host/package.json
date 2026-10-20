@@ -1,7 +1,6 @@
 {
   "name": "@parlor/agent-host",
   "version": "0.0.0",
-  "private": true,
   "bin": {
     "parlor-host": "./bin/parlor-host-dev.mjs"
   },

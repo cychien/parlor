@@ -15,17 +15,20 @@ import type {
   TurnSignals,
 } from "@parlor/chat";
 import { asId, type ThreadId } from "@parlor/core";
+import type { DeviceKeys } from "@parlor/server";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { acpLauncher, type AgentLauncher } from "./acp.js";
 import type { AppGrant } from "./grants.js";
 import type { AppLink } from "./link.js";
 import { createMcpProxy, type McpProxy } from "./mcp-proxy.js";
-import { DEV_POLICY } from "./policy.js";
+import { DEFAULT_POLICY, DEV_POLICY, type RemotePolicy } from "./policy.js";
 import { createSessionPool, type SessionPool } from "./pool.js";
 import type { LocalPrompter } from "./prompter.js";
+import { memoryTrust, TestDevice } from "./spec-kit.js";
 import { type FakeAgentScript, fakeAgentProfile } from "./testing/fake-agent.js";
-import { runTurn, type TurnDeps } from "./turn.js";
+import type { TrustedDevice, TrustStore } from "./trust.js";
+import { PROMPT_MAX_AGE_MS, runTurn, type TurnDeps } from "./turn.js";
 
 const ENTRY = fileURLToPath(new URL("../bin/fake-agent.mjs", import.meta.url));
 const BIN = fileURLToPath(new URL("../bin/parlor-host-dev.mjs", import.meta.url));
@@ -143,6 +146,10 @@ interface HarnessOptions {
   readonly appOrigin?: string;
   readonly launcher?: AgentLauncher;
   readonly proxy?: McpProxy;
+  readonly trust?: TrustStore;
+  readonly policy?: RemotePolicy;
+  readonly prompter?: Partial<LocalPrompter>;
+  readonly now?: () => number;
 }
 
 let harnesses = 0;
@@ -155,7 +162,7 @@ function harness(
   const issuedBy = `h${harnesses}`;
   const issued: string[] = [];
   const logged: Logged[] = [];
-  const now = () => Date.now();
+  const now = options.now ?? (() => Date.now());
   if (options.appOrigin) origins.add(options.appOrigin);
   const calls = {
     call: async (name: string, input: Record<string, unknown>) => {
@@ -203,6 +210,7 @@ function harness(
     approveDevice: async () => false,
     answerHere: async () => undefined,
     turnStarted: () => undefined,
+    ...options.prompter,
   };
   const deps: TurnDeps = {
     link,
@@ -231,7 +239,8 @@ function harness(
     launcher: options.launcher ?? acpLauncher(),
     pool,
     proxy: options.proxy ?? proxy,
-    policy: DEV_POLICY,
+    trust: options.trust ?? memoryTrust(),
+    policy: options.policy ?? DEV_POLICY,
     prompter,
     now,
   };
@@ -667,4 +676,574 @@ describe("runTurn against the fake agent over real stdio", () => {
     const closed = received.flat().filter((entry) => entry.method === "session/close");
     expect(new Set(closed.map((entry) => entry.sessionId)).size).toBe(3);
   }, 60_000);
+});
+
+const APP = grant.appOrigin;
+const MINUTE = 60_000;
+
+const pinOf = (device: TestDevice): TrustedDevice => ({
+  deviceId: device.id,
+  signingKey: device.keys.signingKey,
+  presenceKey: device.keys.presenceKey,
+  name: device.keys.name,
+  platform: device.keys.platform,
+  approvedAt: 1,
+  via: "local",
+});
+
+async function signedClaim(
+  device: TestDevice,
+  thread: ThreadId,
+  text: string,
+  options: {
+    readonly at?: number;
+    readonly app?: string;
+    readonly device?: DeviceKeys | undefined;
+    readonly sign?: boolean;
+  } = {},
+): Promise<ClaimedTurn> {
+  const base = claim(thread, "fake-a", text);
+  const signed =
+    options.sign === false
+      ? undefined
+      : await device.signPrompt(
+          options.app ?? APP,
+          { threadId: thread, turnId: base.turnId, agent: base.agent, text },
+          options.at ?? Date.now(),
+        );
+  return {
+    ...base,
+    prompt: {
+      ...base.prompt,
+      body: { ...base.prompt.body, ...(signed ? { signed } : {}) },
+    },
+    device: "device" in options ? options.device : device.keys,
+  };
+}
+
+const ranAgentFor = (marker: string) =>
+  prompts().some((entry) => entry.text?.includes(marker));
+
+const finishOf = (run: ReturnType<typeof harness>) =>
+  run.logged.find((entry) => entry.kind === "finish")?.outcome;
+
+const eventsOf = (run: ReturnType<typeof harness>) =>
+  run.appended().flatMap((item) => (item.kind === "event" ? [item.body] : []));
+
+describe("runTurn trusting the device that sent the prompt", () => {
+  const policy = DEFAULT_POLICY;
+
+  it("T5-07a: a prompt queued longer than 10 minutes ends prompt_expired, never signature_invalid", async () => {
+    const device = await TestDevice.create();
+    const trust = memoryTrust();
+    await trust.pin(APP, pinOf(device));
+    const signedAt = Date.now();
+    const turn = await signedClaim(device, asId("thread", "t507a"), "queued-long", {
+      at: signedAt,
+    });
+    const run = harness(undefined, { trust, policy, now: () => signedAt + 11 * MINUTE });
+    expect(await runTurn(turn, run.deps)).toEqual({
+      state: "failed",
+      reason: "prompt_expired",
+    });
+    expect(finishOf(run)).toEqual({ state: "failed", reason: "prompt_expired" });
+    expect(ranAgentFor("queued-long")).toBe(false);
+  });
+
+  it("runs a prompt just inside the window, and tells a forgery from a stale prompt", async () => {
+    const device = await TestDevice.create();
+    const trust = memoryTrust();
+    await trust.pin(APP, pinOf(device));
+    const now = Date.now();
+    const fresh = await signedClaim(
+      device,
+      asId("thread", "t507-fresh"),
+      "fresh-prompt",
+      {
+        at: now - 9 * MINUTE,
+      },
+    );
+    const run = harness(undefined, { trust, policy, now: () => now });
+    expect(await runTurn(fresh, run.deps)).toMatchObject({ state: "done" });
+    const forged = await signedClaim(
+      device,
+      asId("thread", "t507-forged"),
+      "forged-prompt",
+    );
+    const tampered = {
+      ...forged,
+      prompt: {
+        ...forged.prompt,
+        body: { ...forged.prompt.body, text: "something else" },
+      },
+    };
+    const other = harness(undefined, { trust, policy });
+    expect(await runTurn(tampered, other.deps)).toEqual({
+      state: "failed",
+      reason: "signature_invalid",
+    });
+    expect(ranAgentFor("something else")).toBe(false);
+  });
+
+  it("lowers the window with PARLOR_HOST_PROMPT_MAX_AGE_MS and never raises it", async () => {
+    const device = await TestDevice.create();
+    const trust = memoryTrust();
+    await trust.pin(APP, pinOf(device));
+    const at = Date.now();
+    vi.stubEnv("PARLOR_HOST_PROMPT_MAX_AGE_MS", "1000");
+    try {
+      const lowered = harness(undefined, { trust, policy, now: () => at + 2_000 });
+      const turn = await signedClaim(device, asId("thread", "t507-env"), "env-low", {
+        at,
+      });
+      expect(await runTurn(turn, lowered.deps)).toEqual({
+        state: "failed",
+        reason: "prompt_expired",
+      });
+      vi.stubEnv("PARLOR_HOST_PROMPT_MAX_AGE_MS", String(PROMPT_MAX_AGE_MS * 10));
+      const raised = harness(undefined, { trust, policy, now: () => at + 11 * MINUTE });
+      const again = await signedClaim(device, asId("thread", "t507-env2"), "env-high", {
+        at,
+      });
+      expect(await runTurn(again, raised.deps)).toEqual({
+        state: "failed",
+        reason: "prompt_expired",
+      });
+    } finally {
+      vi.unstubAllEnvs();
+      vi.stubEnv("FAKE_AGENT_LOG", agentLog);
+    }
+  });
+
+  it("holds a new device's first prompt for the dialog, starting no agent until it is pinned", async () => {
+    const device = await TestDevice.create();
+    const trust = memoryTrust();
+    let allow!: (answer: boolean) => void;
+    const approveDevice = vi.fn(
+      () => new Promise<boolean>((resolve) => (allow = resolve)),
+    );
+    const run = harness(undefined, { trust, policy, prompter: { approveDevice } });
+    const turn = await signedClaim(device, asId("thread", "t5-new"), "first-prompt");
+    const running = runTurn(turn, run.deps);
+    await vi.waitFor(() => expect(approveDevice).toHaveBeenCalledOnce());
+    expect(approveDevice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        appName: "Hello",
+        account: grant.account,
+        device: { name: "Chrome on macOS", platform: "web" },
+      }),
+    );
+    await vi.waitFor(() => expect(eventsOf(run)).toEqual([{ event: "device_pending" }]));
+    expect(ranAgentFor("first-prompt")).toBe(false);
+    expect(await trust.get(APP, device.id)).toBeUndefined();
+    allow(true);
+    expect(await running).toMatchObject({ state: "done" });
+    expect(ranAgentFor("first-prompt")).toBe(true);
+    expect(await trust.get(APP, device.id)).toMatchObject({
+      deviceId: device.id,
+      name: "Chrome on macOS",
+      platform: "web",
+      via: "local",
+      signingKey: device.keys.signingKey,
+    });
+  });
+
+  it("fails a refused device with device_rejected, remembers nothing, and asks again next time", async () => {
+    const device = await TestDevice.create();
+    const trust = memoryTrust();
+    const approveDevice = vi.fn(async () => false);
+    const run = harness(undefined, { trust, policy, prompter: { approveDevice } });
+    const turn = await signedClaim(device, asId("thread", "t5-no"), "refused-prompt");
+    expect(await runTurn(turn, run.deps)).toEqual({
+      state: "failed",
+      reason: "device_rejected",
+    });
+    expect(eventsOf(run)).toEqual([
+      { event: "device_pending" },
+      { event: "device_rejected" },
+    ]);
+    expect(trust.pins()).toEqual([]);
+    expect(ranAgentFor("refused-prompt")).toBe(false);
+    const next = await signedClaim(device, asId("thread", "t5-no2"), "refused-again");
+    await runTurn(
+      next,
+      harness(undefined, { trust, policy, prompter: { approveDevice } }).deps,
+    );
+    expect(approveDevice).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not ask again for a pinned device, and runs its prompt", async () => {
+    const device = await TestDevice.create();
+    const trust = memoryTrust();
+    await trust.pin(APP, pinOf(device));
+    const approveDevice = vi.fn(async () => false);
+    const run = harness(undefined, { trust, policy, prompter: { approveDevice } });
+    const turn = await signedClaim(device, asId("thread", "t5-pinned"), "pinned-prompt");
+    expect(await runTurn(turn, run.deps)).toMatchObject({ state: "done" });
+    expect(approveDevice).not.toHaveBeenCalled();
+    expect(eventsOf(run)).toEqual([]);
+  });
+
+  it("refuses a pinned device whose keys the backend now reports differently, with no dialog", async () => {
+    const device = await TestDevice.create();
+    const attacker = await TestDevice.create(device.id);
+    const trust = memoryTrust();
+    await trust.pin(APP, pinOf(device));
+    const approveDevice = vi.fn(async () => true);
+    const run = harness(undefined, { trust, policy, prompter: { approveDevice } });
+    const turn = await signedClaim(attacker, asId("thread", "t5-swap"), "swapped-prompt");
+    expect(await runTurn(turn, run.deps)).toEqual({
+      state: "failed",
+      reason: "signature_invalid",
+    });
+    expect(approveDevice).not.toHaveBeenCalled();
+    expect(ranAgentFor("swapped-prompt")).toBe(false);
+    expect((await trust.get(APP, device.id))?.signingKey).toEqual(device.keys.signingKey);
+  });
+
+  it("refuses a pinned device the account no longer lists, as not approved", async () => {
+    const device = await TestDevice.create();
+    const trust = memoryTrust();
+    await trust.pin(APP, pinOf(device));
+    const run = harness(undefined, { trust, policy });
+    const turn = await signedClaim(device, asId("thread", "t5-gone"), "revoked-prompt", {
+      device: undefined,
+    });
+    expect(await runTurn(turn, run.deps)).toEqual({
+      state: "failed",
+      reason: "device_rejected",
+    });
+    expect(ranAgentFor("revoked-prompt")).toBe(false);
+  });
+
+  it("refuses an unsigned prompt, and a prompt from a device the account does not know", async () => {
+    const device = await TestDevice.create();
+    const approveDevice = vi.fn(async () => true);
+    const run = harness(undefined, { policy, prompter: { approveDevice } });
+    const unsigned = await signedClaim(
+      device,
+      asId("thread", "t5-unsigned"),
+      "unsigned-one",
+      {
+        sign: false,
+      },
+    );
+    expect(await runTurn(unsigned, run.deps)).toEqual({
+      state: "failed",
+      reason: "signature_invalid",
+    });
+    const unknown = await signedClaim(
+      device,
+      asId("thread", "t5-unknown"),
+      "unknown-one",
+      {
+        device: undefined,
+      },
+    );
+    expect(await runTurn(unknown, run.deps)).toEqual({
+      state: "failed",
+      reason: "signature_invalid",
+    });
+    expect(approveDevice).not.toHaveBeenCalled();
+  });
+
+  it("refuses a prompt signed for another app's origin, however the backend relays it", async () => {
+    const device = await TestDevice.create();
+    const trust = memoryTrust();
+    await trust.pin(APP, pinOf(device));
+    const run = harness(undefined, { trust, policy });
+    const turn = await signedClaim(
+      device,
+      asId("thread", "t5-origin"),
+      "other-app-prompt",
+      {
+        app: "https://evil.example",
+      },
+    );
+    expect(await runTurn(turn, run.deps)).toEqual({
+      state: "failed",
+      reason: "signature_invalid",
+    });
+    expect(ranAgentFor("other-app-prompt")).toBe(false);
+  });
+
+  it("refuses a new device's forged or stale prompt without showing a dialog", async () => {
+    const device = await TestDevice.create();
+    const stranger = await TestDevice.create();
+    const approveDevice = vi.fn(async () => true);
+    const run = harness(undefined, { policy, prompter: { approveDevice } });
+    const forged = await signedClaim(stranger, asId("thread", "t5-forge"), "forged-new", {
+      device: device.keys,
+    });
+    expect(await runTurn(forged, run.deps)).toMatchObject({
+      reason: "signature_invalid",
+    });
+    const stale = await signedClaim(device, asId("thread", "t5-stale"), "stale-new", {
+      at: Date.now() - 20 * MINUTE,
+    });
+    expect(await runTurn(stale, run.deps)).toMatchObject({ reason: "prompt_expired" });
+    expect(approveDevice).not.toHaveBeenCalled();
+  });
+
+  it("closes the dialog and ends the turn cancelled when the user stops it meanwhile", async () => {
+    const device = await TestDevice.create();
+    const trust = memoryTrust();
+    let dialog: AbortSignal | undefined;
+    const approveDevice = vi.fn(
+      ({ signal }: { signal?: AbortSignal | undefined }) =>
+        new Promise<boolean>((resolve) => {
+          dialog = signal;
+          signal?.addEventListener("abort", () => resolve(false));
+        }),
+    );
+    let cancelled = false;
+    const run = harness(
+      (afterSeq) =>
+        cancelled
+          ? [
+              {
+                turnId: asId("turn", `u${turns}`),
+                items: [
+                  {
+                    id: asId("item", "c1"),
+                    threadId: asId("thread", "t5-cancel"),
+                    turnId: asId("turn", `u${turns}`),
+                    seq: afterSeq + 1,
+                    at: Date.now(),
+                    author: "user",
+                    kind: "cancel",
+                    body: {},
+                  },
+                ],
+              },
+            ]
+          : [],
+      { trust, policy, prompter: { approveDevice } },
+    );
+    const turn = await signedClaim(device, asId("thread", "t5-cancel"), "cancelled-new");
+    const running = runTurn(turn, run.deps);
+    await vi.waitFor(() => expect(approveDevice).toHaveBeenCalled());
+    cancelled = true;
+    expect(await running).toEqual({ state: "cancelled" });
+    await vi.waitFor(() => expect(dialog?.aborted).toBe(true));
+    expect(trust.pins()).toEqual([]);
+    expect(ranAgentFor("cancelled-new")).toBe(false);
+  });
+
+  it("shows one dialog for two prompts from the same new device at once", async () => {
+    const device = await TestDevice.create();
+    const trust = memoryTrust();
+    let allow!: (answer: boolean) => void;
+    const approveDevice = vi.fn(
+      () => new Promise<boolean>((resolve) => (allow = resolve)),
+    );
+    const first = harness(undefined, { trust, policy, prompter: { approveDevice } });
+    const second = harness(undefined, { trust, policy, prompter: { approveDevice } });
+    const a = runTurn(
+      await signedClaim(device, asId("thread", "t5-two-a"), "two-a"),
+      first.deps,
+    );
+    const b = runTurn(
+      await signedClaim(device, asId("thread", "t5-two-b"), "two-b"),
+      second.deps,
+    );
+    await vi.waitFor(() => expect(approveDevice).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    allow(true);
+    expect(await Promise.all([a, b])).toEqual([
+      { state: "done", stopReason: "end_turn" },
+      { state: "done", stopReason: "end_turn" },
+    ]);
+    expect(approveDevice).toHaveBeenCalledOnce();
+    expect(eventsOf(first)).toEqual([{ event: "device_pending" }]);
+    expect(eventsOf(second)).toEqual([{ event: "device_pending" }]);
+  });
+
+  it("skips every device check when the policy turns approval off", async () => {
+    const device = await TestDevice.create();
+    const run = harness(undefined, { policy: DEV_POLICY });
+    const turn = await signedClaim(device, asId("thread", "t5-off"), "unchecked", {
+      sign: false,
+      device: undefined,
+    });
+    expect(await runTurn(turn, run.deps)).toMatchObject({ state: "done" });
+  });
+});
+
+describe("runTurn taking answers only as the policy says", () => {
+  const askThread = asId("thread", "t5-ask");
+
+  function chatAnswers(
+    run: () => ReturnType<typeof harness>,
+    bodies: () => readonly Record<string, unknown>[] | undefined,
+  ) {
+    let sent = 0;
+    return (afterSeq: number): TurnSignals[] => {
+      const ask = run()
+        .appended()
+        .find((item) => item.kind === "ask");
+      const queued = bodies();
+      if (!ask || !queued || sent >= queued.length) return [];
+      const turnId = asId("turn", `u${turns}`);
+      sent += 1;
+      return [
+        {
+          turnId,
+          items: [
+            {
+              id: asId("item", `a${sent}`),
+              threadId: askThread,
+              turnId,
+              seq: afterSeq + 1,
+              at: Date.now(),
+              author: "user",
+              kind: "answer",
+              body: { askId: ask.id, choice: "allow", ...queued[sent - 1] },
+            } as LoggedItem<"answer">,
+          ],
+        },
+      ];
+    };
+  }
+
+  const askOf = (run: ReturnType<typeof harness>) =>
+    run.appended().find((item) => item.kind === "ask");
+
+  it("keeps a presence ask open until an answer carries a presence signature", async () => {
+    const device = await TestDevice.create();
+    const trust = memoryTrust();
+    await trust.pin(APP, pinOf(device));
+    let answers: Record<string, unknown>[] | undefined;
+    const run: ReturnType<typeof harness> = harness(
+      chatAnswers(
+        () => run,
+        () => answers,
+      ),
+      { trust, policy: DEFAULT_POLICY },
+    );
+    const running = runTurn(await signedClaim(device, askThread, "scripted"), run.deps);
+    await vi.waitFor(() => expect(askOf(run)).toBeDefined());
+    expect(askOf(run)!.body).toMatchObject({ approval: "presence" });
+    const answer = { threadId: askThread, askId: askOf(run)!.id, choice: "allow" };
+    const at = Date.now();
+    answers = [
+      {},
+      { signed: await device.signAnswer(APP, answer, at, false) },
+      { signed: await device.signAnswer(APP, answer, at, true) },
+    ];
+    expect(await running).toMatchObject({ state: "done" });
+    expect(eventsOf(run).filter((body) => body.event === "answer_rejected")).toEqual([
+      expect.objectContaining({ itemId: "a1" }),
+      expect.objectContaining({ itemId: "a2" }),
+    ]);
+    expect(run.appended().find((item) => item.kind === "tool")!.body).toMatchObject({
+      status: "done",
+    });
+  }, 30_000);
+
+  it("refuses an answer signed for another ask, another app or by a device this computer never pinned", async () => {
+    const device = await TestDevice.create();
+    const stranger = await TestDevice.create("device-2");
+    const trust = memoryTrust();
+    await trust.pin(APP, pinOf(device));
+    let answers: Record<string, unknown>[] | undefined;
+    const run: ReturnType<typeof harness> = harness(
+      chatAnswers(
+        () => run,
+        () => answers,
+      ),
+      { trust, policy: DEFAULT_POLICY },
+    );
+    const running = runTurn(await signedClaim(device, askThread, "scripted"), run.deps);
+    await vi.waitFor(() => expect(askOf(run)).toBeDefined());
+    const answer = { threadId: askThread, askId: askOf(run)!.id, choice: "allow" };
+    const at = Date.now();
+    answers = [
+      { signed: await device.signAnswer(APP, { ...answer, choice: "reject" }, at, true) },
+      { signed: await device.signAnswer("https://evil.example", answer, at, true) },
+      { signed: await stranger.signAnswer(APP, answer, at, true) },
+      { signed: await device.signAnswer(APP, answer, at, true) },
+    ];
+    expect(await running).toMatchObject({ state: "done" });
+    expect(
+      eventsOf(run)
+        .filter((body) => body.event === "answer_rejected")
+        .map((body) => body.itemId),
+    ).toEqual(["a1", "a2", "a3"]);
+  }, 30_000);
+
+  it("answers only on this computer when the policy says so", async () => {
+    const device = await TestDevice.create();
+    const trust = memoryTrust();
+    await trust.pin(APP, pinOf(device));
+    const answerHere = vi.fn(async () => "allow");
+    const run = harness(undefined, {
+      trust,
+      policy: { deviceApproval: "local", answers: "computer" },
+      prompter: { answerHere },
+    });
+    const running = runTurn(await signedClaim(device, askThread, "scripted"), run.deps);
+    await vi.waitFor(() => expect(askOf(run)).toBeDefined());
+    expect(askOf(run)!.body).toMatchObject({ approval: "computer" });
+    await vi.waitFor(() => expect(answerHere).toHaveBeenCalled());
+    expect(answerHere).toHaveBeenCalledWith(
+      expect.objectContaining({
+        appName: "Hello",
+        question: "date",
+        choices: [
+          { id: "allow", label: "Allow", effect: "allow_once" },
+          { id: "reject", label: "Reject", effect: "reject_once" },
+        ],
+      }),
+    );
+    expect(await running).toMatchObject({ state: "done" });
+  }, 30_000);
+
+  it("refuses a chat answer to a question that is answered on the computer", async () => {
+    const device = await TestDevice.create();
+    const trust = memoryTrust();
+    await trust.pin(APP, pinOf(device));
+    let release!: (choice: string) => void;
+    const answerHere = vi.fn(() => new Promise<string>((resolve) => (release = resolve)));
+    let answers: Record<string, unknown>[] | undefined;
+    const run: ReturnType<typeof harness> = harness(
+      chatAnswers(
+        () => run,
+        () => answers,
+      ),
+      {
+        trust,
+        policy: { deviceApproval: "local", answers: "computer" },
+        prompter: { answerHere },
+      },
+    );
+    const running = runTurn(await signedClaim(device, askThread, "scripted"), run.deps);
+    await vi.waitFor(() => expect(askOf(run)).toBeDefined());
+    const answer = { threadId: askThread, askId: askOf(run)!.id, choice: "allow" };
+    answers = [{ signed: await device.signAnswer(APP, answer, Date.now(), true) }];
+    await vi.waitFor(() =>
+      expect(eventsOf(run).some((body) => body.event === "answer_rejected")).toBe(true),
+    );
+    expect(run.appended().some((item) => item.kind === "tool")).toBe(false);
+    release("allow");
+    expect(await running).toMatchObject({ state: "done" });
+  }, 30_000);
+
+  it("asks on the computer when the device has no presence key to answer with", async () => {
+    const device = await TestDevice.create();
+    const trust = memoryTrust();
+    await trust.pin(APP, { ...pinOf(device), presenceKey: undefined });
+    const answerHere = vi.fn(async () => "allow");
+    const run = harness(undefined, {
+      trust,
+      policy: DEFAULT_POLICY,
+      prompter: { answerHere },
+    });
+    const turn = await signedClaim(device, askThread, "scripted", {
+      device: { ...device.keys, presenceKey: undefined },
+    });
+    expect(await runTurn(turn, run.deps)).toMatchObject({ state: "done" });
+    expect(askOf(run)!.body).toMatchObject({ approval: "computer" });
+    expect(answerHere).toHaveBeenCalledOnce();
+  }, 30_000);
 });

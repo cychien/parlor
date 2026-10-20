@@ -1,5 +1,7 @@
 import type { PinnedDevice } from "@parlor/auth";
 
+import { jsonFile } from "./json-file.js";
+
 /** A device this computer accepts prompts from, its keys pinned at approval. */
 export interface TrustedDevice extends PinnedDevice {
   readonly name: string;
@@ -15,8 +17,30 @@ export interface TrustStore {
   forget(appOrigin: string, deviceId?: string): Promise<void>;
 }
 
+type Pins = Record<string, Record<string, TrustedDevice>>;
+
 /** `~/.parlor/host/trust.json`, 0600, written atomically. */
 export function fileTrustStore(file: string): TrustStore {
-  void file;
-  throw new Error("not implemented");
+  const pins = jsonFile<Pins>(file);
+  return {
+    get: async (appOrigin, deviceId) => {
+      const devices = (await pins.read())[appOrigin];
+      return devices && Object.hasOwn(devices, deviceId) ? devices[deviceId] : undefined;
+    },
+    pin: (appOrigin, device) =>
+      pins.change((all) => {
+        (all[appOrigin] ??= {})[device.deviceId] = device;
+      }),
+    forget: (appOrigin, deviceId) =>
+      pins.change((all) => {
+        if (deviceId === undefined) {
+          delete all[appOrigin];
+          return;
+        }
+        const origin = all[appOrigin];
+        if (!origin) return;
+        delete origin[deviceId];
+        if (Object.keys(origin).length === 0) delete all[appOrigin];
+      }),
+  };
 }

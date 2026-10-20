@@ -1,13 +1,12 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
 import { promisify } from "node:util";
 
 import type { AccountSummary } from "@parlor/auth";
 import type { GrantId, HostId } from "@parlor/core";
 
 import { hostAssertion } from "./assertion.js";
+import { jsonFile } from "./json-file.js";
 
 /** One app this computer is connected to. Its key lives in `HostKeys`, never here. */
 export interface AppGrant {
@@ -55,38 +54,17 @@ export interface GrantStore {
 
 /** `~/.parlor/host/grants.json`, 0600, written atomically. */
 export function fileGrantStore(file: string): GrantStore {
-  let writing: Promise<unknown> = Promise.resolve();
-  const read = async (): Promise<Record<string, AppGrant>> => {
-    try {
-      return JSON.parse(await readFile(file, "utf8")) as Record<string, AppGrant>;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
-      throw error;
-    }
-  };
-  const change = (edit: (grants: Record<string, AppGrant>) => void) => {
-    const next = writing.then(async () => {
-      const grants = await read();
-      edit(grants);
-      await mkdir(dirname(file), { recursive: true, mode: 0o700 });
-      const staged = `${file}.${process.pid}.tmp`;
-      await writeFile(staged, `${JSON.stringify(grants, null, 2)}\n`, { mode: 0o600 });
-      await chmod(staged, 0o600);
-      await rename(staged, file);
-    });
-    writing = next.catch(() => undefined);
-    return next;
-  };
+  const grants = jsonFile<Record<string, AppGrant>>(file);
   return {
-    list: async () => Object.values(await read()),
-    get: async (appOrigin) => (await read())[appOrigin],
+    list: async () => Object.values(await grants.read()),
+    get: async (appOrigin) => (await grants.read())[appOrigin],
     save: (grant) =>
-      change((grants) => {
-        grants[grant.appOrigin] = grant;
+      grants.change((all) => {
+        all[grant.appOrigin] = grant;
       }),
     remove: (appOrigin) =>
-      change((grants) => {
-        delete grants[appOrigin];
+      grants.change((all) => {
+        delete all[appOrigin];
       }),
   };
 }
