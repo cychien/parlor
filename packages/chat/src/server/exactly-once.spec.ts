@@ -494,6 +494,26 @@ describe.each(drivers)("exactly-once turns on $name", (driver) => {
     expect(data(current)).toMatchObject({ accepted: true, protocol: 2 });
   });
 
+  it("R5-08: ends the welcome of a computer whose later hello is refused", async () => {
+    const refused = await app.action("alice-host", "hostHello", {
+      ...HELLO,
+      protocols: { min: 1, max: 1 },
+    });
+    expect(data(refused)).toMatchObject({ accepted: false, reason: "host_too_old" });
+    const claimed = await app.action("alice-host", "hostClaim", {});
+    expect(claimed.status).toBe(403);
+    expect(claimed.body).toMatchObject({ error: { code: "forbidden" } });
+    const report = await app.action("alice-host", "hostReport", {
+      online: true,
+      agents: [],
+    });
+    expect(report.status).toBe(403);
+    expect(data(await app.action("alice-host", "hostHello", HELLO))).toMatchObject({
+      accepted: true,
+    });
+    expect((await app.action("alice-host", "hostClaim", {})).status).not.toBe(403);
+  });
+
   it("queues a prompt for an offline computer whose grant holds, up to maxQueued, and hands it over when it returns", async () => {
     await app.action("alice-host", "hostReport", { online: false, agents: [] });
     for (const n of [1, 2, 3, 4]) expect((await send("t1", `u${n}`)).status).toBe(200);
