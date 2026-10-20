@@ -5,12 +5,15 @@ import {
   type ChatItem,
   useChat,
 } from "@parlor/client/react";
+import { useEffect } from "react";
 
 import { ConfirmationCard, focusComposer } from "./agent-requests.js";
+import { sidebarView } from "./sidebar-view.js";
 
 export default function AgentSidebar() {
   return (
     <Chat.Root>
+      <PublishThread />
       <Computers />
       <Chat.Confirmations className="requests">
         {(confirmation) =>
@@ -25,6 +28,15 @@ export default function AgentSidebar() {
       <Composer />
     </Chat.Root>
   );
+}
+
+function PublishThread() {
+  const threadId = useChat().thread?.id;
+  useEffect(() => {
+    sidebarView.set({ threadId });
+    return () => sidebarView.set({ threadId: undefined });
+  }, [threadId]);
+  return null;
 }
 
 function Computers() {

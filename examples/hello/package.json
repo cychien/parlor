@@ -7,7 +7,7 @@
     "dev": "parlor dev",
     "build": "parlor build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "db:generate": "parlor db generate",
     "db:migrate": "parlor db migrate",
     "auth:generate": "PARLOR_ORIGIN=http://localhost auth generate --config auth.cli.ts --output schema/auth.ts --adapter drizzle --dialect postgresql --yes",
@@ -37,6 +37,7 @@
     "@types/react-dom": "catalog:",
     "auth": "1.7.7",
     "typescript": "catalog:",
-    "vite": "catalog:"
+    "vite": "catalog:",
+    "vitest": "catalog:"
   }
 }

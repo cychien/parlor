@@ -11,6 +11,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
+import { sidebarView } from "./sidebar-view.js";
 import { agentPanel } from "./views.js";
 
 const AgentSidebar = lazy(() => import("./agent-sidebar.js"));
@@ -33,6 +34,10 @@ export function AgentPanel() {
   );
   useEffect(() => {
     if (open) region.current?.querySelector("textarea")?.focus();
+  }, [open]);
+  useEffect(() => {
+    sidebarView.set({ open });
+    return () => sidebarView.set({ open: false });
   }, [open]);
   useEffect(() => {
     if (!open) return;
