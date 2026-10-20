@@ -16,7 +16,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { agentLoginStatus, hostBin, hostEnv, prepareHome } from "./agent-home.mjs";
@@ -27,7 +27,14 @@ export const ROOT = spawnSync("git", ["rev-parse", "--show-toplevel"], {
   encoding: "utf8",
   cwd: dirname(fileURLToPath(import.meta.url)),
 }).stdout.trim();
-export const HELLO = join(ROOT, ".claude", "skills", "verify-hello", "scripts", "hello.mjs");
+export const HELLO = join(
+  ROOT,
+  ".claude",
+  "skills",
+  "verify-hello",
+  "scripts",
+  "hello.mjs",
+);
 export const REAL_HOME = homedir();
 const HOMES_ROOT = join(
   process.env.PARLOR_VERIFY_HOME ?? join(REAL_HOME, ".cache", "parlor-verify-hello"),
@@ -98,8 +105,12 @@ export function percentile(values, p) {
   return sorted[Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1)];
 }
 
+const ESC = String.fromCharCode(27);
+const BEL = String.fromCharCode(7);
+const ANSI = new RegExp(`${ESC}\\[[0-?]*[ -/]*[@-~]|${ESC}\\][^${BEL}]*${BEL}|\\r`, "g");
+
 export function stripAnsi(text) {
-  return text.replace(/\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007]*\u0007|\r/g, "");
+  return text.replace(ANSI, "");
 }
 
 export function readJsonLines(file) {
@@ -140,7 +151,10 @@ export class Check {
   save(name, content) {
     const file = join(this.dir, name);
     mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, typeof content === "string" ? content : `${JSON.stringify(content, null, 2)}\n`);
+    writeFileSync(
+      file,
+      typeof content === "string" ? content : `${JSON.stringify(content, null, 2)}\n`,
+    );
     return file;
   }
 
@@ -153,7 +167,9 @@ export class Check {
 
   expect(name, ok, observed) {
     this.results.push({ name, ok: Boolean(ok), observed });
-    this.log(`${ok ? "ok    " : "NOT OK"} ${name}${observed === undefined ? "" : `: ${JSON.stringify(observed)}`}`);
+    this.log(
+      `${ok ? "ok    " : "NOT OK"} ${name}${observed === undefined ? "" : `: ${JSON.stringify(observed)}`}`,
+    );
     return Boolean(ok);
   }
 
@@ -181,7 +197,9 @@ export class Check {
   async cleanup() {
     await this.unwind(0);
     for (const origin of this.origins) deleteKeychainItem(origin);
-    const added = launchctlLabels().filter((label) => !this.launchctlBefore.includes(label));
+    const added = launchctlLabels().filter(
+      (label) => !this.launchctlBefore.includes(label),
+    );
     if (added.length > 0) {
       this.log(`launchd jobs this check left behind: ${added.join(", ")}`);
       for (const label of added) runSync("launchctl", ["remove", label]);
@@ -201,7 +219,12 @@ export class Check {
       await main(this);
     } catch (error) {
       if (error instanceof Inconclusive) inconclusive = error.message;
-      else this.expect(`script ran to the end without an error`, false, String(error?.stack ?? error));
+      else
+        this.expect(
+          `script ran to the end without an error`,
+          false,
+          String(error?.stack ?? error),
+        );
     } finally {
       await this.cleanup();
     }
@@ -223,9 +246,13 @@ export class Check {
       process.exit(2);
     }
     for (const result of failed) {
-      process.stdout.write(`  not ok: ${result.name} ${JSON.stringify(result.observed ?? null)}\n`);
+      process.stdout.write(
+        `  not ok: ${result.name} ${JSON.stringify(result.observed ?? null)}\n`,
+      );
     }
-    process.stdout.write(`FAIL ${this.id}: ${failed.length} of ${this.results.length} assertions failed\n`);
+    process.stdout.write(
+      `FAIL ${this.id}: ${failed.length} of ${this.results.length} assertions failed\n`,
+    );
     process.exit(1);
   }
 }
@@ -239,19 +266,30 @@ function launchctlLabels() {
 }
 
 export function deleteKeychainItem(origin) {
-  return runSync("security", ["delete-generic-password", "-s", "dev.parlor.host", "-a", origin]);
+  return runSync("security", [
+    "delete-generic-password",
+    "-s",
+    "dev.parlor.host",
+    "-a",
+    origin,
+  ]);
 }
 
 export function keychainItemExists(origin) {
   return (
-    runSync("security", ["find-generic-password", "-s", "dev.parlor.host", "-a", origin]).status === 0
+    runSync("security", ["find-generic-password", "-s", "dev.parlor.host", "-a", origin])
+      .status === 0
   );
 }
 
 export function keychainSecret(origin) {
-  const out = runSync("security", ["find-generic-password", "-s", "dev.parlor.host", "-a", origin, "-w"], {
-    timeout: 15_000,
-  });
+  const out = runSync(
+    "security",
+    ["find-generic-password", "-s", "dev.parlor.host", "-a", origin, "-w"],
+    {
+      timeout: 15_000,
+    },
+  );
   return out.status === 0 ? out.stdout.trim() : undefined;
 }
 
@@ -264,8 +302,14 @@ export function lanIp() {
 }
 
 export function load() {
-  const [one] = runSync("sysctl", ["-n", "vm.loadavg"]).stdout.replace(/[{}]/g, "").trim().split(/\s+/);
-  return { load1: Number(one), cores: Number(runSync("sysctl", ["-n", "hw.ncpu"]).stdout) };
+  const [one] = runSync("sysctl", ["-n", "vm.loadavg"])
+    .stdout.replace(/[{}]/g, "")
+    .trim()
+    .split(/\s+/);
+  return {
+    load1: Number(one),
+    cores: Number(runSync("sysctl", ["-n", "hw.ncpu"]).stdout),
+  };
 }
 
 /** An isolated HOME with a short path: the control socket path must stay under the 104 byte limit. */
@@ -278,7 +322,10 @@ export function makeHome(check, tag = check.id) {
 }
 
 export function removeHome(home) {
-  for (const link of [join(home, "Library", "Keychains"), join(home, ".codex", "auth.json")]) {
+  for (const link of [
+    join(home, "Library", "Keychains"),
+    join(home, ".codex", "auth.json"),
+  ]) {
     try {
       if (lstatSync(link).isSymbolicLink()) unlinkSync(link);
     } catch {
@@ -296,7 +343,9 @@ export function requireLogins(check, home, agentIds) {
   });
   for (const id of agentIds) {
     if (!status[id]?.loggedIn) {
-      throw new Inconclusive(`${id} is not logged in under the isolated HOME ${home}: ${status[id]?.detail}`);
+      throw new Inconclusive(
+        `${id} is not logged in under the isolated HOME ${home}: ${status[id]?.detail}`,
+      );
     }
   }
 }
@@ -306,12 +355,19 @@ export function processesWithHome(home) {
   const out = runSync("ps", ["-axww", "-E", "-o", "pid=,ppid=,pgid=,command="], {
     env: { ...process.env, COLUMNS: "100000" },
   });
-  const marker = new RegExp(`(^|\\s)HOME=${home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\s|$)`);
+  const marker = new RegExp(
+    `(^|\\s)HOME=${home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\s|$)`,
+  );
   return out.stdout
     .split("\n")
     .map((line) => line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/))
     .filter((m) => m && Number(m[1]) !== process.pid && marker.test(m[4]))
-    .map((m) => ({ pid: Number(m[1]), ppid: Number(m[2]), pgid: Number(m[3]), line: m[4] }));
+    .map((m) => ({
+      pid: Number(m[1]),
+      ppid: Number(m[2]),
+      pgid: Number(m[3]),
+      line: m[4],
+    }));
 }
 
 export function pidsListening(path) {
@@ -337,7 +393,8 @@ export async function killHome(check, home) {
     await sleep(attempt === 0 ? 3000 : 1000);
   }
   const survivors = processesWithHome(home);
-  if (survivors.length) check.log(`survivors under ${home}: ${survivors.map((p) => p.pid).join(", ")}`);
+  if (survivors.length)
+    check.log(`survivors under ${home}: ${survivors.map((p) => p.pid).join(", ")}`);
 }
 
 const PTY_HELPER = `
@@ -415,7 +472,11 @@ export class Terminal {
       if (exit) this.exitCode = Number(exit[1]);
     });
     this.child.stderr.on("data", (chunk) => {
-      this.events.push({ at: Date.now(), type: "helper-stderr", text: chunk.toString("utf8") });
+      this.events.push({
+        at: Date.now(),
+        type: "helper-stderr",
+        text: chunk.toString("utf8"),
+      });
     });
     check.onCleanup(() => this.kill());
   }
@@ -532,9 +593,15 @@ export class Browser {
     const env = { ...process.env };
     delete env.HELLO_BROWSER_PROFILE;
     if (this.profile) env.HELLO_BROWSER_PROFILE = this.profile;
-    const result = await runAsync(process.execPath, [HELLO, "browser", this.info.id, ...args], { env, timeout });
+    const result = await runAsync(
+      process.execPath,
+      [HELLO, "browser", this.info.id, ...args],
+      { env, timeout },
+    );
     if (result.status !== 0) {
-      throw new Error(`browser ${args.slice(0, 3).join(" ")} exited ${result.status}\n${result.stderr}${result.stdout}`);
+      throw new Error(
+        `browser ${args.slice(0, 3).join(" ")} exited ${result.status}\n${result.stderr}${result.stdout}`,
+      );
     }
     return result.stdout;
   }
@@ -545,7 +612,9 @@ export class Browser {
 
   /** Runs `body` (a function of the page helpers) in the page; async bodies are awaited. */
   page(body) {
-    return this.eval(`async () => { const L = (${PAGE_LIB})(); return await (${body})(L); }`);
+    return this.eval(
+      `async () => { const L = (${PAGE_LIB})(); return await (${body})(L); }`,
+    );
   }
 
   open(path = "/") {
@@ -601,7 +670,9 @@ export class Browser {
 
   async selectAgent(text) {
     await this.cli(["fill", "combobox", "Agent", text]);
-    const selected = await this.page(`(L) => L.agents().filter((o) => o.selected).map((o) => o.text)`);
+    const selected = await this.page(
+      `(L) => L.agents().filter((o) => o.selected).map((o) => o.text)`,
+    );
     if (!selected.includes(text)) {
       await this.page(`(L) => {
         const select = L.agentSelect();
@@ -627,9 +698,7 @@ export class Browser {
     let stable = 0;
     let last;
     while (Date.now() < deadline) {
-      last = await this.page(
-        `(L) => ({ items: L.items(), stop: L.stopVisible() })`,
-      );
+      last = await this.page(`(L) => ({ items: L.items(), stop: L.stopVisible() })`);
       if (onPoll) await onPoll(last);
       const promptCount = last.items.filter((i) => i.kind === "prompt").length;
       const rest = last.items.filter((i) => i.kind !== "prompt");
@@ -652,7 +721,9 @@ export async function openAliceSidebar(check, browser, { signedIn = true } = {})
   await browser.cli(["emulate", "--viewport", "1280x720x1"]);
   await browser.open("/");
   for (let attempt = 0; attempt < 2; attempt++) {
-    await browser.page(`(L) => { if (!L.sidebarOpen()) L.openButton()?.click(); return true; }`);
+    await browser.page(
+      `(L) => { if (!L.sidebarOpen()) L.openButton()?.click(); return true; }`,
+    );
     const deadline = Date.now() + 6000;
     while (Date.now() < deadline) {
       if (await browser.page(`(L) => L.sidebarOpen()`)) return true;
@@ -673,7 +744,9 @@ export async function upInstance(check, { name, seed, noAuth, home } = {}) {
   check.save(`${name ?? "instance"}.up.log`, result.stderr);
   if (result.status !== 0) {
     if (/refusing to start/.test(result.stderr)) {
-      throw new Inconclusive(`hello up refused to start: ${result.stderr.split("\n").find((l) => l.includes("refusing")) ?? result.stderr.slice(-500)}`);
+      throw new Inconclusive(
+        `hello up refused to start: ${result.stderr.split("\n").find((l) => l.includes("refusing")) ?? result.stderr.slice(-500)}`,
+      );
     }
     throw new Error(`hello up failed (${result.status})\n${result.stderr.slice(-2000)}`);
   }
@@ -683,10 +756,17 @@ export async function upInstance(check, { name, seed, noAuth, home } = {}) {
   check.onCleanup(async () => {
     const down = await runAsync(
       process.execPath,
-      [HELLO, "down", info.id, "--save-log", join(check.dir, `${name ?? info.id}.dev.log`)],
+      [
+        HELLO,
+        "down",
+        info.id,
+        "--save-log",
+        join(check.dir, `${name ?? info.id}.dev.log`),
+      ],
       { timeout: 120_000 },
     );
-    if (down.status !== 0) check.log(`down ${info.id} failed: ${down.stderr.slice(-500)}`);
+    if (down.status !== 0)
+      check.log(`down ${info.id} failed: ${down.stderr.slice(-500)}`);
   });
   return info;
 }
@@ -748,7 +828,12 @@ export class MacHost {
   }
 
   env() {
-    return { ...hostEnv(this.home), TERM: "xterm-256color", NO_COLOR: "1", ...this.extraEnv };
+    return {
+      ...hostEnv(this.home),
+      TERM: "xterm-256color",
+      NO_COLOR: "1",
+      ...this.extraEnv,
+    };
   }
 
   terminal(name, args) {
@@ -759,15 +844,25 @@ export class MacHost {
   }
 
   cli(args, { timeout = 60_000 } = {}) {
-    return runAsync(process.execPath, [this.bin, ...args], { env: this.env(), cwd: this.cwd, timeout });
+    return runAsync(process.execPath, [this.bin, ...args], {
+      env: this.env(),
+      cwd: this.cwd,
+      timeout,
+    });
   }
 
   async status() {
     const result = await this.cli(["status", "--json"]);
     try {
-      return { ...JSON.parse(result.stdout.trim().split("\n").pop()), exit: result.status };
+      return {
+        ...JSON.parse(result.stdout.trim().split("\n").pop()),
+        exit: result.status,
+      };
     } catch {
-      return { error: `${result.stdout}${result.stderr}`.slice(0, 500), exit: result.status };
+      return {
+        error: `${result.stdout}${result.stderr}`.slice(0, 500),
+        exit: result.status,
+      };
     }
   }
 
@@ -795,7 +890,9 @@ export class MacHost {
 /** The executable and arguments of a `ps -E` line, before the environment starts. */
 export function commandOf(line) {
   const tokens = line.split(" ");
-  const end = tokens.findIndex((token, index) => index > 0 && /^[A-Z_][A-Z0-9_]*=/.test(token));
+  const end = tokens.findIndex(
+    (part, index) => index > 0 && /^[A-Z_][A-Z0-9_]*=/.test(part),
+  );
   return (end === -1 ? tokens : tokens.slice(0, end)).join(" ");
 }
 
@@ -807,22 +904,31 @@ export function agentProcesses(host) {
 
 /** The newest consent URL for this app: the open shim's log is shared by every app a home connects. */
 export function readConsentUrl(host, terminal) {
-  const fromShim = existsSync(host.openedUrls) ? readFileSync(host.openedUrls, "utf8") : "";
+  const fromShim = existsSync(host.openedUrls)
+    ? readFileSync(host.openedUrls, "utf8")
+    : "";
   const pattern = /https?:\/\/[^\s"'<>]+\/_parlor\/auth\/hosts\/authorize[^\s"'<>]*/g;
   const web = host.info.urls.web;
   const mine = (url) => url.startsWith(`${web}/_parlor/auth/hosts/authorize`);
-  const found = [...(fromShim.match(pattern) ?? []), ...(terminal.text.match(pattern) ?? [])].filter(mine);
+  const found = [
+    ...(fromShim.match(pattern) ?? []),
+    ...(terminal.text.match(pattern) ?? []),
+  ].filter(mine);
   return found.at(-1);
 }
 
-export const PROMPT_PATTERN = /Connect this computer to (.+?) as (\S+?)\? Code (.+?) \[y\/N\]/;
+export const PROMPT_PATTERN =
+  /Connect this computer to (.+?) as (\S+?)\? Code (.+?) \[y\/N\]/;
 
 /**
  * Alice connects the host to the instance the way a user does: run the command the sidebar
  * names, click `Connect` on the consent page, answer `y`. `appTab` is the page id of Alice's
  * app tab, which stays selected on return. `beforeAnswer` runs just before `y` is sent.
  */
-export async function connectHost(check, { host, browser, appTab, beforeAnswer, label = "connect" }) {
+export async function connectHost(
+  check,
+  { host, browser, appTab, beforeAnswer, label = "connect" },
+) {
   const info = host.info;
   const web = info.urls.web;
   const actions = { computer: 0, browser: 0 };
@@ -835,8 +941,14 @@ export async function connectHost(check, { host, browser, appTab, beforeAnswer, 
   await browser.screenshot(`${label}.sidebar-before.png`);
   await browser.snapshot(`${label}.sidebar-before.aria.txt`);
   const expectedCommand = `npx @parlor/agent-host connect ${web}`;
-  check.expect(`${label}: the sidebar names the command ${expectedCommand}`, note.command === expectedCommand, note.command);
-  const args = (note.command ?? expectedCommand).replace(/^npx @parlor\/agent-host /, "").split(/\s+/);
+  check.expect(
+    `${label}: the sidebar names the command ${expectedCommand}`,
+    note.command === expectedCommand,
+    note.command,
+  );
+  const args = (note.command ?? expectedCommand)
+    .replace(/^npx @parlor\/agent-host /, "")
+    .split(/\s+/);
 
   const terminal = host.terminal(label, args);
   actions.computer += 1;
@@ -849,12 +961,16 @@ export async function connectHost(check, { host, browser, appTab, beforeAnswer, 
   }
   if (!url) {
     terminal.save();
-    throw new Error(`no consent URL after 60 s; terminal:\n${terminal.text.slice(-1500)}`);
+    throw new Error(
+      `no consent URL after 60 s; terminal:\n${terminal.text.slice(-1500)}`,
+    );
   }
   check.log(`consent URL ${url} after ${Date.now() - startedAt} ms`);
 
   const consentTab = await browser.newpage(url);
-  await browser.page(`async () => { for (let i = 0; i < 40 && !document.querySelector('p.code'); i++) await new Promise((r) => setTimeout(r, 250)); return true; }`);
+  await browser.page(
+    `async () => { for (let i = 0; i < 40 && !document.querySelector('p.code'); i++) await new Promise((r) => setTimeout(r, 250)); return true; }`,
+  );
   const consent = await browser.page(`(L) => ({
     heading: (document.querySelector('h1,h2') ?? {}).textContent ?? null,
     code: document.querySelector('p.code')?.textContent.trim() ?? null,
@@ -869,7 +985,9 @@ export async function connectHost(check, { host, browser, appTab, beforeAnswer, 
   const prompt = await terminal.waitFor(PROMPT_PATTERN, 60_000);
   if (!prompt) {
     terminal.save();
-    throw new Error(`the terminal never asked for confirmation; terminal:\n${terminal.text.slice(-1500)}`);
+    throw new Error(
+      `the terminal never asked for confirmation; terminal:\n${terminal.text.slice(-1500)}`,
+    );
   }
   const shown = { appName: prompt[1], email: prompt[2], code: prompt[3] };
   check.save(`${label}.terminal-prompt.json`, shown);
@@ -888,7 +1006,10 @@ export async function connectHost(check, { host, browser, appTab, beforeAnswer, 
  * An instance with Better Auth on, Alice signed in with her sidebar open, and a host that
  * is not yet connected; prints `verify: ready` once the page is usable.
  */
-export async function standUp(check, { tag, agentIds, seed = "baseline", extraEnv = {}, home: given, binInfo }) {
+export async function standUp(
+  check,
+  { tag, agentIds, seed = "baseline", extraEnv = {}, home: given, binInfo },
+) {
   const home = given ?? makeHome(check, tag).home;
   if (agentIds.length) requireLogins(check, home, agentIds);
   const info = await upInstance(check, { name: tag, seed });
@@ -914,7 +1035,11 @@ export async function forEachAgent(check, body, agents = selectedAgents()) {
         inconclusive = error;
         check.log(`${agent.name}: inconclusive: ${error.message}`);
       } else {
-        check.expect(`${agent.name}: the check ran to the end`, false, String(error?.stack ?? error));
+        check.expect(
+          `${agent.name}: the check ran to the end`,
+          false,
+          String(error?.stack ?? error),
+        );
       }
     } finally {
       await check.unwind(mark);
@@ -943,7 +1068,10 @@ export async function waitForAgents(browser, texts, ms = 20_000) {
  * Stands up an instance, connects the Mac the way a user does and waits for the picker.
  * `profiles` are user-added agent profiles written to agents.json before the host starts.
  */
-export async function connectedSession(check, { tag, agentIds, extraEnv, seed, profiles }) {
+export async function connectedSession(
+  check,
+  { tag, agentIds, extraEnv, seed, profiles },
+) {
   const session = await standUp(check, { tag, agentIds, seed, extraEnv });
   const extra = typeof profiles === "function" ? profiles(session) : profiles;
   if (extra?.length) {
@@ -962,12 +1090,17 @@ export async function connectedSession(check, { tag, agentIds, extraEnv, seed, p
   }
   const listed = await waitForAgents(session.browser, wanted);
   check.expect(`${tag}: the picker lists ${wanted.join(", ")}`, listed.ok, listed.listed);
-  if (!listed.ok) throw new Error(`${tag}: the picker never listed the agents; terminal:\n${connection.terminal.text.slice(-1200)}`);
+  if (!listed.ok)
+    throw new Error(
+      `${tag}: the picker never listed the agents; terminal:\n${connection.terminal.text.slice(-1200)}`,
+    );
   return { ...session, connection, hostName };
 }
 
 export async function cdpCookies(info) {
-  const version = await (await fetch(`http://127.0.0.1:${info.browserCdpPort}/json/version`)).json();
+  const version = await (
+    await fetch(`http://127.0.0.1:${info.browserCdpPort}/json/version`)
+  ).json();
   const socket = new WebSocket(version.webSocketDebuggerUrl);
   await new Promise((done, abort) => {
     socket.onopen = done;
@@ -1033,7 +1166,8 @@ export class ProxyClient {
     const answer = new Promise((done) => {
       this.pending.set(id, done);
       setTimeout(() => {
-        if (this.pending.delete(id)) done({ at: Date.now(), message: undefined, timedOut: true });
+        if (this.pending.delete(id))
+          done({ at: Date.now(), message: undefined, timedOut: true });
       }, timeout);
     });
     this.child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
@@ -1071,15 +1205,18 @@ export function sha8(text) {
   return createHash("sha256").update(text).digest("hex").slice(0, 8);
 }
 
-export function decodeJwtPayload(token) {
+export function decodeJwtPayload(jwt) {
   try {
-    return JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8"));
+    return JSON.parse(Buffer.from(jwt.split(".")[1], "base64url").toString("utf8"));
   } catch {
     return undefined;
   }
 }
 
-export function walkFiles(root, { skip = () => false, maxBytes = 64 * 1024 * 1024 } = {}) {
+export function walkFiles(
+  root,
+  { skip = () => false, maxBytes = 64 * 1024 * 1024 } = {},
+) {
   const files = [];
   const visit = (path) => {
     let stat;
@@ -1108,4 +1245,12 @@ export function walkFiles(root, { skip = () => false, maxBytes = 64 * 1024 * 102
   return files;
 }
 
-export { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, join, readlinkSync };
+export {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  join,
+  readlinkSync,
+};

@@ -21,7 +21,13 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-import { agentLoginStatus, hostBin, hostEnv, prepareHome, withoutAuth } from "./agent-home.mjs";
+import {
+  agentLoginStatus,
+  hostBin,
+  hostEnv,
+  prepareHome,
+  withoutAuth,
+} from "./agent-home.mjs";
 import { createHostCommand } from "./host.mjs";
 
 function canonicalPath(path) {
@@ -988,7 +994,9 @@ async function cmdUp(args) {
     },
   });
   if (values["no-auth"] && !values.home)
-    fail("--no-auth needs --home: the dev host it spawns must not touch the developer's ~/.parlor");
+    fail(
+      "--no-auth needs --home: the dev host it spawns must not touch the developer's ~/.parlor",
+    );
   if (values.home && values.target !== "web") fail("--home is for the web target");
   if (!TARGETS.includes(values.target))
     fail(`--target must be one of ${TARGETS.join(", ")}`);
@@ -1870,7 +1878,8 @@ function cmdParlorHost([id, home, ...args]) {
   const state = readState(id);
   prepareHome(home);
   const bin = hostBin(join(instanceDir(state.id), "repo"));
-  if (!existsSync(bin)) fail(`instance ${id} has no ${bin}; its snapshot predates the host`);
+  if (!existsSync(bin))
+    fail(`instance ${id} has no ${bin}; its snapshot predates the host`);
   const result = spawnSync("node", [bin, ...args], {
     cwd: join(instanceDir(state.id), "repo"),
     env: hostEnv(home),

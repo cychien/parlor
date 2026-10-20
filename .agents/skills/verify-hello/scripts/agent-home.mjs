@@ -53,7 +53,10 @@ export function prepareHome(home, realHome = homedir()) {
   }
   mkdirSync(join(root, "bin"), { recursive: true });
   const shim = join(root, "bin", "open");
-  writeFileSync(shim, `#!/bin/sh\nprintf '%s\\n' "$@" >> "${join(root, "opened-urls.log")}"\n`);
+  writeFileSync(
+    shim,
+    `#!/bin/sh\nprintf '%s\\n' "$@" >> "${join(root, "opened-urls.log")}"\n`,
+  );
   chmodSync(shim, 0o755);
   return { home: root, openedUrls: join(root, "opened-urls.log"), linked };
 }
@@ -77,16 +80,27 @@ export function hostBin(repoDir) {
 /** `claude auth status` and `codex login status` under the isolated HOME. */
 export function agentLoginStatus(home) {
   const env = hostEnv(home);
-  const claude = spawnSync("claude", ["auth", "status"], { env, encoding: "utf8", timeout: 30_000 });
+  const claude = spawnSync("claude", ["auth", "status"], {
+    env,
+    encoding: "utf8",
+    timeout: 30_000,
+  });
   let claudeIn = false;
   try {
     claudeIn = JSON.parse(claude.stdout).loggedIn === true;
   } catch {
     claudeIn = false;
   }
-  const codex = spawnSync("codex", ["login", "status"], { env, encoding: "utf8", timeout: 30_000 });
+  const codex = spawnSync("codex", ["login", "status"], {
+    env,
+    encoding: "utf8",
+    timeout: 30_000,
+  });
   return {
-    claude: { loggedIn: claudeIn, detail: (claude.stdout || claude.stderr || "").trim().slice(0, 300) },
+    claude: {
+      loggedIn: claudeIn,
+      detail: (claude.stdout || claude.stderr || "").trim().slice(0, 300),
+    },
     codex: {
       loggedIn: codex.status === 0,
       detail: `${codex.stdout ?? ""}${codex.stderr ?? ""}`.trim().slice(0, 300),
