@@ -239,9 +239,9 @@ describe("inProcessRelay", () => {
     expect(tab.received).toEqual([]);
   });
 
-  it("serves the dev user to an anonymous stream when no provider tells people apart", () => {
+  it("serves the dev host's turns, owned by the default user, to an anonymous stream", () => {
     const relay = inProcessRelay();
-    const dev = { scope: "default", userId: asId("user", "dev") };
+    const dev = { scope: "default", userId: asId("user", "default") };
     const tab = connect(relay, "default", undefined);
     relay.accept(holder(dev), batch("u1", delta("u1.1", 0, "a")));
     expect(tab.received).toHaveLength(1);

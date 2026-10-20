@@ -12,6 +12,7 @@ import { z } from "zod";
 import { idSchema } from "../id-schemas.js";
 import { chatItemBodies, hostItemDraft, type LoggedItem } from "../items.js";
 import type {
+  AgentInfo,
   ChatOwner,
   ChatSnapshot,
   ClaimedTurn,
@@ -31,7 +32,7 @@ export { CHAT_TAG, HOSTS_TAG, HOST_GRANTS_TAG };
 
 export interface Written<T> {
   readonly result: T;
-  readonly threadId: ThreadId;
+  readonly threadId: ThreadId | undefined;
 }
 
 export interface ChatActionDeps {
@@ -239,8 +240,22 @@ export function hostChatActions(deps: ChatActionDeps) {
   const requireWelcome = async (host: ChatHost, db: ChatDb) => {
     if (!welcomed.has(host.host.hostId)) await welcome(host, db);
   };
-  const mint = (
+  const agentNames = new Map<HostId, ReadonlyMap<string, string>>();
+  const learnAgents = (hostId: HostId, agents: readonly AgentInfo[]) => {
+    agentNames.set(hostId, new Map(agents.map((agent) => [agent.id, agent.name])));
+  };
+  const agentNameOf = async (host: ChatHost, db: ChatDb, agentId: string) => {
+    if (!agentNames.has(host.host.hostId)) {
+      const known = (await deps.store.listHosts(db, host)).find(
+        (candidate) => candidate.id === host.host.hostId,
+      );
+      if (known) learnAgents(known.id, known.agents);
+    }
+    return agentNames.get(host.host.hostId)?.get(agentId) ?? agentId;
+  };
+  const mint = async (
     host: ChatHost,
+    db: ChatDb,
     turn: { threadId: ThreadId; turnId: TurnId; clientId: string; agentId: string },
   ) => {
     if (!deps.auth.delegate) {
@@ -250,7 +265,7 @@ export function hostChatActions(deps: ChatActionDeps) {
       threadId: turn.threadId,
       turnId: turn.turnId,
       clientId: turn.clientId,
-      agent: turn.agentId,
+      agent: await agentNameOf(host, db, turn.agentId),
       ttlMs: deps.leaseMs,
     });
   };
@@ -287,6 +302,7 @@ export function hostChatActions(deps: ChatActionDeps) {
           online: true,
           ttlMs: 2 * deps.heartbeatMs,
         });
+        learnAgents(id, input.agents);
         welcomed.add(id);
         return {
           id,
@@ -316,6 +332,7 @@ export function hostChatActions(deps: ChatActionDeps) {
           online: input.online,
           ttlMs: 2 * deps.heartbeatMs,
         });
+        learnAgents(host.host.hostId, input.agents);
         return { id: host.host.hostId, onlineUntil };
       },
     }),
@@ -333,7 +350,7 @@ export function hostChatActions(deps: ChatActionDeps) {
           return { result: taken, threadId: taken.id };
         });
         try {
-          const token = await mint(host, {
+          const token = await mint(host, db, {
             threadId: claimed.id,
             turnId: claimed.turnId,
             clientId: claimed.clientId,
@@ -380,8 +397,9 @@ export function hostChatActions(deps: ChatActionDeps) {
       },
     }),
     hostAppend: chatAction("host", enforcing, {
-      description: "Append finished items of a running turn and extend its lease.",
-      input: z.object({ turnId, items: z.array(hostItemDraft).min(1).max(64) }),
+      description:
+        "Append finished items of a running turn and extend its lease; no items only renews it.",
+      input: z.object({ turnId, items: z.array(hostItemDraft).max(64) }),
       run: async (
         input,
         host,
@@ -401,9 +419,12 @@ export function hostChatActions(deps: ChatActionDeps) {
             input.items,
             deps.leaseMs,
           );
-          return { result, threadId: result.threadId };
+          return {
+            result,
+            threadId: input.items.length > 0 ? result.threadId : undefined,
+          };
         });
-        const token = await mint(host, { ...appended, turnId: input.turnId });
+        const token = await mint(host, dbOf(ctx), { ...appended, turnId: input.turnId });
         return { id: appended.threadId, leaseUntil: appended.leaseUntil, token };
       },
     }),

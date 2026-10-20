@@ -117,7 +117,7 @@ describe.each(drivers)("exactly-once turns on $name", (driver) => {
         threadId: "t1",
         turnId: "u1",
         clientId: "tab-1",
-        agent: "claude",
+        agent: "Claude",
         ttlMs: 60_000,
       },
     ]);

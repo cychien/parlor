@@ -3,6 +3,7 @@ import type { z } from "zod";
 
 import type { ChatEvent } from "./events.js";
 import type {
+  ChatItemBody,
   ChatItemKind,
   chatItemBodies,
   HostItemDraft,
@@ -59,4 +60,13 @@ test("every log kind renders, except the ones that settle another item", () => {
 test("a host streams text and open items; only the server settles a turn", () => {
   expectTypeOf<HostFrame["type"]>().toEqualTypeOf<"delta" | "item">();
   expectTypeOf<HostFrame>().not.toHaveProperty("threadId");
+});
+
+test("an ask's approval is the host policy's to set, or absent for any device", () => {
+  expectTypeOf<ChatItemBody<"ask">["approval"]>().toEqualTypeOf<
+    "presence" | "computer" | undefined
+  >();
+  expectTypeOf<Extract<ChatItem, { kind: "ask" }>["approval"]>().toEqualTypeOf<
+    "presence" | "computer" | undefined
+  >();
 });

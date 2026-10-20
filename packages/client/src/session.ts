@@ -8,8 +8,10 @@ export interface SessionUser {
   readonly email: string;
 }
 
+/** `anonymous`: the server signs nobody in, so everyone uses the app without an account. */
 export type SessionSnapshot =
   | { readonly status: "loading" }
+  | { readonly status: "anonymous" }
   | { readonly status: "signed-out" }
   | { readonly status: "signed-in"; readonly user: SessionUser };
 

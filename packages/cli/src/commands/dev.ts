@@ -1,6 +1,7 @@
 import { loadParlorConfig } from "@parlor/config";
 import { defineCommand } from "citty";
 
+import { startDevAgentHost } from "../agent-host-process.js";
 import { CliError } from "../errors.js";
 import { handlers } from "../handlers.js";
 import { parseTarget, resolveHandler } from "../targets.js";
@@ -27,12 +28,18 @@ export const dev = defineCommand({
       type: "string",
       description: "Simulator or device name for ios and android",
     },
+    "agent-host": {
+      type: "boolean",
+      default: true,
+      description: "Serve the chat with this computer's agents (--no-agent-host to skip)",
+    },
   },
   async run({ args }) {
     const target = parseTarget(args.target);
     const handler = resolveHandler(handlers, target);
     const loaded = await loadParlorConfig();
     const port = parsePort(args.port);
+    startDevAgentHost(loaded, { enabled: args["agent-host"], serverHasAuth: false });
     await handler.dev(
       port === undefined
         ? loaded

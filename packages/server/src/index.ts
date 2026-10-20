@@ -40,6 +40,13 @@ export {
   type ServerOptions,
   type SyncOptions,
 } from "./create-server.js";
+export {
+  DEV_AUTH_PLUGIN,
+  DEV_HOST_PATH,
+  DEV_USER_ID,
+  devAuth,
+  type DevAuthOptions,
+} from "./dev-auth.js";
 export { createMcpHandler, type McpOptions } from "./mcp.js";
 export {
   type ActionAudit,

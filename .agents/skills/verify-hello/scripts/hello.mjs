@@ -21,6 +21,13 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
+import {
+  agentLoginStatus,
+  hostBin,
+  hostEnv,
+  prepareHome,
+  withoutAuth,
+} from "./agent-home.mjs";
 import { createHostCommand } from "./host.mjs";
 
 function canonicalPath(path) {
@@ -82,12 +89,16 @@ const HARNESS_REDIRECT = "http://127.0.0.1:47001/callback";
 const USAGE = `usage: hello.mjs <command> [args]
 
   up [--id ID] [--target web|mac|ios] [--seed DATASET] [--device NAME] [--source DIR]
-     [--keep-on-failure] [--force]
+     [--no-auth --home HOME] [--home HOME] [--keep-on-failure] [--force]
                           snapshot the checkout, pick free ports, launch, wait until usable;
                           refused when the 1-minute load is at or above 0.7 x cores (HELLO_MAX_LOAD
                           overrides), when a mac or ios target is asked while another native
                           instance is still starting, or when HELLO_MAX_INSTANCES (unset by
                           default) are running, unless --force
+                          --home HOME runs parlor dev (and the dev host it spawns) with HOME=HOME, an
+                          isolated home whose agent logins are linked (see agent-home); --no-auth also
+                          snapshots hello with the auth option and its imports removed from server.ts,
+                          so plain parlor dev installs devAuth, and needs --home
   doctor ID               read-only health check; exit 1 when the instance is not worth driving
   seed ID DATASET         load a fixture straight into PGlite (stops and restarts a running instance)
   sql ID QUERY            read-only SQL against the instance's PGlite (stops and restarts it)
@@ -125,6 +136,11 @@ const USAGE = `usage: hello.mjs <command> [args]
                           stop what this skill started and delete the snapshot, never evidence;
                           exit 1 and keep the instance when any process or listener survives SIGKILL
   evidence                print and create this branch's verification directory
+  agent-home HOME         create an isolated HOME: empty ~/.parlor, symlinks to the developer's Codex
+                          file login and login Keychain, and an open shim that records URLs; prints JSON
+  parlor-host ID HOME [ARGS...]
+                          run the unpublished host CLI from instance ID's snapshot as parlor-host with
+                          HOME=HOME (prepared as agent-home does); its exit code passes through
 
 users: ${Object.keys(USERS).join(", ")} (password ${PASSWORD})
 datasets: ${datasets().join(", ")}
@@ -581,6 +597,10 @@ function snapshot(state) {
     join(appDir(state), "parlor.config.source.ts"),
   );
   writeFileSync(join(appDir(state), "parlor.config.ts"), configOverlay(state.ports));
+  if (state.noAuth) {
+    const server = join(appDir(state), "server.ts");
+    writeFileSync(server, withoutAuth(readFileSync(server, "utf8")));
+  }
   mkdirSync(join(appDir(state), ".parlor"), { recursive: true });
   const out = openSync(logPath(state), "a");
   try {
@@ -595,6 +615,7 @@ function snapshot(state) {
 
 function devEnv(state) {
   const env = { ...process.env, FORCE_COLOR: "0", BROWSER: "none" };
+  if (state.home) Object.assign(env, hostEnv(state.home, env));
   if (state.target === "mac") env.CARGO_TARGET_DIR = CARGO_TARGET_DIR;
   if (state.target === "ios" && !env.DEVELOPER_DIR && existsSync(XCODE_DEVELOPER_DIR)) {
     env.DEVELOPER_DIR = XCODE_DEVELOPER_DIR;
@@ -673,7 +694,9 @@ async function readiness(state) {
     return "web page not served yet";
   let list;
   try {
-    list = await authedPost(state, `${u.web}/_parlor/actions/listTasks`, {});
+    list = state.noAuth
+      ? await postJson(`${u.web}/_parlor/actions/listTasks`, {})
+      : await authedPost(state, `${u.web}/_parlor/actions/listTasks`, {});
   } catch {
     return "sign-in through the Vite proxy not answering yet";
   }
@@ -966,8 +989,15 @@ async function cmdUp(args) {
       source: { type: "string" },
       "keep-on-failure": { type: "boolean" },
       force: { type: "boolean" },
+      "no-auth": { type: "boolean" },
+      home: { type: "string" },
     },
   });
+  if (values["no-auth"] && !values.home)
+    fail(
+      "--no-auth needs --home: the dev host it spawns must not touch the developer's ~/.parlor",
+    );
+  if (values.home && values.target !== "web") fail("--home is for the web target");
   if (!TARGETS.includes(values.target))
     fail(`--target must be one of ${TARGETS.join(", ")}`);
   if (values.seed) fixturePath(values.seed);
@@ -994,6 +1024,8 @@ async function cmdUp(args) {
       ...sourceRevision(source),
       ports: allocatePorts(),
       cdpPort: allocateCdpPort(),
+      noAuth: values["no-auth"] ? true : undefined,
+      home: values.home ? resolve(values.home) : undefined,
       simulator: sim ? { ...sim, bootedBefore: sim.booted } : undefined,
       createdAt: new Date().toISOString(),
     };
@@ -1007,12 +1039,14 @@ async function cmdUp(args) {
       `snapshot ${source} (${state.head.slice(0, 12)}, fingerprint ${state.fingerprint}) into ${instanceDir(id)}`,
     );
     snapshot(state);
+    if (state.home) prepareHome(state.home);
     if (values.seed)
       log(
         `seeded ${values.seed}: ${JSON.stringify(await loadDataset(state, values.seed))}`,
       );
-    else await seedAccounts(state);
-    log(`seeded users ${Object.keys(USERS).join(", ")} (password ${PASSWORD})`);
+    else if (!state.noAuth) await seedAccounts(state);
+    if (!state.noAuth)
+      log(`seeded users ${Object.keys(USERS).join(", ")} (password ${PASSWORD})`);
     await start(state);
   } catch (error) {
     log(error instanceof CliError ? error.message : String(error?.stack ?? error));
@@ -1047,6 +1081,8 @@ function printInfo(state) {
         log: logPath(state),
         browserSession: browserSession(state),
         browserCdpPort: state.cdpPort ?? null,
+        noAuth: state.noAuth ?? false,
+        home: state.home ?? null,
         simulator: state.simulator ?? null,
       },
       null,
@@ -1830,7 +1866,31 @@ const cmdHost = createHostCommand({
   signInBrowser,
 });
 
+function cmdAgentHome([home]) {
+  if (!home) fail("usage: agent-home HOME");
+  process.stdout.write(`${JSON.stringify(prepareHome(home), null, 2)}\n`);
+  const login = agentLoginStatus(home);
+  process.stdout.write(`${JSON.stringify(login, null, 2)}\n`);
+}
+
+function cmdParlorHost([id, home, ...args]) {
+  if (!id || !home) fail("usage: parlor-host ID HOME [ARGS...]");
+  const state = readState(id);
+  prepareHome(home);
+  const bin = hostBin(join(instanceDir(state.id), "repo"));
+  if (!existsSync(bin))
+    fail(`instance ${id} has no ${bin}; its snapshot predates the host`);
+  const result = spawnSync("node", [bin, ...args], {
+    cwd: join(instanceDir(state.id), "repo"),
+    env: hostEnv(home),
+    stdio: "inherit",
+  });
+  process.exitCode = result.status ?? 1;
+}
+
 const COMMANDS = {
+  "agent-home": cmdAgentHome,
+  "parlor-host": cmdParlorHost,
   up: cmdUp,
   doctor: cmdDoctor,
   seed: cmdSeed,

@@ -28,6 +28,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@parlor/agent-host": "workspace:*",
     "@parlor/agent-ui": "workspace:*",
     "@parlor/config": "workspace:*",
     "@parlor/data": "workspace:*",

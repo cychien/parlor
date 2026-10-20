@@ -325,6 +325,17 @@ button.danger {
   font-weight: 600;
 }
 
+.sidebar-note .connect-command {
+  justify-self: stretch;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
 .picker {
   flex: none;
   display: grid;
