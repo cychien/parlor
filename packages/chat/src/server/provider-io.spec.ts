@@ -92,6 +92,61 @@ describe.each(drivers)(
     );
 
     it(
+      "R5-07: answers a signed answer, and the database still answers after it",
+      { timeout: 20_000 },
+      async () => {
+        app.auth.activeDevices.add("device-1");
+        await within(send("u1"));
+        await within(app.action("alice-host", "hostClaim", {}));
+        await within(
+          app.action("alice-host", "hostAppend", {
+            turnId: "u1",
+            items: [
+              {
+                id: "u1.1",
+                kind: "ask",
+                body: {
+                  question: "Run it?",
+                  choices: [{ id: "yes", label: "Yes", effect: "allow_once" }],
+                  approval: "presence",
+                },
+              },
+            ],
+          }),
+        );
+
+        const answered = await within(
+          app.action("alice", "answer", {
+            threadId: "t1",
+            turnId: "u1",
+            itemId: "a1",
+            answer: {
+              askId: "u1.1",
+              choice: "yes",
+              signed: {
+                deviceId: "device-1",
+                at: 1,
+                signature: {
+                  keyId: "key-1",
+                  presence: "user",
+                  format: "webauthn",
+                  signature: "c2ln",
+                },
+              },
+            },
+          }),
+        );
+
+        expect(answered.status).toBe(200);
+        expect(
+          await within(
+            rows(handle, "select id from parlor_chat_items where kind = 'answer'"),
+          ),
+        ).toEqual([{ id: "a1" }]);
+      },
+    );
+
+    it(
       "puts a turn back in the queue when its token cannot be minted",
       { timeout: 20_000 },
       async () => {

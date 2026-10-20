@@ -187,7 +187,6 @@ export function userChatActions(deps: ChatActionDeps) {
     answer: chatAction("user", enforcing, {
       description: "Answer the agent's permission prompt or question.",
       input: z.object({ threadId, turnId, itemId, answer: chatItemBodies.answer.body }),
-      writes: [CHAT_TAG],
       run: async (input, user, ctx): Promise<{ readonly id: string }> => {
         const { signed } = input.answer;
         if (signed && deps.auth.device) {
@@ -196,12 +195,14 @@ export function userChatActions(deps: ChatActionDeps) {
             throw new ActionError("forbidden", "This device cannot answer.");
           }
         }
-        await deps.store.appendUserItems(dbOf(ctx), user, {
-          threadId: input.threadId,
-          turnId: input.turnId,
-          items: [{ id: input.itemId, kind: "answer", body: input.answer }],
+        return deps.transact(ctx.scope, async (tx) => {
+          await deps.store.appendUserItems(tx, user, {
+            threadId: input.threadId,
+            turnId: input.turnId,
+            items: [{ id: input.itemId, kind: "answer", body: input.answer }],
+          });
+          return { result: { id: input.threadId }, threadId: input.threadId };
         });
-        return { id: input.threadId };
       },
     }),
     cancel: chatAction("user", enforcing, {
@@ -281,13 +282,14 @@ export function hostChatActions(deps: ChatActionDeps) {
       run: async (input, host, ctx): Promise<HostWelcome & { readonly id: string }> => {
         const id = host.host.hostId;
         const protocols = { min: MIN_HOST_PROTOCOL, max: HOST_PROTOCOL };
-        if (input.protocols.max < protocols.min) {
-          return { id, accepted: false, reason: "host_too_old", protocols };
-        }
+        const refuse = async (reason: "host_too_old" | "app_too_old") => {
+          welcomed.delete(id);
+          await deps.store.pruneHosts(dbOf(ctx), host, [id]);
+          return { id, accepted: false as const, reason, protocols };
+        };
+        if (input.protocols.max < protocols.min) return refuse("host_too_old");
         const protocol = Math.min(input.protocols.max, protocols.max);
-        if (protocol < input.protocols.min) {
-          return { id, accepted: false, reason: "app_too_old", protocols };
-        }
+        if (protocol < input.protocols.min) return refuse("app_too_old");
         await deps.store.reportHost(dbOf(ctx), host, host.host, {
           protocol,
           name: input.name,
