@@ -122,6 +122,48 @@ describe("contextFor with a chat turn", () => {
     });
   });
 
+  it("refuses another tab named by the agent without listing the user's tabs", async () => {
+    const { agentUi, requests, navigate, mcp } = twoFocusedTabs();
+    const ctx = await agentUi.contextFor(mcp, { via: "agent" }, undefined, {
+      clientId: "tab-1",
+    });
+    const refusal = await navigate
+      .run({ to: "/settings", clientId: "tab-2" }, ctx)
+      .catch((error: unknown) => error);
+    expect(refusal).toMatchObject({
+      error: {
+        code: "unknown_client",
+        message: "This chat acts on the app client its prompt came from, not on tab-2.",
+      },
+    });
+    expect((refusal as { error: { issues?: unknown } }).error.issues).toBeUndefined();
+    expect(requests).toEqual({ "tab-1": [], "tab-2": [] });
+  });
+
+  it("lets the agent name the tab its prompt came from", async () => {
+    const { agentUi, requests, navigate, mcp } = twoFocusedTabs();
+    const ctx = await agentUi.contextFor(mcp, { via: "agent" }, undefined, {
+      clientId: "tab-1",
+    });
+    void navigate.run({ to: "/settings", clientId: "tab-1" }, ctx).catch(() => {});
+    await vi.waitFor(() => expect(requests["tab-1"]).toHaveLength(1));
+    expect(requests["tab-2"]).toEqual([]);
+    agentUi.close();
+  });
+
+  it("says nothing about the other tabs when the prompt's tab has left", async () => {
+    const { agentUi, navigate, mcp } = twoFocusedTabs();
+    const ctx = await agentUi.contextFor(mcp, { via: "agent" }, undefined, {
+      clientId: "tab-closed",
+    });
+    await expect(navigate.run({ to: "/settings" }, ctx)).rejects.toMatchObject({
+      error: {
+        code: "unknown_client",
+        message: "The app client this chat was sent from is no longer connected.",
+      },
+    });
+  });
+
   it("reports unknown_client when the prompt's tab has left", async () => {
     const { agentUi, navigate, mcp } = twoFocusedTabs();
     const ctx = await agentUi.contextFor(mcp, { via: "agent" }, undefined, {
