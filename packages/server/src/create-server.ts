@@ -33,6 +33,7 @@ import {
   sourceOf,
 } from "./caller.js";
 import { type CorsConfig, corsMiddleware } from "./cors.js";
+import { devAuth } from "./dev-auth.js";
 import { createMcpHandler } from "./mcp.js";
 import { applyMigrations, checkMigrations } from "./migrations.js";
 import type {
@@ -70,6 +71,9 @@ export interface ServerOptions<T extends ActionMap> {
   readonly sync?: SyncOptions | false | undefined;
   readonly agentUi?: AgentUiOptions | false | undefined;
 }
+
+/** A caller the manifest surface does not admit, such as a pairing host, reads only the app. */
+type ManifestReply = Manifest | Pick<Manifest, "protocol" | "app"> | Response;
 
 export interface FrameworkServer {
   readonly installUiManifest?: ((source: UiManifestSource) => void) | undefined;
@@ -172,7 +176,6 @@ export function createServer<T extends ActionMap>(
   const {
     actions,
     scope = defaultScope,
-    auth,
     plugins = [],
     basePath = DEFAULT_BASE_PATH,
     cors = {},
@@ -181,6 +184,7 @@ export function createServer<T extends ActionMap>(
     sync = {},
     agentUi: agentUiOptions = {},
   } = options;
+  const auth = options.auth ?? (process.env.PARLOR_DEV === "1" ? devAuth() : undefined);
   const app = new H3();
   const appName = process.env.PARLOR_APP_NAME || undefined;
   const syncOptions = sync === false ? undefined : sync;
@@ -241,16 +245,20 @@ export function createServer<T extends ActionMap>(
 
   if (cors !== false) app.use(corsMiddleware(cors));
 
-  app.use(`${basePath}/manifest`, refuseUnless(callers, "manifest"));
-
-  app.get(`${basePath}/manifest`, (): Manifest => {
-    const ui = agentUi?.manifest();
-    return {
+  app.get(`${basePath}/manifest`, async (event): Promise<ManifestReply> => {
+    let caller: Caller;
+    try {
+      caller = await callers(event.req);
+    } catch (error) {
+      return errorResponse(error);
+    }
+    const summary: Pick<Manifest, "protocol" | "app"> = {
       protocol: PROTOCOL_VERSION,
       ...(appName ? { app: { name: appName } } : {}),
-      actions: actions.describe(),
-      ...(ui ? { ui } : {}),
     };
+    if (!admits("manifest", caller, callers.enforcing)) return summary;
+    const ui = agentUi?.manifest();
+    return { ...summary, actions: actions.describe(), ...(ui ? { ui } : {}) };
   });
 
   app.post(`${basePath}/actions/:name`, async (event) => {
