@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 export interface HostPaths {
   readonly root: string;
@@ -15,7 +15,19 @@ export interface HostPaths {
   readonly workspaces: string;
 }
 
+/** `workspaces` is `~/Parlor` beside the `~/.parlor/host` root. */
 export function hostPaths(root: string = join(homedir(), ".parlor", "host")): HostPaths {
-  void root;
-  throw new Error("not implemented");
+  const run = join(root, "run");
+  return {
+    root,
+    grants: join(root, "grants.json"),
+    trust: join(root, "trust.json"),
+    sessions: join(root, "sessions.json"),
+    agents: join(root, "agents.json"),
+    control: join(run, "control.sock"),
+    proxy: join(run, "proxy.sock"),
+    versions: join(root, "versions"),
+    current: join(root, "current"),
+    workspaces: join(dirname(dirname(root)), "Parlor"),
+  };
 }

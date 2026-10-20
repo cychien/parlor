@@ -1,5 +1,7 @@
 import { defineCommand, runMain } from "citty";
 
+import { runMcpProxyProcess } from "./mcp-proxy.js";
+
 const notImplemented = (): never => {
   throw new Error("not implemented");
 };
@@ -47,7 +49,7 @@ const dev = defineCommand({
 
 const mcpProxy = defineCommand({
   meta: { name: "mcp-proxy", description: "Internal: an agent's stdio MCP server" },
-  run: notImplemented,
+  run: () => runMcpProxyProcess(process.env),
 });
 
 await runMain(
