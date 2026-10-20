@@ -196,6 +196,87 @@ const TURN_STATE: Partial<Record<TurnState, string>> = {
   failed: "Failed",
 };
 
+type Items = readonly ChatItem<AgentConfirmation>[];
+type PromptItem = Extract<ChatItem<AgentConfirmation>, { kind: "prompt" }>;
+type AskItem = Extract<ChatItem<AgentConfirmation>, { kind: "ask" }>;
+
+function awaitsApproval(items: Items, prompt: PromptItem): boolean {
+  if (prompt.state !== "queued" && prompt.state !== "running") return false;
+  let waiting = false;
+  for (const item of items) {
+    if (item.turnId !== prompt.turnId) continue;
+    if (item.kind === "event" && item.event === "device_pending") waiting = true;
+    else if (item.kind !== "prompt" && item.kind !== "confirm") waiting = false;
+  }
+  return waiting;
+}
+
+function useHostName(hostId: string | undefined): string {
+  const { hosts } = useChat();
+  return hosts.find((host) => host.id === hostId)?.name ?? "your computer";
+}
+
+function PromptMeta({ item }: { readonly item: PromptItem }) {
+  const { items, resend } = useChat();
+  const hostName = useHostName(item.agent.hostId);
+  if (item.failure === "prompt_expired") {
+    return (
+      <>
+        <p className="item-meta">{`Expired before ${hostName} picked it up`}</p>
+        <div className="actions">
+          <button type="button" onClick={() => void resend(item.id)}>
+            Resend
+          </button>
+        </div>
+      </>
+    );
+  }
+  if (awaitsApproval(items, item)) {
+    return (
+      <p className="item-meta">{`Waiting for ${hostName} to approve this device`}</p>
+    );
+  }
+  const text = TURN_STATE[item.state];
+  return text ? <p className="item-meta">{text}</p> : null;
+}
+
+function AskCard({ item }: { readonly item: AskItem }) {
+  const { items } = useChat();
+  const prompt = items.find(
+    (candidate): candidate is PromptItem =>
+      candidate.kind === "prompt" && candidate.turnId === item.turnId,
+  );
+  const hostName = useHostName(prompt?.agent.hostId);
+  return (
+    <Chat.Ask item={item} className="card">
+      <p className="card-what">{item.question}</p>
+      {item.answer.state === "answered" ? (
+        <p className="item-meta">Answered</p>
+      ) : item.answer.state === "closed" ? (
+        <p className="item-meta">No longer needed</p>
+      ) : (
+        <>
+          {item.approval === "computer" ? (
+            <p className="item-meta">{`Approve on ${hostName}`}</p>
+          ) : null}
+          <div className="actions">
+            {item.choices.map((choice) => (
+              <Chat.AskChoice
+                key={choice.id}
+                choice={choice}
+                className={choice.effect.startsWith("allow") ? "primary" : undefined}
+                onClick={focusComposer}
+              >
+                {choice.label}
+              </Chat.AskChoice>
+            ))}
+          </div>
+        </>
+      )}
+    </Chat.Ask>
+  );
+}
+
 const TOOL_STATE = {
   pending: "Waiting",
   running: "Running",
@@ -221,9 +302,7 @@ function Item({ item }: { readonly item: ChatItem<AgentConfirmation> }) {
       return (
         <>
           <p className="prompt">{item.text}</p>
-          {TURN_STATE[item.state] ? (
-            <p className="item-meta">{TURN_STATE[item.state]}</p>
-          ) : null}
+          <PromptMeta item={item} />
         </>
       );
     case "reply":
@@ -254,31 +333,7 @@ function Item({ item }: { readonly item: ChatItem<AgentConfirmation> }) {
         </ul>
       );
     case "ask":
-      return (
-        <Chat.Ask item={item} className="card">
-          <p className="card-what">{item.question}</p>
-          {item.answer.state === "answered" ? (
-            <p className="item-meta">Answered</p>
-          ) : item.answer.state === "closed" ? (
-            <p className="item-meta">No longer needed</p>
-          ) : item.approval === "computer" ? (
-            <p className="item-meta">Answer on your computer.</p>
-          ) : (
-            <div className="actions">
-              {item.choices.map((choice) => (
-                <Chat.AskChoice
-                  key={choice.id}
-                  choice={choice}
-                  className={choice.effect.startsWith("allow") ? "primary" : undefined}
-                  onClick={focusComposer}
-                >
-                  {choice.label}
-                </Chat.AskChoice>
-              ))}
-            </div>
-          )}
-        </Chat.Ask>
-      );
+      return <AskCard item={item} />;
     case "confirm":
       return <ConfirmationCard confirmation={item.confirmation} />;
     case "event":
