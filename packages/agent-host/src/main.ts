@@ -18,7 +18,6 @@ const { version } = createRequire(import.meta.url)("../package.json") as {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Aborts on the first SIGINT or SIGTERM; a second one gets the default handling. */
 function shutdownSignal(): AbortSignal {
   const controller = new AbortController();
   const stop = () => {

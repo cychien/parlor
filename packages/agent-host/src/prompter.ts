@@ -36,7 +36,6 @@ export interface LocalPrompter {
 
 const UNPRINTABLE = /[\p{Cc}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
 
-/** Text from an app or an agent, as the terminal may show it: no control or bidi characters. */
 export const printable = (text: string) => text.replace(UNPRINTABLE, "");
 
 function ask(question: string): Promise<string | undefined> {

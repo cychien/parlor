@@ -43,7 +43,6 @@ export type PairOutcome =
       readonly reason: "declined_locally" | "declined_in_app" | "timeout";
     };
 
-/** A pairing refused here whose revoke failed: `grant` is kept, `declined`, to retry it. */
 export class UnrevokedGrant extends Error {
   override readonly name = "UnrevokedGrant";
   constructor(

@@ -2,6 +2,8 @@ import type { AssertionRequest } from "./assertion.js";
 
 export const REVOKE_PATH = "/_parlor/auth/hosts/revoke";
 
+const alreadyRevoked = (response: Response) => response.status === 401;
+
 export interface RevokeInput {
   readonly appOrigin: string;
   readonly appName: string;
@@ -9,7 +11,6 @@ export interface RevokeInput {
   readonly fetch?: typeof fetch | undefined;
 }
 
-/** Ends the grant on the app's side; a 401 means it already ended. Anything else throws. */
 export async function revokeGrant(input: RevokeInput): Promise<void> {
   const url = `${input.appOrigin}${REVOKE_PATH}`;
   const authorization = `ParlorHost ${await input.assert({ method: "POST", url })}`;
@@ -28,7 +29,7 @@ export async function revokeGrant(input: RevokeInput): Promise<void> {
       },
     );
   }
-  if (!response.ok && response.status !== 401) {
+  if (!response.ok && !alreadyRevoked(response)) {
     throw new Error(
       `${input.appName} did not disconnect this computer: it answered HTTP ${response.status}.`,
     );

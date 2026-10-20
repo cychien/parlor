@@ -388,7 +388,6 @@ const claudeToolName = (mcp: McpToolRef) => ({
   claudeCode: { toolName: `${MCP_PREFIX}${mcp.server}__${mcp.tool}` },
 });
 
-/** A tool call as the session's updates described it so far. */
 interface KnownCall {
   readonly title?: string | undefined;
   readonly mcp?: McpToolRef | undefined;
@@ -400,15 +399,11 @@ function commandIn(rawInput: unknown): string | undefined {
     : undefined;
 }
 
-/**
- * A permission's own title can be generic ("Run command") while the call it is for shows
- * what runs; the question names both unless one already says the other.
- */
-function questionOf(asked: string, shown: string | undefined): string {
-  const detail = shown?.trim() ?? "";
-  if (detail === "" || asked.includes(detail)) return asked;
-  if (asked.trim() === "" || detail.includes(asked)) return detail;
-  return `${asked}: ${detail}`;
+function permissionQuestion(askedTitle: string, callDetail: string | undefined): string {
+  const detail = callDetail?.trim() ?? "";
+  if (detail === "" || askedTitle.includes(detail)) return askedTitle;
+  if (askedTitle.trim() === "" || detail.includes(askedTitle)) return detail;
+  return `${askedTitle}: ${detail}`;
 }
 
 function permissionAskOf(
@@ -421,7 +416,7 @@ function permissionAskOf(
   return {
     kind: "permission",
     toolCallId: call.toolCallId,
-    title: questionOf(
+    title: permissionQuestion(
       mcp ? readableTitle(title, mcp) : title,
       known?.title ?? commandIn(call.rawInput),
     ),
