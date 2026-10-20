@@ -1466,6 +1466,16 @@ function browserRef(state, role, name) {
   return `@${matches[0].match(pattern)[1]}`;
 }
 
+function axiOnElement(state, command, role, name, ...rest) {
+  const attempt = () => axi(state, [command, browserRef(state, role, name), ...rest]);
+  try {
+    return attempt();
+  } catch (error) {
+    if (!String(error.message).includes("STALE_REF")) throw error;
+    return attempt();
+  }
+}
+
 async function signInBrowser(state, name) {
   const user = userOf(name);
   axi(state, ["open", `${urls(state).web}/sign-in`]);
@@ -1491,13 +1501,9 @@ async function cmdBrowser([id, action, ...args]) {
   if (action === "signin") return browserSignIn(state, args[0]);
   if (action === "open")
     return print(axi(state, ["open", `${urls(state).web}${args[0] ?? "/"}`]));
-  if (action === "click")
-    return print(axi(state, ["click", browserRef(state, args[0], args[1])]));
-  if (action === "fill") {
-    return print(
-      axi(state, ["fill", browserRef(state, args[0], args[1]), args[2] ?? ""]),
-    );
-  }
+  if (action === "click") return print(axiOnElement(state, "click", args[0], args[1]));
+  if (action === "fill")
+    return print(axiOnElement(state, "fill", args[0], args[1], args[2] ?? ""));
   if (action === "focus") return setBrowserFocus(state, args[0]);
   if (action === "snapshot") {
     const result = axi(state, ["snapshot", "--full"]);
