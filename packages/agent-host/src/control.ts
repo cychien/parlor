@@ -1,3 +1,6 @@
+import { connect } from "node:net";
+import { createInterface } from "node:readline";
+
 import type { LocalHostStatus } from "@parlor/capabilities";
 
 export const CONTROL_PROTOCOL = 1;
@@ -36,6 +39,35 @@ export interface ControlClient {
 export async function connectControl(
   socketPath: string,
 ): Promise<ControlClient | undefined> {
-  void socketPath;
-  throw new Error("not implemented");
+  const socket = connect(socketPath);
+  const connected = await new Promise<boolean>((resolve) => {
+    socket.once("connect", () => resolve(true));
+    socket.once("error", () => resolve(false));
+  });
+  if (!connected) {
+    socket.destroy();
+    return undefined;
+  }
+  const waiting: ((line: string | undefined) => void)[] = [];
+  createInterface({ input: socket, crlfDelay: Infinity }).on("line", (line) =>
+    waiting.shift()?.(line),
+  );
+  socket.on("close", () => {
+    for (const reply of waiting.splice(0)) reply(undefined);
+  });
+  socket.on("error", () => socket.destroy());
+  return {
+    send: (request) =>
+      new Promise((resolve) => {
+        waiting.push((line) =>
+          resolve(
+            line === undefined
+              ? { ok: false, error: "Parlor Host closed the connection." }
+              : JSON.parse(line),
+          ),
+        );
+        socket.write(`${JSON.stringify(request)}\n`);
+      }),
+    close: () => socket.end(),
+  };
 }
