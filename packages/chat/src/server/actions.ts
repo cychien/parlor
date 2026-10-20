@@ -11,21 +11,20 @@ import { z } from "zod";
 
 import { idSchema } from "../id-schemas.js";
 import { chatItemBodies, hostItemDraft, type LoggedItem } from "../items.js";
-import {
-  type AgentInfo,
-  type ChatOwner,
-  type ChatSnapshot,
-  type ClaimedTurn,
-  type HostSummary,
-  TURN_FAILURES,
-  type TurnSignals,
+import type {
+  AgentInfo,
+  ChatOwner,
+  ChatSnapshot,
+  ClaimedTurn,
+  HostSummary,
+  TurnSignals,
 } from "../model.js";
 import { HOST_PROTOCOL, type HostWelcome } from "../protocol.js";
 import { CHAT_TAG, HOSTS_TAG } from "../tags.js";
 import { turnContext } from "./context.js";
 import type { LiveRelay } from "./live.js";
 import { type ChatHost, chatAction } from "./party.js";
-import { agentInfoSchema } from "./rows.js";
+import { agentInfoSchema, TURN_FAILURES } from "./rows.js";
 import type { ChatDb, ChatStore, StoredHost } from "./store.js";
 
 export { CHAT_TAG, HOSTS_TAG, HOST_GRANTS_TAG };

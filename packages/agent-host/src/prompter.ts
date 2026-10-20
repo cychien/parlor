@@ -162,7 +162,6 @@ function choose(
   );
 }
 
-/** The macOS background daemon: `osascript` dialogs and notifications. */
 export function macDialogPrompter(): LocalPrompter {
   const host = computerName();
   const identity = (account: AccountSummary) => account.email ?? account.name;

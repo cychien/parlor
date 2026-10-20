@@ -18,17 +18,16 @@ import { z } from "zod";
 import { idSchema } from "../id-schemas.js";
 import { chatItemBodies, type ChatItemBody, type ChatItemKind } from "../items.js";
 import type { HostItemDraft, LoggedItem, UserItemKind } from "../items.js";
-import {
-  type AgentInfo,
-  type AgentRef,
-  type ChatOwner,
-  type ClaimedTurn,
-  type HostSummary,
-  type ThreadPage,
-  type ThreadSummary,
-  TURN_FAILURES,
-  type TurnOutcome,
-  type TurnSignals,
+import type {
+  AgentInfo,
+  AgentRef,
+  ChatOwner,
+  ClaimedTurn,
+  HostSummary,
+  ThreadPage,
+  ThreadSummary,
+  TurnOutcome,
+  TurnSignals,
 } from "../model.js";
 import {
   agentInfoSchema,
@@ -36,6 +35,7 @@ import {
   threadRow,
   toLoggedItem,
   toThreadSummary,
+  TURN_FAILURES,
   turnStateSchema,
 } from "./rows.js";
 

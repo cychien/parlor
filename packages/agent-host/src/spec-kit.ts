@@ -226,7 +226,6 @@ export function memoryTrust(): TrustStore & { readonly pins: () => TrustedDevice
 
 const ES256 = { name: "ECDSA", hash: "SHA-256" } as const;
 
-/** A device with plain ES256 keys: what the account would hand the host in `claimed.device`. */
 export class TestDevice {
   private constructor(
     readonly keys: DeviceKeys,

@@ -65,7 +65,6 @@ export class AuthClientError extends Error {
   }
 }
 
-/** This device, enrolled through `enrollDevice` on first use and signing with `deviceKey`. */
 export type DeviceHandle = SessionDevice;
 
 export interface AuthClient extends SessionSource, DeviceSource, HostAuthorizer {

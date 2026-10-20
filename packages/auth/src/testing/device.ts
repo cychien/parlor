@@ -31,7 +31,6 @@ const idOf = async (key: JsonWebKey) =>
     ),
   );
 
-/** A device whose keys are plain ES256 keys, with an `es256-raw` presence key like a native shell's. */
 export class TestDeviceKey implements DeviceKey {
   readonly #signing = generate();
   readonly #presence: Promise<CryptoKeyPair> | undefined;

@@ -19,27 +19,6 @@ function sources(dir: string): string[] {
   });
 }
 
-interface PatchedFile {
-  /** Each run of lines the patch adds; the whole file in one run when the patch creates it. */
-  readonly runs: readonly string[];
-}
-
-function filesOfPatch(patch: string): Map<string, PatchedFile> {
-  const files = new Map<string, PatchedFile>();
-  for (const section of patch.split(/^diff --git /m).slice(1)) {
-    const name = /^a\/(\S+)/.exec(section)?.[1];
-    if (!name) continue;
-    const runs: string[][] = [[]];
-    for (const line of section.split("\n").slice(1)) {
-      if (line.startsWith("+") && !line.startsWith("+++"))
-        runs.at(-1)!.push(line.slice(1));
-      else if (runs.at(-1)!.length > 0) runs.push([]);
-    }
-    files.set(name, { runs: runs.map((run) => run.join("\n")) });
-  }
-  return files;
-}
-
 const OPENING = "([{";
 const CLOSING = ")]}";
 
@@ -134,14 +113,14 @@ function endOfSignature(statement: string): number {
 }
 
 /** Each export's declaration with its body, comments and `export` keyword left out. */
-function signaturesOf(...texts: readonly string[]): Map<string, string> {
+function signaturesOf(text: string): Map<string, string> {
   const signatures = new Map<string, string>();
   const add = (name: string, signature: string) =>
     signatures.set(
       name,
       [signatures.get(name), compact(signature)].filter(Boolean).join("\n"),
     );
-  for (const statement of texts.flatMap(statementsOf)) {
+  for (const statement of statementsOf(text)) {
     if (!statement.startsWith("export")) continue;
     const declaration = statement.replace(/^export\s+(default\s+)?/, "");
     const named = /^(?:async\s+)?(function|interface|type|class|enum)\s+(\w+)/.exec(
@@ -177,11 +156,11 @@ interface Difference {
 
 function differences(
   file: string,
-  skeleton: readonly string[],
+  skeleton: string,
   actual: string,
   only?: readonly string[],
 ): Difference[] {
-  const wanted = signaturesOf(...skeleton);
+  const wanted = signaturesOf(skeleton);
   const found = signaturesOf(actual);
   const names = new Set([...wanted.keys(), ...found.keys()]);
   const out: Difference[] = [];
@@ -216,14 +195,19 @@ describe("the phase 4 skeleton contract", () => {
   }, 60_000);
 });
 
-const PATCH = join(REPOSITORY, "docs", "features", "inline-agent", "skeleton.patch");
+const SKELETON_BRANCH = "inline-agent-skeleton";
+
+const skeleton = (file: string) =>
+  execFileSync("git", ["show", `${SKELETON_BRANCH}:${file}`], {
+    cwd: REPOSITORY,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
 
 const source = (file: string) => readFileSync(join(REPOSITORY, file), "utf8");
 
 function drift(file: string, only?: readonly string[]): Difference[] {
-  const patched = filesOfPatch(readFileSync(PATCH, "utf8")).get(file);
-  if (!patched) throw new Error(`${file} is not in the skeleton patch`);
-  return differences(file, patched.runs, source(file), only);
+  return differences(file, skeleton(file), source(file), only);
 }
 
 const DIFFERENCES: Readonly<
@@ -232,6 +216,10 @@ const DIFFERENCES: Readonly<
   "chat/src/model.ts TurnStatus changed": {
     agreed: true,
     why: "addendum D9: the failure the sidebar shows",
+  },
+  "auth/src/client/index.ts AuthClientOptions changed": {
+    agreed: false,
+    why: "`deviceKey` injects the keys, as `session` injects the session store",
   },
   "capabilities/src/device-key/index.ts CapacitorDeviceKeyModule missing": {
     agreed: false,
@@ -292,7 +280,11 @@ describe("the phase 5 skeleton contract", () => {
     const found = [
       ...drift("packages/auth/src/statements.ts"),
       ...drift("packages/auth/src/devices.ts"),
-      ...drift("packages/auth/src/client/index.ts", ["DeviceHandle"]),
+      ...drift("packages/auth/src/client/index.ts", [
+        "DeviceHandle",
+        "AuthClient",
+        "AuthClientOptions",
+      ]),
       ...drift("packages/capabilities/src/device-key/interface.ts"),
       ...drift("packages/capabilities/src/device-key/index.ts"),
       ...drift("packages/capabilities/src/device-key/web.ts"),
@@ -332,8 +324,7 @@ describe("the phase 5 skeleton contract", () => {
 
   it("K5: device-key.spec-d.ts is the skeleton's, unchanged, and holds under the type checker", () => {
     const file = "packages/capabilities/src/device-key/device-key.spec-d.ts";
-    const patched = filesOfPatch(readFileSync(PATCH, "utf8")).get(file)!;
-    expect(compact(source(file))).toBe(compact(patched.runs.join("\n")));
+    expect(compact(source(file))).toBe(compact(skeleton(file)));
     const capabilities = join(REPOSITORY, "packages", "capabilities");
     expect(() =>
       execFileSync(

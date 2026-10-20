@@ -29,7 +29,6 @@ export function canonicalBytes(value: unknown): Uint8Array {
   return new TextEncoder().encode(serialize(value));
 }
 
-/** The public point of an EC key, without whatever else an export carries. */
 export function publicPoint(key: JsonWebKey): JsonWebKey {
   return { kty: key.kty!, crv: key.crv!, x: key.x!, y: key.y! };
 }

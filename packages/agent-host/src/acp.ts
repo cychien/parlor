@@ -523,7 +523,6 @@ function tapUpdates(
   };
 }
 
-/** Logs every request and notification this host sends the agent, by method. */
 function tapSends(stream: Stream): Stream {
   const writer = stream.writable.getWriter();
   return {

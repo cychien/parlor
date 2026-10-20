@@ -188,7 +188,6 @@ async function presenceOf(
 
 const isoOf = (value: string | Date): string => new Date(value).toISOString();
 
-/** `devices`, `enrollDevice` and `revokeDevice`, merged into the account actions in phase 5. */
 export function deviceAccountActions(deps: DeviceActionDeps) {
   return createRegistry({
     devices: defineAction({

@@ -7,7 +7,6 @@ export interface JsonFile<T extends object> {
   change(edit: (value: T) => void): Promise<void>;
 }
 
-/** A 0600 JSON object at `file`, absent until first written. */
 export function jsonFile<T extends object>(file: string): JsonFile<T> {
   let writing: Promise<unknown> = Promise.resolve();
   const read = async (): Promise<T> => {
