@@ -7,9 +7,14 @@ import { join } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { createMcpProxy, type McpProxy, NO_TURN_MESSAGE } from "./mcp-proxy.js";
+import {
+  createMcpProxy,
+  DISCONNECTED_MESSAGE,
+  type McpProxy,
+  NO_TURN_MESSAGE,
+} from "./mcp-proxy.js";
 
 const BIN = fileURLToPath(new URL("../bin/parlor-host-dev.mjs", import.meta.url));
 
@@ -17,6 +22,8 @@ interface Received {
   readonly headers: IncomingHttpHeaders;
   readonly body: string;
 }
+
+const HELD = "ui_wait_forever";
 
 const APP_ANSWER =
   '{"jsonrpc":"2.0","id":7,"result":{"content":[{"type":"text","text":"navigated"}]}}';
@@ -36,7 +43,11 @@ beforeAll(async () => {
     request.on("data", (chunk: string) => (body += chunk));
     request.on("end", () => {
       received.push({ headers: request.headers, body });
-      const id = (JSON.parse(body) as { id?: number }).id;
+      const { id, params } = JSON.parse(body) as {
+        id?: number;
+        params?: { name?: string };
+      };
+      if (params?.name === HELD) return;
       response.writeHead(200, { "content-type": "application/json" });
       response.end(APP_ANSWER.replace('"id":7', `"id":${id}`));
     });
@@ -50,6 +61,7 @@ beforeAll(async () => {
 afterAll(async () => {
   for (const child of children) child.kill();
   await proxy.close();
+  stub.closeAllConnections();
   await new Promise((resolve) => stub.close(resolve));
   await rm(dir, { recursive: true, force: true });
 });
@@ -69,6 +81,7 @@ function agentSide(env: Readonly<Record<string, string>>) {
     else queue.push(line);
   });
   return {
+    child,
     send: (line: string) => child.stdin.write(`${line}\n`),
     next: () =>
       new Promise<string>((resolve) => {
@@ -79,8 +92,8 @@ function agentSide(env: Readonly<Record<string, string>>) {
   };
 }
 
-const call = (id: number) =>
-  `{"jsonrpc":"2.0","id":${id},"method":"tools/call","params":{"name":"ui_navigate","arguments":{"to":"/settings"}}}`;
+const call = (id: number, name = "ui_navigate") =>
+  `{"jsonrpc":"2.0","id":${id},"method":"tools/call","params":{"name":"${name}","arguments":{"to":"/settings"}}}`;
 
 describe("the MCP proxy", () => {
   it("C3: forwards each call byte for byte with the current turn token and nothing else", async () => {
@@ -138,6 +151,9 @@ describe("the MCP proxy", () => {
   });
 
   it("only lets the owner reach its 0600 socket, and only with a nonce it handed out", async () => {
+    received.length = 0;
+    const session = proxy.open("hello", origin);
+    session.begin({ token: "tokenA", expiresAt: Date.now() + 60_000 });
     expect((await stat(join(dir, "run", "proxy.sock"))).mode & 0o777).toBe(0o600);
     expect((await stat(join(dir, "run"))).mode & 0o777).toBe(0o700);
     const stranger = agentSide({
@@ -145,9 +161,53 @@ describe("the MCP proxy", () => {
       PARLOR_HOST_PROXY_NONCE: "guessed",
     });
     stranger.send(call(3));
+    expect(JSON.parse(await stranger.next())).toMatchObject({
+      id: 3,
+      error: { code: -32001, message: DISCONNECTED_MESSAGE },
+    });
+    expect(received).toEqual([]);
+    stranger.child.stdin.end();
     const closed = await new Promise<number | null>((resolve) =>
-      children.at(-1)!.once("exit", resolve),
+      stranger.child.once("exit", resolve),
     );
     expect(closed).toBe(0);
+
+    const orphan = agentSide({
+      PARLOR_HOST_PROXY_SOCKET: join(dir, "run", "absent.sock"),
+      PARLOR_HOST_PROXY_NONCE: session.nonce,
+    });
+    orphan.send(call(4));
+    expect(JSON.parse(await orphan.next())).toMatchObject({
+      id: 4,
+      error: { code: -32001, message: DISCONNECTED_MESSAGE },
+    });
+    session.dispose();
+  });
+
+  it("answers every call once its session is gone: in flight at that moment, and after it", async () => {
+    const session = proxy.open("hello", origin);
+    const agent = agentSide(session.server.env);
+    session.begin({ token: "tokenA", expiresAt: Date.now() + 60_000 });
+    agent.send(call(1));
+    expect(JSON.parse(await agent.next())).toMatchObject({ id: 1, result: {} });
+
+    agent.send(call(2, HELD));
+    await vi.waitFor(() => expect(received.at(-1)?.body).toBe(call(2, HELD)));
+    session.dispose();
+    expect(JSON.parse(await agent.next())).toEqual({
+      jsonrpc: "2.0",
+      id: 2,
+      error: { code: -32001, message: DISCONNECTED_MESSAGE },
+    });
+
+    const sentAt = Date.now();
+    agent.send(call(3));
+    expect(JSON.parse(await agent.next())).toEqual({
+      jsonrpc: "2.0",
+      id: 3,
+      error: { code: -32001, message: DISCONNECTED_MESSAGE },
+    });
+    expect(Date.now() - sentAt).toBeLessThan(1_000);
+    expect(agent.child.exitCode).toBeNull();
   });
 });

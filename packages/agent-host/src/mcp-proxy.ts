@@ -1,12 +1,13 @@
 import { randomBytes } from "node:crypto";
+import { once } from "node:events";
 import { chmod, mkdir, rm } from "node:fs/promises";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { dirname } from "node:path";
-import { createInterface } from "node:readline";
 
 import type { Delegation } from "@parlor/server";
 
 import type { StdioMcpServer } from "./acp.js";
+import { onLines } from "./lines.js";
 import { logEvent } from "./log.js";
 
 /**
@@ -34,6 +35,9 @@ export interface ProxySession {
 
 export const NO_TURN_MESSAGE =
   "No turn is active: the user has not asked anything right now. Wait for their next message.";
+
+export const DISCONNECTED_MESSAGE =
+  "This computer no longer serves the app: it was disconnected, or Parlor Host stopped.";
 
 const SOCKET_ENV = "PARLOR_HOST_PROXY_SOCKET";
 const NONCE_ENV = "PARLOR_HOST_PROXY_NONCE";
@@ -232,7 +236,7 @@ export function createMcpProxy(hostBinary: string): McpProxy {
     const reply = (line: string) => {
       if (!socket.destroyed) socket.write(`${line}\n`);
     };
-    createInterface({ input: socket, crlfDelay: Infinity }).on("line", (line) => {
+    onLines(socket, (line) => {
       if (live !== undefined) {
         handle(live, line, reply);
         return;
@@ -312,23 +316,49 @@ export function createMcpProxy(hostBinary: string): McpProxy {
   };
 }
 
-/** `parlor-host mcp-proxy`: stdio to the daemon socket and back, nothing else. */
+/**
+ * `parlor-host mcp-proxy`: stdio to the daemon socket and back. Once the daemon hangs up,
+ * every request still unanswered, and every later one, is answered with an error here.
+ */
 export async function runMcpProxyProcess(env: NodeJS.ProcessEnv): Promise<void> {
   const path = env[SOCKET_ENV];
   const nonce = env[NONCE_ENV];
   if (!path || !nonce) throw new Error(`${SOCKET_ENV} and ${NONCE_ENV} must be set.`);
-  const socket = connect(path);
-  await new Promise<void>((resolve, reject) => {
-    socket.once("connect", resolve);
-    socket.once("error", reject);
+  const unanswered = new Set<JsonRpcId>();
+  const toAgent = (line: string) => void process.stdout.write(`${line}\n`);
+  const refuse = (id: JsonRpcId) =>
+    toAgent(failure(id, REFUSED_CODE, DISCONNECTED_MESSAGE));
+  process.stdout.on("error", () => undefined);
+
+  const daemon = connect(path);
+  daemon.on("error", () => daemon.destroy());
+  const hungUp = new Promise<void>((resolve) =>
+    daemon.once("close", () => {
+      for (const id of unanswered) refuse(id);
+      unanswered.clear();
+      resolve();
+    }),
+  );
+  daemon.write(`${nonce}\n`);
+  onLines(daemon, (line) => {
+    const message = parse(line);
+    if (message?.id !== undefined && message.method === undefined) {
+      unanswered.delete(message.id);
+    }
+    toAgent(line);
   });
-  socket.write(`${nonce}\n`);
-  process.stdin.pipe(socket);
-  socket.pipe(process.stdout);
-  await new Promise<void>((resolve) => {
-    socket.once("close", () => resolve());
-    process.stdin.once("end", () => socket.end());
+
+  const agent = onLines(process.stdin, (line) => {
+    const message = parse(line);
+    const id = typeof message?.method === "string" ? message.id : undefined;
+    if (!daemon.destroyed) {
+      if (id !== undefined) unanswered.add(id);
+      daemon.write(`${line}\n`);
+    } else if (id !== undefined) {
+      refuse(id);
+    }
   });
-  process.stdin.unpipe(socket);
-  process.stdin.destroy();
+  await once(agent, "close");
+  daemon.end();
+  await hungUp;
 }

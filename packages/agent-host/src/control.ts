@@ -1,7 +1,8 @@
 import { connect } from "node:net";
-import { createInterface } from "node:readline";
 
 import type { LocalHostStatus } from "@parlor/capabilities";
+
+import { onLines } from "./lines.js";
 
 export const CONTROL_PROTOCOL = 1;
 
@@ -49,9 +50,7 @@ export async function connectControl(
     return undefined;
   }
   const waiting: ((line: string | undefined) => void)[] = [];
-  createInterface({ input: socket, crlfDelay: Infinity }).on("line", (line) =>
-    waiting.shift()?.(line),
-  );
+  onLines(socket, (line) => waiting.shift()?.(line));
   socket.on("close", () => {
     for (const reply of waiting.splice(0)) reply(undefined);
   });

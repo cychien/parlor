@@ -377,3 +377,64 @@ describe("an app the host cannot speak to", () => {
     }
   }, 30_000);
 });
+
+describe("disconnecting through the daemon", () => {
+  it("T4-12: a revoke the app refuses keeps the link, the grant and the key", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pk-"));
+    let revokeStatus = 500;
+    const routes = hostRoutes({ wake: false });
+    const app = await stubApp((request, body, response) =>
+      request.url === "/_parlor/auth/hosts/revoke"
+        ? (json(response, {}, revokeStatus), true)
+        : routes(request, body, response),
+    );
+    const keys = memoryHostKeys();
+    await (await keys.create(app.origin)).keep(asId("grant", "host:Hello"));
+    const paths = hostPaths(join(root, ".parlor", "host"));
+    const grants = fileGrantStore(paths.grants);
+    await grants.save(grantFor(app.origin, "Hello", join(root, "Parlor", "hello")));
+    const host = createHostDaemon({
+      release: {
+        version: "0.0.0",
+        protocols: { min: 1, max: HOST_PROTOCOL },
+        control: 1,
+      },
+      paths,
+      grants,
+      keys,
+      pool: createSessionPool(paths.sessions),
+      proxy: createMcpProxy("parlor-host"),
+      launcher: acpLauncher(),
+      prompter: {
+        confirmPairing: async () => false,
+        approveDevice: async () => false,
+        answerHere: async () => undefined,
+        turnStarted: () => undefined,
+      },
+      policy: DEV_POLICY,
+    });
+    try {
+      await host.start();
+      await host.connect(app.origin);
+      await expect(host.disconnect(app.origin)).rejects.toThrow(
+        "Hello did not disconnect this computer: it answered HTTP 500.",
+      );
+      expect((await grants.list()).map((grant) => grant.appOrigin)).toEqual([app.origin]);
+      expect(keys.origins()).toEqual([app.origin]);
+      const reports = app.seen.filter((seen) => seen.path.endsWith("/hostReport")).length;
+      await host.connect(app.origin);
+      expect(app.seen.filter((seen) => seen.path.endsWith("/hostReport")).length).toBe(
+        reports + 1,
+      );
+
+      revokeStatus = 200;
+      await host.disconnect(app.origin);
+      expect(await grants.list()).toEqual([]);
+      expect(keys.origins()).toEqual([]);
+    } finally {
+      await host.stop();
+      await app.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+});

@@ -1,7 +1,6 @@
 import { chmod, mkdir, readlink, realpath, rm, symlink } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import { basename, delimiter, join } from "node:path";
-import { createInterface } from "node:readline";
 
 import type { LocalHostStatus } from "@parlor/capabilities";
 import {
@@ -17,6 +16,7 @@ import { type AgentProfile, detectAgents, loadProfiles } from "./agents.js";
 import { connectControl, type ControlRequest } from "./control.js";
 import { requestDevHostToken } from "./dev-host.js";
 import { type AppGrant, devHostKeys, type GrantStore, type HostKeys } from "./grants.js";
+import { onLines } from "./lines.js";
 import { type AppLink, createAppLink } from "./link.js";
 import { logEvent, openHostLog } from "./log.js";
 import type { McpProxy } from "./mcp-proxy.js";
@@ -25,6 +25,7 @@ import type { HostPaths } from "./paths.js";
 import type { RemotePolicy } from "./policy.js";
 import type { SessionPool } from "./pool.js";
 import type { LocalPrompter } from "./prompter.js";
+import { revokeGrant } from "./revoke.js";
 import type { HostRelease } from "./service.js";
 import { runTurn } from "./turn.js";
 
@@ -150,14 +151,10 @@ export function createHostDaemon(deps: DaemonDeps): HostDaemon {
     }
   };
 
-  const closeLink = async (
-    origin: string,
-    reason: string,
-    options: { readonly revoke?: boolean } = {},
-  ) => {
+  const closeLink = async (origin: string, reason: string) => {
     const state = links.get(origin);
     links.delete(origin);
-    await state?.link.stop(options);
+    await state?.link.stop();
     await deps.pool.drop(origin);
     if (state) logEvent("link_closed", { appOrigin: origin, reason });
   };
@@ -276,6 +273,7 @@ export function createHostDaemon(deps: DaemonDeps): HostDaemon {
         agents: agents.map((a) => a.id),
       });
       for (const grant of await deps.grants.list()) {
+        if (grant.declined) continue;
         void report(open(grant, deps.keys)).catch((error: unknown) =>
           logEvent("link_failed", { appOrigin: grant.appOrigin, error: String(error) }),
         );
@@ -283,7 +281,9 @@ export function createHostDaemon(deps: DaemonDeps): HostDaemon {
     },
     async connect(appOrigin) {
       const grant = await deps.grants.get(appOrigin);
-      if (!grant) throw new Error(`This computer is not connected to ${appOrigin}.`);
+      if (!grant || grant.declined) {
+        throw new Error(`This computer is not connected to ${appOrigin}.`);
+      }
       const current = links.get(appOrigin);
       if (current?.link.grant.grantId === grant.grantId) {
         await report(current);
@@ -293,7 +293,19 @@ export function createHostDaemon(deps: DaemonDeps): HostDaemon {
       await report(open(grant, deps.keys));
     },
     async disconnect(appOrigin) {
-      await closeLink(appOrigin, "disconnected", { revoke: true });
+      const state = links.get(appOrigin);
+      const grant = state?.link.grant ?? (await deps.grants.get(appOrigin));
+      if (!grant) throw new Error(`This computer is not connected to ${appOrigin}.`);
+      if (state) {
+        await state.link.stop({ revoke: true });
+      } else {
+        await revokeGrant({
+          appOrigin,
+          appName: grant.appName,
+          assert: (request) => deps.keys.assert(appOrigin, request),
+        });
+      }
+      await closeLink(appOrigin, "disconnected");
       await forget(appOrigin);
     },
     async stop() {
@@ -339,7 +351,7 @@ export function createHostDaemon(deps: DaemonDeps): HostDaemon {
     clients.add(socket);
     socket.on("close", () => clients.delete(socket));
     socket.on("error", () => socket.destroy());
-    createInterface({ input: socket, crlfDelay: Infinity }).on("line", (line) => {
+    onLines(socket, (line) => {
       let request: ControlRequest;
       try {
         request = JSON.parse(line) as ControlRequest;

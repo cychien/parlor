@@ -9,6 +9,7 @@ import { hostAssertion } from "./assertion.js";
 import type { AppGrant, HostKeyPair, HostKeys } from "./grants.js";
 import { workspaceOf } from "./naming.js";
 import type { LocalPrompter } from "./prompter.js";
+import { revokeGrant } from "./revoke.js";
 
 export const PAIRING_TIMEOUT_MS = 10 * 60_000;
 
@@ -41,6 +42,17 @@ export type PairOutcome =
       readonly paired: false;
       readonly reason: "declined_locally" | "declined_in_app" | "timeout";
     };
+
+/** A pairing refused here whose revoke failed: `grant` is kept, `declined`, to retry it. */
+export class UnrevokedGrant extends Error {
+  override readonly name = "UnrevokedGrant";
+  constructor(
+    readonly grant: AppGrant,
+    cause: Error,
+  ) {
+    super(cause.message, { cause });
+  }
+}
 
 const MATCHING_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -127,23 +139,6 @@ async function exchange(
   return body;
 }
 
-async function revoke(origin: string, key: HostKeyPair, grantId: string): Promise<void> {
-  const url = `${origin}/_parlor/auth/hosts/revoke`;
-  const assertion = await hostAssertion(
-    (payload) => key.sign(payload),
-    { kid: key.thumbprint, grantId },
-    { method: "POST", url },
-  );
-  await fetch(url, {
-    method: "POST",
-    headers: {
-      authorization: `ParlorHost ${assertion}`,
-      "content-type": "application/json",
-    },
-    body: "{}",
-  });
-}
-
 function timeout(ms: number): {
   readonly expired: Promise<"timeout">;
   readonly clear: () => void;
@@ -197,6 +192,15 @@ export async function pair(input: PairInput): Promise<PairOutcome> {
     if (!("code" in callback)) return { paired: false, reason: "declined_in_app" };
 
     const granted = await exchange(origin, key, callback.code, codeVerifier);
+    const grant: AppGrant = {
+      appOrigin: origin,
+      appName,
+      grantId: granted.grant.id,
+      hostId: granted.grant.hostId,
+      account: granted.account,
+      workspace: workspaceOf(input.workspaceRoot, origin),
+      createdAt: Date.now(),
+    };
     const confirmed = await Promise.race([
       input.prompter.confirmPairing({
         appName,
@@ -207,26 +211,26 @@ export async function pair(input: PairInput): Promise<PairOutcome> {
       deadline.expired,
     ]);
     if (confirmed !== true) {
-      await revoke(origin, key, granted.grant.id);
+      await revokeGrant({
+        appOrigin: origin,
+        appName,
+        assert: (request) =>
+          hostAssertion(
+            (payload) => key.sign(payload),
+            { kid: key.thumbprint, grantId: grant.grantId },
+            request,
+          ),
+      }).catch(async (error: Error) => {
+        await key.keep(grant.grantId);
+        throw new UnrevokedGrant({ ...grant, declined: true }, error);
+      });
       return {
         paired: false,
         reason: confirmed === "timeout" ? "timeout" : "declined_locally",
       };
     }
-    await key.keep(granted.grant.id);
-    return {
-      paired: true,
-      grant: {
-        appOrigin: origin,
-        appName,
-        grantId: granted.grant.id,
-        hostId: granted.grant.hostId,
-        account: granted.account,
-        workspace: workspaceOf(input.workspaceRoot, origin),
-        createdAt: Date.now(),
-      },
-      approvedBy: granted.approvedBy,
-    };
+    await key.keep(grant.grantId);
+    return { paired: true, grant, approvedBy: granted.approvedBy };
   } finally {
     deadline.clear();
   }

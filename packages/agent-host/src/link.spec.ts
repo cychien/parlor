@@ -206,7 +206,9 @@ describe("an app link", () => {
     const app = stubApp((seen) =>
       seen.path.endsWith("/hostHello")
         ? data(welcome)
-        : new Response(null, { status: 503 }),
+        : seen.path === "/_parlor/auth/hosts/revoke"
+          ? Response.json({})
+          : new Response(null, { status: 503 }),
     );
     const link = createAppLink(grant, deps(app.fetch));
     link.start();

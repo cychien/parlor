@@ -1,3 +1,5 @@
+import { setTimeout as sleep } from "node:timers/promises";
+
 import { DEV_AUTH_PLUGIN, DEV_HOST_PATH } from "@parlor/server";
 
 const RETRY_MS = 250;
@@ -6,8 +8,6 @@ const RETRY_MAX_MS = 2_000;
 export class NoDevAuth extends Error {
   override readonly name = "NoDevAuth";
 }
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function requestDevHostToken(
   serverOrigin: string,
@@ -28,6 +28,6 @@ export async function requestDevHostToken(
     if (response && response.status !== 502 && response.status !== 503) {
       throw new Error(`${url} answered HTTP ${response.status}.`);
     }
-    await sleep(Math.min(RETRY_MS * 2 ** attempt, RETRY_MAX_MS));
+    await sleep(Math.min(RETRY_MS * 2 ** attempt, RETRY_MAX_MS), undefined, { signal });
   }
 }

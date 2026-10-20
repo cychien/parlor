@@ -21,6 +21,8 @@ export interface AppGrant {
   readonly createdAt: number;
   /** A `parlor dev` grant: in memory only. */
   readonly dev?: true | undefined;
+  /** Refused here but not yet revoked by the app: kept only to retry the revoke, never served. */
+  readonly declined?: true | undefined;
 }
 
 /** One key per app grant in the OS keychain; the server holds only its public half. */

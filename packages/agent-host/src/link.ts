@@ -16,6 +16,7 @@ import { createSyncClient, type SyncClient } from "@parlor/sync/client";
 
 import type { AppGrant, HostKeys } from "./grants.js";
 import { logEvent } from "./log.js";
+import { revokeGrant } from "./revoke.js";
 
 export const RECONNECT_MAX_MS = 4_000;
 export const ACTIVE_POLL_MS = 2_000;
@@ -52,6 +53,7 @@ export interface AppLink {
   /** Set once `hostHello` was welcomed; every other call waits for it. */
   readonly protocol: number | undefined;
   start(): void;
+  /** With `revoke`, a refused revoke throws and leaves the link running. */
   stop(options?: { readonly revoke?: boolean | undefined }): Promise<void>;
 }
 
@@ -281,14 +283,15 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
       });
     },
     async stop(options = {}) {
-      running = false;
-      if (options.revoke && !down) {
-        await signedFetch(`${origin}/_parlor/auth/hosts/revoke`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: "{}",
-        }).catch(() => undefined);
+      if (options.revoke && !down && !grant.dev) {
+        await revokeGrant({
+          appOrigin: origin,
+          appName: grant.appName,
+          assert: (request) => deps.keys.assert(origin, request),
+          fetch: deps.fetch,
+        });
       }
+      running = false;
       close();
     },
   };

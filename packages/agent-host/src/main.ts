@@ -17,12 +17,27 @@ const { version } = createRequire(import.meta.url)("../package.json") as {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function untilSignal(): Promise<void> {
-  return new Promise((resolve) => {
-    process.once("SIGINT", () => resolve());
-    process.once("SIGTERM", () => resolve());
-  });
+/** Aborts on the first SIGINT or SIGTERM; a second one gets the default handling. */
+function shutdownSignal(): AbortSignal {
+  const controller = new AbortController();
+  const stop = () => {
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+    controller.abort();
+  };
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+  return controller.signal;
 }
+
+const untilAborted = (signal: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    if (signal.aborted) resolve();
+    else signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+
+const errorText = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
 
 function fail(message: string): void {
   process.stderr.write(`${message}\n`);
@@ -41,6 +56,7 @@ async function host() {
     { DEV_POLICY },
     { createSessionPool },
     { terminalPrompter },
+    { revokeGrant },
   ] = await Promise.all([
     import("./acp.js"),
     import("@parlor/chat"),
@@ -52,6 +68,7 @@ async function host() {
     import("./policy.js"),
     import("./pool.js"),
     import("./prompter.js"),
+    import("./revoke.js"),
   ]);
   const POLICY_UNTIL_DEVICE_TRUST = DEV_POLICY;
   type Paths = ReturnType<typeof hostPaths>;
@@ -94,9 +111,31 @@ async function host() {
       `Parlor Host did not start; see ${join(paths.root, "logs", "daemon.out")}.`,
     );
   };
+  const disconnectFrom = async (origin: string) => {
+    const paths = hostPaths();
+    const client = await connectControl(paths.control);
+    if (client) {
+      const reply = await client.send({ op: "disconnect", appOrigin: origin });
+      client.close();
+      if (!reply.ok) throw new Error(reply.error);
+      return;
+    }
+    const grants = fileGrantStore(paths.grants);
+    const grant = await grants.get(origin);
+    if (!grant) throw new Error(`This computer is not connected to ${origin}.`);
+    const keys = keychainHostKeys(KEYCHAIN_SERVICE);
+    await revokeGrant({
+      appOrigin: origin,
+      appName: grant.appName,
+      assert: (request) => keys.assert(origin, request),
+    });
+    await grants.remove(origin);
+    await keys.remove(origin);
+  };
   return {
     connectControl,
     daemonFor,
+    disconnectFrom,
     ensureDaemon,
     fileGrantStore,
     hostPaths,
@@ -109,35 +148,49 @@ const connect = defineCommand({
   meta: { name: "connect", description: "Connect this computer to a Parlor app" },
   args: { url: { type: "positional", required: true, description: "The app's URL" } },
   async run({ args }) {
-    const [kit, { pair }, { computerName, platformName }] = await Promise.all([
-      host(),
-      import("./pairing.js"),
-      import("./naming.js"),
-    ]);
+    const [kit, { pair, UnrevokedGrant }, { computerName, platformName }] =
+      await Promise.all([host(), import("./pairing.js"), import("./naming.js")]);
     const origin = new URL(args.url).origin;
     const paths = kit.hostPaths();
     const grants = kit.fileGrantStore(paths.grants);
     let grant = await grants.get(origin);
+    if (grant?.declined) {
+      try {
+        await kit.disconnectFrom(origin);
+      } catch (error) {
+        fail(errorText(error));
+        return;
+      }
+      grant = undefined;
+    }
     if (!grant) {
-      const outcome = await pair({
-        appOrigin: origin,
-        hostName: computerName(),
-        platform: platformName(),
-        keys: kit.keychainHostKeys(KEYCHAIN_SERVICE),
-        prompter: kit.terminalPrompter(),
-        workspaceRoot: paths.workspaces,
-        channel: {
-          kind: "browser",
-          open: async (url) => {
-            process.stdout.write(
-              `Open this page in your browser to connect this computer:\n${url}\n`,
-            );
-            spawn("open", [url], { stdio: "ignore", detached: true })
-              .on("error", () => undefined)
-              .unref();
+      let outcome: Awaited<ReturnType<typeof pair>>;
+      try {
+        outcome = await pair({
+          appOrigin: origin,
+          hostName: computerName(),
+          platform: platformName(),
+          keys: kit.keychainHostKeys(KEYCHAIN_SERVICE),
+          prompter: kit.terminalPrompter(),
+          workspaceRoot: paths.workspaces,
+          channel: {
+            kind: "browser",
+            open: async (url) => {
+              process.stdout.write(
+                `Open this page in your browser to connect this computer:\n${url}\n`,
+              );
+              spawn("open", [url], { stdio: "ignore", detached: true })
+                .on("error", () => undefined)
+                .unref();
+            },
           },
-        },
-      });
+        });
+      } catch (error) {
+        if (!(error instanceof UnrevokedGrant)) throw error;
+        await grants.save(error.grant);
+        fail(`${error.message} Run \`parlor-host disconnect ${origin}\` to try again.`);
+        return;
+      }
       if (!outcome.paired) {
         const why = {
           declined_locally: "You did not confirm the connection here.",
@@ -168,32 +221,9 @@ const disconnect = defineCommand({
   args: { url: { type: "positional", required: true, description: "The app's URL" } },
   async run({ args }) {
     const kit = await host();
-    const origin = new URL(args.url).origin;
-    const paths = kit.hostPaths();
-    const client = await kit.connectControl(paths.control);
-    if (client) {
-      const reply = await client.send({ op: "disconnect", appOrigin: origin });
-      client.close();
-      if (!reply.ok) fail(reply.error);
-      return;
-    }
-    const grants = kit.fileGrantStore(paths.grants);
-    if (!(await grants.get(origin))) {
-      fail(`This computer is not connected to ${origin}.`);
-      return;
-    }
-    const keys = kit.keychainHostKeys(KEYCHAIN_SERVICE);
-    const url = `${origin}/_parlor/auth/hosts/revoke`;
-    await fetch(url, {
-      method: "POST",
-      headers: {
-        authorization: `ParlorHost ${await keys.assert(origin, { method: "POST", url })}`,
-        "content-type": "application/json",
-      },
-      body: "{}",
-    }).catch(() => undefined);
-    await grants.remove(origin);
-    await keys.remove(origin);
+    await kit
+      .disconnectFrom(new URL(args.url).origin)
+      .catch((error: unknown) => fail(errorText(error)));
   },
 });
 
@@ -227,9 +257,10 @@ const daemon = defineCommand({
   async run() {
     const kit = await host();
     const paths = kit.hostPaths();
+    const shutdown = shutdownSignal();
     const running = kit.daemonFor(paths, kit.fileGrantStore(paths.grants));
     await running.start();
-    await untilSignal();
+    await untilAborted(shutdown);
     await running.stop();
     process.exit(0);
   },
@@ -246,11 +277,13 @@ const dev = defineCommand({
       import("./dev-host.js"),
     ]);
     const origin = new URL(args.app).origin;
-    const stopped = untilSignal();
+    const shutdown = shutdownSignal();
+    const stopped = untilAborted(shutdown);
     let hostToken: string;
     try {
-      hostToken = await requestDevHostToken(origin);
+      hostToken = await requestDevHostToken(origin, shutdown);
     } catch (error) {
+      if (shutdown.aborted) process.exit();
       if (!(error instanceof NoDevAuth)) throw error;
       process.stdout.write(
         "Parlor Host: this app signs people in itself; connect this computer from its sidebar.\n",
