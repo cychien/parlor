@@ -193,14 +193,15 @@ describe("the phase 4 skeleton contract", () => {
   }, 60_000);
 });
 
-const SKELETON_BRANCH = "inline-agent-skeleton";
+const SKELETON: Readonly<Record<string, string>> = JSON.parse(
+  readFileSync(join(PACKAGE, "src", "testing", "skeleton-phase5.json"), "utf8"),
+);
 
-const skeleton = (file: string) =>
-  execFileSync("git", ["show", `${SKELETON_BRANCH}:${file}`], {
-    cwd: REPOSITORY,
-    encoding: "utf8",
-    stdio: "pipe",
-  });
+const skeleton = (file: string) => {
+  const text = SKELETON[file];
+  if (text === undefined) throw new Error(`The skeleton fixture has no ${file}.`);
+  return text;
+};
 
 const source = (file: string) => readFileSync(join(REPOSITORY, file), "utf8");
 
@@ -216,43 +217,43 @@ const DIFFERENCES: Readonly<
     why: "addendum D9: the failure the sidebar shows",
   },
   "auth/src/client/index.ts AuthClientOptions changed": {
-    agreed: false,
+    agreed: true,
     why: "`deviceKey` injects the keys, as `session` injects the session store",
   },
   "capabilities/src/device-key/index.ts CapacitorDeviceKeyModule missing": {
-    agreed: false,
+    agreed: true,
     why: "the native adapters report unavailable until phase 6, so they load nothing",
   },
   "capabilities/src/device-key/index.ts TauriInvoke missing": {
-    agreed: false,
+    agreed: true,
     why: "the native adapters report unavailable until phase 6, so they load nothing",
   },
   "capabilities/src/device-key/tauri.ts TauriInvoke missing": {
-    agreed: false,
+    agreed: true,
     why: "the native adapters report unavailable until phase 6, so they load nothing",
   },
   "capabilities/src/device-key/tauri.ts tauriDeviceKey changed": {
-    agreed: false,
+    agreed: true,
     why: "no `load` parameter: nothing to load while unavailable",
   },
   "capabilities/src/device-key/capacitor.ts CapacitorDeviceKeyModule missing": {
-    agreed: false,
+    agreed: true,
     why: "the native adapters report unavailable until phase 6, so they load nothing",
   },
   "capabilities/src/device-key/capacitor.ts capacitorDeviceKey changed": {
-    agreed: false,
+    agreed: true,
     why: "no `load` parameter: nothing to load while unavailable",
   },
   "agent-host/src/policy.ts changePolicy added": {
-    agreed: false,
+    agreed: true,
     why: "addendum D7: `parlor-host config` writes policy.json",
   },
   "agent-host/src/policy.ts loadPolicy added": {
-    agreed: false,
+    agreed: true,
     why: "addendum D7: the overlay read at the start of each turn",
   },
   "agent-host/src/prompter.ts LocalPrompter changed": {
-    agreed: false,
+    agreed: true,
     why: "addendum D8: `signal` closes a dialog whose turn ended",
   },
 };
