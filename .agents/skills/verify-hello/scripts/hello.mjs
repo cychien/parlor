@@ -806,7 +806,22 @@ function browserPorts(state, browsers) {
     : main;
 }
 
-function instanceSurvivors(state, { browsers = "main" } = {}) {
+const AGENT_HOMES_DIR = join(HOME, "h");
+
+/** A real `parlor-host` an isolated HOME runs from the snapshot, with its agents and their children. */
+function hostProcesses(candidates, table) {
+  const parents = new Map(table.map((p) => [p.pid, p.ppid]));
+  const roots = new Set(candidates.filter((p) => isUnder(p.cwd, AGENT_HOMES_DIR)).map((p) => p.pid));
+  const fromHost = (pid) => {
+    for (let at = pid, hops = 0; at > 1 && hops < 64; at = parents.get(at), hops += 1) {
+      if (roots.has(at)) return true;
+    }
+    return false;
+  };
+  return new Set(candidates.filter((p) => fromHost(p.pid)).map((p) => p.pid));
+}
+
+function instanceSurvivors(state, { browsers = "main", hosts = "kill" } = {}) {
   const table = processTable();
   const found = new Map();
   const add = (p, reason) => {
@@ -815,8 +830,9 @@ function instanceSurvivors(state, { browsers = "main" } = {}) {
     found.set(p.pid, entry);
   };
   for (const p of ownedProcesses(state, table)) add(p, "instance process");
-  for (const p of processesUnder(instanceDir(state.id), table))
-    add(p, "cwd or command under the instance dir");
+  const under = processesUnder(instanceDir(state.id), table);
+  const kept = hosts === "keep" ? hostProcesses(under, table) : new Set();
+  for (const p of under) if (!kept.has(p.pid)) add(p, "cwd or command under the instance dir");
   const ports = [...Object.values(state.ports), ...browserPorts(state, browsers)].filter(
     Boolean,
   );
@@ -1829,10 +1845,14 @@ async function cmdToken(args) {
 async function cmdSeed([id, name]) {
   const state = readState(id);
   fixturePath(name);
-  await withStopped(state, async () => {
-    const summary = await loadDataset(state, name);
-    process.stdout.write(`${JSON.stringify({ dataset: name, ...summary })}\n`);
-  });
+  await withStopped(
+    state,
+    async () => {
+      const summary = await loadDataset(state, name);
+      process.stdout.write(`${JSON.stringify({ dataset: name, ...summary })}\n`);
+    },
+    { hosts: "keep" },
+  );
 }
 
 async function cmdSql(args) {
@@ -1858,7 +1878,7 @@ async function cmdSql(args) {
         : result.rows;
       process.stdout.write(`${JSON.stringify(out, null, 2)}\n`);
     },
-    { browsers: "none" },
+    { browsers: "none", hosts: "keep" },
   );
 }
 
