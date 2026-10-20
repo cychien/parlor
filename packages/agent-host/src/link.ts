@@ -5,7 +5,7 @@ import {
   type HostStreamBatch,
   type HostWelcome,
 } from "@parlor/chat";
-import type { ChatHostActionMap } from "@parlor/chat/server";
+import { type ChatHostActionMap, MAX_STREAM_BODY_BYTES } from "@parlor/chat/server";
 import {
   createActionClient,
   createPluginClient,
@@ -58,8 +58,7 @@ export interface AppLink {
 type Accepted = Extract<HostWelcome, { readonly accepted: true }>;
 
 const RETRY_BASE_MS = 250;
-/** Under the server's 64 KB stream body limit with room for the envelope. */
-const MAX_BATCH_BYTES = 48 * 1024;
+const MAX_BATCH_BYTES = (MAX_STREAM_BODY_BYTES * 3) / 4;
 
 class LinkDown extends Error {
   override readonly name = "LinkDown";
@@ -70,7 +69,6 @@ interface TurnStream {
   posting: Promise<void> | undefined;
 }
 
-/** Adjacent deltas of one item merge into one, so a busy stream posts fewer, larger frames. */
 function coalesce(frames: readonly HostFrame[]): HostFrame[] {
   const merged: HostFrame[] = [];
   for (const frame of frames) {

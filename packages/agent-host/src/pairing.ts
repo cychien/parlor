@@ -70,7 +70,6 @@ async function appNameOf(origin: string): Promise<string> {
 
 type Callback = { readonly code: string } | { readonly declined: true };
 
-/** A loopback listener for this attempt's `state` only; it answers once and closes. */
 async function loopback(state: string): Promise<{
   readonly redirectUri: string;
   readonly callback: Promise<Callback>;

@@ -10,7 +10,6 @@ export interface AssertionRequest {
   readonly url: string;
 }
 
-/** A `ParlorHost` assertion: ES256 by the grant's key, bound to one method and URL, dead in a minute. */
 export async function hostAssertion(
   sign: (payload: Uint8Array) => Promise<string>,
   key: { readonly kid: string; readonly grantId: string },

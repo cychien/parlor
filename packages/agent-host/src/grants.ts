@@ -105,7 +105,6 @@ interface LoadedKey {
   readonly grantId: string;
 }
 
-/** Where a grant's private key rests between runs. */
 interface SecretStore {
   read(account: string): Promise<string | undefined>;
   write(account: string, secret: string): Promise<void>;

@@ -95,7 +95,6 @@ function stepsFor(script: FakeAgentScript, text: string): readonly FakeStep[] {
   ];
 }
 
-/** A minimal MCP client over the stdio server the host gave the session. */
 class McpStdioClient {
   readonly #child: ChildProcessWithoutNullStreams;
   readonly #pending = new Map<number, (message: Record<string, unknown>) => void>();

@@ -44,7 +44,6 @@ const entriesOf = (
 
 const unchanged = (fold: TurnFold): FoldStep => ({ fold, frames: [], closed: [] });
 
-/** A turn has one plan, revised in place: its item is always number 0. */
 const planItemOf = (fold: TurnFold) => itemId(`${fold.turnId}.0`);
 
 function allocate(fold: TurnFold): { readonly id: string; readonly fold: TurnFold } {

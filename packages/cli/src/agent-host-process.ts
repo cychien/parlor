@@ -16,7 +16,6 @@ export interface DevAgentHostOptions {
   readonly serverHasAuth: boolean;
 }
 
-/** The `parlor-host` entry of the installed `@parlor/agent-host`. */
 function agentHostBin(): string {
   return join(
     dirname(require.resolve("@parlor/agent-host")),
@@ -29,8 +28,7 @@ function agentHostBin(): string {
 /**
  * `parlor dev` runs `parlor-host dev --app http://localhost:<port>` next to the server, so
  * the chat works against the developer's own agents with no pairing. Orchestration only;
- * `undefined` when skipped. The host waits for the server, and leaves quietly when the
- * app turns out to sign people in itself.
+ * `undefined` when skipped.
  */
 export function startDevAgentHost(
   { config, rootDir }: LoadedConfig,

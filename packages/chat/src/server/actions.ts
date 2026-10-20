@@ -32,7 +32,6 @@ export { CHAT_TAG, HOSTS_TAG, HOST_GRANTS_TAG };
 
 export interface Written<T> {
   readonly result: T;
-  /** The thread whose sync event commits with the work; none for a write nobody reads. */
   readonly threadId: ThreadId | undefined;
 }
 
@@ -245,7 +244,6 @@ export function hostChatActions(deps: ChatActionDeps) {
   const learnAgents = (hostId: HostId, agents: readonly AgentInfo[]) => {
     agentNames.set(hostId, new Map(agents.map((agent) => [agent.id, agent.name])));
   };
-  /** What the turn token calls the agent: the name its computer reported for the profile. */
   const agentNameOf = async (host: ChatHost, db: ChatDb, agentId: string) => {
     if (!agentNames.has(host.host.hostId)) {
       const known = (await deps.store.listHosts(db, host)).find(

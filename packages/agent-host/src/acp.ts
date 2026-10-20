@@ -211,8 +211,7 @@ const MAX_DETAIL_CHARS = 4_000;
 const AUTH_REQUIRED = -32000;
 const MCP_PREFIX = "mcp__";
 
-/** Modes where the agent asks the user before it acts, most preferred first. */
-const ASK_MODES = ["default", "workspace-write", "read-only"];
+const ASK_MODES_BY_PREFERENCE = ["default", "workspace-write", "read-only"];
 
 type Fields = Readonly<Record<string, unknown>>;
 
@@ -266,7 +265,6 @@ function mcpRefOf(call: ToolCall | ToolCallUpdate): McpToolRef | undefined {
   return undefined;
 }
 
-/** An MCP tool's title by its own name, not the agent's `mcp__hello__createTask` key. */
 function readableTitle(title: string, mcp: McpToolRef): string {
   const keys = [
     `${MCP_PREFIX}${mcp.server}__${mcp.tool}`,
@@ -505,17 +503,17 @@ interface LiveState {
 }
 
 function pinnedModeOf(modes: SessionModeState | null | undefined): string | undefined {
-  if (!modes || ASK_MODES.includes(modes.currentModeId)) return undefined;
+  if (!modes || ASK_MODES_BY_PREFERENCE.includes(modes.currentModeId)) return undefined;
   const available = new Set(modes.availableModes.map((mode) => mode.id));
-  return ASK_MODES.find((mode) => available.has(mode));
+  return ASK_MODES_BY_PREFERENCE.find((mode) => available.has(mode));
 }
 
 function signalExit(pid: number | undefined, signal: NodeJS.Signals) {
   if (pid === undefined) return;
   try {
     process.kill(-pid, signal);
-  } catch {
-    // The group is already gone.
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
   }
 }
 
@@ -667,9 +665,7 @@ export function acpLauncher(): AgentLauncher {
               mcpServers,
             });
             return { id: input.resume, modes: resumed.modes, resumed: true };
-          } catch {
-            // A session the agent no longer has starts over.
-          }
+          } catch {}
         }
         const created = await context.request(methods.agent.session.new, {
           cwd: input.cwd,

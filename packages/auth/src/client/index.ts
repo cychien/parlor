@@ -75,7 +75,6 @@ function settle(result: BetterAuthResult): void {
 
 const ANONYMOUS_SESSION: SessionSnapshot = { status: "anonymous" };
 
-/** The server answers, but serves no auth routes: it runs without an auth provider. */
 const serverHasNoAuth = (error: { readonly status?: unknown }) => error.status === 404;
 
 export function createAuthClient(options: AuthClientOptions = {}): AuthClient {

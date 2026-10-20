@@ -36,7 +36,6 @@ export function agentPath(): Promise<string> {
   return resolved;
 }
 
-/** What an agent process inherits: this process's environment without any Parlor setting. */
 export async function agentEnvironment(): Promise<Record<string, string>> {
   const env: Record<string, string> = {};
   for (const [name, value] of Object.entries(process.env)) {

@@ -62,11 +62,7 @@ function incompatibleMessage(
     : `${grant.appName} is older than this Parlor Host: it speaks host protocol ${welcome.protocols.max}, and this computer needs ${HOST_PROTOCOL}.`;
 }
 
-/**
- * Agents reach their MCP server as `parlor-host`: a link to this CLI that the daemon puts
- * first on their PATH, so it resolves whether or not the host is installed globally.
- */
-async function exposeHostCommand(root: string): Promise<void> {
+async function putHostCommandFirstOnPath(root: string): Promise<void> {
   const entry = process.argv[1];
   if (!entry || !basename(entry).startsWith("parlor-host")) return;
   const bin = join(root, "bin");
@@ -264,7 +260,7 @@ export function createHostDaemon(deps: DaemonDeps): HostDaemon {
         throw new Error("Parlor Host is already running on this computer.");
       }
       openHostLog(join(paths.root, "logs", "daemon.log"));
-      await exposeHostCommand(paths.root);
+      await putHostCommandFirstOnPath(paths.root);
       await deps.proxy.listen(paths.proxy);
       profiles = await loadProfiles(paths.agents);
       agents = await detectAgents(profiles);

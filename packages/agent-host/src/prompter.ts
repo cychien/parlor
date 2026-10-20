@@ -34,7 +34,6 @@ export interface LocalPrompter {
   }): void;
 }
 
-/** One line from the terminal; `undefined` once its input has ended. */
 function ask(question: string): Promise<string | undefined> {
   return new Promise((resolve) => {
     const lines = createInterface({ input: process.stdin, output: process.stdout });

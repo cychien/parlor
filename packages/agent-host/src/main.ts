@@ -53,6 +53,7 @@ async function host() {
     import("./pool.js"),
     import("./prompter.js"),
   ]);
+  const POLICY_UNTIL_DEVICE_TRUST = DEV_POLICY;
   type Paths = ReturnType<typeof hostPaths>;
   type Grants = ReturnType<typeof fileGrantStore>;
   const daemonFor = (paths: Paths, grants: Grants) =>
@@ -69,10 +70,8 @@ async function host() {
       proxy: createMcpProxy("parlor-host"),
       launcher: acpLauncher(),
       prompter: terminalPrompter(),
-      // Phase 5 brings device trust and presence; until then every grant runs this.
-      policy: DEV_POLICY,
+      policy: POLICY_UNTIL_DEVICE_TRUST,
     });
-  /** The running per-user daemon, started detached when none answers. */
   const ensureDaemon = async (paths: Paths) => {
     const running = await connectControl(paths.control);
     if (running) return running;

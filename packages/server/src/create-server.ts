@@ -72,8 +72,8 @@ export interface ServerOptions<T extends ActionMap> {
   readonly agentUi?: AgentUiOptions | false | undefined;
 }
 
-/** A caller the manifest surface does not admit, such as a pairing host, reads only the app. */
-type ManifestReply = Manifest | Pick<Manifest, "protocol" | "app"> | Response;
+type ManifestSummary = Pick<Manifest, "protocol" | "app">;
+type ManifestReply = Manifest | ManifestSummary | Response;
 
 export interface FrameworkServer {
   readonly installUiManifest?: ((source: UiManifestSource) => void) | undefined;
@@ -252,7 +252,7 @@ export function createServer<T extends ActionMap>(
     } catch (error) {
       return errorResponse(error);
     }
-    const summary: Pick<Manifest, "protocol" | "app"> = {
+    const summary: ManifestSummary = {
       protocol: PROTOCOL_VERSION,
       ...(appName ? { app: { name: appName } } : {}),
     };

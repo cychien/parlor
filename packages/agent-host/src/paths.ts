@@ -15,7 +15,6 @@ export interface HostPaths {
   readonly workspaces: string;
 }
 
-/** `workspaces` is `~/Parlor` beside the `~/.parlor/host` root. */
 export function hostPaths(root: string = join(homedir(), ".parlor", "host")): HostPaths {
   const run = join(root, "run");
   return {

@@ -41,7 +41,6 @@ export interface TurnDeps {
   readonly now: () => number;
 }
 
-/** How often a running turn asks for the user's answers and stop. */
 const SIGNAL_POLL_MS = 500;
 const MAX_APPEND_ITEMS = 64;
 const APPEND_ATTEMPTS = 5;

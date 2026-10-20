@@ -19,7 +19,6 @@ export const PASSWORD = "correct horse battery staple";
 
 const digest = (password: string) => createHash("sha256").update(password).digest("hex");
 
-/** A signed-in browser: a cookie jar over real HTTP. */
 export class Browser {
   readonly #cookies = new Map<string, string>();
 
@@ -48,7 +47,6 @@ export class Browser {
     return response;
   }
 
-  /** Answers the consent page at `url` the way its form does. */
   async consent(
     url: string,
     decision: "connect" | "cancel",
@@ -80,7 +78,6 @@ export interface SpecApp {
   close(): Promise<void>;
 }
 
-/** Hello's shape on Better Auth and PGlite with `chat()`, served over real HTTP. */
 export async function startSpecApp(): Promise<SpecApp> {
   const database: DatabaseHandle = await createDatabase({ dataDir: "memory://" });
   let server: FrameworkServer | undefined;
@@ -153,7 +150,6 @@ export async function startSpecApp(): Promise<SpecApp> {
   };
 }
 
-/** `HostKeys` in memory, for specs that must not touch a Keychain. */
 export function memoryHostKeys(): HostKeys & {
   readonly origins: () => readonly string[];
 } {
