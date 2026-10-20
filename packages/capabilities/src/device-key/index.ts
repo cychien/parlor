@@ -6,12 +6,6 @@ import type { DeviceKey } from "./interface.js";
 import { tauriDeviceKey } from "./tauri.js";
 import { webDeviceKey, type WebDeviceKeyApis } from "./web.js";
 
-export {
-  canonicalBytes,
-  decodeBase64url,
-  encodeBase64url,
-  enrollmentBytes,
-} from "./encoding.js";
 export type {
   DeviceKey,
   DevicePublicKeys,

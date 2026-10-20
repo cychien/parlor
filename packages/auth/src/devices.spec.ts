@@ -1,4 +1,4 @@
-import { decodeBase64url } from "@parlor/capabilities";
+import { decodeBase64url, enrollmentBytes } from "@parlor/capabilities/encoding";
 import { asId } from "@parlor/core";
 import { createDatabase, type DatabaseHandle } from "@parlor/data";
 import { sql } from "drizzle-orm";
@@ -155,7 +155,6 @@ describe("enrolling a device", () => {
         publicKey: passkey,
         attestation: "oA",
       };
-      const { enrollmentBytes } = await import("@parlor/capabilities");
       const proof = await device.sign(
         enrollmentBytes({
           challenge: decodeBase64url(challenge),

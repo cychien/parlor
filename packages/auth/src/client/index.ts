@@ -1,6 +1,5 @@
 import { oauthProviderClient } from "@better-auth/oauth-provider/client";
 import {
-  decodeBase64url,
   detectPlatform,
   type DeviceKey,
   deviceKey,
@@ -8,6 +7,7 @@ import {
   type SessionStore,
   sessionStore,
 } from "@parlor/capabilities";
+import { decodeBase64url } from "@parlor/capabilities/encoding";
 import {
   type ActionClient,
   createActionClient,

@@ -40,8 +40,7 @@ type StoredPresence =
 
 interface KeyStore {
   read<T>(key: string): Promise<T | undefined>;
-  /** The first value kept under `key` wins, so two tabs never end up with different keys. */
-  keep<T>(key: string, value: T): Promise<T>;
+  keepFirst<T>(key: string, value: T): Promise<T>;
 }
 
 function settled<T>(request: IDBRequest<T>): Promise<T> {
@@ -63,7 +62,7 @@ function openKeyStore(factory: IDBFactory): KeyStore {
       const tx = (await database).transaction(STORE, "readonly");
       return (await settled(tx.objectStore(STORE).get(key))) as T | undefined;
     },
-    async keep<T>(key: string, value: T) {
+    async keepFirst<T>(key: string, value: T) {
       const tx = (await database).transaction(STORE, "readwrite");
       const store = tx.objectStore(STORE);
       const existing = (await settled(store.get(key))) as T | undefined;
@@ -106,7 +105,7 @@ function createWebDeviceKey(
     const stored = await store.read<CryptoKeyPair>(SIGNING);
     const pair =
       stored ??
-      (await store.keep<CryptoKeyPair>(
+      (await store.keepFirst<CryptoKeyPair>(
         SIGNING,
         await subtle.generateKey(P256, false, ["sign", "verify"]),
       ));
@@ -174,7 +173,7 @@ function createWebDeviceKey(
     if (!credentials) return undefined;
     const stored =
       (await store.read<StoredPresence>(PRESENCE)) ??
-      (await store.keep(PRESENCE, await createPresence(credentials, enrollment)));
+      (await store.keepFirst(PRESENCE, await createPresence(credentials, enrollment)));
     if ("unavailable" in stored) return undefined;
     return {
       format: "webauthn",
@@ -249,10 +248,6 @@ function createWebDeviceKey(
   };
 }
 
-/**
- * Signing key: a non-extractable ECDSA P-256 `CryptoKey` in IndexedDB. Presence key: a
- * platform passkey whose assertion challenge is the payload's SHA-256.
- */
 export function webDeviceKey(
   apis: () => WebDeviceKeyApis = () => ({
     subtle: globalThis.crypto?.subtle,

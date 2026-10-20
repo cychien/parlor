@@ -1,13 +1,12 @@
-import {
-  type DeviceKey,
-  type DevicePublicKeys,
-  type DeviceSignature,
-  encodeBase64url,
-  enrollmentBytes,
-  type PresenceEnrollment,
-  type PresencePublicKey,
-  type PresenceSignature,
+import type {
+  DeviceKey,
+  DevicePublicKeys,
+  DeviceSignature,
+  PresenceEnrollment,
+  PresencePublicKey,
+  PresenceSignature,
 } from "@parlor/capabilities";
+import { encodeBase64url, enrollmentBytes } from "@parlor/capabilities/encoding";
 
 const P256 = { name: "ECDSA", namedCurve: "P-256" } as const;
 const ES256 = { name: "ECDSA", hash: "SHA-256" } as const;

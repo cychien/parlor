@@ -33,7 +33,6 @@ export function publicPoint(key: JsonWebKey): JsonWebKey {
   return { kty: key.kty!, crv: key.crv!, x: key.x!, y: key.y! };
 }
 
-/** What an enrollment's proof of possession signs: the challenge and both public keys. */
 export function enrollmentBytes(input: {
   readonly challenge: Uint8Array;
   readonly signing: JsonWebKey;

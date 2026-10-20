@@ -8,7 +8,7 @@ import {
   verifyStatement,
   type VerifyOutcome,
 } from "@parlor/auth";
-import { canonicalBytes, encodeBase64url } from "@parlor/capabilities";
+import { canonicalBytes, encodeBase64url } from "@parlor/capabilities/encoding";
 import type {
   ChatEvent,
   ChatItemBody,

@@ -22,7 +22,6 @@ function sources(dir: string): string[] {
 const OPENING = "([{";
 const CLOSING = ")]}";
 
-/** The top-level statements of a TypeScript file, comments removed. */
 function statementsOf(text: string): string[] {
   const statements: string[] = [];
   let current = "";
@@ -112,7 +111,6 @@ function endOfSignature(statement: string): number {
   return statement.length;
 }
 
-/** Each export's declaration with its body, comments and `export` keyword left out. */
 function signaturesOf(text: string): Map<string, string> {
   const signatures = new Map<string, string>();
   const add = (name: string, signature: string) =>
@@ -244,22 +242,6 @@ const DIFFERENCES: Readonly<
   "capabilities/src/device-key/capacitor.ts capacitorDeviceKey changed": {
     agreed: false,
     why: "no `load` parameter: nothing to load while unavailable",
-  },
-  "capabilities/src/device-key/index.ts canonicalBytes added": {
-    agreed: false,
-    why: "the one encoder the device and the account both sign and verify with",
-  },
-  "capabilities/src/device-key/index.ts decodeBase64url added": {
-    agreed: false,
-    why: "the one encoder the device and the account both sign and verify with",
-  },
-  "capabilities/src/device-key/index.ts encodeBase64url added": {
-    agreed: false,
-    why: "the one encoder the device and the account both sign and verify with",
-  },
-  "capabilities/src/device-key/index.ts enrollmentBytes added": {
-    agreed: false,
-    why: "addendum D5: the proof signs the challenge and both public keys, so device and account share the bytes",
   },
   "agent-host/src/policy.ts changePolicy added": {
     agreed: false,

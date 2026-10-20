@@ -5,7 +5,7 @@ import {
   sign as nodeSign,
 } from "node:crypto";
 
-import { encodeBase64url } from "@parlor/capabilities";
+import { encodeBase64url } from "@parlor/capabilities/encoding";
 import type { LoggedItem, PromptToSign } from "@parlor/chat";
 import { asId } from "@parlor/core";
 import { describe, expect, it } from "vitest";

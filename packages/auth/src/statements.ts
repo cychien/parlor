@@ -1,10 +1,9 @@
+import type { DeviceSignature, PresenceSignature } from "@parlor/capabilities";
 import {
   canonicalBytes,
   decodeBase64url,
-  type DeviceSignature,
   encodeBase64url,
-  type PresenceSignature,
-} from "@parlor/capabilities";
+} from "@parlor/capabilities/encoding";
 import type { AnswerToSign, LoggedItem, PromptToSign } from "@parlor/chat";
 import type { DeviceId } from "@parlor/core";
 import type { PresenceKey } from "@parlor/server";
@@ -109,7 +108,6 @@ export async function answerStatement(
   };
 }
 
-/** The host rebuilds what the device signed from the logged prompt, never from the wire. */
 export async function signedPrompt(
   app: string,
   item: LoggedItem<"prompt">,
@@ -127,7 +125,6 @@ export async function signedPrompt(
   };
 }
 
-/** Sorted-key JSON at every level, UTF-8; never re-encoded on the way. */
 export function statementBytes(statement: Statement): Uint8Array {
   return canonicalBytes(statement);
 }

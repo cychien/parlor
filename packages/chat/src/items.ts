@@ -92,7 +92,6 @@ export const chatItemBodies = {
     body: z.object({
       event: z.enum(CHAT_EVENTS),
       detail: z.string().max(500).optional(),
-      /** An `answer_rejected` names the answer item it refused, so its ask stays open. */
       itemId: idSchema("item").optional(),
     }),
   },

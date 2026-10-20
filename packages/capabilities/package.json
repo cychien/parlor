@@ -13,7 +13,8 @@
     }
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./encoding": "./src/device-key/encoding.ts"
   },
   "publishConfig": {
     "imports": {
@@ -27,6 +28,10 @@
       ".": {
         "types": "./dist/index.d.ts",
         "import": "./dist/index.js"
+      },
+      "./encoding": {
+        "types": "./dist/device-key/encoding.d.ts",
+        "import": "./dist/device-key/encoding.js"
       }
     }
   },

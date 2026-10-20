@@ -63,7 +63,6 @@ export interface FakeAuthenticator {
   readonly created: PublicKeyCredentialCreationOptions[];
   readonly requested: PublicKeyCredentialRequestOptions[];
   userVerified: boolean;
-  /** The next ceremony is cancelled by the user. */
   cancel: boolean;
 }
 

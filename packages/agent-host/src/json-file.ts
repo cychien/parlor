@@ -3,7 +3,6 @@ import { dirname } from "node:path";
 
 export interface JsonFile<T extends object> {
   read(): Promise<T>;
-  /** Edits the whole file in order with every other change, then replaces it atomically. */
   change(edit: (value: T) => void): Promise<void>;
 }
 

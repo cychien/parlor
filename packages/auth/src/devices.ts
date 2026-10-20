@@ -1,10 +1,7 @@
 import { randomBytes } from "node:crypto";
 
-import {
-  decodeBase64url,
-  enrollmentBytes,
-  type PresencePublicKey,
-} from "@parlor/capabilities";
+import type { PresencePublicKey } from "@parlor/capabilities";
+import { decodeBase64url, enrollmentBytes } from "@parlor/capabilities/encoding";
 import {
   ActionError,
   asId,

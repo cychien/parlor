@@ -2,7 +2,6 @@ import type { PinnedDevice } from "@parlor/auth";
 
 import { jsonFile } from "./json-file.js";
 
-/** A device this computer accepts prompts from, its keys pinned at approval. */
 export interface TrustedDevice extends PinnedDevice {
   readonly name: string;
   readonly platform: string;
@@ -10,7 +9,6 @@ export interface TrustedDevice extends PinnedDevice {
   readonly via: "pairing" | "local";
 }
 
-/** Local state the backend cannot write. */
 export interface TrustStore {
   get(appOrigin: string, deviceId: string): Promise<TrustedDevice | undefined>;
   pin(appOrigin: string, device: TrustedDevice): Promise<void>;
@@ -19,7 +17,6 @@ export interface TrustStore {
 
 type Pins = Record<string, Record<string, TrustedDevice>>;
 
-/** `~/.parlor/host/trust.json`, 0600, written atomically. */
 export function fileTrustStore(file: string): TrustStore {
   const pins = jsonFile<Pins>(file);
   return {

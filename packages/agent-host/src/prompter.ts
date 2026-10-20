@@ -102,7 +102,6 @@ const clipped = (text: string) =>
     ? `${printable(text).slice(0, MAX_DIALOG_TEXT)}...`
     : printable(text);
 
-/** Everything the user's text can reach goes in as an argument, never into the script. */
 function osascript(
   lines: readonly string[],
   args: readonly string[],
