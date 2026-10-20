@@ -23,6 +23,7 @@ export function AgentPanel() {
   const region = useRef<HTMLElement | null>(null);
   const [open, setOpen] = useState(false);
   const [everOpened, setEverOpened] = useState(false);
+  const [headerActions, setHeaderActions] = useState<HTMLElement | null>(null);
   const pending = useAgentConfirmations().length;
   const { ref } = useAgentView(agentPanel, { get: () => ({ open }) });
   const attach = useCallback(
@@ -91,12 +92,15 @@ export function AgentPanel() {
         >
           <header>
             <h2 id={titleId}>Agent</h2>
-            <button type="button" onClick={close}>
-              Close
-            </button>
+            <div className="header-actions">
+              <span ref={setHeaderActions} className="header-slot" />
+              <button type="button" onClick={close}>
+                Close
+              </button>
+            </div>
           </header>
           <Suspense fallback={<p className="sidebar-note">Loading...</p>}>
-            {everOpened ? <AgentSidebar /> : null}
+            {everOpened ? <AgentSidebar headerActions={headerActions} /> : null}
           </Suspense>
         </section>,
         document.body,
