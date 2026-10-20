@@ -92,7 +92,11 @@ async function activeHosts(
   return hosts.filter((_host, at) => holding[at]);
 }
 
-const summaryOf = ({ grantId: _grantId, ...summary }: StoredHost): HostSummary => summary;
+const summaryOf = ({
+  grantId: _grantId,
+  protocol: _protocol,
+  ...summary
+}: StoredHost): HostSummary => summary;
 
 export function userChatActions(deps: ChatActionDeps) {
   const { enforcing } = deps;
@@ -229,6 +233,10 @@ export function hostChatActions(deps: ChatActionDeps) {
     const hosts = await deps.store.listHosts(db, host);
     const known = hosts.find((candidate) => candidate.id === host.host.hostId);
     if (!known) throw new ActionError("forbidden", "Say hello before anything else.");
+    if (known.protocol < MIN_HOST_PROTOCOL) {
+      await deps.pruneHosts(host, [known.id]);
+      throw new ActionError("forbidden", "Say hello before anything else.");
+    }
     welcomed.add(known.id);
     return known;
   };
@@ -321,7 +329,7 @@ export function hostChatActions(deps: ChatActionDeps) {
         const db = dbOf(ctx);
         const known = await welcome(host, db);
         const { onlineUntil } = await deps.store.reportHost(db, host, host.host, {
-          protocol: HOST_PROTOCOL,
+          protocol: known.protocol,
           name: known.name,
           platform: known.platform,
           agents: input.agents,

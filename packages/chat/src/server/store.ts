@@ -190,6 +190,7 @@ export interface ChatStore {
 
 export interface StoredHost extends HostSummary {
   readonly grantId: GrantId;
+  readonly protocol: number;
 }
 
 function rowsOf(result: unknown): unknown[] {
@@ -881,7 +882,7 @@ export const sqlChatStore: ChatStore = {
   async listHosts(db, owner) {
     return query(
       db,
-      sql`select id, grant_id, name, platform, agents, online_until > now() as online
+      sql`select id, grant_id, protocol, name, platform, agents, online_until > now() as online
         from parlor_chat_hosts
         where owner_id = ${owner.userId} and scope = ${owner.scope}
         order by name, id`,
@@ -889,6 +890,7 @@ export const sqlChatStore: ChatStore = {
         .object({
           id: idSchema("host"),
           grant_id: idSchema("grant"),
+          protocol: z.number().int(),
           name: z.string(),
           platform: z.string(),
           agents: z.array(agentInfoSchema),

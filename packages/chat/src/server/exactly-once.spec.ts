@@ -514,6 +514,20 @@ describe.each(drivers)("exactly-once turns on $name", (driver) => {
     expect((await app.action("alice-host", "hostClaim", {})).status).not.toBe(403);
   });
 
+  it("R5-09: refuses and prunes a stored computer below the minimum protocol that skips hello after a restart", async () => {
+    await rows(handle, "update parlor_chat_hosts set protocol = 1");
+    await app.server.close();
+    app = serveChat(handle, { chat: { leaseMs: 60_000, maxQueued: 4 } });
+    const claimed = await claim();
+    expect(claimed.status).toBe(403);
+    expect(claimed.body).toMatchObject({ error: { code: "forbidden" } });
+    expect(await rows(handle, "select 1 from parlor_chat_hosts")).toHaveLength(0);
+    expect(data(await app.action("alice-host", "hostHello", HELLO))).toMatchObject({
+      accepted: true,
+    });
+    expect((await claim()).status).not.toBe(403);
+  });
+
   it("queues a prompt for an offline computer whose grant holds, up to maxQueued, and hands it over when it returns", async () => {
     await app.action("alice-host", "hostReport", { online: false, agents: [] });
     for (const n of [1, 2, 3, 4]) expect((await send("t1", `u${n}`)).status).toBe(200);
