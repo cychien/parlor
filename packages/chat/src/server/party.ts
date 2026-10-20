@@ -5,10 +5,9 @@ import {
   type ActionDefinition,
   defineAction,
   type DeviceId,
+  DEV_USER_ID,
   type HostPrincipal,
   type Principal,
-  asId,
-  type UserId,
 } from "@parlor/core";
 import type { z } from "zod";
 
@@ -52,8 +51,6 @@ export function chatAction<P extends Party, I extends z.ZodType, O>(
       run(input, partyOf(party, ctx.principal, ctx.scope, enforcing), ctx),
   });
 }
-
-export const DEV_USER_ID: UserId = asId("user", "dev");
 
 type PartyResolvers = {
   readonly [P in Party]: (

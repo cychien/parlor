@@ -1,10 +1,15 @@
-import { type ThreadId, type TurnId, type UserId, userOf } from "@parlor/core";
+import {
+  DEV_USER_ID,
+  type ThreadId,
+  type TurnId,
+  type UserId,
+  userOf,
+} from "@parlor/core";
 import type { ChannelConnection, ServerChannel } from "@parlor/sync";
 
 import type { ChatOwner, OpenItem, OpenTurn } from "../model.js";
 import { applyFrame } from "../open-turns.js";
 import { CHAT_CHANNEL, type ChatFrame, type HostStreamBatch } from "../protocol.js";
-import { DEV_USER_ID } from "./party.js";
 import type { TurnHolder } from "./store.js";
 
 export const MAX_OPEN_BYTES_PER_TURN = 256 * 1024;

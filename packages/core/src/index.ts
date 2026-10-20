@@ -47,6 +47,7 @@ export {
   type AgentPrincipal,
   type AnonymousPrincipal,
   type AuthenticatedPrincipal,
+  DEV_USER_ID,
   type HostPrincipal,
   isAuthenticated,
   type Principal,

@@ -1,4 +1,12 @@
-import type { DeviceId, GrantId, HostId, ThreadId, TurnId, UserId } from "./ids.js";
+import {
+  asId,
+  type DeviceId,
+  type GrantId,
+  type HostId,
+  type ThreadId,
+  type TurnId,
+  type UserId,
+} from "./ids.js";
 
 /**
  * Who is calling, resolved once per request from its credential by the server's auth
@@ -61,6 +69,12 @@ export interface TurnBinding {
 export type AuthenticatedPrincipal = Exclude<Principal, AnonymousPrincipal>;
 
 export const ANONYMOUS: AnonymousPrincipal = { kind: "anonymous" };
+
+/**
+ * Who everyone is when no provider tells people apart: the anonymous browser and the
+ * `parlor dev` host and turns. Equal to the default scope, so they share one audience.
+ */
+export const DEV_USER_ID: UserId = asId("user", "default");
 
 export function isAuthenticated(
   principal: Principal,

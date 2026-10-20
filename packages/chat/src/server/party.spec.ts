@@ -1,8 +1,8 @@
-import { asId, type Principal } from "@parlor/core";
+import { asId, DEV_USER_ID, type Principal } from "@parlor/core";
 import type { DatabaseHandle } from "@parlor/data";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { DEV_USER_ID, partyOf } from "./party.js";
+import { partyOf } from "./party.js";
 import {
   agentRef,
   type ChatServer,
