@@ -4,6 +4,7 @@ import type { FrameworkServer } from "@parlor/server";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createTestApp, ORIGIN, PASSWORD, signUp } from "../testing/app.js";
+import { Computer } from "../testing/computer.js";
 import { type AuthClient, createAuthClient, type SessionStore } from "./index.js";
 
 let database: DatabaseHandle;
@@ -57,7 +58,9 @@ function shell({ unreachableFor = 0 } = {}) {
         failures -= 1;
         return Promise.reject(new TypeError("fetch failed"));
       }
-      return server.fetch(new Request(input, init));
+      const request = new Request(input, init);
+      if (request.method === "POST") request.headers.set("origin", "tauri://localhost");
+      return server.fetch(request);
     },
   });
   return { auth, store };
@@ -123,6 +126,31 @@ describe("the auth client in a native shell", () => {
     expect(seen).not.toContain("signed-out");
     expect(store.token).toBe(signedUp.token);
   }, 15_000);
+
+  it("approves a computer's pairing with its session and answers the code", async () => {
+    const { auth } = shell();
+    await auth.signUp({ name: "Alice", email: "alice@example.com", password: PASSWORD });
+    const computer = new Computer("Alice's Mac", "macos", "urn:parlor:ipc");
+    const { redirectUri: _ipc, ...pairing } = await computer.pairing();
+
+    const code = await auth.authorizeHost(pairing);
+
+    const exchanged = await computer.exchange(server, code);
+    expect(exchanged.status).toBe(200);
+    expect(exchanged.body.account).toMatchObject({ email: "alice@example.com" });
+    const hosts = await auth.account.call("hosts", {});
+    expect(hosts.map((host) => host.name)).toEqual(["Alice's Mac"]);
+  });
+
+  it("refuses to approve a pairing without a session", async () => {
+    const { auth } = shell();
+    const computer = new Computer("Alice's Mac", "macos", "urn:parlor:ipc");
+    const { redirectUri: _ipc, ...pairing } = await computer.pairing();
+    await expect(auth.authorizeHost(pairing)).rejects.toMatchObject({
+      name: "AuthClientError",
+      status: 401,
+    });
+  });
 
   it("drops a token the server revoked", async () => {
     const laptop = await signUp(server, "Alice");

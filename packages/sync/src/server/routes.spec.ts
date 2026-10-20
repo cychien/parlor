@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 
+import { asId, type Principal } from "@parlor/core";
 import { createDatabase, type DatabaseHandle } from "@parlor/data";
 import { H3 } from "h3";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -8,7 +9,7 @@ import type { ChannelConnection, ServerChannel } from "../channel.js";
 import { createSyncClient } from "../client/sync-client.js";
 import type { SyncBatch } from "../protocol.js";
 import { SyncHub } from "./hub.js";
-import { registerSyncRoutes, transportFromEnv } from "./routes.js";
+import { registerSyncRoutes, type StreamAuthority, transportFromEnv } from "./routes.js";
 import { ensureSyncTables, recordSyncEvent } from "./store.js";
 
 let handle: DatabaseHandle;
@@ -289,5 +290,108 @@ describe("sync stream channels", () => {
     client.stop();
     await vi.waitFor(() => expect(lifecycle).toEqual(["opened", "closed"]));
     await vi.waitFor(() => expect(ui.log.at(-1)).toBe("close"));
+  });
+});
+
+describe("sync stream channel connections", () => {
+  const principalOf = (userId: string): Principal => ({
+    kind: "user",
+    userId: asId("user", userId),
+    sessionId: `session-${userId}`,
+  });
+
+  function ownerChannel(event: string) {
+    const log: string[] = [];
+    const sends = new Map<string, (data: string) => void>();
+    const closedSignals: AbortSignal[] = [];
+    const channel: ServerChannel = {
+      event,
+      connect(connection) {
+        const owner =
+          connection.principal?.kind === "user" ? connection.principal.userId : "-";
+        log.push(`open ${owner}`);
+        sends.set(owner, connection.send);
+        if (connection.closed) closedSignals.push(connection.closed);
+        connection.closed?.addEventListener("abort", () => log.push(`aborted ${owner}`));
+        return () => log.push(`close ${owner}`);
+      },
+    };
+    return { channel, log, sends, closedSignals };
+  }
+
+  function appFor(
+    chat: ServerChannel,
+    authority: (request: Request) => Promise<StreamAuthority>,
+  ) {
+    const channelled = new H3();
+    registerSyncRoutes(channelled, {
+      basePath: "/_parlor",
+      data: handle,
+      hub,
+      scope: () => "channels",
+      keepAliveMs: 50,
+      channels: [chat],
+      authority,
+    });
+    return channelled;
+  }
+
+  const as = (userId: string) =>
+    new Request("http://app.test/_parlor/sync/stream?since=", {
+      headers: { "x-user": userId },
+    });
+
+  it("hands each stream its own holder, so a channel can send to its owner alone", async () => {
+    const chat = ownerChannel("chat");
+    const server = appFor(chat.channel, async (request) => ({
+      principal: principalOf(request.headers.get("x-user")!),
+      channels: true,
+    }));
+    const alice = await server.fetch(as("alice"));
+    const bob = await server.fetch(as("bob"));
+    chat.sends.get("alice")!("for-alice");
+
+    expect(await readFrames(alice.body!, 2)).toEqual([
+      'event: handshake\ndata: {"protocol":1,"capabilities":["chat"],"keepAliveMs":50}',
+      "event: chat\ndata: for-alice",
+    ]);
+    expect(await readFrames(bob.body!, 1, 200)).toEqual([
+      'event: handshake\ndata: {"protocol":1,"capabilities":["chat"],"keepAliveMs":50}',
+    ]);
+  });
+
+  it("aborts the connection's closed signal when the stream ends, before the channel detaches", async () => {
+    const chat = ownerChannel("chat");
+    const server = appFor(chat.channel, async () => ({
+      principal: principalOf("alice"),
+      channels: true,
+    }));
+    const response = await server.fetch(as("alice"));
+    await readFrames(response.body!, 1);
+
+    await vi.waitFor(() =>
+      expect(chat.log).toEqual(["open alice", "aborted alice", "close alice"]),
+    );
+    expect(chat.closedSignals.map((signal) => signal.aborted)).toEqual([true]);
+  });
+
+  it("aborts the closed signal when the holder's credential is revoked", async () => {
+    const chat = ownerChannel("chat");
+    const revocation = new AbortController();
+    const server = appFor(chat.channel, async () => ({
+      principal: principalOf("alice"),
+      channels: true,
+      revoked: revocation.signal,
+    }));
+    const response = await server.fetch(as("alice"));
+    const reader = response.body!.getReader();
+    await reader.read();
+    expect(chat.closedSignals.map((signal) => signal.aborted)).toEqual([false]);
+
+    revocation.abort();
+    await vi.waitFor(() =>
+      expect(chat.closedSignals.map((s) => s.aborted)).toEqual([true]),
+    );
+    await reader.cancel();
   });
 });

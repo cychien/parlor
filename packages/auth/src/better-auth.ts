@@ -1,7 +1,7 @@
 import { cimd } from "@better-auth/cimd";
 import { fetchClientMetadataResource } from "@better-auth/cimd/node";
 import { mcp } from "@better-auth/mcp";
-import { DEFAULT_BASE_PATH, SHELL_ORIGINS } from "@parlor/server";
+import { DEFAULT_BASE_PATH, REVOCATION_HORIZON_MS, SHELL_ORIGINS } from "@parlor/server";
 import type { BetterAuthOptions, BetterAuthPlugin } from "better-auth";
 import { bearer, jwt } from "better-auth/plugins";
 
@@ -11,7 +11,9 @@ export const AUTH_PLUGIN = "auth";
 export const AUTH_BASE_PATH = `${DEFAULT_BASE_PATH}/${AUTH_PLUGIN}`;
 export const MCP_SCOPE = "mcp";
 export const CONSENT_PATH = "/consent";
-export const ACCESS_TOKEN_TTL_S = 600;
+/** Clock skew a revocation must outlast beyond a credential's own lifetime. */
+const SKEW_MS = 60_000;
+export const ACCESS_TOKEN_TTL_S = (REVOCATION_HORIZON_MS - SKEW_MS) / 1000;
 
 /** Better Auth endpoints that would let a user bypass Parlor's own account actions. */
 const DISABLED_PATHS = [
@@ -41,6 +43,7 @@ export interface ParlorAuthOptions extends Omit<
 }
 
 export interface ParlorAuthSettings {
+  readonly appName?: string | undefined;
   readonly origin: string;
   readonly baseURL: string;
   readonly resource: string;
@@ -109,7 +112,9 @@ export function parlorAuth(options: ParlorAuthOptions): BetterAuthOptions {
   const origin = originOf(options);
   const baseURL = `${origin}${AUTH_BASE_PATH}`;
   const resource = `${origin}${DEFAULT_BASE_PATH}/mcp`;
-  const bridge: Bridge = { settings: { origin, baseURL, resource } };
+  const bridge: Bridge = {
+    settings: { appName: rest.appName, origin, baseURL, resource },
+  };
   const trusted = rest.trustedOrigins;
   return {
     ...rest,

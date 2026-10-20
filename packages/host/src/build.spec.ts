@@ -112,6 +112,120 @@ describe("buildServer", () => {
   }, 120_000);
 });
 
+describe("buildServer app name", () => {
+  it("bakes config.app.name into the bundle as PARLOR_APP_NAME", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "parlor-host-name-"));
+    await writeFile(
+      join(rootDir, "server.ts"),
+      [
+        "export default {",
+        "  fetch: () => Response.json({ appName: process.env.PARLOR_APP_NAME ?? null }),",
+        "};",
+      ].join("\n"),
+    );
+    const config = parseConfig({ app: { id: "dev.parlor.host", name: "Host App" } });
+    const result = await buildServer(
+      { config, rootDir, configFile: "parlor.config.ts" },
+      { preset: "node-server" },
+    );
+
+    const port = await freePort();
+    const { PARLOR_APP_NAME: _name, ...env } = process.env;
+    const child = spawn(
+      process.execPath,
+      [join(result.outputDir, "server", "index.mjs")],
+      {
+        env: { ...env, PORT: String(port) },
+        stdio: "ignore",
+      },
+    );
+    try {
+      for (let i = 0; i < 50; i++) {
+        try {
+          const response = await fetch(`http://localhost:${port}/_parlor/name`);
+          await expect(response.json()).resolves.toEqual({ appName: "Host App" });
+          return;
+        } catch (error) {
+          if (error instanceof Error && error.name === "AssertionError") throw error;
+          await new Promise((r) => setTimeout(r, 100));
+        }
+      }
+      throw new Error("server did not start");
+    } finally {
+      child.kill();
+    }
+  }, 120_000);
+});
+
+const DEFAULT_POLICY =
+  "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'";
+
+describe("buildServer content security policy", () => {
+  it("sends the policy on pages, assets and the SPA fallback but leaves framework routes to themselves", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "parlor-host-csp-"));
+    await writeFile(
+      join(rootDir, "server.ts"),
+      [
+        "export default {",
+        "  fetch: (request: Request) => {",
+        "    const path = new URL(request.url).pathname;",
+        '    const headers = path === "/_parlor/own" ? { "content-security-policy": "default-src none" } : undefined;',
+        "    return new Response(path, { headers });",
+        "  },",
+        "};",
+      ].join("\n"),
+    );
+    await mkdir(join(rootDir, ".parlor", "web"), { recursive: true });
+    await writeFile(
+      join(rootDir, ".parlor", "web", "index.html"),
+      "<!doctype html><title>spa</title>",
+    );
+    const config = parseConfig({
+      app: { id: "dev.parlor.host", name: "Host" },
+      web: { csp: { "connect-src": ["https://relay.example.com"] } },
+    });
+    const result = await buildServer(
+      { config, rootDir, configFile: "parlor.config.ts" },
+      { preset: "node-server" },
+    );
+
+    const port = await freePort();
+    const child = spawn(
+      process.execPath,
+      [join(result.outputDir, "server", "index.mjs")],
+      {
+        env: { ...process.env, PORT: String(port) },
+        stdio: "ignore",
+      },
+    );
+    try {
+      const policyOf = async (path: string, init?: RequestInit) => {
+        for (let i = 0; i < 50; i++) {
+          try {
+            const response = await fetch(`http://localhost:${port}${path}`, init);
+            return response.headers.get("content-security-policy");
+          } catch {
+            await new Promise((r) => setTimeout(r, 100));
+          }
+        }
+        throw new Error("server did not start");
+      };
+      const expected = DEFAULT_POLICY.replace(
+        "connect-src 'self'",
+        "connect-src 'self' https://relay.example.com",
+      );
+      expect(await policyOf("/", { headers: { accept: "text/html" } })).toBe(expected);
+      expect(await policyOf("/tasks/42", { headers: { accept: "text/html" } })).toBe(
+        expected,
+      );
+      expect(await policyOf("/index.html")).toBe(expected);
+      expect(await policyOf("/_parlor/own")).toBe("default-src none");
+    } finally {
+      child.kill();
+    }
+  }, 120_000);
+});
+
 const SHUTDOWN_BOUND_MS = 2000;
 const GENERATED_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", ".parlor");
 

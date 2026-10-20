@@ -8,6 +8,8 @@ import react from "@vitejs/plugin-react";
 import { defaultClientConditions, type PluginOption } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
+import { appCsp, metaCsp, serializeCsp } from "./csp.js";
+
 export const FRAMEWORK_ROUTE_PREFIX = "/_parlor";
 /** OAuth discovery lives at the origin root (RFC 8414, RFC 9728), outside the framework prefix. */
 export const OAUTH_DISCOVERY_PREFIXES = [
@@ -20,6 +22,42 @@ export interface WebOptions {
   readonly conditions?: readonly string[] | undefined;
   readonly serverUrl?: string | undefined;
   readonly root?: string | undefined;
+  /** Writes the policy into the built `index.html` for shells that serve it without HTTP headers. */
+  readonly cspMeta?: boolean | undefined;
+}
+
+function isFrameworkPath(url: string | undefined): boolean {
+  const path = (url ?? "").split("?")[0] ?? "";
+  return [FRAMEWORK_ROUTE_PREFIX, ...OAUTH_DISCOVERY_PREFIXES].some(
+    (prefix) => path === prefix || path.startsWith(`${prefix}/`),
+  );
+}
+
+function cspPlugin(config: ParlorConfig, options: WebOptions): PluginOption {
+  const serverOrigin = options.serverUrl || undefined;
+  return {
+    name: "parlor:csp",
+    configureServer(server) {
+      const header = serializeCsp(appCsp(config, { serverOrigin, dev: true }));
+      server.middlewares.use((request, response, next) => {
+        if (!isFrameworkPath(request.url)) {
+          response.setHeader("content-security-policy", header);
+        }
+        next();
+      });
+    },
+    transformIndexHtml(_html, context) {
+      if (context.server || !options.cspMeta) return;
+      const content = serializeCsp(metaCsp(appCsp(config, { serverOrigin })));
+      return [
+        {
+          tag: "meta",
+          attrs: { "http-equiv": "Content-Security-Policy", content },
+          injectTo: "head-prepend",
+        },
+      ];
+    },
+  };
 }
 
 export function webManifest(config: ParlorConfig) {
@@ -65,6 +103,7 @@ export function parlorWeb(
   const plugins: PluginOption[] = [
     ...fileRoutes(config, options.root ?? process.cwd()),
     react(),
+    cspPlugin(config, options),
     agentManifest({
       app: {
         id: config.app.id,
@@ -96,7 +135,18 @@ export function parlorWeb(
     },
   ];
   if (config.web.pwa) {
-    plugins.push(VitePWA({ registerType: "autoUpdate", manifest: webManifest(config) }));
+    plugins.push(
+      VitePWA({
+        registerType: "autoUpdate",
+        manifest: webManifest(config),
+        workbox: {
+          navigateFallbackDenylist: [
+            FRAMEWORK_ROUTE_PREFIX,
+            ...OAUTH_DISCOVERY_PREFIXES,
+          ].map((prefix) => new RegExp(`^${prefix.replaceAll(".", "\\.")}(/|$)`)),
+        },
+      }),
+    );
   }
   return plugins;
 }

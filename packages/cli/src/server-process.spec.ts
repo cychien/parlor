@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { serverEnv, startServerProcess, stopServerProcess } from "./server-process.js";
 
 describe("serverEnv", () => {
-  it("tells the server its port and the origin the web dev server serves the app on", () => {
+  it("tells the server its port, the app name and the origin the web dev server serves the app on", () => {
     const config = parseConfig({
       app: { id: "dev.parlor.test", name: "Test" },
       server: { port: 3100 },
@@ -21,6 +21,7 @@ describe("serverEnv", () => {
       PATH: "/bin",
       PORT: "3100",
       PARLOR_WEB_ORIGIN: "http://localhost:5200",
+      PARLOR_APP_NAME: "Test",
     });
   });
 });

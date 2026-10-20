@@ -4,6 +4,7 @@ import type { AnyRouter } from "@tanstack/router-core";
 import {
   type AgentOrigin,
   type ClientMessage,
+  MAX_WATCHED_THREADS,
   parseUiFrame,
   type PresenceUpdate,
   type QuerySnapshot,
@@ -76,6 +77,10 @@ export interface AgentUiClient extends ClientChannel {
   readonly confirmations: ConfirmationStore;
   screen(): Promise<ScreenSnapshot>;
   start(): () => void;
+  /** Forgets what belongs to the signed-in user: the pending confirmations. */
+  reset(): void;
+  /** Declares a chat thread shown here until the returned function runs (presence `watching`). */
+  watch(threadId: string): () => void;
 }
 
 const REPLY_CACHE_SIZE = 64;
@@ -349,8 +354,10 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
     );
   };
 
+  const watched = new Map<string, number>();
   let lastPresence: string | undefined;
   let gone = false;
+  let connected = false;
   let presenceTimer: ReturnType<typeof setTimeout> | undefined;
   const presence = (): PresenceUpdate => {
     const visible = env.document?.visibilityState === "visible";
@@ -362,10 +369,13 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
       ...(options.buildId === undefined ? {} : { buildId: options.buildId }),
       ops: UI_OPS,
       canConfirm: confirmations.watched(),
+      ...(watched.size > 0
+        ? { watching: [...watched.keys()].slice(0, MAX_WATCHED_THREADS) }
+        : {}),
     };
   };
   const reportPresence = () => {
-    if (gone) return;
+    if (gone || !connected) return;
     const update = presence();
     const serialized = JSON.stringify(update);
     if (serialized === lastPresence) return;
@@ -457,12 +467,32 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
     screen,
     opened() {
       gone = false;
+      connected = true;
       attachPresence();
       lastPresence = undefined;
       reportPresence();
     },
-    closed: detachPresence,
+    closed() {
+      connected = false;
+      detachPresence();
+    },
     receive,
+    watch(threadId) {
+      watched.set(threadId, (watched.get(threadId) ?? 0) + 1);
+      schedulePresence();
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        const remaining = (watched.get(threadId) ?? 1) - 1;
+        if (remaining > 0) watched.set(threadId, remaining);
+        else watched.delete(threadId);
+        schedulePresence();
+      };
+    },
+    reset() {
+      confirmations.replace([]);
+    },
     start() {
       registry.resume();
       return () => {

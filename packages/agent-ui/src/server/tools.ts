@@ -225,16 +225,35 @@ export function createUiTools(
     });
   };
   const select = (ctx: AgentToolContext, clientId: string | undefined) => {
-    const wanted = clientId ?? ctx.clientId;
-    if (wanted !== undefined && !directory.connected(ctx.scope, wanted)) {
+    if (ctx.clientId !== undefined) return selectBound(ctx, ctx.clientId, clientId);
+    if (clientId !== undefined && !directory.connected(ctx.scope, clientId)) {
       const connected = directory.summaries(ctx.scope).map((client) => client.id);
       throw new UiFailure({
         code: "unknown_client",
-        message: `No app client ${wanted} is connected. Connected clients: ${connected.join(", ") || "none"}.`,
+        message: `No app client ${clientId} is connected. Connected clients: ${connected.join(", ") || "none"}.`,
         issues: connected.map((id) => ({ path: "clientId", message: id })),
       });
     }
-    return directory.select(ctx.scope, wanted);
+    return directory.select(ctx.scope, clientId);
+  };
+  const selectBound = (
+    ctx: AgentToolContext,
+    bound: string,
+    requested: string | undefined,
+  ) => {
+    if (requested !== undefined && requested !== bound) {
+      throw new UiFailure({
+        code: "unknown_client",
+        message: `This chat acts on the app client its prompt came from, not on ${requested}.`,
+      });
+    }
+    if (!directory.connected(ctx.scope, bound)) {
+      throw new UiFailure({
+        code: "unknown_client",
+        message: "The app client this chat was sent from is no longer connected.",
+      });
+    }
+    return directory.select(ctx.scope, bound);
   };
 
   const build = (manifest: UiManifest | undefined): readonly AgentTool[] => {

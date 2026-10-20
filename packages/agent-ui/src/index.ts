@@ -19,6 +19,7 @@ export {
   type JsonObject,
   type KeyedViewSnapshot,
   type LeaveNotice,
+  MAX_WATCHED_THREADS,
   type MatchedRouteSnapshot,
   type NotFoundRouteSnapshot,
   type PresenceUpdate,

@@ -11,6 +11,8 @@ export interface AgentConfirmation {
   readonly origin: AgentOrigin;
   /** Local `Date.now()` time after which the server stops waiting. */
   readonly expiresAt: number;
+  /** The chat thread an inline agent asked from; the chat shows the card inline there. */
+  readonly threadId?: string | undefined;
   readonly approve: () => void;
   readonly decline: () => void;
 }
@@ -45,6 +47,7 @@ const signatureOf = (prompt: ConfirmationPrompt) =>
     prompt.input,
     prompt.origin.via,
     prompt.origin.name,
+    prompt.threadId,
   ]);
 
 const sameItems = (a: readonly AgentConfirmation[], b: readonly AgentConfirmation[]) =>
@@ -100,6 +103,7 @@ export function createConfirmationStore(
     input: prompt.input,
     origin: prompt.origin,
     expiresAt: env.now() + prompt.expiresInMs,
+    threadId: prompt.threadId,
     approve: () => respond(prompt.id, true),
     decline: () => respond(prompt.id, false),
   });

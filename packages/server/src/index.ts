@@ -12,7 +12,19 @@ export {
   createActionRunner,
   type RunOptions,
 } from "./actions.js";
-export { AuthFailure, type AuthFailureReason, type AuthProvider } from "./auth.js";
+export {
+  type AccountProfile,
+  AuthFailure,
+  type AuthFailureReason,
+  type AuthProvider,
+  type Delegation,
+  type DeviceKeys,
+  HOST_GRANTS_TAG,
+  type PresenceKey,
+  type TurnDelegation,
+} from "./auth.js";
+export { readBoundedText } from "./body.js";
+export { REVOCATION_HORIZON_MS } from "./revocation-horizon.js";
 export {
   type Caller,
   type CallerResolver,

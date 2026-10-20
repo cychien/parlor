@@ -12,7 +12,7 @@ An external agent can see what the user has on screen and move the app to anothe
 - `ui-catalog` lists the four ui_ tools next to the actions, with the three routes in the description and as the `to` enum, and the `New task` form with its fields `title`, `notes` in `ui_set`'s description (the read-only `agentPanel` view is listed in the manifest but not in `ui_set`'s writable forms); `GET /_parlor/manifest` carries the same routes under `ui`, and the MCP resource `parlor://manifest` carries the pages and views with their schemas.
 - `ui-policy` hides all four tools with `agentUi: { external: false }` and keeps only `ui_screen` with `"read-only"`; a confirm action still asks the user under `false`.
 - `ui-activity` shows the app's activity status (a pill at the bottom left) while an agent request runs, with a text per operation: reading the screen, opening a page, filling in a form, pointing at something, asking to confirm; it says what happened for a moment afterwards, then goes quiet.
-- `ui-panel-view` lists the read-only view `agentPanel` in `ui_screen` with `{open}` for the agent panel, and refuses `ui_set` on it with `not_writable`.
+- `ui-panel-view` lists the read-only view `agentPanel` in `ui_screen` with `{open}` for the Agent sidebar, and refuses `ui_set` on it with `not_writable`.
 
 ## How to get to it (user POV)
 
@@ -47,5 +47,5 @@ Preconditions:
 - The ui_ tools show the activity status for up to 3 s; the status is `position: fixed` and does not move the page, so a `click` or `fill` is safe, but wait for `data-state` `idle` before reading its text as quiet.
 - A mac window behind the terminal reports `visible: false`; the screenshot still captures it by window id.
 - Navigation to `/settings` finishes within one frame, so a `busy` activity status is only observable on a slowed page.
-- While the agent panel is open the page behind is inert, so `ui_navigate` still works but a `click` on the page fails until the panel is closed.
+- The Agent sidebar is non-modal: the page behind stays interactive while it is open, and `ui_navigate` and `click` both work.
 - The agent may answer in another language; assert on tool calls, results, and the stored state, not on its wording.

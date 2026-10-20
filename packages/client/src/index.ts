@@ -15,5 +15,14 @@ export {
   type WritableField,
 } from "@parlor/agent-ui";
 export { ACTION_QUERY_PREFIX, actionQueryKey } from "./query-keys.js";
-export type { SessionSnapshot, SessionSource, SessionUser } from "./session.js";
+export { createPluginClient, type PluginClient } from "./plugin-client.js";
+export type {
+  DeviceSource,
+  FrameworkAuth,
+  HostAuthorizer,
+  SessionDevice,
+  SessionSnapshot,
+  SessionSource,
+  SessionUser,
+} from "./session.js";
 export type { Register, RegisteredActions } from "./register.js";

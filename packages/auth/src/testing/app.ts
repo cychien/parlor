@@ -1,9 +1,14 @@
 import { createHash } from "node:crypto";
 
-import { defineAction } from "@parlor/core";
-import { createRegistry } from "@parlor/core/registry";
+import { type DataProvider, defineAction } from "@parlor/core";
+import { type ActionRegistry, createRegistry } from "@parlor/core/registry";
 import type { DatabaseHandle } from "@parlor/data";
-import { createServer, type FrameworkServer } from "@parlor/server";
+import {
+  type AuthProvider,
+  createServer,
+  type FrameworkServer,
+  type ServerPlugin,
+} from "@parlor/server";
 import { betterAuth } from "better-auth";
 import { memoryAdapter } from "better-auth/adapters/memory";
 import { getAuthTables } from "better-auth/db";
@@ -38,15 +43,26 @@ const digest = (password: string) => createHash("sha256").update(password).diges
 export interface TestApp {
   readonly server: FrameworkServer;
   readonly instance: ReturnType<typeof betterAuth>;
+  readonly provider: AuthProvider;
+}
+
+export interface TestAppOptions {
+  readonly actions?: ActionRegistry | undefined;
+  readonly plugins?: readonly ServerPlugin[] | undefined;
+  readonly wrap?: ((provider: DataProvider) => DataProvider) | undefined;
+  readonly secret?: string | undefined;
 }
 
 /** A hello-like app on Better Auth's memory adapter, with revocations in `database`. */
-export function createTestApp(database: DatabaseHandle): TestApp {
+export function createTestApp(
+  database: DatabaseHandle,
+  options: TestAppOptions = {},
+): TestApp {
   const authOptions = parlorAuth({
     origin: ORIGIN,
     signInPage: "/sign-in",
     appName: "Hello",
-    secret: "a-test-secret-that-is-long-enough-for-better-auth",
+    secret: options.secret ?? "a-test-secret-that-is-long-enough-for-better-auth",
     emailAndPassword: {
       enabled: true,
       // scrypt dominates these tests under a parallel run; hashing is not what they check.
@@ -64,16 +80,19 @@ export function createTestApp(database: DatabaseHandle): TestApp {
     ...authOptions,
     database: memoryAdapter(Object.fromEntries(tables)),
   });
+  const provider = betterAuthProvider({ instance });
   const server = createServer({
-    actions,
-    auth: betterAuthProvider({ instance }),
-    database: {
+    actions: options.actions ?? actions,
+    auth: provider,
+    ...(options.plugins ? { plugins: options.plugins } : {}),
+    database: (options.wrap ?? ((data) => data))({
       read: () => database.read(),
       transaction: (run) => database.transaction(run),
-      listen: (channel, handler, options) => database.listen(channel, handler, options),
-    },
+      listen: (channel, handler, listening) =>
+        database.listen(channel, handler, listening),
+    }),
   });
-  return { server, instance };
+  return { server, instance, provider };
 }
 
 /** A browser tab: keeps cookies like one, and remembers the bearer token a sign-in hands out. */

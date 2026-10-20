@@ -1,5 +1,5 @@
 import type { AgentActivityKind, AgentActivityState } from "@parlor/client/react";
-import { Chat, useSession } from "@parlor/client/react";
+import { Chat, useAgentConfirmations, useSession } from "@parlor/client/react";
 import {
   createRootRoute,
   Link,
@@ -10,6 +10,7 @@ import {
 
 import { AgentPanel } from "../agent-panel.js";
 import { auth } from "../auth.js";
+import { allCardsVisible, useSidebarView } from "../sidebar-view.js";
 import { agentPanel } from "../views.js";
 
 export const Route = createRootRoute({
@@ -83,5 +84,11 @@ function describe(state: AgentActivityState): string {
 }
 
 function AgentIndicator() {
-  return <Chat.Activity className="agent-status">{describe}</Chat.Activity>;
+  const pending = useAgentConfirmations();
+  const view = useSidebarView();
+  return (
+    <Chat.Activity className="agent-status" hidden={allCardsVisible(pending, view)}>
+      {describe}
+    </Chat.Activity>
+  );
 }

@@ -68,13 +68,41 @@ async function resolveHeaders(
   return headers;
 }
 
-async function toActionError(response: Response): Promise<ActionError> {
+export async function toActionError(
+  response: Response,
+  options: { readonly missingIsNotFound?: boolean } = {},
+): Promise<ActionError> {
   const body: unknown = await response.json().catch(() => undefined);
   if (ActionError.isBody(body)) return ActionError.fromBody(body);
-  return new ActionError(
-    "internal",
-    `Action request failed with HTTP ${response.status}`,
-  );
+  const code =
+    options.missingIsNotFound && response.status === 404 ? "not_found" : "internal";
+  return new ActionError(code, `Action request failed with HTTP ${response.status}`);
+}
+
+export async function invokeAt<T extends ActionMap, K extends keyof T & string>(
+  request: ActionClient<ActionMap>["request"],
+  path: string,
+  input: ActionInput<T[K]>,
+  options: CallOptions & { readonly missingIsNotFound?: boolean } = {},
+): Promise<ActionEnvelope<ActionOutput<T[K]>>> {
+  const response = await request(path, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input ?? {}),
+    signal: options.signal ?? null,
+  });
+  if (!response.ok) {
+    throw await toActionError(
+      response,
+      options.missingIsNotFound ? { missingIsNotFound: true } : {},
+    );
+  }
+  const body = (await response.json()) as { data: ActionOutput<T[K]>; tags?: Tag[] };
+  return { data: body.data, tags: body.tags ?? [] };
+}
+
+export function resolveServerOrigin(): string {
+  return injectedServerUrl() || globalThis.location?.origin || "";
 }
 
 export function createActionClient<T extends ActionMap>(
@@ -99,15 +127,7 @@ export function createActionClient<T extends ActionMap>(
     input: ActionInput<T[K]>,
     callOptions: CallOptions = {},
   ): Promise<ActionEnvelope<ActionOutput<T[K]>>> => {
-    const response = await request(`${basePath}/actions/${name}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input ?? {}),
-      signal: callOptions.signal ?? null,
-    });
-    if (!response.ok) throw await toActionError(response);
-    const body = (await response.json()) as { data: ActionOutput<T[K]>; tags?: Tag[] };
-    return { data: body.data, tags: body.tags ?? [] };
+    return invokeAt<T, K>(request, `${basePath}/actions/${name}`, input, callOptions);
   };
 
   return {

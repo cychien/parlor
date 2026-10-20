@@ -10,6 +10,8 @@ export interface ChannelConnection {
   readonly scope: string;
   /** Who holds the stream; absent when the server resolves no identity. */
   readonly principal?: Principal | undefined;
+  /** Aborts when the stream ends, including when its holder's credential is revoked. */
+  readonly closed?: AbortSignal | undefined;
   send(data: string): void;
 }
 

@@ -102,10 +102,23 @@ async function verifiedOrigin(
 ): Promise<AgentOrigin> {
   const caller = callers && request ? await callers(request) : undefined;
   const principal = caller?.principal;
+  if (principal?.kind === "agent" && principal.turn) {
+    return { via: "agent", name: principal.agent.name };
+  }
   if (principal?.kind === "agent" && principal.agent.verified) {
     return { via: "mcp", name: principal.agent.name };
   }
   return originOf(ctx);
+}
+
+async function turnClientOf(
+  callers: CallerResolver | undefined,
+  request: Request | undefined,
+): Promise<{ readonly clientId: string } | undefined> {
+  const principal = callers && request ? (await callers(request)).principal : undefined;
+  return principal?.kind === "agent" && principal.turn
+    ? { clientId: principal.turn.clientId }
+    : undefined;
 }
 
 export function originOf(ctx: ServerContext): AgentOrigin {
@@ -250,6 +263,7 @@ export function createMcpHandler<T extends ActionMap>(
                     ctx.requestInfo,
                     await verifiedOrigin(callers, ctx.requestInfo, toolCtx),
                     signal,
+                    await turnClientOf(callers, ctx.requestInfo),
                   ),
                 ),
               ),

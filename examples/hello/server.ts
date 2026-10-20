@@ -1,4 +1,5 @@
 import { betterAuthProvider } from "@parlor/auth";
+import { chat } from "@parlor/chat/server";
 import { createDatabase } from "@parlor/data";
 import { createServer } from "@parlor/server";
 import { betterAuth } from "better-auth";
@@ -22,4 +23,5 @@ export default createServer({
   actions: registry,
   database,
   auth: betterAuthProvider({ instance: auth }),
+  plugins: [chat()],
 });

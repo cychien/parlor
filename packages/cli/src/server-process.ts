@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 
-import type { LoadedConfig, ParlorConfig } from "@parlor/config";
+import { appServerEnv, type LoadedConfig, type ParlorConfig } from "@parlor/config";
 
 import { onShutdown } from "./shutdown.js";
 
@@ -17,6 +17,7 @@ export function serverEnv(
     ...base,
     PORT: String(config.server.port),
     PARLOR_WEB_ORIGIN: `http://localhost:${config.web.port}`,
+    ...appServerEnv(config),
   };
 }
 

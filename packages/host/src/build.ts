@@ -2,8 +2,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { UI_MANIFEST_FILE } from "@parlor/agent-ui";
-import { GENERATED_DIR, type LoadedConfig } from "@parlor/config";
-import { webOutDir } from "@parlor/shell-web";
+import { appServerEnv, GENERATED_DIR, type LoadedConfig } from "@parlor/config";
+import { appCsp, serializeCsp, webOutDir } from "@parlor/shell-web";
 import { build, copyPublicAssets, createNitro, prepare } from "nitro/builder";
 import type { NitroConfig } from "nitro/types";
 
@@ -68,11 +68,21 @@ export async function buildServer(
     serverEntry: entryPath,
     compatibilityDate: options.compatibilityDate ?? DEFAULT_COMPATIBILITY_DATE,
     publicAssets: [{ dir: webOutDir(rootDir), baseURL: "/", fallthrough: true }],
+    routeRules: {
+      "/**": { headers: { "content-security-policy": serializeCsp(appCsp(config, {})) } },
+      [`${basePath}/**`]: { headers: false },
+    },
     traceDeps: [...TRACED_DEPENDENCIES],
     replace: {
       [INDEX_HTML_PLACEHOLDER]: JSON.stringify(indexHtml),
       [UI_MANIFEST_PLACEHOLDER]: uiManifest,
       [`process.env.${SYNC_TRANSPORT_ENV}`]: JSON.stringify(syncTransport),
+      ...Object.fromEntries(
+        Object.entries(appServerEnv(config)).map(([name, value]) => [
+          `process.env.${name}`,
+          JSON.stringify(value),
+        ]),
+      ),
     },
   });
   await prepare(nitro);

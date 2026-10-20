@@ -473,3 +473,127 @@ describe("ConfirmationBoard frames", () => {
     expect(items("a")).toHaveLength(1);
   });
 });
+
+describe("ConfirmationBoard thread-bound cards", () => {
+  const thread = { threadId: "thr_alice", turnId: "turn_1" };
+
+  function tabs() {
+    const harness = setup();
+    const { directory } = harness;
+    const join = (
+      clientId: string,
+      scope: string,
+      watching: string[],
+      canConfirm = true,
+    ) => {
+      harness.join(clientId, { canConfirm }, scope);
+      directory.presence(clientId, scope, {
+        type: "presence",
+        focused: true,
+        visible: true,
+        platform: "web",
+        canConfirm,
+        watching,
+      });
+    };
+    return { ...harness, join };
+  }
+
+  it("reaches both of the owner's tabs on the thread and never another user's tab", () => {
+    const { board, join, items, request } = tabs();
+    join("alice-1", "alice", ["thr_alice"]);
+    join("alice-2", "alice", ["thr_alice"]);
+    join("alice-3", "alice", ["thr_other"]);
+    join("bob-1", "bob", ["thr_alice"]);
+    void board.ask(request({ scope: "alice", clientId: "alice-1", thread }));
+
+    expect(items("alice-1").map((i) => [i.id, i.threadId])).toEqual([
+      ["c1", "thr_alice"],
+    ]);
+    expect(items("alice-2").map((i) => [i.id, i.threadId])).toEqual([
+      ["c1", "thr_alice"],
+    ]);
+    expect(items("alice-3")).toEqual([]);
+    expect(items("bob-1")).toEqual([]);
+  });
+
+  it("reaches the tab that sent the prompt even when it is not watching, but not when it cannot confirm", () => {
+    const { board, join, items, request } = tabs();
+    join("sender", "alice", []);
+    join("mute", "alice", ["thr_alice"], false);
+    void board.ask(request({ scope: "alice", clientId: "sender", thread }));
+    expect(items("sender").map((i) => i.id)).toEqual(["c1"]);
+    expect(items("mute")).toEqual([]);
+  });
+
+  it("is answerable from the second tab, and the first tab's card leaves", async () => {
+    const { board, join, items, request, answer } = tabs();
+    join("alice-1", "alice", ["thr_alice"]);
+    join("alice-2", "alice", ["thr_alice"]);
+    const settled = board.ask(request({ scope: "alice", clientId: "alice-1", thread }));
+    expect(answer("alice-2", "c1", true, "alice")).toBe(true);
+    await expect(settled).resolves.toBe("approved");
+    expect(items("alice-1")).toEqual([]);
+    expect(items("alice-2")).toEqual([]);
+  });
+
+  it("refuses an answer from another user's tab", () => {
+    const { board, join, request, answer } = tabs();
+    join("alice-1", "alice", ["thr_alice"]);
+    join("bob-1", "bob", ["thr_alice"]);
+    void board.ask(request({ scope: "alice", clientId: "alice-1", thread }));
+    expect(answer("bob-1", "c1", true, "bob")).toBe(false);
+  });
+
+  it("follows the thread as tabs start and stop watching it", () => {
+    const { board, join, directory, items, request } = tabs();
+    join("alice-1", "alice", ["thr_alice"]);
+    join("alice-2", "alice", []);
+    void board.ask(request({ scope: "alice", clientId: "alice-1", thread }));
+    expect(items("alice-2")).toEqual([]);
+
+    directory.presence("alice-2", "alice", {
+      type: "presence",
+      focused: true,
+      visible: true,
+      platform: "web",
+      canConfirm: true,
+      watching: ["thr_alice"],
+    });
+    expect(items("alice-2").map((i) => i.id)).toEqual(["c1"]);
+
+    directory.presence("alice-2", "alice", {
+      type: "presence",
+      focused: true,
+      visible: true,
+      platform: "web",
+      canConfirm: true,
+    });
+    expect(items("alice-2")).toEqual([]);
+    expect(items("alice-1").map((i) => i.id)).toEqual(["c1"]);
+  });
+
+  it("is unavailable when nobody can show it", async () => {
+    const { board, join, request } = tabs();
+    join("alice-1", "alice", ["thr_alice"], false);
+    await expect(
+      board.ask(request({ scope: "alice", clientId: "alice-1", thread })),
+    ).resolves.toBe("unavailable");
+  });
+
+  it("leaves an external agent's card on the presence selection, without a thread id", () => {
+    const { board, join, items, request } = tabs();
+    join("alice-1", "alice", ["thr_alice"]);
+    void board.ask(request({ scope: "alice" }));
+    expect(items("alice-1")).toEqual([
+      {
+        id: "c1",
+        action: "deleteTask",
+        description: "Delete a task by id.",
+        input: { id: "t1" },
+        origin: { via: "mcp", name: "Claude Code" },
+        expiresInMs: TIMEOUT,
+      },
+    ]);
+  });
+});

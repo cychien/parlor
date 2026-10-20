@@ -21,6 +21,8 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
+import { createHostCommand } from "./host.mjs";
+
 function canonicalPath(path) {
   try {
     return realpathSync(path);
@@ -109,6 +111,11 @@ const USAGE = `usage: hello.mjs <command> [args]
                           any other axi command (screenshot FILE, wait TEXT, eval JS, console) passes through
   browser ID focus on|off make the selected page report document.hasFocus() true or false, firing blur
                           or focus; open, click, fill undo off, and after a click or fill off needs a fresh tab
+  host ID pair --as USER --name NAME [--out DIR] [--no-approve] [--no-exchange]
+                          pair a fake computer with the user's account (host-initiated, PKCE, ES256)
+  host ID exchange|assert|call|request|play|hello|online|send|stream|seed-thread|list
+                          drive that computer over the real wire; host selfcheck verifies the
+                          signing helpers; see SKILL.md, "Fake host"
   screenshot ID FILE      capture the mac window or the iOS simulator screen
   info ID | list          print one instance's state, or every instance plus stray processes
                           under the home that belong to no instance
@@ -1401,19 +1408,47 @@ async function cmdScreenshot([id, file]) {
   process.stdout.write(`${path}\n`);
 }
 
-function axi(state, args, options = {}) {
+function axiEnv(state) {
   const chromeArgs = [
     process.env.CHROME_DEVTOOLS_AXI_CHROME_ARGS,
-    state.cdpPort && `--remote-debugging-port=${state.cdpPort}`,
+    state.cdpPort && !browserProfile() && `--remote-debugging-port=${state.cdpPort}`,
   ].filter(Boolean);
+  return {
+    ...process.env,
+    CHROME_DEVTOOLS_AXI_SESSION: browserSession(state),
+    CHROME_DEVTOOLS_AXI_CHROME_ARGS: chromeArgs.join(" "),
+  };
+}
+
+function axi(state, args, options = {}) {
   return run("npx", ["-y", "chrome-devtools-axi", ...args], {
-    env: {
-      ...process.env,
-      CHROME_DEVTOOLS_AXI_SESSION: browserSession(state),
-      CHROME_DEVTOOLS_AXI_CHROME_ARGS: chromeArgs.join(" "),
-    },
+    env: axiEnv(state),
     maxBuffer: 64 * 1024 * 1024,
     ...options,
+  });
+}
+
+function axiAsync(state, args) {
+  return new Promise((settle, abort) => {
+    const child = spawn("npx", ["-y", "chrome-devtools-axi", ...args], {
+      env: axiEnv(state),
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("error", (error) => abort(new CliError(`npx failed: ${error.message}`)));
+    child.on("close", (status) => {
+      if (status !== 0) {
+        abort(
+          new CliError(
+            `chrome-devtools-axi ${args.join(" ")} exited ${status}\n${stderr}${stdout}`,
+          ),
+        );
+      } else {
+        settle({ status, stdout, stderr });
+      }
+    });
   });
 }
 
@@ -1431,7 +1466,17 @@ function browserRef(state, role, name) {
   return `@${matches[0].match(pattern)[1]}`;
 }
 
-async function browserSignIn(state, name) {
+function axiOnElement(state, command, role, name, ...rest) {
+  const attempt = () => axi(state, [command, browserRef(state, role, name), ...rest]);
+  try {
+    return attempt();
+  } catch (error) {
+    if (!String(error.message).includes("STALE_REF")) throw error;
+    return attempt();
+  }
+}
+
+async function signInBrowser(state, name) {
   const user = userOf(name);
   axi(state, ["open", `${urls(state).web}/sign-in`]);
   axi(state, ["wait", "Sign"]);
@@ -1442,7 +1487,11 @@ async function browserSignIn(state, name) {
   axi(state, ["fill", browserRef(state, "textbox", "Email"), user.email]);
   axi(state, ["fill", browserRef(state, "textbox", "Password"), PASSWORD]);
   axi(state, ["click", browserRef(state, "button", "Sign in")]);
-  const result = axi(state, ["wait", "Sign out"]);
+  return axi(state, ["wait", "Sign out"]);
+}
+
+async function browserSignIn(state, name) {
+  const result = await signInBrowser(state, name);
   process.stdout.write(`signed in as ${name}\n${result.stdout}`);
 }
 
@@ -1452,13 +1501,9 @@ async function cmdBrowser([id, action, ...args]) {
   if (action === "signin") return browserSignIn(state, args[0]);
   if (action === "open")
     return print(axi(state, ["open", `${urls(state).web}${args[0] ?? "/"}`]));
-  if (action === "click")
-    return print(axi(state, ["click", browserRef(state, args[0], args[1])]));
-  if (action === "fill") {
-    return print(
-      axi(state, ["fill", browserRef(state, args[0], args[1]), args[2] ?? ""]),
-    );
-  }
+  if (action === "click") return print(axiOnElement(state, "click", args[0], args[1]));
+  if (action === "fill")
+    return print(axiOnElement(state, "fill", args[0], args[1], args[2] ?? ""));
   if (action === "focus") return setBrowserFocus(state, args[0]);
   if (action === "snapshot") {
     const result = axi(state, ["snapshot", "--full"]);
@@ -1472,8 +1517,13 @@ async function cmdBrowser([id, action, ...args]) {
   return print(axi(state, [action, ...args]));
 }
 
+function browserProfile() {
+  return process.env.HELLO_BROWSER_PROFILE || undefined;
+}
+
 function browserSession(state) {
-  return `hello-${state.id}`;
+  const profile = browserProfile();
+  return profile ? `hello-${state.id}-${profile}` : `hello-${state.id}`;
 }
 
 async function cdpConnect(url) {
@@ -1766,6 +1816,20 @@ function cmdEvidence() {
   process.stdout.write(`${dir}\n`);
 }
 
+const cmdHost = createHostCommand({
+  fail,
+  log,
+  readState,
+  urls,
+  instanceDir,
+  userOf,
+  asUser,
+  writeJsonAtomic,
+  axiAsync,
+  browserRef,
+  signInBrowser,
+});
+
 const COMMANDS = {
   up: cmdUp,
   doctor: cmdDoctor,
@@ -1778,6 +1842,7 @@ const COMMANDS = {
   agent: cmdAgent,
   token: cmdToken,
   browser: cmdBrowser,
+  host: cmdHost,
   screenshot: cmdScreenshot,
   info: ([id]) => printInfo(readState(id)),
   list: cmdList,

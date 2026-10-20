@@ -40,3 +40,22 @@ describe("app.version and app.scheme", () => {
     ).toBe("todo");
   });
 });
+
+describe("web.csp", () => {
+  const app = { id: "com.example.todo", name: "T" };
+
+  it("keeps the source lists an app adds", () => {
+    expect(
+      parseConfig({
+        app,
+        web: { csp: { "connect-src": ["https://api.example.com"] } },
+      }).web.csp,
+    ).toEqual({ "connect-src": ["https://api.example.com"] });
+  });
+
+  it("rejects a directive the policy builder does not know", () => {
+    expect(() =>
+      parseConfig({ app, web: { csp: { "script-src-elem": ["'self'"] } } }),
+    ).toThrow();
+  });
+});

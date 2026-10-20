@@ -3,6 +3,7 @@ import { resolveCapability, type SessionStore, sessionStore } from "@parlor/capa
 import {
   type ActionClient,
   createActionClient,
+  type HostAuthorizer,
   type SessionSnapshot,
   type SessionSource,
 } from "@parlor/client";
@@ -14,6 +15,7 @@ const DEFAULT_BASE_PATH = "/_parlor";
 const RETRY_BASE_MS = 1000;
 const RETRY_MAX_MS = 30_000;
 const TOKEN_HEADER = "set-auth-token";
+const HOST_IPC_REDIRECT = "urn:parlor:ipc";
 
 function injectedServerUrl(): string {
   const env = (import.meta as { env?: { PARLOR_SERVER_URL?: string } }).env;
@@ -43,7 +45,7 @@ export class AuthClientError extends Error {
   }
 }
 
-export interface AuthClient extends SessionSource {
+export interface AuthClient extends SessionSource, HostAuthorizer {
   /** Plug into `createActionClient({ headers })` so every surface carries the session. */
   readonly headers: () => Promise<HeadersInit>;
   signIn(input: { readonly email: string; readonly password: string }): Promise<void>;
@@ -175,6 +177,35 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
         await (await store)?.set(undefined);
       }
     },
+    authorizeHost: async (pairing) => {
+      const response = await (options.fetch ?? fetch)(
+        `${baseUrl}${basePath}/auth/hosts/authorize`,
+        {
+          method: "POST",
+          headers: { ...(await headers()), "content-type": "application/json" },
+          body: JSON.stringify({
+            ...pairing,
+            redirectUri: HOST_IPC_REDIRECT,
+            decision: "connect",
+          }),
+        },
+      );
+      const body = (await response.json().catch(() => undefined)) as
+        | { code?: unknown; state?: unknown; error?: { message?: string; code?: string } }
+        | undefined;
+      if (
+        !response.ok ||
+        typeof body?.code !== "string" ||
+        body.state !== pairing.state
+      ) {
+        throw new AuthClientError(
+          body?.error?.message ?? "The computer could not be connected.",
+          response.status,
+          body?.error?.code,
+        );
+      }
+      return body.code;
+    },
     account: createActionClient<AccountActions>({
       baseUrl,
       fetch: options.fetch,
@@ -184,4 +215,4 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
   };
 }
 
-export type { SessionStore } from "@parlor/capabilities";
+export type { HostPairing, SessionStore } from "@parlor/capabilities";

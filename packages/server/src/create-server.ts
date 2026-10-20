@@ -182,6 +182,7 @@ export function createServer<T extends ActionMap>(
     agentUi: agentUiOptions = {},
   } = options;
   const app = new H3();
+  const appName = process.env.PARLOR_APP_NAME || undefined;
   const syncOptions = sync === false ? undefined : sync;
   const syncEnabled = syncOptions !== undefined && database !== undefined;
   const installed = [...(auth ? [auth] : []), ...plugins];
@@ -197,9 +198,15 @@ export function createServer<T extends ActionMap>(
   const host: PluginHost = {
     basePath,
     database,
+    ...(auth ? { auth } : {}),
     callerOf: callers,
-    announce: async (target, tags) => {
+    ready,
+    announce: async (target, tags, within) => {
       if (!syncEnabled || !database || tags.length === 0) return;
+      if (within !== undefined) {
+        await recordSyncEvent(within as SyncDatabase, { scope: target, tags });
+        return;
+      }
       await ready();
       await database.transaction((tx) =>
         recordSyncEvent(tx as SyncDatabase, { scope: target, tags }),
@@ -240,6 +247,7 @@ export function createServer<T extends ActionMap>(
     const ui = agentUi?.manifest();
     return {
       protocol: PROTOCOL_VERSION,
+      ...(appName ? { app: { name: appName } } : {}),
       actions: actions.describe(),
       ...(ui ? { ui } : {}),
     };
@@ -312,9 +320,13 @@ export function createServer<T extends ActionMap>(
         await guardMcp(event.req);
       } catch (error) {
         const refusal = toActionError(error);
-        return refusal.code === "unauthenticated" && auth
-          ? auth.challenge(event.req)
-          : errorResponse(refusal);
+        const challenged =
+          refusal.code === "unauthenticated" ||
+          (await callers(event.req).then(
+            ({ principal }) => principal.kind === "host",
+            () => false,
+          ));
+        return challenged && auth ? auth.challenge(event.req) : errorResponse(refusal);
       }
       return handler.fetch(event.req);
     });

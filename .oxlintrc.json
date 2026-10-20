@@ -29,5 +29,45 @@
     "**/.parlor/**",
     "docs/**",
     "**/routeTree.gen.ts"
+  ],
+  "overrides": [
+    {
+      "files": [
+        "packages/chat/src/**/*.{ts,tsx}",
+        "packages/client/src/react/chat/**/*.{ts,tsx}"
+      ],
+      "rules": {
+        "eslint/no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "zod",
+                "message": "The browser bundle must not ship zod; validate by hand here and keep schemas in server code."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["zod/*"],
+                "message": "The browser bundle must not ship zod; validate by hand here and keep schemas in server code."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "packages/chat/src/server/**",
+        "packages/chat/src/items.ts",
+        "packages/chat/src/id-schemas.ts",
+        "packages/chat/src/**/*.spec.ts",
+        "packages/chat/src/**/*.spec-d.ts",
+        "packages/client/src/react/chat/**/*.spec.{ts,tsx}"
+      ],
+      "rules": {
+        "eslint/no-restricted-imports": "off"
+      }
+    }
   ]
 }

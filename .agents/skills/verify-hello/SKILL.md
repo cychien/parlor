@@ -26,7 +26,7 @@ Read this before starting anything.
 - One iOS instance per simulator: the app id `dev.parlor.hello` is installed once per device, so `up` refuses a second instance on the same simulator. Pass `--device` to use another. Pick a device nobody else has booted and match its full name: two booted simulators whose names share a prefix, such as "iPhone 17 Pro" and "iPhone 17 Pro Max", cannot be told apart by a window-title click guard.
 - Focus and visibility are not real here. chrome-devtools-mcp, which axi drives, emulates a focused page on every tab it manages, so by default every page reports `document.hasFocus()` true and `document.visibilityState` `visible` and never receives `blur`, even in a background tab (`selectpage` changes nothing). `$H browser <id> focus off|on` overrides that for the selected tab (see Drive). `visibilityState` cannot be changed at all: it stays `visible` in both states and `visibilitychange` never fires, in headless and in headed Chrome. Anything that depends on a hidden tab (agent UI client selection by visibility) cannot be reproduced here; do not read that as an app defect without a real window.
 - Starting a web instance takes about 6 seconds (measured: `up` copies the checkout and runs `pnpm install --offline` in the copy), so start one per isolation need without hesitation. A mac or iOS instance takes minutes because it builds the native app; reuse a running one across checks with `$H seed` and `$H sync` instead of starting a new one.
-- Browser sessions are per instance: `$H browser <id> ...` sets `CHROME_DEVTOOLS_AXI_SESSION=hello-<id>`. Never call chrome-devtools-axi without a session name, because the default session may belong to another agent.
+- Browser sessions are per instance: `$H browser <id> ...` sets `CHROME_DEVTOOLS_AXI_SESSION=hello-<id>`. Never call chrome-devtools-axi without a session name, because the default session may belong to another agent. Tabs of one session share cookies, so a second signed-in user needs a second Chrome: `HELLO_BROWSER_PROFILE=bob $H browser <id> signin bob` uses session `hello-<id>-bob` with its own cookie jar (no CDP port, so no `focus`); stop it with `HELLO_BROWSER_PROFILE=bob $H browser <id> stop`.
 - Desktop builds share one cargo target dir, `~/.cache/parlor-verify-hello/cargo-target`, so only the first mac launch compiles Tauri from scratch. Concurrent mac launches wait on cargo's lock.
 - A shell or page that comes up before the server listens keeps retrying SSE negotiation with backoff (1 s doubling to 30 s) and joins agent UI within a few seconds of the server listening, with no reload.
 - Override the root with `PARLOR_VERIFY_HOME`.
@@ -90,7 +90,7 @@ It checks: processes alive in the instance tree; the snapshot fingerprint matche
 Feature recipes live in `features/README.md`. The surfaces:
 
 - **Signing in.** Every page but `/sign-in` sends a signed-out visitor to `/sign-in`. `$H browser <id> signin [alice|bob]` signs the selected tab in through that page (signing out first when someone is signed in) and waits for the app. `seed`, `sql`, `stop` and `start` restart the instance's Chrome with a fresh profile, so sign in again afterwards. In the Mac window there is no click automation, but System Events keystrokes work: bring `parlor_app` to the front, Tab into Email, and type the password one character at a time with a short delay (typed at full speed, WKWebView drops characters).
-- **Web UI, chrome-devtools-axi.** `$H browser <id> open /` loads the page. `click ROLE NAME` and `fill ROLE NAME TEXT` find the element by ARIA role and accessible name in a fresh snapshot and fail unless exactly one matches, so refs never go stale. Handles: on `/sign-in` `textbox "Email"`, `textbox "Password"`, `button "Sign in"`, `button "Create an account"`; in the app `button "Sign out"`, on `/settings` `button "Sign out <device>"` per session and `button "Revoke <agent>"` per connected agent; `textbox "New task"`, `button "Add"`, `checkbox "<task title>"` (its snapshot line shows `checked` when done), `textbox "Name"`, heading `Hello, <name>!`, `button "Notify"`, the texts `Notifications via <platform>` and `Deep links via <platform>`. Any other axi command passes through with the instance's session: `$H browser <id> wait "Call Amy"`, `screenshot FILE`, `eval "<js>"`, `console`, `pages`, `newpage <url>`, `selectpage <id>`, `closepage <id>`. axi prints its errors on stdout; the harness includes them in the failure message.
+- **Web UI, chrome-devtools-axi.** `$H browser <id> open /` loads the page. `click ROLE NAME` and `fill ROLE NAME TEXT` find the element by ARIA role and accessible name in a fresh snapshot and fail unless exactly one matches; when the page re-renders between that snapshot and the action (`STALE_REF`) they resolve a fresh ref and retry once. Handles: on `/sign-in` `textbox "Email"`, `textbox "Password"`, `button "Sign in"`, `button "Create an account"`; in the app `button "Sign out"` and `button "Agent"` (`button "Agent, <n> pending"` while requests wait), which toggles the Agent sidebar (`region "Agent"`, a `section.agent-sidebar`; mounted on first open) holding `combobox "Agent"` (the computer and agent picker), the thread log `ol[role=log]`, `textbox "Message"`, `button "Send"`, `button "Stop"` (only while a turn runs) and `button "Close"`; on `/settings` `button "Sign out <device>"` per session, `button "Revoke <agent>"` per connected agent and `button "Revoke <host name>"` per connected computer; `textbox "New task"`, `button "Add"`, `checkbox "<task title>"` (its snapshot line shows `checked` when done), `textbox "Name"`, heading `Hello, <name>!`, `button "Notify"`, the texts `Notifications via <platform>` and `Deep links via <platform>`. Any other axi command passes through with the instance's session: `$H browser <id> wait "Call Amy"`, `screenshot FILE`, `eval "<js>"`, `console`, `pages`, `newpage <url>`, `selectpage <id>`, `closepage <id>`. axi prints its errors on stdout; the harness includes them in the failure message.
 - **Browser viewport.** The default chrome-devtools-axi viewport is 2029 px tall, so a list of about 30 rows never scrolls and a scroll check passes vacuously. Run `$H browser <id> emulate --viewport 1280x720x1` first. It stays on the tab across later `open` calls.
 - **Reading page state with `eval`.** `eval` runs in the selected page. A bare expression returns its value; statements need the function form. A missing value prints `undefined` (for `eval`) or `null`.
 
@@ -155,6 +155,92 @@ Feature recipes live in `features/README.md`. The surfaces:
 - **macOS desktop.** `$H screenshot <id> FILE` captures the `parlor_app` window by its window id, even when other windows cover it. There is no click automation for the WKWebView: drive state through HTTP or MCP and prove the window follows. Window title `Hello`, size 1024x768.
 - **iOS simulator.** `$H screenshot <id> FILE` uses `xcrun simctl io <udid> screenshot`. Deep links: `xcrun simctl openurl <udid> 'hello://open/x'` with the udid from `$H info <id>`. There is no tap automation; drive state through HTTP or MCP.
 
+## Fake host
+
+`$H host <id> ...` plays the part of a user's computer running Parlor Host, over the real wire, without an agent. It runs `createFakeHost` from `@parlor/chat/testing` resolved from the instance snapshot (through the snapshot's `tsx`), and does the pairing and the assertion signing itself with WebCrypto (ES256, no dependency), so a check can also craft bad requests. Until the checkout holds phase 3 code, a command that needs the fake host fails with `this snapshot has no @parlor/chat/testing`, and `pair` fails at the consent page because the snapshot serves no host authorize route; `host selfcheck` needs no instance and verifies the signing helpers.
+
+Each paired host (name, user, key pair as JWK, grant id, host id, server origin) is kept in `<instance>/hosts.json` by host name, so later commands name it with `--host NAME`. A fake host always talks to `server.url`, never through Vite.
+
+```sh
+$H host <id> pair --as alice --name "Test Mac" [--out DIR] [--no-approve] [--no-exchange] [--timeout S]
+$H host <id> exchange --host NAME [--replay | --wrong-key] [--out FILE]
+$H host <id> list
+$H host <id> assert --host NAME --method POST --url URL [--iat-offset SECONDS] [--jti J]
+$H host <id> call --host NAME hostHello|hostClaim|... '<json>' [--out FILE]
+$H host <id> request --host NAME --url URL [--method M] [--body JSON] [--auth host|none|"<literal authorization>"] [--assert-url URL] [--iat-offset S] [--jti J] [--header k=v] [--out FILE]
+$H host <id> hello --host NAME
+$H host <id> online --host NAME [--seconds S]
+$H host <id> play --host NAME SCRIPT.json [--out FILE] [--wait-claim SECONDS] [--turns N] [--poll-ms MS]
+$H host <id> send --host NAME [--as USER] [--text T] [--thread ID] [--turn ID] [--item ID] [--client-id C] [--out FILE]
+$H host <id> stream --host NAME [--out FILE] [--seconds S] [--since V]
+$H host <id> seed-thread --host NAME --as alice --turns 100 [--script FILE] [--out FILE]
+```
+
+- **pair.** Host-initiated: it makes a key, a PKCE verifier, `state` and a matching code, listens on `127.0.0.1:<free port>/callback`, and prints the authorize URL and the matching code as the first output line. By default it drives the instance browser to the URL (signing in as `--as` when the consent page does not show that account), writes `consent.aria.txt` and `consent.png` into `--out`, clicks `button "Connect"`, exchanges the code at `/hosts/token`, and prints the host summary, the `HostGrantResponse` and a step transcript (`pair-transcript.json` in `--out`). `--no-approve` only prints the URL and waits for the callback (`--timeout`, 120 s), so a check can open the page, click `Connect` or `Cancel` itself. `--no-exchange` stops after the callback and keeps the code, for `exchange`. A denied consent prints `{error: "access_denied", transcript}` and exits 1.
+- **exchange.** Without flags it redeems the pending code. `--replay` sends the last exchange again (same code, verifier and proof); the code is single use, so the server must answer 400 `invalid_grant`. `--wrong-key` redeems the pending code with a proof signed by a different key (T3-01). Both print status and body without touching the grant.
+- **assert** prints a fresh `ParlorHost <jws>` header value; `--iat-offset -120` backdates it, `--jti` pins the id for a replay, any `--url` or `--method` signs for another request.
+- **call** is one host action with a fresh assertion: `request.url` is `<server>/_parlor/chat/actions/<name>`; it prints `{request, startedAt, endedAt, status, headers, body}`. **request** sends any request with a host assertion, with `--assert-url`/`--assert-method` to sign for something else, `--auth none` for no credential, or `--auth "Bearer ..."` for a literal header (a turn token or a user session).
+- **hello** runs `hostHello` and prints the welcome; **online** says hello, heartbeats at the welcome's `heartbeatMs`, and on SIGTERM or `--seconds` reports offline.
+- **send** sends a prompt as the user (`--as`, default the host's user) to the host's first agent over HTTP, like the sidebar's Send. It prints `{threadId, turnId, itemId, status, body}`; ids are generated unless given.
+- **play** says hello, heartbeats, waits for a turn (`--wait-claim`, 60 s), claims it, plays the script, and repeats for `--turns` (or the script's `turns`). Start it in the background before the user sends, `$H host <id> play ... --out FILE &`. SIGTERM writes a final `terminated` event. Exit 1 when any request failed.
+- **stream** opens the host's sync stream (`GET /_parlor/sync/stream` with an assertion), records each event and when the stream ends (`endReason`: `server_closed`, `timeout`, `terminated` or `error: ...`), and writes FILE continuously, so a check can revoke the host and read when the stream closed.
+- **seed-thread** drives N full turns through the real wire, one at a time: send as the user, claim, play the script (default: a 200 char reply in 50 deltas, a `createTask` tool item, finish), finish. It prints a summary with the median and max turn time. Add `--script` to change the turn.
+
+### Play script
+
+```json
+{
+  "steps": [
+    { "op": "reply", "chars": 400, "deltas": 40, "intervalMs": 50 },
+    {
+      "op": "tool",
+      "title": "Created task",
+      "name": "createTask",
+      "kind": "app",
+      "status": "done"
+    },
+    { "op": "ask", "question": "Run it?", "as": "a1" },
+    { "op": "waitAnswer", "ask": "a1", "timeoutMs": 60000 },
+    {
+      "op": "mcp",
+      "tool": "deleteTask",
+      "input": { "id": "x" },
+      "headers": { "x-parlor-source": "ui" },
+      "as": "forged"
+    },
+    { "op": "finish" }
+  ]
+}
+```
+
+Item ids are `<turnId>.<n>` unless a step has `id`. Ops:
+
+| op           | Fields (defaults)                                                                                                                                                                                                                                                                                                        |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `reply`      | `kind` (`reply` or `reasoning`), `text` or `chars` (200), `deltas` (10), `intervalMs` (0, steady from the first delta), `stopOnCancel` (stop streaming as soon as a cancel is seen and append the text sent so far with `interrupted: true`), `holdAfterDelta: {n, ms}`, `persist: false` (stream only, no durable item) |
+| `tool`       | `title`, `name`, `kind` (`app` or `local`), `status` (`done`), `detail`, `runningMs` (when set, a `running` tool frame first, then the durable item)                                                                                                                                                                     |
+| `ask`        | `question`, `choices` (allow/reject), `approval` (`computer`), `form`, `as` (a label for `waitAnswer`)                                                                                                                                                                                                                   |
+| `waitAnswer` | `ask` (label or item id; default the last ask), `timeoutMs` (60000)                                                                                                                                                                                                                                                      |
+| `waitCancel` | `timeoutMs` (60000)                                                                                                                                                                                                                                                                                                      |
+| `mcp`        | `tool`, `input`, `headers`, `auth` (`turn` sends the claim's turn token as Bearer, `none`), `via` (`server` is `<server>/_parlor/mcp`, `web` the Vite proxy), `wait: false` (do not block the script; joined at finish), `as`                                                                                            |
+| `pause`      | `ms`                                                                                                                                                                                                                                                                                                                     |
+| `frames`     | raw `frames` (host frames), `repeat`                                                                                                                                                                                                                                                                                     |
+| `append`     | raw `items` (host item drafts), `repeat`                                                                                                                                                                                                                                                                                 |
+| `finish`     | `outcome` (`{"state":"done","stopReason":"end_turn"}`, `{"state":"cancelled"}`, `{"state":"failed","reason":"agent_exited"}`; default: cancelled when a cancel was seen, else done)                                                                                                                                      |
+
+Top level also takes `agents` (the `hostHello` agent list; default one ready agent `fake`) and `turns`. While a turn plays, `hostSignals` is polled every `--poll-ms` (100) and the token from `hostAppend` replaces the turn token.
+
+### Transcript
+
+`--out FILE` holds `{host, user, server, startedAt, endedAt, script, events}`; every event is `{at, type, ...}` with `at` from `Date.now()`, and per-turn events also carry `turn` (1-based) and `turnId`:
+
+- `hello` (`status`, `welcome`), `heartbeat` (`status`), `claim_wait`, `claim` (`turn` is the whole `ClaimedTurn`, token included), `claim_timeout`, `claim_error`.
+- `stream` (`status`, `frames`: `{type, itemId, kind, offset, chars, status}` per frame), `append` (`status`, `items`: `{id, kind, toolStatus, interrupted, chars}`, `leaseUntil`).
+- `signals` (`seen`: the signal items of that poll), `cancel_seen` and `answer_seen` (first time seen, with the item id), `wait`, `pause`.
+- `mcp_start`, `mcp_result` (`startedAt`, `ms`, `isError`, `result`), `finish` (`outcome`, `status`), `error`, `terminated`.
+
+Reading a thread afterwards: `$H host <id> call --host NAME` only reaches host actions; the user view is `POST /_parlor/chat/actions/open` or `items` with `$H token <id> --as alice`, or the thread log in the page (see `features/chat.md`).
+
 ## Evidence
 
 ```sh
@@ -183,6 +269,7 @@ $H reap                                   # exit 0 and [] when nothing runs from
 
 ## Helpers
 
-- `scripts/hello.mjs` is the whole control CLI: `up`, `doctor`, `seed`, `sql`, `stop`, `start`, `sync`, `browser`, `mcp`, `agent`, `screenshot`, `info`, `list`, `reap`, `down`, `evidence`. `$H --help` prints usage, datasets, and the home dir.
+- `scripts/hello.mjs` is the whole control CLI: `up`, `doctor`, `seed`, `sql`, `stop`, `start`, `sync`, `browser`, `mcp`, `agent`, `host`, `screenshot`, `info`, `list`, `reap`, `down`, `evidence`. `$H --help` prints usage, datasets, and the home dir.
+- `scripts/host.mjs` is the `host` command family (the fake computer); `$H host selfcheck` verifies its signing helpers without an instance.
 - `fixtures/*.sql` are the datasets.
 - `features/` is the feature map. Keep it current with the **maintain-verification-skill** skill.

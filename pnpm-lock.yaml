@@ -89,6 +89,9 @@ importers:
       '@parlor/capabilities':
         specifier: workspace:*
         version: link:../../packages/capabilities
+      '@parlor/chat':
+        specifier: workspace:*
+        version: link:../../packages/chat
       '@parlor/client':
         specifier: workspace:*
         version: link:../../packages/client
@@ -147,6 +150,9 @@ importers:
       vite:
         specifier: 'catalog:'
         version: 8.3.3(@types/node@24.19.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.3(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.3(@types/node@24.19.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15))
 
   packages/agent-ui:
     dependencies:
@@ -230,6 +236,9 @@ importers:
       '@modelcontextprotocol/client':
         specifier: ^2.3.1
         version: 2.3.1
+      '@parlor/chat':
+        specifier: workspace:*
+        version: link:../chat
       '@parlor/data':
         specifier: workspace:*
         version: link:../data
@@ -272,6 +281,40 @@ importers:
       happy-dom:
         specifier: 'catalog:'
         version: 20.14.5
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.3(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.3(@types/node@24.19.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15))
+
+  packages/chat:
+    dependencies:
+      '@parlor/agent-ui':
+        specifier: workspace:*
+        version: link:../agent-ui
+      '@parlor/core':
+        specifier: workspace:*
+        version: link:../core
+      '@parlor/server':
+        specifier: workspace:*
+        version: link:../server
+      '@parlor/sync':
+        specifier: workspace:*
+        version: link:../sync
+      drizzle-orm:
+        specifier: ^0.45.4
+        version: 0.45.4(@electric-sql/pglite@0.5.9)(@types/pg@8.23.1)(kysely@0.29.7)(pg@8.23.1)
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5
+    devDependencies:
+      '@parlor/data':
+        specifier: workspace:*
+        version: link:../data
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.19.1
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -336,6 +379,9 @@ importers:
       '@parlor/capabilities':
         specifier: workspace:*
         version: link:../capabilities
+      '@parlor/chat':
+        specifier: workspace:*
+        version: link:../chat
       '@parlor/core':
         specifier: workspace:*
         version: link:../core

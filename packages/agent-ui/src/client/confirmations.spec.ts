@@ -145,3 +145,23 @@ describe("createConfirmationStore", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
+describe("createConfirmationStore thread ids", () => {
+  it("exposes the thread of a card an inline agent raised, and none on an external agent's", () => {
+    const { store } = setup();
+    store.replace([{ ...prompt("c1"), threadId: "thr_1" }, prompt("c2")]);
+    expect(store.get().map((c) => [c.id, c.threadId])).toEqual([
+      ["c1", "thr_1"],
+      ["c2", undefined],
+    ]);
+  });
+
+  it("treats the same card moving to another thread as a new card", () => {
+    const { store } = setup();
+    store.replace([{ ...prompt("c1"), threadId: "thr_1" }]);
+    const first = store.get()[0];
+    store.replace([{ ...prompt("c1"), threadId: "thr_2" }]);
+    expect(store.get()[0]).not.toBe(first);
+    expect(store.get()[0]?.threadId).toBe("thr_2");
+  });
+});

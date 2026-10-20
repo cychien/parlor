@@ -10,6 +10,7 @@ import type { ActionRegistry } from "@parlor/core/registry";
 import type { ServerChannel } from "@parlor/sync";
 
 import type { CallerOf } from "./access.js";
+import type { AuthProvider } from "./auth.js";
 import type { Caller } from "./caller.js";
 
 /**
@@ -93,10 +94,18 @@ export function pluginRoute<const K extends SignedInKind | "anonymous">(
 export interface PluginHost {
   readonly basePath: string;
   readonly database: DataProvider | undefined;
+  /** The installed auth provider, for plugins that mint or look up credentials (chat). */
+  readonly auth?: AuthProvider | undefined;
   callerOf(request: Request): Promise<Caller>;
   /**
-   * Records a sync event for writes made outside an action's transaction, such as through
-   * a library that holds its own connection. Does nothing when sync is off.
+   * Resolves once the database holds every plugin's tables. Work a plugin starts on its own,
+   * such as a timer, waits for it; request handlers need not, as the server awaits it first.
    */
-  announce(scope: string, tags: readonly Tag[]): Promise<void>;
+  ready?(): Promise<void>;
+  /**
+   * Records a sync event for writes made outside an action's transaction, such as through
+   * a library that holds its own connection. With `tx`, the event commits with that
+   * transaction instead of its own. Does nothing when sync is off.
+   */
+  announce(scope: string, tags: readonly Tag[], tx?: unknown): Promise<void>;
 }
