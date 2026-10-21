@@ -67,3 +67,11 @@ test("every chat write returns its thread or host id as `id`, its sync tag", () 
 test("a claim hands over everything a turn needs in one response", () => {
   expectTypeOf<ActionOutput<ChatActionMap["hostClaim"]>>().toEqualTypeOf<ClaimedTurn>();
 });
+
+test("announcing activity takes no input and is a user action only", () => {
+  expectTypeOf<ActionInput<ChatActionMap["userActive"]>>().toEqualTypeOf<
+    Record<string, never>
+  >();
+  expectTypeOf<keyof ChatUserActionMap>().toExtend<keyof ChatActionMap>();
+  expectTypeOf<"userActive">().not.toExtend<keyof ChatHostActionMap>();
+});

@@ -2,7 +2,7 @@ import type { AgentConfirmation } from "@parlor/agent-ui/client";
 import type { ChatItem } from "@parlor/chat";
 import { expectTypeOf, test } from "vitest";
 
-import type { ConnectOption } from "./runtime.js";
+import type { ChatWait, ConnectOption } from "./runtime.js";
 import type { useChat } from "./use-chat.js";
 
 type Chat = ReturnType<typeof useChat>;
@@ -17,4 +17,10 @@ test("the chat's items are the folded log; an inline confirmation is the app's o
   expectTypeOf<
     Extract<Chat["items"][number], { kind: "confirm" }>["confirmation"]
   >().toEqualTypeOf<AgentConfirmation>();
+});
+
+test("a waiting chat names the computer and why, so the app never guesses from the items", () => {
+  expectTypeOf<Chat["wait"]>().toEqualTypeOf<ChatWait | undefined>();
+  expectTypeOf<ChatWait["reason"]>().toEqualTypeOf<"offline" | "approval">();
+  expectTypeOf<ChatWait["hostName"]>().toEqualTypeOf<string>();
 });

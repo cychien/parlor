@@ -252,3 +252,60 @@ describe("the phase 6 skeleton contract", () => {
     ).not.toThrow();
   }, 120_000);
 });
+
+const SKELETON_7: Readonly<Record<string, string>> = JSON.parse(
+  readFileSync(join(PACKAGE, "src", "testing", "skeleton-phase7.json"), "utf8"),
+);
+
+function drift7(file: string, only: readonly string[]): Difference[] {
+  const text = SKELETON_7[file];
+  if (text === undefined) throw new Error(`The skeleton fixture has no ${file}.`);
+  return differences(file, text, source(file), only);
+}
+
+const DIFFERENCES_7: Readonly<
+  Record<string, { readonly agreed: boolean; readonly why: string }>
+> = {
+  "client/src/react/chat/runtime.ts ChatState changed": {
+    agreed: true,
+    why: "spec 8.7: `wait` names the computer a waiting chat waits for and why",
+  },
+  "sync/src/client/sync-client.ts SyncClientOptions changed": {
+    agreed: true,
+    why: "spec 8.7: `pollEveryMs`, `requestTimeoutMs` and `onResume`, so the host adapts its interval and a dropped connection cannot hang; `onNegotiated` is the source of FrameworkSync.transport()",
+  },
+};
+
+describe("the phase 7 skeleton contract", () => {
+  it("K7: every file this phase implements keeps the skeleton's exported signatures, but for the differences listed here", () => {
+    const found = [
+      ...drift7("packages/sync/src/client/sync-client.ts", [
+        "SyncClient",
+        "SyncClientOptions",
+      ]),
+      ...drift7("packages/agent-host/src/link.ts", [
+        "ACTIVE_POLL_MS",
+        "IDLE_POLL_MS",
+        "RECONNECT_MAX_MS",
+      ]),
+      ...drift7("packages/client/src/react/chat/runtime.ts", ["ChatState"]),
+    ].map(
+      ({ file, symbol, kind }) =>
+        `${file.split("/").slice(1).join("/")} ${symbol} ${kind}`,
+    );
+    expect(found.sort()).toEqual(Object.keys(DIFFERENCES_7).sort());
+  });
+
+  it("K7: the chat and client type tests hold under the type checker, with the wait and userActive pinned", () => {
+    for (const name of ["chat", "client"]) {
+      const directory = join(REPOSITORY, "packages", name);
+      expect(() =>
+        execFileSync(
+          join(directory, "node_modules", ".bin", "tsc"),
+          ["-p", "tsconfig.spec.json", "--noEmit"],
+          { cwd: directory, stdio: "pipe" },
+        ),
+      ).not.toThrow();
+    }
+  }, 120_000);
+});
