@@ -1,8 +1,11 @@
-// The Keychain items a generated Mac app owns, by the exact names the Drive contract gives them.
-// An ad-hoc build's items carry an ACL bound to that build's cdhash, so a later build reading them
-// makes SecurityAgent ask for the login password: the driver deletes them before a Mac app
-// launches and when its instance goes down. Items are deleted and probed by label, service, account
-// and tag only; the Keychain is never listed and no secret is read.
+// The Keychain items a generated Mac app can own, by the exact names the Drive contract gives them.
+// The app keeps its device keys and session in the Keychain only when its build is signed by an
+// Apple-issued certificate (it has an Apple Team ID); an ad-hoc or linker-signed build, which is
+// every build this driver makes, keeps them in the 0600 `parlor-vault.json` under its HOME instead
+// (packages/shell-desktop `secret_store.rs`). The driver still deletes the items before a Mac app
+// launches and when its instance goes down: a Team ID build or an earlier build may have written
+// them, and WebKit's own master key is always a Keychain item. Items are deleted and probed by label,
+// service, account and tag only; the Keychain is never listed and no secret is read.
 import { spawn } from "node:child_process";
 
 import { nativeTool } from "./webview.mjs";

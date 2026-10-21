@@ -735,8 +735,8 @@ function relaunchMarker(state) {
 /**
  * cargo runs the dev app through this, so the app starts with appEnv and nothing of the dev tree.
  * The first launch copies the debug binary and its sidecars into the instance, and every later
- * launch of the instance runs that copy, so its signature (and its Keychain items' ACLs) never
- * changes; `sync` marks the copy stale. When `relaunch` asks, it starts the same copy again.
+ * launch of the instance runs that copy, so its signature never changes;
+ * `sync` marks the copy stale. When `relaunch` asks, it starts the same copy again.
  */
 function appRunner(state) {
   const file = join(instanceDir(state.id), "app-runner.sh");
