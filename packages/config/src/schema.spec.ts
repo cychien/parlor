@@ -59,3 +59,16 @@ describe("web.csp", () => {
     ).toThrow();
   });
 });
+
+describe("desktop.agentHost", () => {
+  const app = { id: "com.example.todo", name: "Todo" };
+
+  it("K6: is a boolean left unset by default, so a desktop app carries no host until it asks", () => {
+    expect(parseConfig({ app }).desktop).not.toHaveProperty("agentHost");
+    expect(parseConfig({ app, desktop: { agentHost: true } }).desktop.agentHost).toBe(true);
+    expect(parseConfig({ app, desktop: { agentHost: false } }).desktop.agentHost).toBe(
+      false,
+    );
+    expect(() => parseConfig({ app, desktop: { agentHost: "yes" } })).toThrow();
+  });
+});
