@@ -754,7 +754,7 @@ export function registerFakeAgent(check, { home, id, script, tag = check.id }) {
   const scriptFile = check.save(`${tag}.fake-script.json`, script);
   const logFile = join(check.dir, `${tag}.fake-agent.log`);
   const entry = join(snapshotRepo(id), "packages", "agent-host", "bin", "fake-agent.mjs");
-  const wrapper = join(check.dir, `${tag}.fake-agent.sh`);
+  const wrapper = join(home, "bin", `${tag}.fake-agent.sh`);
   const q = (v) => `'${String(v).replaceAll("'", "'\\''")}'`;
   writeFileSync(
     wrapper,
