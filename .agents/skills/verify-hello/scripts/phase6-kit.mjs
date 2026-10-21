@@ -328,22 +328,36 @@ export function axPress(pid, path) {
 }
 
 /** The app's native dialog: the window or sheet holding the static text `title`, with its texts and buttons. */
-export function findNativeDialog(pid, title) {
-  const tree = axTree(pid);
-  const scan = (node) => {
-    const texts = [];
-    const buttons = [];
-    const collect = (n) => {
-      if (n.role === "AXStaticText" && (n.value ?? n.title))
-        texts.push(n.value ?? n.title);
-      if (n.role === "AXTextArea" && n.value) texts.push(n.value);
-      if (n.role === "AXButton" && (n.title ?? n.desc))
-        buttons.push({ name: n.title ?? n.desc, path: n.path });
-      for (const c of n.children ?? []) collect(c);
-    };
-    collect(node);
-    return { texts, buttons };
+/**
+ * The pids that can own an app's native alert: the app itself, and UserNotificationCenter, which
+ * draws an alert the app raises through CFUserNotification (as tauri-plugin-dialog does off the
+ * main thread).
+ */
+export function dialogOwners(ownerPid) {
+  const center = runSync("pgrep", ["-x", "UserNotificationCenter"])
+    .stdout.split("\n")
+    .filter(Boolean)
+    .map(Number);
+  return [ownerPid, ...center];
+}
+
+function scanDialog(node) {
+  const texts = [];
+  const buttons = [];
+  const collect = (n) => {
+    if (n.role === "AXStaticText" && (n.value ?? n.title)) texts.push(n.value ?? n.title);
+    if (n.role === "AXTextArea" && n.value) texts.push(n.value);
+    if (n.role === "AXButton" && (n.title ?? n.desc))
+      buttons.push({ name: n.title ?? n.desc, path: n.path });
+    for (const c of n.children ?? []) collect(c);
   };
+  collect(node);
+  return { texts, buttons };
+}
+
+/** The window or sheet titled `title` or holding a static text `title` among the windows of `pid`. */
+function dialogIn(pid, title) {
+  const tree = axTree(pid);
   const containers = [];
   const walk = (node) => {
     if (["AXWindow", "AXSheet"].includes(node.role)) containers.push(node);
@@ -351,22 +365,31 @@ export function findNativeDialog(pid, title) {
   };
   for (const window of tree.windows) walk(window);
   for (const node of containers.reverse()) {
-    if (node.role === "AXWindow" && node.title === title)
+    const { texts, buttons } = scanDialog(node);
+    const titled = node.role === "AXWindow" && node.title === title;
+    if (titled || texts.some((t) => t.trim() === title))
       return {
-        ...scan(node),
-        title: node.title,
+        texts,
+        buttons,
+        title,
         frame: node.frame,
         role: node.role,
+        subrole: node.subrole,
         pid,
       };
-    const { texts, buttons } = scan(node);
-    if (
-      node.role === "AXSheet" ||
-      node.subrole === "AXDialog" ||
-      node.subrole === "AXSystemDialog"
-    ) {
-      if (texts.some((t) => t.trim() === title))
-        return { texts, buttons, title, frame: node.frame, role: node.role, pid };
+  }
+  return undefined;
+}
+
+/** The app's native dialog, in the app's own windows or the alert UserNotificationCenter draws for it. */
+export function findNativeDialog(ownerPid, title) {
+  for (const pid of dialogOwners(ownerPid)) {
+    try {
+      const found = dialogIn(pid, title);
+      if (found)
+        return { ...found, owner: pid === ownerPid ? "app" : "UserNotificationCenter" };
+    } catch {
+      /* no access to that process's windows right now */
     }
   }
   return undefined;
@@ -375,17 +398,129 @@ export function findNativeDialog(pid, title) {
 export async function waitNativeDialog(pid, title, ms) {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
-    const dialog = (() => {
-      try {
-        return findNativeDialog(pid, title);
-      } catch {
-        return undefined;
-      }
-    })();
+    const dialog = findNativeDialog(pid, title);
     if (dialog) return dialog;
     await sleep(250);
   }
   return undefined;
+}
+
+/**
+ * A machine-wide lock, held by one script at a time for `fn` (a dead holder is taken over).
+ * `ms` bounds the wait.
+ */
+export async function withMachineLock(name, fn, { ms = 3 * 60 * 60_000, onWait } = {}) {
+  const lock = join(HARNESS_HOME, `.${name}.lock`);
+  const deadline = Date.now() + ms;
+  let announced = false;
+  for (;;) {
+    try {
+      mkdirSync(lock, { recursive: false });
+      writeFileSync(join(lock, "pid"), String(process.pid));
+      break;
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      let holder = 0;
+      try {
+        holder = Number(readFileSync(join(lock, "pid"), "utf8"));
+      } catch {
+        /* being written */
+      }
+      if (holder === process.pid) return fn();
+      if (holder && runSync("kill", ["-0", String(holder)]).status !== 0)
+        rmSync(lock, { recursive: true, force: true });
+      if (!announced && onWait) onWait(holder);
+      announced = true;
+      if (Date.now() > deadline)
+        throw new Inconclusive(
+          `could not take ${lock} (held by pid ${holder}) within ${ms} ms`,
+        );
+      await sleep(1000);
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    rmSync(lock, { recursive: true, force: true });
+  }
+}
+
+const SECURITY_PROMPT = /parlor|Hello/;
+
+/** Every SecurityAgent (Keychain access) prompt on screen whose text names one of the apps under test. */
+export function securityPrompts() {
+  const pids = runSync("pgrep", ["-x", "SecurityAgent"])
+    .stdout.split("\n")
+    .filter(Boolean)
+    .map(Number);
+  const found = [];
+  for (const pid of pids) {
+    let tree;
+    try {
+      tree = axTree(pid);
+    } catch {
+      continue;
+    }
+    for (const window of tree.windows) {
+      const { texts, buttons } = scanDialog(window);
+      if (texts.some((t) => SECURITY_PROMPT.test(t)))
+        found.push({ pid, texts, buttons, frame: window.frame });
+    }
+  }
+  return found;
+}
+
+/**
+ * Runs a Mac check's `body` alone on the machine (the app's session item and the host's items
+ * live in the one login Keychain, and an ad-hoc build reading an item another build wrote makes
+ * macOS ask for the login password) and watches for such Keychain prompts. A prompt that names
+ * the apps under test is saved, denied so nothing waits on it, and makes the check INCONCLUSIVE:
+ * no script can type the user's password.
+ */
+export async function macCheck(check, body) {
+  return withMachineLock(
+    "mac-check",
+    async () => {
+      const prompts = [];
+      const run = { stopped: false };
+      const watcher = (async () => {
+        while (!run.stopped) {
+          for (const prompt of securityPrompts()) {
+            prompts.push({ at: Date.now(), ...prompt });
+            await screenshotRegion(
+              check,
+              prompt.frame,
+              `${check.id}.keychain-prompt-${prompts.length}.png`,
+            );
+            const deny = prompt.buttons.find((b) =>
+              ["拒絕", "Deny", "Cancel", "取消"].includes(b.name),
+            );
+            if (deny) runSync(axTool(), ["press", String(prompt.pid), deny.path]);
+          }
+          await sleep(1000);
+        }
+      })();
+      let failure;
+      try {
+        await body();
+      } catch (error) {
+        failure = error;
+      }
+      run.stopped = true;
+      await watcher;
+      if (prompts.length) {
+        check.save(`${check.id}.keychain-prompts.json`, prompts);
+        throw new Inconclusive(
+          `macOS asked for the login Keychain password (${prompts[0].texts.find((t) => SECURITY_PROMPT.test(t))}); an ad-hoc signed build read a Keychain item another build wrote, and no script can type the password`,
+        );
+      }
+      if (failure) throw failure;
+    },
+    {
+      onWait: (holder) =>
+        check.log(`waiting for the mac-check lock held by pid ${holder}`),
+    },
+  );
 }
 
 export async function screenshotRegion(check, frame, name) {
@@ -748,14 +883,16 @@ export async function buildHostRelease(check, { version, signWith, trusted, labe
   const out = join(check.dir, `${label}.release`);
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
-  const result = await runAsync(
-    process.execPath,
-    [script, "--version", version, "--key", signWith.key, "--out", out],
-    {
-      cwd: ROOT,
-      env: { ...process.env, PARLOR_HOST_RELEASE_KEY_FILE: trusted.pub },
-      timeout: 900_000,
-    },
+  const result = await withMachineLock("host-release", () =>
+    runAsync(
+      process.execPath,
+      [script, "--version", version, "--key", signWith.key, "--out", out],
+      {
+        cwd: ROOT,
+        env: { ...process.env, PARLOR_HOST_RELEASE_KEY_FILE: trusted.pub },
+        timeout: 900_000,
+      },
+    ),
   );
   check.save(`${label}.release.log`, `${result.stdout}\n${result.stderr}`);
   if (
