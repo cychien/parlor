@@ -73,7 +73,6 @@ export type Action =
   | { readonly do: "refuse_downgrade"; readonly running: HostRelease }
   | { readonly do: "hand_over"; readonly client: Sidecar; readonly running: HostRelease };
 
-/** What to do about the service, given what answers on the control socket and who asks. */
 export function actionFor(situation: Situation, client: ServiceClient): Action {
   switch (situation.service) {
     case "legacy":
@@ -94,11 +93,9 @@ export function actionFor(situation: Situation, client: ServiceClient): Action {
 }
 
 export interface ServiceDeps {
-  /** The release public key this build trusts. */
   readonly releaseKey: string | undefined;
   readonly readyMs: number;
   readonly pollMs: number;
-  /** Starts a detached service; spawns the binary unless a spec stands in for it. */
   readonly start?:
     | ((paths: HostPaths, command: string, args: readonly string[]) => Promise<void>)
     | undefined;

@@ -18,15 +18,12 @@ export interface ReleaseSignature {
   readonly v: 1;
   readonly version: string;
   readonly platform: string;
-  /** hex SHA-256 of the binary */
   readonly sha256: string;
-  /** base64url Ed25519 over `releaseBytes` */
   readonly signature: string;
 }
 
 export const isVersion = (text: string) => VERSION.test(text);
 
-/** Numeric `major.minor.patch`: negative when `a` is older than `b`. */
 export function compareVersions(a: string, b: string): number {
   const [left, right] = [a, b].map((version) => {
     const match = VERSION.exec(version);

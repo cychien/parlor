@@ -177,7 +177,6 @@ const thumbprint = (point: JsonWebKey) =>
       .digest(),
   );
 
-/** A keystore as the native side behaves: raw P-256 signatures, the proof built from the enrollment bytes. */
 export function fakeKeystore(): FakeKeystore {
   const signing = generateKeyPairSync("ec", { namedCurve: "P-256" });
   const presence = generateKeyPairSync("ec", { namedCurve: "P-256" });

@@ -49,7 +49,6 @@ async function acquire(path: string, staleMs: number): Promise<void> {
   }
 }
 
-/** A cross-process mutex: an `O_EXCL` file holding its owner's pid, stolen once the owner is dead or silent for `staleMs`. */
 export async function withFileLock<T>(
   path: string,
   work: () => Promise<T>,

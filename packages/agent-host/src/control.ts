@@ -34,7 +34,6 @@ export type ControlRequest =
 
 export type ControlOp = ControlRequest["op"];
 
-/** One app the service holds a grant for, which `status` lists so two apps stay apart. */
 export interface GrantSummary {
   readonly appOrigin: string;
   readonly appName: string;

@@ -19,7 +19,6 @@ import { logEvent } from "./log.js";
 export interface McpProxy {
   listen(socketPath: string): Promise<void>;
   open(appServer: string, appOrigin: string): ProxySession;
-  /** Accepts no new connection and leaves the live ones alone, for a service handing over to a newer one. */
   stopListening(): Promise<void>;
   close(): Promise<void>;
 }

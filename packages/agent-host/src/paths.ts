@@ -13,7 +13,6 @@ export interface HostPaths {
   readonly versions: string;
   /** What the login item points at; a link into `versions/<version>/`, never into an app bundle. */
   readonly current: string;
-  /** Held by `ensureService` from the first look at the service until it answers. */
   readonly lock: string;
   readonly logs: string;
   readonly launchAgent: string;

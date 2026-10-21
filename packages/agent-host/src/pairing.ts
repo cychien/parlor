@@ -252,7 +252,6 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-/** What the host exchanged the page's code for, shown by the shell's own dialog, never the page's claim. */
 export interface LocalPairingReview {
   readonly account: string;
   readonly appName: string;
@@ -357,7 +356,6 @@ function presenceKeyOf(value: unknown): PairingDevice["presenceKey"] {
   return undefined;
 }
 
-/** The device a shell hands over, kept only when it is whole: a half-formed one pins nothing. */
 export function pairingDeviceOf(value: unknown): PairingDevice | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const device = value as Record<string, unknown>;
