@@ -460,7 +460,7 @@ export async function runTurn(
         const session: AgentSession = await connection.openSession({
           cwd: grant.workspace,
           mcpServers: [proxy.server],
-          resume: pool.resumable(grant, threadId, agentId),
+          resume: await pool.resumable(grant, threadId, agentId),
           pinAskMode: true,
           strictAsk: deps.policy.answers !== "off",
         });

@@ -1,9 +1,6 @@
-import { readFileSync } from "node:fs";
-import { mkdir, rename, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
-
 import type { AgentConnection, AgentSession } from "./acp.js";
 import type { AppGrant } from "./grants.js";
+import { jsonFile } from "./json-file.js";
 import type { ProxySession } from "./mcp-proxy.js";
 
 export interface LiveSession {
@@ -37,7 +34,11 @@ export interface SessionPool {
     session: LiveSession,
   ): void;
   /** The last session id, from `sessions.json`, for `session/resume` after a restart. */
-  resumable(grant: PooledGrant, threadId: string, agentId: string): string | undefined;
+  resumable(
+    grant: PooledGrant,
+    threadId: string,
+    agentId: string,
+  ): Promise<string | undefined>;
   drop(appOrigin: string, agentId?: string): Promise<void>;
   /** Erases the grant's remembered session ids, once the grant is gone. */
   forget(grant: PooledGrant): Promise<void>;
@@ -47,14 +48,6 @@ const keyOf = (...parts: readonly string[]) => parts.join("\u0000");
 
 const sessionKeyOf = (grant: PooledGrant, threadId: string, agentId: string) =>
   keyOf(grant.appOrigin, grant.grantId, threadId, agentId);
-
-function readRemembered(file: string): Record<string, string> {
-  try {
-    return JSON.parse(readFileSync(file, "utf8")) as Record<string, string>;
-  } catch {
-    return {};
-  }
-}
 
 interface Launching {
   readonly controller: AbortController;
@@ -73,21 +66,7 @@ export function createSessionPool(stateFile: string): SessionPool {
     string,
     { readonly live: LiveSession; readonly owner: string }
   >();
-  const remembered = readRemembered(stateFile);
-  let saving: Promise<void> = Promise.resolve();
-
-  const save = () => {
-    const snapshot = `${JSON.stringify(remembered, null, 2)}\n`;
-    saving = saving
-      .then(async () => {
-        await mkdir(dirname(stateFile), { recursive: true, mode: 0o700 });
-        const staged = `${stateFile}.${process.pid}.tmp`;
-        await writeFile(staged, snapshot, { mode: 0o600 });
-        await rename(staged, stateFile);
-      })
-      .catch(() => undefined);
-    return saving;
-  };
+  const remembered = jsonFile<Record<string, string>>(stateFile);
 
   const discard = (owner: string) => {
     processes.delete(owner);
@@ -156,11 +135,14 @@ export function createSessionPool(stateFile: string): SessionPool {
       }
       const key = sessionKeyOf(grant, threadId, agentId);
       sessions.set(key, { live, owner });
-      remembered[key] = live.session.id;
-      void save();
+      void remembered
+        .change((all) => void (all[key] = live.session.id))
+        .catch(() => undefined);
     },
-    resumable: (grant, threadId, agentId) =>
-      remembered[sessionKeyOf(grant, threadId, agentId)],
+    resumable: async (grant, threadId, agentId) => {
+      const all = await remembered.read().catch(() => ({}) as Record<string, string>);
+      return all[sessionKeyOf(grant, threadId, agentId)];
+    },
     async drop(appOrigin, agentId) {
       const owned = ownedBy(appOrigin, agentId);
       for (const [owner, pending] of launching) {
@@ -174,10 +156,11 @@ export function createSessionPool(stateFile: string): SessionPool {
     },
     async forget(grant) {
       const prefix = keyOf(grant.appOrigin, grant.grantId, "");
-      for (const key of Object.keys(remembered)) {
-        if (key.startsWith(prefix)) delete remembered[key];
-      }
-      await save();
+      await remembered.change((all) => {
+        for (const key of Object.keys(all)) {
+          if (key.startsWith(prefix)) delete all[key];
+        }
+      });
     },
   };
 }
