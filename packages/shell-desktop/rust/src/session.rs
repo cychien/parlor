@@ -2,7 +2,21 @@ use tauri::AppHandle;
 
 const ACCOUNT: &str = "parlor.session";
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", debug_assertions))]
+mod store {
+    use super::ACCOUNT;
+    use crate::dev_vault;
+
+    pub fn get(service: &str) -> Result<Option<String>, String> {
+        dev_vault::get(service, ACCOUNT)
+    }
+
+    pub fn set(service: &str, token: Option<&str>) -> Result<(), String> {
+        dev_vault::set(service, ACCOUNT, token)
+    }
+}
+
+#[cfg(all(target_os = "macos", not(debug_assertions)))]
 mod store {
     use super::ACCOUNT;
     use security_framework::passwords::{

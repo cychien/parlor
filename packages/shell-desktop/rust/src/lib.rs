@@ -1,5 +1,7 @@
 #[cfg(unix)]
 mod control;
+#[cfg(all(target_os = "macos", debug_assertions))]
+mod dev_vault;
 mod device_key;
 #[cfg(unix)]
 mod dialog;

@@ -16,38 +16,21 @@ mod apple {
     use std::sync::mpsc;
 
     use block2::RcBlock;
-    use core_foundation::base::{TCFType, ToVoid};
-    use core_foundation::boolean::CFBoolean;
-    use core_foundation::data::CFData;
+    use core_foundation::base::ToVoid;
     use core_foundation::dictionary::{CFDictionary, CFMutableDictionary};
-    use core_foundation::number::CFNumber;
-    use core_foundation::string::CFString;
-    use core_foundation_sys::base::CFTypeRef;
-    use core_foundation_sys::string::CFStringRef;
     use objc2::runtime::Bool;
     use objc2_foundation::{NSError, NSString};
     use objc2_local_authentication::{LAContext, LAPolicy};
-    use security_framework::access_control::{ProtectionMode, SecAccessControl};
     use security_framework::key::{Algorithm, SecKey};
-    use security_framework_sys::access_control::{
-        kSecAccessControlPrivateKeyUsage, kSecAccessControlUserPresence,
-    };
-    use security_framework_sys::base::{SecKeyRef, errSecItemNotFound};
-    use security_framework_sys::item::{
-        kSecAttrAccessControl, kSecAttrIsPermanent, kSecAttrKeyClass, kSecAttrKeyClassPrivate,
-        kSecAttrKeySizeInBits, kSecAttrKeyType, kSecAttrKeyTypeECSECPrimeRandom, kSecAttrLabel,
-        kSecAttrTokenID, kSecAttrTokenIDSecureEnclave, kSecClass, kSecClassKey,
-        kSecPrivateKeyAttrs, kSecReturnRef,
-    };
-    use security_framework_sys::keychain_item::SecItemCopyMatching;
+    use security_framework_sys::item::kSecAttrTokenID;
 
     use super::PublicPoint;
     use crate::device_key::{der_to_raw, report_of};
 
-    #[link(name = "Security", kind = "framework")]
-    unsafe extern "C" {
-        static kSecAttrApplicationTag: CFStringRef;
-    }
+    #[cfg(not(debug_assertions))]
+    use keychain::{create, stored};
+    #[cfg(debug_assertions)]
+    use vault::{create, stored};
 
     const SIGNING: &str = "signing";
     const PRESENCE: &str = "presence";
@@ -60,10 +43,6 @@ mod apple {
         presence: bool,
     }
 
-    fn tag(identifier: &str, name: &str) -> Vec<u8> {
-        format!("{identifier}.device-key.{name}").into_bytes()
-    }
-
     fn dictionary(pairs: Vec<(*const c_void, *const c_void)>) -> CFDictionary {
         let mut dictionary = CFMutableDictionary::new();
         for (key, value) in pairs {
@@ -72,84 +51,226 @@ mod apple {
         dictionary.to_immutable()
     }
 
-    fn lookup(tag: &[u8]) -> Result<Option<SecKey>, String> {
-        let tag = CFData::from_buffer(tag);
-        let wanted = CFBoolean::true_value();
-        let query = unsafe {
-            dictionary(vec![
-                (kSecClass.to_void(), kSecClassKey.to_void()),
-                (kSecAttrApplicationTag.to_void(), tag.to_void()),
-                (
-                    kSecAttrKeyClass.to_void(),
-                    kSecAttrKeyClassPrivate.to_void(),
-                ),
-                (kSecReturnRef.to_void(), wanted.to_void()),
-            ])
+    #[cfg(not(debug_assertions))]
+    mod keychain {
+        use core_foundation::base::{TCFType, ToVoid};
+        use core_foundation::boolean::CFBoolean;
+        use core_foundation::data::CFData;
+        use core_foundation::number::CFNumber;
+        use core_foundation::string::CFString;
+        use core_foundation_sys::base::CFTypeRef;
+        use core_foundation_sys::string::CFStringRef;
+        use security_framework::access_control::{ProtectionMode, SecAccessControl};
+        use security_framework::key::SecKey;
+        use security_framework_sys::access_control::{
+            kSecAccessControlPrivateKeyUsage, kSecAccessControlUserPresence,
         };
-        let mut found: CFTypeRef = std::ptr::null();
-        let status = unsafe { SecItemCopyMatching(query.as_concrete_TypeRef(), &mut found) };
-        if status == errSecItemNotFound {
-            return Ok(None);
+        use security_framework_sys::base::{SecKeyRef, errSecItemNotFound};
+        use security_framework_sys::item::{
+            kSecAttrAccessControl, kSecAttrIsPermanent, kSecAttrKeyClass, kSecAttrKeyClassPrivate,
+            kSecAttrKeySizeInBits, kSecAttrKeyType, kSecAttrKeyTypeECSECPrimeRandom, kSecAttrLabel,
+            kSecAttrTokenID, kSecAttrTokenIDSecureEnclave, kSecClass, kSecClassKey,
+            kSecPrivateKeyAttrs, kSecReturnRef,
+        };
+        use security_framework_sys::keychain_item::SecItemCopyMatching;
+
+        use super::{can_evaluate, dictionary};
+
+        #[link(name = "Security", kind = "framework")]
+        unsafe extern "C" {
+            static kSecAttrApplicationTag: CFStringRef;
         }
-        if status != 0 || found.is_null() {
-            return Err(format!("Keychain lookup failed ({status})"));
+
+        fn tag(identifier: &str, name: &str) -> Vec<u8> {
+            format!("{identifier}.device-key.{name}").into_bytes()
         }
-        Ok(Some(unsafe {
-            SecKey::wrap_under_create_rule(found as SecKeyRef)
-        }))
+
+        fn lookup(tag: &[u8]) -> Result<Option<SecKey>, String> {
+            let tag = CFData::from_buffer(tag);
+            let wanted = CFBoolean::true_value();
+            let query = unsafe {
+                dictionary(vec![
+                    (kSecClass.to_void(), kSecClassKey.to_void()),
+                    (kSecAttrApplicationTag.to_void(), tag.to_void()),
+                    (
+                        kSecAttrKeyClass.to_void(),
+                        kSecAttrKeyClassPrivate.to_void(),
+                    ),
+                    (kSecReturnRef.to_void(), wanted.to_void()),
+                ])
+            };
+            let mut found: CFTypeRef = std::ptr::null();
+            let status = unsafe { SecItemCopyMatching(query.as_concrete_TypeRef(), &mut found) };
+            if status == errSecItemNotFound {
+                return Ok(None);
+            }
+            if status != 0 || found.is_null() {
+                return Err(format!("Keychain lookup failed ({status})"));
+            }
+            Ok(Some(unsafe {
+                SecKey::wrap_under_create_rule(found as SecKeyRef)
+            }))
+        }
+
+        #[allow(deprecated)]
+        fn generate(
+            tag: &[u8],
+            enclave: bool,
+            presence: bool,
+            label: &str,
+        ) -> Result<SecKey, String> {
+            let tag = CFData::from_buffer(tag);
+            let permanent = CFBoolean::true_value();
+            let size = CFNumber::from(256);
+            let label = CFString::new(label);
+            let access = if enclave {
+                let flags = kSecAccessControlPrivateKeyUsage
+                    | if presence {
+                        kSecAccessControlUserPresence
+                    } else {
+                        0
+                    };
+                Some(
+                    SecAccessControl::create_with_protection(
+                        Some(ProtectionMode::AccessibleWhenUnlockedThisDeviceOnly),
+                        flags,
+                    )
+                    .map_err(|e| e.to_string())?,
+                )
+            } else {
+                None
+            };
+            let mut private = vec![
+                (
+                    unsafe { kSecAttrIsPermanent }.to_void(),
+                    permanent.to_void(),
+                ),
+                (unsafe { kSecAttrApplicationTag }.to_void(), tag.to_void()),
+            ];
+            if let Some(access) = &access {
+                private.push((unsafe { kSecAttrAccessControl }.to_void(), access.to_void()));
+            }
+            let private = dictionary(private);
+            let mut attributes = vec![
+                (
+                    unsafe { kSecAttrKeyType }.to_void(),
+                    unsafe { kSecAttrKeyTypeECSECPrimeRandom }.to_void(),
+                ),
+                (unsafe { kSecAttrKeySizeInBits }.to_void(), size.to_void()),
+                (unsafe { kSecAttrLabel }.to_void(), label.to_void()),
+                (unsafe { kSecPrivateKeyAttrs }.to_void(), private.to_void()),
+            ];
+            if enclave {
+                attributes.push((
+                    unsafe { kSecAttrTokenID }.to_void(),
+                    unsafe { kSecAttrTokenIDSecureEnclave }.to_void(),
+                ));
+            }
+            // `GenerateKeyOptions` cannot carry the application tag the key is found by
+            SecKey::generate(dictionary(attributes)).map_err(|e| e.to_string())
+        }
+
+        pub fn stored(identifier: &str, name: &str) -> Result<Option<SecKey>, String> {
+            lookup(&tag(identifier, name))
+        }
+
+        pub fn create(
+            identifier: &str,
+            name: &str,
+            presence: bool,
+        ) -> Result<Option<SecKey>, String> {
+            let tag = tag(identifier, name);
+            let label = format!("{identifier} device {name} key");
+            match generate(&tag, true, presence, &label) {
+                Ok(key) => Ok(Some(key)),
+                Err(_) if presence && !can_evaluate() => Ok(None),
+                Err(_) => generate(&tag, false, presence, &label).map(Some),
+            }
+        }
     }
 
-    #[allow(deprecated)]
-    fn generate(tag: &[u8], enclave: bool, presence: bool, label: &str) -> Result<SecKey, String> {
-        let tag = CFData::from_buffer(tag);
-        let permanent = CFBoolean::true_value();
-        let size = CFNumber::from(256);
-        let label = CFString::new(label);
-        let access = if enclave {
-            let flags = kSecAccessControlPrivateKeyUsage
-                | if presence {
-                    kSecAccessControlUserPresence
-                } else {
-                    0
-                };
-            Some(
-                SecAccessControl::create_with_protection(
-                    Some(ProtectionMode::AccessibleWhenUnlockedThisDeviceOnly),
-                    flags,
-                )
-                .map_err(|e| e.to_string())?,
-            )
-        } else {
-            None
+    #[cfg(debug_assertions)]
+    mod vault {
+        use base64::Engine;
+        use base64::engine::general_purpose::STANDARD;
+        use core_foundation::base::{TCFType, ToVoid};
+        use core_foundation::data::CFData;
+        use core_foundation::error::CFError;
+        use core_foundation::number::CFNumber;
+        use security_framework::key::SecKey;
+        use security_framework_sys::item::{
+            kSecAttrKeyClass, kSecAttrKeyClassPrivate, kSecAttrKeySizeInBits, kSecAttrKeyType,
+            kSecAttrKeyTypeECSECPrimeRandom,
         };
-        let mut private = vec![
-            (
-                unsafe { kSecAttrIsPermanent }.to_void(),
-                permanent.to_void(),
-            ),
-            (unsafe { kSecAttrApplicationTag }.to_void(), tag.to_void()),
-        ];
-        if let Some(access) = &access {
-            private.push((unsafe { kSecAttrAccessControl }.to_void(), access.to_void()));
+        use security_framework_sys::key::SecKeyCreateWithData;
+
+        use super::{can_evaluate, dictionary};
+        use crate::dev_vault;
+
+        fn entry(name: &str) -> String {
+            format!("device-key.{name}")
         }
-        let private = dictionary(private);
-        let mut attributes = vec![
-            (
-                unsafe { kSecAttrKeyType }.to_void(),
-                unsafe { kSecAttrKeyTypeECSECPrimeRandom }.to_void(),
-            ),
-            (unsafe { kSecAttrKeySizeInBits }.to_void(), size.to_void()),
-            (unsafe { kSecAttrLabel }.to_void(), label.to_void()),
-            (unsafe { kSecPrivateKeyAttrs }.to_void(), private.to_void()),
-        ];
-        if enclave {
-            attributes.push((
-                unsafe { kSecAttrTokenID }.to_void(),
-                unsafe { kSecAttrTokenIDSecureEnclave }.to_void(),
-            ));
+
+        pub fn stored(identifier: &str, name: &str) -> Result<Option<SecKey>, String> {
+            let Some(encoded) = dev_vault::get(identifier, &entry(name))? else {
+                return Ok(None);
+            };
+            let bytes = STANDARD.decode(encoded).map_err(|e| e.to_string())?;
+            let data = CFData::from_buffer(&bytes);
+            let attributes = unsafe {
+                dictionary(vec![
+                    (
+                        kSecAttrKeyType.to_void(),
+                        kSecAttrKeyTypeECSECPrimeRandom.to_void(),
+                    ),
+                    (
+                        kSecAttrKeyClass.to_void(),
+                        kSecAttrKeyClassPrivate.to_void(),
+                    ),
+                ])
+            };
+            let mut error = std::ptr::null_mut();
+            let key = unsafe {
+                SecKeyCreateWithData(
+                    data.as_concrete_TypeRef(),
+                    attributes.as_concrete_TypeRef(),
+                    &mut error,
+                )
+            };
+            if key.is_null() {
+                return Err(unsafe { CFError::wrap_under_create_rule(error) }.to_string());
+            }
+            Ok(Some(unsafe { SecKey::wrap_under_create_rule(key) }))
         }
-        // `GenerateKeyOptions` cannot carry the application tag the key is found by
-        SecKey::generate(dictionary(attributes)).map_err(|e| e.to_string())
+
+        pub fn create(
+            identifier: &str,
+            name: &str,
+            presence: bool,
+        ) -> Result<Option<SecKey>, String> {
+            if presence && !can_evaluate() {
+                return Ok(None);
+            }
+            let size = CFNumber::from(256);
+            let attributes = dictionary(vec![
+                (
+                    unsafe { kSecAttrKeyType }.to_void(),
+                    unsafe { kSecAttrKeyTypeECSECPrimeRandom }.to_void(),
+                ),
+                (unsafe { kSecAttrKeySizeInBits }.to_void(), size.to_void()),
+            ]);
+            #[allow(deprecated)]
+            let key = SecKey::generate(attributes).map_err(|e| e.to_string())?;
+            let private = key
+                .external_representation()
+                .ok_or("The new key cannot be exported.")?;
+            dev_vault::set(
+                identifier,
+                &entry(name),
+                Some(&STANDARD.encode(private.bytes())),
+            )?;
+            Ok(Some(key))
+        }
     }
 
     fn can_evaluate() -> bool {
@@ -184,7 +305,7 @@ mod apple {
 
     fn open(identifier: &str, name: &str) -> Result<Option<Key>, String> {
         let presence = name == PRESENCE;
-        Ok(lookup(&tag(identifier, name))?.map(|key| Key { key, presence }))
+        Ok(stored(identifier, name)?.map(|key| Key { key, presence }))
     }
 
     fn open_or_create(identifier: &str, name: &str) -> Result<Option<Key>, String> {
@@ -196,14 +317,7 @@ mod apple {
             return Ok(Some(key));
         }
         let presence = name == PRESENCE;
-        let tag = tag(identifier, name);
-        let label = format!("{identifier} device {name} key");
-        let key = match generate(&tag, true, presence, &label) {
-            Ok(key) => key,
-            Err(_) if presence && !can_evaluate() => return Ok(None),
-            Err(_) => generate(&tag, false, presence, &label)?,
-        };
-        Ok(Some(Key { key, presence }))
+        Ok(create(identifier, name, presence)?.map(|key| Key { key, presence }))
     }
 
     pub fn signing_key(identifier: &str) -> Result<Key, String> {
