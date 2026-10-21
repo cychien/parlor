@@ -4,13 +4,21 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  rmSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 
 const DROPPED_ENV = /^(CLAUDECODE|CLAUDE_|ANTHROPIC_|CODEX_|OPENAI_)/;
+
+/**
+ * Where isolated HOMEs live. Short on purpose: the host's Unix sockets under
+ * `{home}/.parlor/host/run/` must stay below the 104 byte limit, so a home stays under 40 bytes.
+ */
+export const HOMES_ROOT = process.env.PARLOR_VERIFY_HOMES ?? "/private/tmp/pvh";
 
 /** The login the agents read: Codex's file login and, for Claude Code, the login Keychain. */
 export function loginLinks(realHome = homedir()) {
@@ -25,12 +33,36 @@ export function loginLinks(realHome = homedir()) {
       target: join(realHome, ".codex", "auth.json"),
       for: "codex",
     },
+    {
+      link: [".local", "bin", "claude"],
+      target: join(realHome, ".local", "bin", "claude"),
+      for: "claude",
+    },
+    {
+      link: [".local", "bin", "codex"],
+      target: join(realHome, ".local", "bin", "codex"),
+      for: "codex",
+    },
   ];
 }
 
+/** Removes an isolated HOME: its links first, so nothing behind them is touched. */
+export function removeHome(home, realHome = homedir()) {
+  for (const { link } of loginLinks(realHome)) {
+    const path = join(home, ...link);
+    try {
+      if (lstatSync(path).isSymbolicLink()) unlinkSync(path);
+    } catch {
+      /* not there */
+    }
+  }
+  rmSync(home, { recursive: true, force: true });
+}
+
 /**
- * An isolated HOME: an empty `~/.parlor`, read-only links to the developer's agent logins
- * and a `bin/open` that records the URL the host would open instead of opening it.
+ * An isolated HOME: an empty `~/.parlor`, read-only links to the developer's agent logins and
+ * to the agents themselves where their installers put them (`~/.local/bin`), and a `bin/open`
+ * that records the URL the host would open instead of opening it.
  */
 export function prepareHome(home, realHome = homedir()) {
   const root = resolve(home);

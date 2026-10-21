@@ -37,4 +37,4 @@ Preconditions:
 - The `Add` button is disabled while a create is pending; click once and wait for the title.
 - New tasks get the current time as `created_at`, so they sort after every seeded task, whose timestamps are in January 2026.
 - `$H sql` stops and restarts the instance. Run it after the browser steps, then reopen the page.
-- The mac and iOS webviews cannot be clicked from this skill. On those shells, create through MCP or HTTP and prove the list with `$H screenshot`, and report UI creation on those shells as not covered.
+- On the mac and iOS shells, create from the form with `$H webview <id> fill textbox "New task" ...` and `click button Add`, and prove the list with `$H webview <id> snapshot` and `$H screenshot`.

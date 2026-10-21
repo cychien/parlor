@@ -24,7 +24,7 @@ This directory is the maintained source for verifying the user-facing behavior o
 - UI proof is an ARIA snapshot plus a screenshot, before and after the action.
 - Agent proof is `agent-summary.json` and `agent-transcript.jsonl` plus the state read back afterwards.
 - HTTP proof is the request and the response body with its status code.
-- Shell proof (mac, iOS) is `$H doctor` output and `$H screenshot` images, because the webviews cannot be clicked from here.
+- Shell proof (mac, iOS) is `$H doctor` output, `$H screenshot` images and `$H webview <id> snapshot` before and after, with the shell driven through `$H webview <id> click|fill` (see SKILL.md, Shell webviews).
 - Report an unreachable entry point with the command tried and the unmet precondition. Never report it as verified through a different entry point.
 
 ## Feature entry contract

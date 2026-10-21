@@ -12,14 +12,20 @@ import {
   readlinkSync,
   rmSync,
   statSync,
-  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { agentLoginStatus, hostBin, hostEnv, prepareHome } from "./agent-home.mjs";
+import {
+  agentLoginStatus,
+  HOMES_ROOT,
+  hostBin,
+  hostEnv,
+  prepareHome,
+  removeHome,
+} from "./agent-home.mjs";
 
 export const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
@@ -36,10 +42,6 @@ export const HELLO = join(
   "hello.mjs",
 );
 export const REAL_HOME = homedir();
-const HOMES_ROOT = join(
-  process.env.PARLOR_VERIFY_HOME ?? join(REAL_HOME, ".cache", "parlor-verify-hello"),
-  "h",
-);
 
 export const AGENTS = [
   { id: "claude", name: "Claude Code" },
@@ -323,19 +325,7 @@ export function makeHome(check, tag = check.id) {
   return { home, prepared };
 }
 
-export function removeHome(home) {
-  for (const link of [
-    join(home, "Library", "Keychains"),
-    join(home, ".codex", "auth.json"),
-  ]) {
-    try {
-      if (lstatSync(link).isSymbolicLink()) unlinkSync(link);
-    } catch {
-      /* not there */
-    }
-  }
-  rmSync(home, { recursive: true, force: true });
-}
+export { removeHome };
 
 export function requireLogins(check, home, agentIds) {
   const status = agentLoginStatus(home);
@@ -525,7 +515,7 @@ export class Terminal {
 }
 
 /** The page-side helpers every script shares; `Browser.page` hands them to a function. */
-const PAGE_LIB = `() => {
+export const PAGE_LIB = `() => {
   const sidebar = () => document.querySelector('section.agent-sidebar');
   const nameOf = (el) => el.getAttribute('aria-label') ?? (el.labels && el.labels[0] ? el.labels[0].textContent.trim() : '');
   const agentSelect = () => [...(sidebar()?.querySelectorAll('select,[role=combobox]') ?? [])].find((el) => nameOf(el) === 'Agent');
