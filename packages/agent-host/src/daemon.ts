@@ -1,6 +1,6 @@
 import { chmod, mkdir, readlink, realpath, rm, symlink } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
-import { basename, delimiter, join } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 
 import type { LocalHostStatus } from "@parlor/capabilities";
 import {
@@ -122,6 +122,7 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
   let profiles: readonly AgentProfile[] = [];
   let agents: AgentInfo[] = [];
   let control: Server | undefined;
+  let startup: Promise<void> = Promise.resolve();
   const clients = new Set<Socket>();
 
   const claim = async (link: AppLink): Promise<ClaimedTurn | undefined> => {
@@ -307,26 +308,40 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
   const daemon: ServiceDaemon = {
     drained,
     async start() {
-      await mkdir(paths.root, { recursive: true, mode: 0o700 });
-      await withInheritedLock(paths.lock, deps.lockToken, async () => {
-        const answering = await connectControl(paths.control);
-        if (answering) {
-          answering.close();
-          throw new HostAlreadyRunning();
-        }
+      let finishStartup!: () => void;
+      let failStartup!: (error: unknown) => void;
+      startup = new Promise<void>((resolve, reject) => {
+        finishStartup = resolve;
+        failStartup = reject;
+      });
+      startup.catch(() => undefined);
+      try {
+        await mkdir(paths.root, { recursive: true, mode: 0o700 });
+        await withInheritedLock(paths.lock, deps.lockToken, async () => {
+          const answering = await connectControl(paths.control);
+          if (answering) {
+            answering.close();
+            throw new HostAlreadyRunning();
+          }
+          await mkdir(dirname(paths.control), { recursive: true, mode: 0o700 });
+          control = createServer(serve);
+          await rm(paths.control, { force: true });
+          await new Promise<void>((resolve, reject) => {
+            control!.once("error", reject);
+            control!.listen(paths.control, () => resolve());
+          });
+          await chmod(paths.control, 0o600);
+        });
         openHostLog(join(paths.root, "logs", "daemon.log"));
         await putHostCommandFirstOnPath(paths.root);
         await deps.proxy.listen(paths.proxy);
         profiles = await loadProfiles(paths.agents);
         agents = await detectAgents(profiles);
-        control = createServer(serve);
-        await rm(paths.control, { force: true });
-        await new Promise<void>((resolve, reject) => {
-          control!.once("error", reject);
-          control!.listen(paths.control, () => resolve());
-        });
-        await chmod(paths.control, 0o600);
-      });
+        finishStartup();
+      } catch (error) {
+        failStartup(error);
+        throw error;
+      }
       logEvent("daemon_started", {
         version: deps.release.version,
         agents: agents.map((a) => a.id),
@@ -475,6 +490,7 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
   };
 
   const handle = async (request: ControlRequest): Promise<unknown> => {
+    if (request.op !== "hello") await startup;
     switch (request.op) {
       case "hello":
         return { ok: true, release: deps.release };

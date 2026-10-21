@@ -1,6 +1,6 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,7 @@ import { asId } from "@parlor/core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { acpLauncher } from "./acp.js";
+import { connectControl } from "./control.js";
 import { createHostDaemon } from "./daemon.js";
 import { type AppGrant, fileGrantStore, keychainHostKeys } from "./grants.js";
 import { createMcpProxy } from "./mcp-proxy.js";
@@ -504,4 +505,106 @@ describe("what the daemon enforces on a grant's turns", () => {
       await rm(root, { recursive: true, force: true });
     }
   }, 60_000);
+});
+
+describe("a daemon that is slow to detect its agents", () => {
+  async function slowHost() {
+    const root = await mkdtemp(join(tmpdir(), "ps-"));
+    const paths = hostPaths(join(root, ".parlor", "host"));
+    mkdirSync(paths.root, { recursive: true });
+    const binary = join(root, "slow-agent");
+    await writeFile(binary, "#!/bin/sh\nsleep 1.5\necho 1.2.3\n");
+    await chmod(binary, 0o755);
+    await writeFile(
+      paths.agents,
+      JSON.stringify([
+        {
+          id: "slow",
+          name: "Slow agent",
+          launch: { kind: "native", command: binary, args: [] },
+          binary,
+        },
+      ]),
+    );
+    const keys = memoryHostKeys();
+    const grants = fileGrantStore(paths.grants);
+    const host = createHostDaemon({
+      release: {
+        version: "0.0.0",
+        protocols: { min: 1, max: HOST_PROTOCOL },
+        control: 1,
+      },
+      paths,
+      grants,
+      keys,
+      trust: fileTrustStore(paths.trust),
+      pool: createSessionPool(paths.sessions),
+      proxy: createMcpProxy("parlor-host"),
+      launcher: acpLauncher(),
+      prompter: {
+        confirmPairing: async () => false,
+        approveDevice: async () => false,
+        answerHere: async () => undefined,
+        turnStarted: () => undefined,
+      },
+      policy: DEV_POLICY,
+    });
+    return { root, paths, keys, grants, host };
+  }
+
+  it("binds the control socket and frees the lock before detecting agents", async () => {
+    const { root, paths, host } = await slowHost();
+    let started = false;
+    const starting = host.start().then(() => void (started = true));
+    try {
+      const control = await vi.waitFor(
+        async () => {
+          const client = await connectControl(paths.control);
+          if (!client) throw new Error("not bound");
+          return client;
+        },
+        { timeout: 1_000, interval: 20 },
+      );
+      expect((await control.send({ op: "hello", client: undefined as never })).ok).toBe(
+        true,
+      );
+      control.close();
+      expect(started).toBe(false);
+      expect(await readFile(paths.lock, "utf8").catch(() => "gone")).toBe("gone");
+      await starting;
+    } finally {
+      await starting.catch(() => undefined);
+      await host.stop();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("answers a connect that arrives mid-startup only once the agents are known", async () => {
+    const { root, paths, keys, grants, host } = await slowHost();
+    const app = await stubApp(hostRoutes({ wake: false }));
+    await (await keys.create(app.origin)).keep(asId("grant", "host:S"));
+    await grants.save(grantFor(app.origin, "Slow", join(root, "Parlor", "slow")));
+    const starting = host.start();
+    try {
+      const control = await vi.waitFor(
+        async () => {
+          const client = await connectControl(paths.control);
+          if (!client) throw new Error("not bound");
+          return client;
+        },
+        { timeout: 1_000, interval: 20 },
+      );
+      const reply = await control.send({ op: "connect", appOrigin: app.origin });
+      control.close();
+      expect(reply.ok).toBe(true);
+      const report = app.seen.find((seen) => seen.path.endsWith("/hostReport"));
+      expect(report?.body).toContain('"id":"slow"');
+      await starting;
+    } finally {
+      await starting.catch(() => undefined);
+      await host.stop();
+      await app.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
