@@ -86,19 +86,31 @@ class FakeSession implements AgentSession {
   readonly resumed = false;
   prompts = 0;
   cancels = 0;
+  cancelDelayMs: number | undefined = 100;
   handlers: TurnHandlers | undefined;
   #finish: ((stop: StopReason) => void) | undefined;
+  #busy = false;
 
   constructor(readonly id: string) {}
 
   prompt(_blocks: unknown, handlers: TurnHandlers): Promise<StopReason> {
+    if (this.#busy)
+      return Promise.reject(new Error("This session is already answering."));
+    this.#busy = true;
     this.prompts += 1;
     this.handlers = handlers;
-    return new Promise((resolve) => (this.#finish = resolve));
+    return new Promise((resolve) => {
+      this.#finish = (stop) => {
+        this.#busy = false;
+        resolve(stop);
+      };
+    });
   }
 
   cancel = async () => {
     this.cancels += 1;
+    if (this.cancelDelayMs === undefined) return new Promise<void>(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, this.cancelDelayMs));
     this.#finish?.("cancelled");
   };
 
@@ -156,7 +168,10 @@ function fakeProxy() {
 type AppendMode = "ok" | "fail" | "hang";
 
 function fakeLink() {
-  const link = { mode: "ok" as AppendMode };
+  const link = { mode: "ok" as AppendMode, finishMode: "ok" as "ok" | "fail" };
+  const finishAt: number[] = [];
+  const held: ((items: unknown[]) => void)[] = [];
+  let holdSignals = false;
   const appendAt: number[] = [];
   const appended: string[] = [];
   const finished: TurnOutcome[] = [];
@@ -179,10 +194,16 @@ function fakeLink() {
                 token: { token: "t", expiresAt: Date.now() + LEASE_MS },
               };
             case "hostFinish":
+              finishAt.push(Date.now());
+              if (link.finishMode === "fail") throw new Error("offline");
               finished.push(input.outcome as TurnOutcome);
               return { id: "t1" };
             case "hostSignals":
               signals += 1;
+              if (holdSignals) {
+                holdSignals = false;
+                return new Promise((resolve) => held.push(resolve));
+              }
               return [];
             default:
               throw new Error(`unexpected ${name}`);
@@ -196,6 +217,11 @@ function fakeLink() {
   return {
     link: stub,
     setMode: (mode: AppendMode) => void (link.mode = mode),
+    setFinishMode: (mode: "ok" | "fail") => void (link.finishMode = mode),
+    finishAt,
+    holdNextSignals: () => void (holdSignals = true),
+    releaseSignals: (items: unknown[]) =>
+      held.splice(0).forEach((resolve) => resolve(items)),
     appendAt,
     appended,
     finished,
@@ -385,5 +411,109 @@ describe("a turn whose appends keep failing", () => {
     expect(typeof line!.at).toBe("number");
     run.session.end();
     await run.outcome;
+  }, 60_000);
+});
+
+describe("a lost turn whose agent is slow to cancel", () => {
+  it("T7-04 (f) waits for the cancelled prompt to settle, so the next turn finds the session free", async () => {
+    const agent = fakeAgent();
+    const { proxy } = fakeProxy();
+    const first = await started("thread-a", agent, proxy);
+    first.session.cancelDelayMs = 3 * SECOND;
+    first.link.setMode("fail");
+    first.session.say("thinking");
+
+    let ended: TurnOutcome | undefined;
+    void first.outcome.then((value) => (ended = value));
+    await vi.advanceTimersByTimeAsync(LEASE_MS + SECOND);
+    expect(first.session.cancels).toBe(1);
+    expect(ended).toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(3 * SECOND);
+    expect(ended).toEqual({ state: "failed", reason: "host_lost" });
+
+    const later = runTurn(claim("thread-a"), deps(fakeLink().link, agent, proxy));
+    await until(() => first.session.prompts === 2);
+    expect(agent.sessions).toHaveLength(1);
+    expect(agent.kills()).toBe(0);
+    first.session.end();
+    expect(await later).toEqual({ state: "done", stopReason: "end_turn" });
+  }, 60_000);
+
+  it("T7-04 (g) treats an agent that never stops as one to drop, after a bounded wait", async () => {
+    const agent = fakeAgent();
+    const { proxy } = fakeProxy();
+    const run = await started("thread-a", agent, proxy);
+    run.session.cancelDelayMs = undefined;
+    run.link.setMode("fail");
+    run.session.say("thinking");
+
+    let ended: TurnOutcome | undefined;
+    void run.outcome.then((value) => (ended = value));
+    await vi.advanceTimersByTimeAsync(LEASE_MS + SECOND);
+    expect(ended).toBeUndefined();
+    expect(agent.kills()).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(5 * SECOND);
+    expect(ended).toEqual({ state: "failed", reason: "host_lost" });
+    expect(agent.kills()).toBe(1);
+  }, 60_000);
+
+  it("T7-04 (h) ends the signals loop with the turn, so a late cancel never reaches the next prompt", async () => {
+    const agent = fakeAgent();
+    const { proxy } = fakeProxy();
+    const link = fakeLink();
+    const first = await started("thread-a", agent, proxy, link);
+    link.holdNextSignals();
+    await vi.advanceTimersByTimeAsync(SECOND);
+    link.setMode("fail");
+    first.session.say("thinking");
+    await vi.advanceTimersByTimeAsync(LEASE_MS + 5 * SECOND);
+    expect((await first.settled).value).toEqual({ state: "failed", reason: "host_lost" });
+    expect(first.session.cancels).toBe(1);
+
+    const later = runTurn(claim("thread-a"), deps(fakeLink().link, agent, proxy));
+    await until(() => first.session.prompts === 2);
+    link.releaseSignals([
+      {
+        turnId: asId("turn", "u1"),
+        items: [{ seq: 1e6, kind: "cancel", body: {} }],
+      },
+    ]);
+    await vi.advanceTimersByTimeAsync(2 * SECOND);
+    expect(first.session.cancels).toBe(1);
+    first.session.end();
+    expect(await later).toEqual({ state: "done", stopReason: "end_turn" });
+  }, 60_000);
+});
+
+describe("a turn whose hostFinish keeps failing", () => {
+  it("T7-04 (i) retries hostFinish through a network drop and reports the turn done", async () => {
+    const agent = fakeAgent();
+    const { proxy } = fakeProxy();
+    const run = await started("thread-a", agent, proxy);
+    run.link.setFinishMode("fail");
+    run.session.end();
+    await vi.advanceTimersByTimeAsync(10 * SECOND);
+    expect(run.link.finishAt.length).toBeGreaterThan(3);
+    expect(run.link.finished).toEqual([]);
+
+    run.link.setFinishMode("ok");
+    await vi.advanceTimersByTimeAsync(5 * SECOND);
+    expect((await run.settled).value).toEqual({ state: "done", stopReason: "end_turn" });
+    expect(run.link.finished).toEqual([{ state: "done", stopReason: "end_turn" }]);
+  }, 60_000);
+
+  it("T7-04 (j) ends the turn as lost, without throwing, once the lease would have lapsed", async () => {
+    const agent = fakeAgent();
+    const { proxy } = fakeProxy();
+    const run = await started("thread-a", agent, proxy);
+    run.link.setFinishMode("fail");
+    const callAt = Date.now();
+    run.session.end();
+    await vi.advanceTimersByTimeAsync(LEASE_MS + 2 * SECOND);
+    expect((await run.settled).value).toEqual({ state: "failed", reason: "host_lost" });
+    expect(run.link.finishAt.every((at) => at - callAt < LEASE_MS)).toBe(true);
+    expect(run.link.finished).toEqual([]);
   }, 60_000);
 });

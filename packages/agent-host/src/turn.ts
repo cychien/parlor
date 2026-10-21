@@ -64,6 +64,7 @@ const MAX_APPEND_ITEMS = 64;
 const APPEND_RETRY_BASE_MS = 250;
 const APPEND_RETRY_MAX_MS = 4_000;
 const MIN_LEASE_MS = 1_000;
+const CANCEL_SETTLE_MS = 5_000;
 const QUESTION_CHOICES = [
   { id: "accept", label: "Submit", effect: "allow_once" },
   { id: "decline", label: "Decline", effect: "reject_once" },
@@ -96,6 +97,18 @@ function lapseAfter(ms: number) {
   });
   lapsed.catch(() => undefined);
   return { lapsed, cancel: () => clearTimeout(timer) };
+}
+
+async function settlesWithin(work: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), ms);
+  });
+  try {
+    return await Promise.race([work.then(() => true as const), late]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function promptMaxAgeMs(): number {
@@ -232,19 +245,12 @@ export async function runTurn(
     return id;
   };
 
-  const send = async (items: HostItemDraft[]) => {
+  const untilLeaseLapses = async <T>(call: () => Promise<T>): Promise<T> => {
     const lease = lapseAfter(leaseMs);
     try {
       for (let attempt = 0; ; attempt += 1) {
         try {
-          const renewed = await Promise.race([
-            calls.call("hostAppend", { turnId, items }),
-            lease.lapsed,
-          ]);
-          lastWrite = deps.now();
-          proxy?.renew(renewed.token);
-          logEvent("host_append", { turnId, itemIds: items.map((item) => item.id) });
-          return;
+          return await Promise.race([call(), lease.lapsed]);
         } catch (error) {
           if (error instanceof ActionError || error instanceof LeaseLapsed) throw error;
           await Promise.race([
@@ -256,6 +262,15 @@ export async function runTurn(
     } finally {
       lease.cancel();
     }
+  };
+
+  const send = async (items: HostItemDraft[]) => {
+    const renewed = await untilLeaseLapses(() =>
+      calls.call("hostAppend", { turnId, items }),
+    );
+    lastWrite = deps.now();
+    proxy?.renew(renewed.token);
+    logEvent("host_append", { turnId, itemIds: items.map((item) => item.id) });
   };
 
   const write = (items: readonly HostItemDraft[]) => {
@@ -295,8 +310,9 @@ export async function runTurn(
     proxy?.end();
     if (lost) return { state: "failed", reason: "host_lost" };
     try {
-      await calls.call("hostFinish", { turnId, outcome });
+      await untilLeaseLapses(() => calls.call("hostFinish", { turnId, outcome }));
     } catch (error) {
+      if (error instanceof LeaseLapsed) return { state: "failed", reason: "host_lost" };
       if (!(error instanceof ActionError && error.code === "forbidden")) throw error;
     }
     return outcome;
@@ -710,19 +726,30 @@ export async function runTurn(
     };
 
     let afterSeq = claimed.prompt.seq;
-    let polling = true;
+    const signalsOver = new AbortController();
+    const signalsEnded = new Promise<"ended">((resolve) =>
+      signalsOver.signal.addEventListener("abort", () => resolve("ended"), {
+        once: true,
+      }),
+    );
     const signals = async () => {
       for (;;) {
-        await sleep(SIGNAL_POLL_MS);
-        if (!polling) return;
+        if ((await Promise.race([sleep(SIGNAL_POLL_MS), signalsEnded])) === "ended")
+          return;
         let batches: TurnSignals[];
         try {
-          batches = await calls.call("hostSignals", { turns: [{ turnId, afterSeq }] });
+          const fetched = await Promise.race([
+            calls.call("hostSignals", { turns: [{ turnId, afterSeq }] }),
+            signalsEnded,
+          ]);
+          if (fetched === "ended") return;
+          batches = fetched;
         } catch {
           continue;
         }
         for (const batch of batches) {
           for (const item of batch.items) {
+            if (signalsOver.signal.aborted) return;
             afterSeq = Math.max(afterSeq, item.seq);
             if (item.kind === "cancel") {
               cancel();
@@ -747,10 +774,16 @@ export async function runTurn(
       ask,
     });
     prompted.catch(() => undefined);
-    void signals();
+    const signalsRan = signals().catch(() => undefined);
     try {
       stop = await Promise.race([prompted, exited, lostPromise]);
-      if (stop === "lost") void session.cancel();
+      if (stop === "lost") {
+        const settled = await settlesWithin(
+          Promise.allSettled([session.cancel(), prompted]),
+          CANCEL_SETTLE_MS,
+        );
+        if (!settled) await pool.drop(origin, agentId);
+      }
     } catch (error) {
       failure =
         error instanceof AgentExited
@@ -762,10 +795,11 @@ export async function runTurn(
               ),
             ]);
     } finally {
-      polling = false;
+      signalsOver.abort();
       settleAll();
       turnOver.abort();
     }
+    await signalsRan;
 
     const stopped = failure !== undefined || cancelled || stop === "cancelled";
     const final = finishFold(fold, stopped);
