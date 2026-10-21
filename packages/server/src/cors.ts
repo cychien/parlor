@@ -1,16 +1,9 @@
+import { SHELL_ORIGINS } from "@parlor/core";
 import { type H3Event, handleCors } from "h3";
 
 import { CLIENT_HEADER, SESSION_TOKEN_HEADER, SOURCE_HEADER } from "./protocol.js";
 
-export const SHELL_ORIGINS: readonly string[] = [
-  "tauri://localhost",
-  "http://tauri.localhost",
-  "https://tauri.localhost",
-  "capacitor://localhost",
-  "ionic://localhost",
-  "http://localhost",
-  "https://localhost",
-];
+export { SHELL_ORIGINS };
 
 const LOCAL_DEV_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
 

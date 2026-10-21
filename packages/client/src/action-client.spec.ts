@@ -1,7 +1,7 @@
 import { ActionError } from "@parlor/core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createActionClient } from "./action-client.js";
+import { appOrigin, createActionClient } from "./action-client.js";
 
 function fakeFetch(status: number, body: unknown) {
   return vi.fn(async () => Response.json(body, { status }));
@@ -101,5 +101,45 @@ describe("client identity and envelopes", () => {
     expect(url).toBe("https://api.test/_parlor/sync/token");
     expect(init.method).toBe("POST");
     expect(new Headers(init.headers).get("x-parlor-source")).toBe("ui");
+  });
+});
+
+describe("appOrigin", () => {
+  const SERVER = "https://hello.example.com/api";
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function pageAt(origin: string) {
+    vi.stubGlobal("location", { origin });
+  }
+
+  it("is the page origin when the app is served over http(s)", () => {
+    pageAt("https://hello.example.com");
+    expect(appOrigin(SERVER)).toBe("https://hello.example.com");
+  });
+
+  it.each([
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "capacitor://localhost",
+    "ionic://localhost",
+    "http://localhost",
+    "https://localhost",
+  ])("is the server origin in the %s webview", (origin) => {
+    pageAt(origin);
+    expect(appOrigin(SERVER)).toBe("https://hello.example.com");
+  });
+
+  it("keeps a dev server page origin that is not a shell origin", () => {
+    pageAt("http://localhost:5173");
+    expect(appOrigin(SERVER)).toBe("http://localhost:5173");
+  });
+
+  it("is the server URL itself when it is not a URL", () => {
+    pageAt("tauri://localhost");
+    expect(appOrigin("not a url")).toBe("not a url");
   });
 });
