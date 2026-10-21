@@ -400,10 +400,7 @@ async function admitsUserItem(
       throw new ActionError("forbidden", "This question is answered on the computer.");
     }
     const { signed } = draft.body;
-    if (
-      ask.approval === "presence" &&
-      !(signed?.signature.format === "webauthn" && signed.signature.presence === "user")
-    ) {
+    if (ask.approval === "presence" && signed?.signature.presence !== "user") {
       throw new ActionError("forbidden", "This question needs a presence check.");
     }
     const [state] = await query(

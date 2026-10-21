@@ -397,7 +397,26 @@ export function hostChatActions(deps: ChatActionDeps) {
       run: async (input, host, ctx): Promise<TurnSignals[]> => {
         const db = dbOf(ctx);
         await requireWelcome(host, db);
-        return deps.store.readSignals(db, host, host.host, input.turns);
+        const signals = await deps.store.readSignals(db, host, host.host, input.turns);
+        return Promise.all(
+          signals.map(async (batch): Promise<TurnSignals> => {
+            const answering = new Set(
+              batch.items.flatMap((item) =>
+                item.kind === "answer" && item.body.signed
+                  ? [item.body.signed.deviceId]
+                  : [],
+              ),
+            );
+            const devices = (
+              await Promise.all(
+                [...answering].map((deviceId) =>
+                  deps.auth.device?.(host.userId, deviceId),
+                ),
+              )
+            ).filter((device) => device !== undefined);
+            return devices.length > 0 ? { ...batch, devices } : batch;
+          }),
+        );
       },
     }),
     hostAppend: chatAction("host", enforcing, {
