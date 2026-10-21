@@ -316,11 +316,11 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
         await logSigned(statement);
         return { deviceId: id, at, signature };
       },
-      signAnswer: async (answer, { presence }) => {
+      signAnswer: async (answer, { presence: wanted }) => {
         const at = Date.now();
         const statement = await answerStatement(app, answer, at);
         const bytes = statementBytes(statement);
-        const signature = presence
+        const signature = wanted
           ? await key.sign(bytes, { presence: true })
           : await key.sign(bytes, { presence: false });
         await logSigned(statement);
