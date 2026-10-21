@@ -4,6 +4,8 @@ export {
   AGENT_HOST_SIDECAR,
   ensureTauriProject,
   libRs,
+  type PrepareTauriProjectOptions,
+  prepareTauriProject,
   stageAgentHost,
   stageAgentHostFrom,
   tauriConfig,

@@ -2,7 +2,7 @@ import type { LoadedConfig } from "@parlor/config";
 import { startWebDev } from "@parlor/shell-web";
 
 import { assertRustToolchain } from "./prerequisites.js";
-import { ensureTauriProject, stageAgentHost } from "./project.js";
+import { prepareTauriProject } from "./project.js";
 import { hostTargetTriple } from "./target-triple.js";
 import { runTauri } from "./tauri-cli.js";
 
@@ -17,10 +17,7 @@ export async function startDesktopDev(
   options: DesktopDevOptions = {},
 ): Promise<void> {
   assertRustToolchain();
-  const projectDir = await ensureTauriProject(loaded);
-  if (loaded.config.desktop.agentHost) {
-    await stageAgentHost(projectDir, hostTargetTriple());
-  }
+  const projectDir = await prepareTauriProject(loaded, hostTargetTriple());
   const web = await startWebDev(loaded, {
     conditions: [TAURI_CONDITION],
     serverUrl: loaded.config.server.url,

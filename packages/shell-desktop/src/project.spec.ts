@@ -9,6 +9,7 @@ import {
   AGENT_HOST_SIDECAR,
   ensureTauriProject,
   libRs,
+  prepareTauriProject,
   stageAgentHost,
   stageAgentHostFrom,
   tauriConfig,
@@ -169,6 +170,83 @@ describe("stageAgentHost", () => {
     await expect(stageAgentHost("/tmp/x", "x86_64-unknown-linux-gnu")).rejects.toThrow(
       /no prebuilt Parlor Host for x86_64-unknown-linux-gnu/,
     );
+  });
+});
+
+describe("prepareTauriProject", () => {
+  async function loadedWithHost() {
+    const rootDir = await mkdtemp(join(tmpdir(), "parlor-tauri-"));
+    return { config: withHost, rootDir, configFile: "parlor.config.ts" };
+  }
+
+  it("generates the project without the sidecar and warns once when no prebuilt host exists for the target", async () => {
+    const loaded = await loadedWithHost();
+    const warnings: string[] = [];
+    const projectDir = await prepareTauriProject(loaded, "x86_64-unknown-linux-gnu", {
+      warn: (message) => warnings.push(message),
+    });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/no prebuilt Parlor Host for x86_64-unknown-linux-gnu/);
+    const conf = await readFile(join(projectDir, "src-tauri", "tauri.conf.json"), "utf8");
+    expect(conf).not.toMatch(/parlor-host|externalBin/);
+    const lib = await readFile(join(projectDir, "src-tauri", "src", "lib.rs"), "utf8");
+    expect(lib).not.toMatch(/parlor_host_|parlor_shell::setup|tauri_plugin_dialog/);
+    expect(lib).toContain("parlor_shell::parlor_session_get,");
+  });
+
+  it("warns and builds without the sidecar when the prebuilt bin is missing", async () => {
+    const loaded = await loadedWithHost();
+    const warnings: string[] = [];
+    const projectDir = await prepareTauriProject(loaded, "aarch64-apple-darwin", {
+      stage: (dir, triple) =>
+        stageAgentHostFrom(join(loaded.rootDir, "no-package"), dir, triple),
+      warn: (message) => warnings.push(message),
+    });
+    expect(warnings).toHaveLength(1);
+    expect(
+      await readFile(join(projectDir, "src-tauri", "tauri.conf.json"), "utf8"),
+    ).not.toContain("externalBin");
+  });
+
+  it("keeps the sidecar and stays quiet when the host is staged", async () => {
+    const loaded = await loadedWithHost();
+    const warnings: string[] = [];
+    const staged: string[] = [];
+    const projectDir = await prepareTauriProject(loaded, "aarch64-apple-darwin", {
+      stage: async (dir, triple) => {
+        staged.push(dir, triple);
+        return dir;
+      },
+      warn: (message) => warnings.push(message),
+    });
+    expect(warnings).toEqual([]);
+    expect(staged).toEqual([projectDir, "aarch64-apple-darwin"]);
+    expect(
+      await readFile(join(projectDir, "src-tauri", "tauri.conf.json"), "utf8"),
+    ).toContain("externalBin");
+  });
+
+  it("does not stage anything without desktop.agentHost", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "parlor-tauri-"));
+    const stage = async () => {
+      throw new Error("staged");
+    };
+    await expect(
+      prepareTauriProject({ config, rootDir, configFile: "x" }, "aarch64-apple-darwin", {
+        stage,
+      }),
+    ).resolves.toBe(join(rootDir, ".parlor", "tauri"));
+  });
+
+  it("does not swallow an unexpected staging failure", async () => {
+    const loaded = await loadedWithHost();
+    await expect(
+      prepareTauriProject(loaded, "aarch64-apple-darwin", {
+        stage: async () => {
+          throw new Error("disk full");
+        },
+      }),
+    ).rejects.toThrow("disk full");
   });
 });
 
