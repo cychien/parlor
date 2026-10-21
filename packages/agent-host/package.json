@@ -10,7 +10,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./testing": "./src/testing/fake-agent.ts"
+    "./testing": "./src/testing/fake-agent.ts",
+    "./scripts/release.mjs": "./scripts/release.mjs"
   },
   "publishConfig": {
     "bin": {

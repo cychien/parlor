@@ -15,8 +15,8 @@ export interface AgentProfile {
 }
 
 /**
- * `adapter`: an npm ACP adapter at an exact version, run with the host's embedded
- * runtime. `native`: an agent CLI that speaks ACP itself, found on the login-shell PATH.
+ * `adapter`: an npm ACP adapter at an exact version, run from the copy this build embeds
+ * and else through `npx`. `native`: an agent CLI that speaks ACP itself, found on the login-shell PATH.
  */
 export type AgentLaunch =
   | {
@@ -59,6 +59,12 @@ export const AGENT_PROFILES: readonly AgentProfile[] = [
     binary: "gemini",
   },
 ];
+
+/** Where each adapter looks for the agent CLI it drives; its own search does not survive a single executable. */
+export const ADAPTER_BINARY_ENV: Readonly<Record<string, string>> = {
+  "@agentclientprotocol/claude-agent-acp": "CLAUDE_CODE_EXECUTABLE",
+  "@agentclientprotocol/codex-acp": "CODEX_PATH",
+};
 
 export const DETECT_TIMEOUT_MS = 3_000;
 
