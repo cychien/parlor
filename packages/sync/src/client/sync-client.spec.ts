@@ -1166,3 +1166,137 @@ describe("createSyncClient onResume", () => {
     client.stop();
   });
 });
+
+describe("createSyncClient stop", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const negotiated = () =>
+    Response.json({ protocol: 1, transport: "poll", endpoint: "", pollIntervalMs: 100 });
+
+  function heldPoll() {
+    let signal: AbortSignal | undefined;
+    const answers: ((response: Response) => void)[] = [];
+    const request = vi.fn(async (path: string, init?: RequestInit) => {
+      if (path.endsWith("/sync/token")) return negotiated();
+      signal = init?.signal ?? undefined;
+      return new Promise<Response>((resolve) => {
+        answers.push(resolve);
+      });
+    });
+    return {
+      request,
+      answers,
+      answer: (response: Response) => answers.at(-1)!(response),
+      signal: () => signal,
+    };
+  }
+
+  it("stop aborts an in-flight poll and drops its late events", async () => {
+    const held = heldPoll();
+    const onEvents = vi.fn();
+    const onError = vi.fn();
+    const client = createSyncClient({
+      request: held.request,
+      onEvents,
+      onError,
+      coalesceMs: 10,
+    });
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(held.signal()?.aborted).toBe(false);
+
+    client.stop();
+    expect(held.signal()?.aborted).toBe(true);
+
+    held.answer(Response.json({ events: [event(1, "a")], cursor: "1.a" }));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(onEvents).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    expect(client.cursor).toBe("");
+    expect(held.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("stop drops a late 401 without reaching onUnauthorized or onError", async () => {
+    const held = heldPoll();
+    const onUnauthorized = vi.fn();
+    const onError = vi.fn();
+    const client = createSyncClient({
+      request: held.request,
+      onEvents: vi.fn(),
+      onError,
+      onUnauthorized,
+    });
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    client.stop();
+
+    held.answer(new Response("no", { status: 401 }));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(onUnauthorized).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    expect(held.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("stop aborts an in-flight negotiation and ignores its late answer", async () => {
+    let signal: AbortSignal | undefined;
+    let answer!: (response: Response) => void;
+    const request = vi.fn(async (path: string, init?: RequestInit) => {
+      if (path.endsWith("/sync/token")) {
+        signal = init?.signal ?? undefined;
+        return new Promise<Response>((resolve) => {
+          answer = resolve;
+        });
+      }
+      return Response.json({ events: [], cursor: "" });
+    });
+    const onNegotiated = vi.fn();
+    const onUnauthorized = vi.fn();
+    const client = createSyncClient({
+      request,
+      onEvents: vi.fn(),
+      onError: vi.fn(),
+      onNegotiated,
+      onUnauthorized,
+    });
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    client.stop();
+    expect(signal?.aborted).toBe(true);
+
+    answer(new Response("no", { status: 401 }));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(onUnauthorized).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledTimes(1);
+
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    answer(negotiated());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onNegotiated).toHaveBeenCalledTimes(1);
+    client.stop();
+  });
+
+  it("a restarted client ignores the stale poll of its previous run", async () => {
+    const held = heldPoll();
+    const onEvents = vi.fn();
+    const client = createSyncClient({
+      request: held.request,
+      onEvents,
+      onError: vi.fn(),
+      coalesceMs: 10,
+    });
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const [stale] = held.answers;
+    client.stop();
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+
+    stale!(Response.json({ events: [event(1, "old")], cursor: "1.old" }));
+    await vi.advanceTimersByTimeAsync(20);
+    expect(onEvents).not.toHaveBeenCalled();
+    expect(client.cursor).toBe("");
+    client.stop();
+  });
+});

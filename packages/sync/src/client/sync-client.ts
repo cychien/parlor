@@ -70,6 +70,10 @@ export class SyncRequestTimeout extends Error {
   }
 }
 
+class StaleRequest extends Error {
+  override readonly name = "StaleRequest";
+}
+
 const refused = (response: Response) =>
   response.status === 401 || response.status === 403;
 
@@ -160,9 +164,13 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
   let reconnectDelay = settings.reconnectBaseMs;
   let endReconnectWait: (() => void) | undefined;
   let connectTimer: ReturnType<typeof setTimeout> | undefined;
+  let epoch = 0;
+  const inflight = new Set<AbortController>();
 
   const withTimeout = async <T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+    const mine = epoch;
     const own = new AbortController();
+    inflight.add(own);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const expired = new Promise<never>((_, reject) => {
       timer = schedule(() => {
@@ -171,8 +179,14 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
       }, settings.requestTimeoutMs);
     });
     try {
-      return await Promise.race([run(own.signal), expired]);
+      const result = await Promise.race([run(own.signal), expired]);
+      if (mine !== epoch) throw new StaleRequest();
+      return result;
+    } catch (error) {
+      if (mine !== epoch) throw new StaleRequest();
+      throw error;
     } finally {
+      inflight.delete(own);
       if (timer !== undefined) cancel(timer);
     }
   };
@@ -225,6 +239,10 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
       let halted = false;
       void poll()
         .catch((error: unknown) => {
+          if (error instanceof StaleRequest) {
+            halted = true;
+            return;
+          }
           if (negotiated === "poll") interrupted = true;
           if (error instanceof SyncUnauthorized) {
             halted = true;
@@ -357,20 +375,22 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
   const connect = async () => {
     if (connecting) return;
     connecting = true;
+    const mine = epoch;
     try {
-      await connectLoop();
+      await connectLoop(mine);
     } finally {
-      connecting = false;
+      if (mine === epoch) connecting = false;
     }
   };
 
-  const connectLoop = async () => {
+  const connectLoop = async (mine: number) => {
+    const active = () => running && mine === epoch;
     for (;;) {
-      if (!running) return;
+      if (!active()) return;
       let endpoint: string | undefined;
       try {
         const negotiation = await negotiate();
-        if (!running) return;
+        if (!active()) return;
         negotiatedPollMs = negotiation.pollIntervalMs;
         negotiated = negotiation.transport;
         guarded(() => options.onNegotiated?.(negotiation.transport));
@@ -381,7 +401,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
         }
         endpoint = negotiation.endpoint;
       } catch (error) {
-        if (!running) return;
+        if (!active()) return;
         interrupted = true;
         if (error instanceof SyncUnauthorized) {
           transport = undefined;
@@ -400,13 +420,13 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
         try {
           await stream(endpoint);
         } catch (error) {
-          if (!running) return;
+          if (!active()) return;
           if (error instanceof SyncUnauthorized) unauthorized(error);
           else settings.onError?.(error);
         }
         interrupted = true;
       }
-      if (!running) return;
+      if (!active()) return;
       const delay = backoff();
       await new Promise<void>((resolve) => {
         const timer = schedule(() => {
@@ -450,8 +470,12 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
 
   const stop = () => {
     running = false;
+    epoch += 1;
+    for (const request of inflight) request.abort();
+    inflight.clear();
     controller?.abort();
     controller = undefined;
+    connecting = false;
     endReconnectWait?.();
     if (pollTimer !== undefined) cancel(pollTimer);
     if (flushTimer !== undefined) cancel(flushTimer);
