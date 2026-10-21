@@ -30,6 +30,7 @@ import {
   REAL_HOME,
   ROOT,
   helloCli,
+  killHome,
   load,
   makeHome,
   parseEval,
@@ -735,9 +736,13 @@ export function guardRealHome(check) {
   });
 }
 
-/** An isolated HOME under the short homes root, removed when the check ends. */
+/**
+ * An isolated HOME under the short homes root, removed when the check ends, after every process
+ * still running with it (the installed daemon outlives the apps and `down`) is killed.
+ */
 export function shortHome(check, tag) {
   const made = makeHome(check, tag);
+  check.onCleanup(() => killHome(check, made.home));
   if (Buffer.byteLength(made.home) >= 40)
     throw new Error(
       `the isolated HOME ${made.home} is ${Buffer.byteLength(made.home)} bytes; keep it under 40 (${HOMES_ROOT})`,
