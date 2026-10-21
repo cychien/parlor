@@ -874,7 +874,7 @@ export function registerFakeAgent(check, { home, id, script, tag = check.id }) {
     id: "fake",
     name: "Fake agent",
     launch: { kind: "native", command: wrapper, args: [] },
-    binary: wrapper,
+    binary: process.execPath,
   };
   writeAgentProfiles(home, [profile]);
   return {
