@@ -788,6 +788,58 @@ export async function hostReleases(check, specs) {
   return { trusted, other, built };
 }
 
+/**
+ * Setup for a Mac check whose app bundles the checkout's own host: when
+ * packages/agent-host-darwin-arm64/bin/parlor-host is missing, builds a signed one with release.mjs
+ * and a test Ed25519 key pair under the check dir and places it (with its .sig) there. Builds
+ * at most once at a time machine-wide; a script that finds it already placed uses it.
+ */
+export async function ensureBundledHost(check, { version = "0.0.1" } = {}) {
+  const bin = join(ROOT, "packages", "agent-host-darwin-arm64", "bin");
+  const placed = () =>
+    existsSync(join(bin, "parlor-host")) && existsSync(join(bin, "parlor-host.sig"));
+  if (placed()) return bin;
+  const lock = join(HARNESS_HOME, ".bundled-host.lock");
+  const deadline = Date.now() + 20 * 60_000;
+  for (;;) {
+    try {
+      mkdirSync(lock, { recursive: false });
+      writeFileSync(join(lock, "pid"), String(process.pid));
+      break;
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      let holder = 0;
+      try {
+        holder = Number(readFileSync(join(lock, "pid"), "utf8"));
+      } catch {
+        /* being written */
+      }
+      if (holder && runSync("kill", ["-0", String(holder)]).status !== 0)
+        rmSync(lock, { recursive: true, force: true });
+      if (Date.now() > deadline) throw new ProvisionError(`could not take ${lock}`);
+      await sleep(1000);
+    }
+  }
+  try {
+    if (placed()) return bin;
+    const trusted = releaseKeys(check, "bundled-host");
+    const out = await buildHostRelease(check, {
+      version,
+      label: "bundled-host",
+      trusted,
+      signWith: trusted,
+    });
+    mkdirSync(bin, { recursive: true });
+    cpSync(join(out, "parlor-host"), join(bin, "parlor-host"));
+    cpSync(join(out, "parlor-host.sig"), join(bin, "parlor-host.sig"));
+    chmodSync(join(bin, "parlor-host"), 0o755);
+    check.log(`placed a signed host ${version} (test key) in ${bin}`);
+    return bin;
+  } finally {
+    rmSync(lock, { recursive: true, force: true });
+  }
+}
+
 /** Launches a release app with `open -n` and the driver's launch environment; resolves with the launch time. */
 export async function openApp(instance) {
   const env = Object.entries(instance.launchEnv ?? {}).flatMap(([k, v]) => [
