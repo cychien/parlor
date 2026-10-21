@@ -93,6 +93,17 @@ describe("SyncBridge", () => {
     expect(seen).toEqual(["a", "b", "b"]);
   });
 
+  it("tells every negotiation listener each time the server negotiates, until it unsubscribes", () => {
+    const bridge = new SyncBridge();
+    const seen: string[] = [];
+    const off = bridge.onNegotiated((transport) => seen.push(`a:${transport}`));
+    bridge.onNegotiated((transport) => seen.push(`b:${transport}`));
+    bridge.negotiated("poll");
+    off();
+    bridge.negotiated("sse");
+    expect(seen).toEqual(["a:poll", "b:poll", "b:sse"]);
+  });
+
   it("reports the negotiated transport only while a client is attached", () => {
     const bridge = new SyncBridge();
     expect(bridge.transport()).toBeUndefined();

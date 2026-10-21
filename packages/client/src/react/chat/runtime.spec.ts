@@ -103,13 +103,16 @@ function setup(
     auth?: Partial<DeviceSource & HostAuthorizer>;
     transport?: "sse" | "poll";
     hidden?: () => boolean;
+    hosts?: () => HostSummary[];
   } = {},
 ) {
+  let negotiatedTransport = options.transport;
+  const negotiatedListeners = new Set<(transport: "sse" | "poll") => void>();
   const calls: { name: string; input: unknown }[] = [];
   const handlers: Record<string, (input: never) => unknown> = {
     open: options.open ?? (async () => snapshot()),
     items: (input: { afterSeq: number }) => options.items?.(input.afterSeq) ?? [],
-    hosts: () => [claudeOnMac()],
+    hosts: options.hosts ?? (() => [claudeOnMac()]),
     send: (input: { threadId: string }) => ({ id: input.threadId, turnId: "t" }),
     cancel: (input: { threadId: string }) => ({ id: input.threadId }),
     answer: (input: { threadId: string }) => ({ id: input.threadId }),
@@ -154,7 +157,11 @@ function setup(
       resumeListeners.add(listener);
       return () => resumeListeners.delete(listener);
     },
-    transport: () => options.transport,
+    transport: () => negotiatedTransport,
+    onNegotiated: (listener) => {
+      negotiatedListeners.add(listener);
+      return () => negotiatedListeners.delete(listener);
+    },
     isHidden: options.hidden,
     auth: options.auth,
     localHost: Promise.resolve(
@@ -176,6 +183,10 @@ function setup(
     },
     resume: () => {
       for (const listener of resumeListeners) listener();
+    },
+    negotiate: (transport: "sse" | "poll") => {
+      negotiatedTransport = transport;
+      for (const listener of negotiatedListeners) listener(transport);
     },
     setConfirmations(next: readonly AgentConfirmation[]) {
       confirmations = next;
@@ -1608,6 +1619,137 @@ describe("createChatRuntime degradation", () => {
     expect(server.times()).toHaveLength(1);
   });
 
+  describe("a failed hosts or thread-list refresh", () => {
+    const offlineMac = () => [claudeOnMac(false)];
+    const queuedOnMac = () =>
+      snapshot({
+        items: [logged(1, "item_p", "prompt", "go")],
+        turns: [turn("turn_1", "queued")],
+      });
+
+    function hostsServer() {
+      const state = { broken: false, hosts: [claudeOnMac()] };
+      const times: number[] = [];
+      const t0 = Date.now();
+      const h = setup({
+        open: async () => ({ ...queuedOnMac(), hosts: state.hosts }),
+        hosts: () => {
+          times.push(Date.now() - t0);
+          if (state.broken) throw new Error("offline");
+          return state.hosts;
+        },
+      });
+      return { h, state, times };
+    }
+
+    it("T7-03 (g) retries a failed hosts refresh with backoff and shows the host going offline", async () => {
+      const { h, state, times } = hostsServer();
+      h.runtime.start();
+      await settle();
+      expect(h.runtime.get().status).toBe("running");
+
+      state.broken = true;
+      state.hosts = offlineMac();
+      h.tags(["parlor_chat_hosts"]);
+      await settle();
+      expect(h.runtime.get().status).toBe("running");
+
+      await vi.advanceTimersByTimeAsync(3 * SECOND);
+      expect(times).toEqual([0, SECOND, 3 * SECOND]);
+      expect(h.runtime.get().status).toBe("running");
+
+      state.broken = false;
+      await vi.advanceTimersByTimeAsync(4 * SECOND);
+      expect(h.runtime.get().status).toBe("waiting");
+      expect(h.runtime.get().wait?.reason).toBe("offline");
+      const reads = h.names().length;
+      await vi.advanceTimersByTimeAsync(60 * SECOND);
+      expect(h.names()).toHaveLength(reads);
+    });
+
+    it("T7-03 (g) retries a failed thread-list refresh until it lands", async () => {
+      let broken = false;
+      let listed = [thread("thr_1")];
+      const h = setup({
+        threadId: undefined,
+        open: async () => {
+          if (broken) throw new Error("offline");
+          return { threads: listed, hosts: [claudeOnMac()], page: undefined } as never;
+        },
+      });
+      h.runtime.start();
+      await settle();
+      h.runtime.newThread();
+      await settle();
+
+      broken = true;
+      listed = [thread("thr_1"), thread("thr_2")];
+      h.tags(["parlor_chat", "thr_2"]);
+      await settle();
+      expect(h.runtime.get().threads).toHaveLength(1);
+
+      broken = false;
+      await vi.advanceTimersByTimeAsync(SECOND);
+      expect(h.runtime.get().threads).toHaveLength(2);
+    });
+
+    it("T7-03 (g) keeps retrying the hosts refresh after an items refresh succeeds", async () => {
+      const state = { broken: false, hosts: [claudeOnMac()] };
+      const times: number[] = [];
+      const h = setup({
+        open: async () => ({ ...snapshot(), hosts: state.hosts }),
+        hosts: () => {
+          times.push(Date.now());
+          if (state.broken) throw new Error("offline");
+          return state.hosts;
+        },
+      });
+      h.runtime.start();
+      await settle();
+
+      state.broken = true;
+      state.hosts = offlineMac();
+      h.tags(["parlor_chat_hosts"]);
+      await settle();
+      h.tags(["parlor_chat", "thr_1"]);
+      await settle();
+      expect(h.names()).toContain("items");
+
+      state.broken = false;
+      await vi.advanceTimersByTimeAsync(SECOND);
+      expect(times).toHaveLength(2);
+      expect(h.runtime.get().hosts[0]?.online).toBe(false);
+    });
+
+    it("T7-03 (g) does not retry a hosts refresh refused as forbidden", async () => {
+      let calls = 0;
+      const h = setup({
+        hosts: () => {
+          calls += 1;
+          throw new ActionError("forbidden", "no");
+        },
+      });
+      h.runtime.start();
+      await settle();
+      h.tags(["parlor_chat_hosts"]);
+      await vi.advanceTimersByTimeAsync(120 * SECOND);
+      expect(calls).toBe(1);
+    });
+
+    it("T7-03 (g) runs no hosts retry after the sidebar unmounts", async () => {
+      const { h, state, times } = hostsServer();
+      const stop = h.runtime.start();
+      await settle();
+      state.broken = true;
+      h.tags(["parlor_chat_hosts"]);
+      await settle();
+      const reads = times.length;
+      stop();
+      await vi.advanceTimersByTimeAsync(120 * SECOND);
+      expect(times).toHaveLength(reads);
+    });
+  });
+
   it("T7-03 (d) runs no retry of a failed refresh after the sidebar unmounts", async () => {
     let broken = false;
     const h = setup({
@@ -1685,6 +1827,44 @@ describe("createChatRuntime activity events", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(pings(h)).toBe(0);
     }
+  });
+
+  it("T7-03 (f) pings as soon as sync negotiates poll after start and after the first read, at most once a minute", async () => {
+    const h = setup();
+    h.runtime.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pings(h)).toBe(0);
+
+    h.negotiate("poll");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pings(h)).toBe(1);
+
+    h.negotiate("poll");
+    await vi.advanceTimersByTimeAsync(59_000);
+    h.negotiate("poll");
+    expect(pings(h)).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(2000);
+    h.negotiate("poll");
+    expect(pings(h)).toBe(2);
+  });
+
+  it("T7-03 (f) does not ping when sync negotiates SSE, while hidden, or after the sidebar unmounts", async () => {
+    let hidden = false;
+    const h = setup({ hidden: () => hidden });
+    const stop = h.runtime.start();
+    await vi.advanceTimersByTimeAsync(0);
+    h.negotiate("sse");
+    expect(pings(h)).toBe(0);
+
+    hidden = true;
+    h.negotiate("poll");
+    expect(pings(h)).toBe(0);
+
+    hidden = false;
+    stop();
+    h.negotiate("poll");
+    expect(pings(h)).toBe(0);
   });
 
   it("swallows a server that has no userActive and stops asking", async () => {

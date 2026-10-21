@@ -311,6 +311,7 @@ describe("the auth client's device", () => {
       addChannel: () => () => undefined,
       onSyncTags: (_listener: (tags: readonly Tag[]) => void) => () => undefined,
       onResume: () => () => undefined,
+      onNegotiated: () => () => undefined,
       transport: () => undefined,
       auth,
       localHost: Promise.resolve({ available: false, reason: "no host" }),

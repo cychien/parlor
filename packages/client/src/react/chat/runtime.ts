@@ -127,6 +127,7 @@ export interface ChatRuntimeDeps {
   readonly onResume: (listener: () => void) => () => void;
   /** What the server negotiated for sync; `undefined` until it has. */
   readonly transport: () => "sse" | "poll" | undefined;
+  readonly onNegotiated: (listener: (transport: "sse" | "poll") => void) => () => void;
   readonly isHidden?: (() => boolean) | undefined;
   readonly auth: Partial<DeviceSource & HostAuthorizer> | undefined;
   readonly localHost: Promise<CapabilityHandle<LocalAgentHost>>;
@@ -146,6 +147,8 @@ const UNFIXABLE_BY_RETRY: ReadonlySet<string> = new Set([
 
 const retryable = (error: unknown) =>
   !(error instanceof ActionError && UNFIXABLE_BY_RETRY.has(error.code));
+
+type StaleRead = "lists" | "hosts";
 
 interface PendingSend {
   readonly text: string;
@@ -214,6 +217,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
   let channelOpen = false;
   let staleAfterLoad = false;
   let dirty = false;
+  const staleReads = new Set<StaleRead>();
   let unfixable = false;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let retryDelay = READ_RETRY_BASE_MS;
@@ -324,6 +328,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     const epoch = generation;
     const snapshot = await calls.call("open", target ? { threadId: target } : {});
     if (epoch !== generation) return;
+    staleReads.clear();
     threads = snapshot.threads;
     hosts = snapshot.hosts;
     const page = startedNew && target === undefined ? undefined : snapshot.page;
@@ -357,6 +362,18 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     emit();
   };
 
+  const readLists = async () => {
+    if (threadId === undefined && !startedNew && draft.trim() === "") {
+      await load(undefined);
+      emit();
+    } else await refreshLists();
+  };
+
+  const staleReaders: Record<StaleRead, () => Promise<void>> = {
+    lists: readLists,
+    hosts: refreshHosts,
+  };
+
   const cancelRetry = () => {
     if (retryTimer !== undefined) globalThis.clearTimeout(retryTimer);
     retryTimer = undefined;
@@ -375,6 +392,23 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       retryTimer = undefined;
       void mend();
     }, wait);
+  };
+
+  const settled = () => {
+    if (!dirty && staleReads.size === 0) clearRetry();
+  };
+
+  const rereadStale = async (kind: StaleRead) => {
+    const epoch = generation;
+    try {
+      await staleReaders[kind]();
+      staleReads.delete(kind);
+      settled();
+    } catch (error) {
+      if (epoch !== generation) return;
+      staleReads.add(kind);
+      if (retryable(error)) scheduleRetry();
+    }
   };
 
   let refreshing = false;
@@ -405,7 +439,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
           if (fresh.some((item) => !known.has(item.turnId))) await load(target);
         }
         dirty = false;
-        clearRetry();
+        settled();
         emit();
       } while (refreshAgain);
     } catch (error) {
@@ -506,6 +540,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     stopIds.clear();
     answerIds.clear();
     dirty = false;
+    staleReads.clear();
     clearRetry();
     watch();
     if (blank && loaded === "yes") {
@@ -673,10 +708,8 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
           if (mine || computers) staleAfterLoad = true;
         } else {
           if (mine && threadId !== undefined) void refresh();
-          else if (mine && !startedNew && draft.trim() === "") {
-            void load(undefined).then(emit, () => {});
-          } else if (mine) void refreshLists().catch(() => {});
-          if (computers) void refreshHosts().catch(() => {});
+          else if (mine) void rereadStale("lists");
+          if (computers) void rereadStale("hosts");
         }
       });
       const offResume = deps.onResume(() => {
@@ -687,6 +720,9 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
           }
         } else if (loaded === "no") staleAfterLoad = true;
         else void refresh();
+      });
+      const offNegotiated = deps.onNegotiated((transport) => {
+        if (transport === "poll") announceActivity();
       });
       const offConfirmations = agentUi.confirmations.subscribe(emit);
       emit();
@@ -700,6 +736,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
         detachChannel();
         offTags();
         offResume();
+        offNegotiated();
         offConfirmations();
         stopWatching?.();
         stopWatching = undefined;
@@ -710,7 +747,10 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
 
   async function mend() {
     if (loaded === "failed") await loadFirst();
-    else if (loaded === "yes" && dirty) await refresh();
+    else if (loaded === "yes") {
+      if (dirty) await refresh();
+      for (const kind of [...staleReads]) await rereadStale(kind);
+    }
     emit();
   }
 

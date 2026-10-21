@@ -8,6 +8,8 @@ export interface FrameworkSync {
   onResume(listener: () => void): () => void;
   /** What the server negotiated; `undefined` until it has, and while no client is attached. */
   transport(): "sse" | "poll" | undefined;
+  /** The server negotiated a transport, on every connect. */
+  onNegotiated(listener: (transport: "sse" | "poll") => void): () => void;
 }
 
 export class SyncBridge implements FrameworkSync {
@@ -15,6 +17,7 @@ export class SyncBridge implements FrameworkSync {
   readonly #listeners = new Set<(events: readonly SyncEvent[]) => void>();
   readonly #detachers = new Map<ClientChannel, () => void>();
   readonly #resumers = new Set<() => void>();
+  readonly #negotiators = new Set<(transport: "sse" | "poll") => void>();
   #client: SyncClient | undefined;
   #transport: "sse" | "poll" | undefined;
 
@@ -42,8 +45,14 @@ export class SyncBridge implements FrameworkSync {
     return this.#transport;
   }
 
+  onNegotiated(listener: (transport: "sse" | "poll") => void): () => void {
+    this.#negotiators.add(listener);
+    return () => this.#negotiators.delete(listener);
+  }
+
   negotiated(transport: "sse" | "poll"): void {
     this.#transport = transport;
+    for (const listener of [...this.#negotiators]) listener(transport);
   }
 
   emit(events: readonly SyncEvent[]): void {
