@@ -15,7 +15,7 @@ import { dirname, join } from "node:path";
 import type { ProtocolRange } from "@parlor/chat";
 
 import { connectControl } from "./control.js";
-import { withFileLock } from "./lock.js";
+import { LOCK_TOKEN_ENV, withFileLock } from "./lock.js";
 import type { HostPaths } from "./paths.js";
 import {
   compareVersions,
@@ -97,7 +97,12 @@ export interface ServiceDeps {
   readonly readyMs: number;
   readonly pollMs: number;
   readonly start?:
-    | ((paths: HostPaths, command: string, args: readonly string[]) => Promise<void>)
+    | ((
+        paths: HostPaths,
+        command: string,
+        args: readonly string[],
+        lockToken: string,
+      ) => Promise<void>)
     | undefined;
 }
 
@@ -134,6 +139,7 @@ async function spawnService(
   paths: HostPaths,
   command: string,
   args: readonly string[],
+  lockToken: string,
 ): Promise<void> {
   await mkdir(paths.logs, { recursive: true, mode: 0o700 });
   const output = await open(join(paths.logs, "daemon.out"), "a", 0o600);
@@ -141,7 +147,7 @@ async function spawnService(
     cwd: paths.root,
     detached: true,
     stdio: ["ignore", output.fd, output.fd],
-    env: process.env,
+    env: { ...process.env, [LOCK_TOKEN_ENV]: lockToken },
   });
   child.unref();
   await output.close();
@@ -236,6 +242,7 @@ async function installBundled(
   paths: HostPaths,
   client: Sidecar,
   deps: ServiceDeps,
+  lockToken: string,
 ): Promise<AdoptOutcome> {
   const source = {
     binary: client.binary,
@@ -250,7 +257,12 @@ async function installBundled(
     return { kind: "refused", reason: "unsigned" };
   }
   await installLoginItem(paths);
-  await startWith(deps)(paths, join(paths.current, SERVICE_BINARY), ["daemon"]);
+  await startWith(deps)(
+    paths,
+    join(paths.current, SERVICE_BINARY),
+    ["daemon"],
+    lockToken,
+  );
   return { kind: "installed", release: await untilRunning(paths, client, deps) };
 }
 
@@ -259,6 +271,7 @@ async function handOver(
   client: Sidecar,
   running: HostRelease,
   deps: ServiceDeps,
+  lockToken: string,
 ): Promise<AdoptOutcome> {
   const control = await connectControl(paths.control);
   if (!control) throw new Error("Parlor Host stopped answering during the upgrade.");
@@ -275,7 +288,12 @@ async function handOver(
           throw new Error(reply.error);
         })();
   }
-  await startWith(deps)(paths, join(paths.current, SERVICE_BINARY), ["daemon"]);
+  await startWith(deps)(
+    paths,
+    join(paths.current, SERVICE_BINARY),
+    ["daemon"],
+    lockToken,
+  );
   const to = await untilRunning(
     paths,
     client,
@@ -296,7 +314,7 @@ export async function ensureServiceWith(
   client: ServiceClient,
 ): Promise<AdoptOutcome> {
   await mkdir(paths.root, { recursive: true, mode: 0o700 });
-  return withFileLock(paths.lock, async () => {
+  return withFileLock(paths.lock, async (lockToken) => {
     for (;;) {
       const action = actionFor(await observe(paths, client), client);
       switch (action.do) {
@@ -307,16 +325,21 @@ export async function ensureServiceWith(
         case "refuse_downgrade":
           return { kind: "refused", reason: "downgrade", running: action.running };
         case "hand_over":
-          return handOver(paths, action.client, action.running, deps);
+          return handOver(paths, action.client, action.running, deps, lockToken);
         case "install_bundled":
-          return installBundled(paths, action.client, deps);
+          return installBundled(paths, action.client, deps, lockToken);
         case "start_installed":
-          await startWith(deps)(paths, join(paths.current, SERVICE_BINARY), ["daemon"]);
+          await startWith(deps)(
+            paths,
+            join(paths.current, SERVICE_BINARY),
+            ["daemon"],
+            lockToken,
+          );
           await untilRunning(paths, client, deps);
           continue;
         case "spawn_self": {
           const self = selfInvocation(["daemon"]);
-          await startWith(deps)(paths, self.command, self.args);
+          await startWith(deps)(paths, self.command, self.args, lockToken);
           return { kind: "installed", release: await untilRunning(paths, client, deps) };
         }
       }

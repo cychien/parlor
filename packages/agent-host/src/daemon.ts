@@ -18,6 +18,7 @@ import { requestDevHostToken } from "./dev-host.js";
 import { type AppGrant, devHostKeys, type GrantStore, type HostKeys } from "./grants.js";
 import { onLines } from "./lines.js";
 import { type AppLink, createAppLink } from "./link.js";
+import { withInheritedLock } from "./lock.js";
 import { logEvent, openHostLog } from "./log.js";
 import type { McpProxy } from "./mcp-proxy.js";
 import { computerName, platformName, workspaceOf } from "./naming.js";
@@ -49,6 +50,8 @@ export interface DaemonDeps {
   readonly launcher: AgentLauncher;
   readonly prompter: LocalPrompter;
   readonly policy: RemotePolicy;
+  /** The `service.lock` token of the `ensureService` that spawned this daemon, which holds the lock for it. */
+  readonly lockToken?: string | undefined;
 }
 
 /**
@@ -305,23 +308,25 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
     drained,
     async start() {
       await mkdir(paths.root, { recursive: true, mode: 0o700 });
-      const answering = await connectControl(paths.control);
-      if (answering) {
-        answering.close();
-        throw new HostAlreadyRunning();
-      }
-      openHostLog(join(paths.root, "logs", "daemon.log"));
-      await putHostCommandFirstOnPath(paths.root);
-      await deps.proxy.listen(paths.proxy);
-      profiles = await loadProfiles(paths.agents);
-      agents = await detectAgents(profiles);
-      control = createServer(serve);
-      await rm(paths.control, { force: true });
-      await new Promise<void>((resolve, reject) => {
-        control!.once("error", reject);
-        control!.listen(paths.control, () => resolve());
+      await withInheritedLock(paths.lock, deps.lockToken, async () => {
+        const answering = await connectControl(paths.control);
+        if (answering) {
+          answering.close();
+          throw new HostAlreadyRunning();
+        }
+        openHostLog(join(paths.root, "logs", "daemon.log"));
+        await putHostCommandFirstOnPath(paths.root);
+        await deps.proxy.listen(paths.proxy);
+        profiles = await loadProfiles(paths.agents);
+        agents = await detectAgents(profiles);
+        control = createServer(serve);
+        await rm(paths.control, { force: true });
+        await new Promise<void>((resolve, reject) => {
+          control!.once("error", reject);
+          control!.listen(paths.control, () => resolve());
+        });
+        await chmod(paths.control, 0o600);
       });
-      await chmod(paths.control, 0o600);
       logEvent("daemon_started", {
         version: deps.release.version,
         agents: agents.map((a) => a.id),
@@ -479,6 +484,13 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
         return { ok: true, status: status(), grants: grantsOf() };
       case "begin_local_pairing": {
         const { origin } = pendingPairing(request.appOrigin);
+        const existing = await deps.grants.get(origin);
+        if (existing && !existing.declined) {
+          return {
+            ok: false,
+            error: `This computer is already connected to ${existing.appName}.`,
+          };
+        }
         const pairing = startLocalPairing({
           appOrigin: origin,
           hostName: name,

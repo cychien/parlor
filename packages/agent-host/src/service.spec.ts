@@ -19,8 +19,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { acpLauncher } from "./acp.js";
 import { connectControl } from "./control.js";
-import { createHostDaemon, type ServiceDaemon } from "./daemon.js";
+import { createHostDaemon, HostAlreadyRunning, type ServiceDaemon } from "./daemon.js";
 import { fileGrantStore } from "./grants.js";
+import { holdsLock, withFileLock } from "./lock.js";
 import { createMcpProxy } from "./mcp-proxy.js";
 import { hostPaths, type HostPaths } from "./paths.js";
 import { DEV_POLICY } from "./policy.js";
@@ -79,7 +80,11 @@ afterEach(async () => {
 
 async function startDaemon(
   version: string,
-  options: { readonly paths?: HostPaths; readonly grants?: boolean } = {},
+  options: {
+    readonly paths?: HostPaths;
+    readonly grants?: boolean;
+    readonly lockToken?: string;
+  } = {},
 ): Promise<ServiceDaemon> {
   const at = options.paths ?? paths;
   const daemon = createHostDaemon({
@@ -98,11 +103,23 @@ async function startDaemon(
       turnStarted: () => undefined,
     },
     policy: DEV_POLICY,
+    lockToken: options.lockToken,
   });
   daemons.push(daemon);
   await daemon.start();
   return daemon;
 }
+
+const spawnDaemon =
+  (version: string) =>
+  async (
+    _paths: HostPaths,
+    _command: string,
+    _args: readonly string[],
+    lockToken: string,
+  ): Promise<void> => {
+    await startDaemon(version, { lockToken });
+  };
 
 interface Bundle {
   readonly binary: string;
@@ -241,6 +258,64 @@ describe("the adopt decision", () => {
   });
 });
 
+describe("starting a daemon outside ensureService", () => {
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  beforeEach(() => mkdir(paths.root, { recursive: true }));
+
+  it("T6-01: lets exactly one of two daemons started at once bind the control socket", async () => {
+    const outcomes = await Promise.allSettled([
+      startDaemon("1.0.0"),
+      startDaemon("1.0.0"),
+    ]);
+    expect(outcomes.map((outcome) => outcome.status).sort()).toEqual([
+      "fulfilled",
+      "rejected",
+    ]);
+    const refused = outcomes.find((outcome) => outcome.status === "rejected");
+    expect((refused as PromiseRejectedResult).reason).toBeInstanceOf(HostAlreadyRunning);
+    expect(await versionRunning()).toBe("1.0.0");
+  });
+
+  it("waits for the lock an ensureService holds before probing or binding", async () => {
+    let started = false;
+    await withFileLock(paths.lock, async () => {
+      const waiting = startDaemon("1.0.0").then(() => void (started = true));
+      await sleep(300);
+      expect(started).toBe(false);
+      expect(await versionRunning()).toBeUndefined();
+      await rm(paths.lock);
+      await waiting;
+    });
+    expect(started).toBe(true);
+  });
+
+  it("does not skip the lock for a token that names no held lock", async () => {
+    let started = false;
+    await withFileLock(paths.lock, async () => {
+      const waiting = startDaemon("1.0.0", { lockToken: "forged" }).then(
+        () => void (started = true),
+      );
+      await sleep(300);
+      expect(started).toBe(false);
+      await rm(paths.lock);
+      await waiting;
+    });
+  });
+
+  it("starts under the lock its parent ensureService holds", async () => {
+    await withFileLock(paths.lock, async (lockToken) => {
+      await startDaemon("1.0.0", { lockToken });
+    });
+    expect(await versionRunning()).toBe("1.0.0");
+  });
+
+  it("releases the lock once it is bound", async () => {
+    await startDaemon("1.0.0");
+    expect(existsSync(paths.lock)).toBe(false);
+  });
+});
+
 describe("a service already running", () => {
   it("T6-03a: refuses a binary signed with another key, and leaves current and the running version alone", async () => {
     await startDaemon("1.0.0");
@@ -332,7 +407,7 @@ describe("a service already running", () => {
     const old = await startDaemon("1.0.0");
     const next = await bundle("next", "1.1.0");
     const outcome = await ensureServiceWith(
-      await withTrust({ start: async () => void (await startDaemon("1.1.0")) }),
+      await withTrust({ start: spawnDaemon("1.1.0") }),
       paths,
       sidecar("1.1.0", next),
     );
@@ -360,7 +435,7 @@ describe("no service running", () => {
   it("T6-01: installs the bundled release from its own signature, links current, writes the login item and starts it", async () => {
     const files = await bundle("first", "1.0.0");
     const outcome = await ensureServiceWith(
-      await withTrust({ start: async () => void (await startDaemon("1.0.0")) }),
+      await withTrust({ start: spawnDaemon("1.0.0") }),
       paths,
       sidecar("1.0.0", files),
     );
@@ -416,7 +491,7 @@ describe("no service running", () => {
 
   it("T6-01: lets two apps start at once and starts the service once", async () => {
     const files = await bundle("race", "1.0.0");
-    const start = vi.fn(async () => void (await startDaemon("1.0.0")));
+    const start = vi.fn(spawnDaemon("1.0.0"));
     const deps = await withTrust({ start });
     const outcomes = await Promise.all([
       ensureServiceWith(deps, paths, sidecar("1.0.0", files)),
@@ -437,7 +512,7 @@ describe("no service running", () => {
       "partial",
     );
     const deps = await withTrust({
-      start: async () => void (await startDaemon("1.0.0")),
+      start: spawnDaemon("1.0.0"),
     });
     expect(await ensureServiceWith(deps, paths, sidecar("1.0.0", files))).toMatchObject({
       kind: "installed",
@@ -455,7 +530,7 @@ describe("no service running", () => {
   it("starts an installed release first, then lets a newer bundle take over from it", async () => {
     const first = await bundle("installed-1", "1.0.0");
     const deps = await withTrust({
-      start: async () => void (await startDaemon("1.0.0")),
+      start: spawnDaemon("1.0.0"),
     });
     await ensureServiceWith(deps, paths, sidecar("1.0.0", first));
     await daemons.shift()!.stop();
@@ -464,10 +539,10 @@ describe("no service running", () => {
     const starts: string[] = [];
     const outcome = await ensureServiceWith(
       await withTrust({
-        start: async () => {
+        start: async (...args) => {
           const version = starts.length === 0 ? "1.0.0" : "1.1.0";
           starts.push(version);
-          await startDaemon(version);
+          await spawnDaemon(version)(...args);
         },
       }),
       paths,
@@ -477,8 +552,19 @@ describe("no service running", () => {
     expect(outcome).toMatchObject({ kind: "upgraded", to: { version: "1.1.0" } });
   }, 90_000);
 
+  it("hands the service lock's token to the daemon it starts, while it holds that lock", async () => {
+    const held: boolean[] = [];
+    const start = async (...args: Parameters<NonNullable<ServiceDeps["start"]>>) => {
+      held.push(await holdsLock(paths.lock, args[3]));
+      await spawnDaemon("1.0.0")(...args);
+    };
+    await ensureServiceWith(await withTrust({ start }), paths, cli("1.0.0"));
+    expect(held).toEqual([true]);
+    expect(existsSync(paths.lock)).toBe(false);
+  }, 60_000);
+
   it("a CLI starts the service itself and installs nothing", async () => {
-    const start = vi.fn(async () => void (await startDaemon("1.0.0")));
+    const start = vi.fn(spawnDaemon("1.0.0"));
     const outcome = await ensureServiceWith(
       await withTrust({ start }),
       paths,

@@ -150,6 +150,47 @@ describe("the daemon pairing a desktop app over its control socket", () => {
     });
   }, 60_000);
 
+  it("refuses to pair an app this computer is already connected to, and touches nothing", async () => {
+    const alice = await app.signUp("Ivy");
+    const { control, grants, keys } = await started("again");
+    const begun = await control.send({
+      op: "begin_local_pairing",
+      appOrigin: app.origin,
+    });
+    if (!begun.ok) throw new Error(begun.error);
+    await control.send({
+      op: "finish_local_pairing",
+      appOrigin: app.origin,
+      code: await authorize(alice, begun.pairing),
+    });
+    await control.send({
+      op: "confirm_local_pairing",
+      appOrigin: app.origin,
+      connect: true,
+      device,
+    });
+    const before = await grants.get(app.origin);
+    const create = vi.spyOn(keys, "create");
+
+    expect(
+      await control.send({ op: "begin_local_pairing", appOrigin: app.origin }),
+    ).toEqual({ ok: false, error: "This computer is already connected to Hello." });
+
+    expect(create).not.toHaveBeenCalled();
+    expect(await grants.get(app.origin)).toEqual(before);
+    expect(keys.origins()).toEqual([app.origin]);
+    expect(
+      await control.send({
+        op: "finish_local_pairing",
+        appOrigin: app.origin,
+        code: "x",
+      }),
+    ).toEqual({ ok: false, error: "No pairing was started for this app." });
+    expect(await control.send({ op: "status" })).toMatchObject({
+      status: { apps: [app.origin] },
+    });
+  }, 60_000);
+
   it("pins nothing when the app's device is not whole, and still pairs", async () => {
     const alice = await app.signUp("Noa");
     const { control, trust } = await started("half");

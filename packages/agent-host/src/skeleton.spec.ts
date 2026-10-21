@@ -80,6 +80,10 @@ const DIFFERENCES: Readonly<
     agreed: true,
     why: "addendum D7: the overlay read at the start of each turn",
   },
+  "agent-host/src/daemon.ts DaemonDeps changed": {
+    agreed: false,
+    why: "review of phase 6: `lockToken` names the service.lock the spawning ensureService holds, so the daemon's probe-through-bind takes the lock otherwise",
+  },
   "agent-host/src/prompter.ts LocalPrompter changed": {
     agreed: true,
     why: "addendum D8: `signal` closes a dialog whose turn ended",
@@ -168,6 +172,10 @@ const DIFFERENCES_6: Readonly<
   "agent-host/src/service.ts ServiceClient changed": {
     agreed: false,
     why: "the `.sig` of a bundled binary lives in the app's resources, not beside it, so the client carries its path",
+  },
+  "agent-host/src/daemon.ts DaemonDeps changed": {
+    agreed: false,
+    why: "review of phase 6: `lockToken` names the service.lock the spawning ensureService holds, so the daemon's probe-through-bind takes the lock otherwise",
   },
   "agent-host/src/control.ts ControlRequest changed": {
     agreed: true,

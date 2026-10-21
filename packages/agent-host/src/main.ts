@@ -44,6 +44,7 @@ async function host() {
     { CONTROL_PROTOCOL, connectControl },
     { createHostDaemon, HostAlreadyRunning },
     { fileGrantStore, keychainHostKeys },
+    { LOCK_TOKEN_ENV },
     { createMcpProxy },
     { hostPaths },
     { changePolicy, DEFAULT_POLICY, loadPolicy },
@@ -58,6 +59,7 @@ async function host() {
     import("./control.js"),
     import("./daemon.js"),
     import("./grants.js"),
+    import("./lock.js"),
     import("./mcp-proxy.js"),
     import("./paths.js"),
     import("./policy.js"),
@@ -87,6 +89,7 @@ async function host() {
       launcher: acpLauncher(),
       prompter,
       policy: DEFAULT_POLICY,
+      lockToken: process.env[LOCK_TOKEN_ENV],
     });
   const disconnectFrom = async (origin: string) => {
     const paths = hostPaths();

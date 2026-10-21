@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { LOCK_STALE_MS, withFileLock } from "./lock.js";
+import { holdsLock, withFileLock, withInheritedLock } from "./lock.js";
 
 let dir: string;
 beforeAll(async () => {
@@ -41,7 +41,7 @@ describe("withFileLock", () => {
   it("writes the owner's pid into the lock", async () => {
     const path = join(dir, "pid.lock");
     await withFileLock(path, async () => {
-      expect((await readFile(path, "utf8")).trim()).toBe(String(process.pid));
+      expect((await readFile(path, "utf8")).split("\n")[0]).toBe(String(process.pid));
     });
   });
 
@@ -53,24 +53,28 @@ describe("withFileLock", () => {
     expect(Date.now() - started).toBeLessThan(1_000);
   });
 
-  it("takes over a lock its live owner has held longer than the stale limit", async () => {
+  it("never takes over a lock whose live owner has held it for hours", async () => {
     const path = join(dir, "old.lock");
     await writeFile(path, `${process.pid}\n`);
-    const old = new Date(Date.now() - LOCK_STALE_MS - 1_000);
+    const old = new Date(Date.now() - 3 * 60 * 60_000);
     await utimes(path, old, old);
-    const started = Date.now();
-    await withFileLock(path, async () => undefined);
-    expect(Date.now() - started).toBeLessThan(1_000);
+    let entered = false;
+    const waiting = withFileLock(path, async () => void (entered = true));
+    await sleep(150);
+    expect(entered).toBe(false);
+    await rm(path);
+    await waiting;
+    expect(entered).toBe(true);
   });
 
-  it("waits for a live owner that is still within the stale limit", async () => {
+  it("waits for a live owner", async () => {
     const path = join(dir, "live.lock");
     await writeFile(path, `${process.pid}\n`);
     let entered = false;
     const waiting = withFileLock(path, async () => void (entered = true));
     await sleep(150);
     expect(entered).toBe(false);
-    await utimes(path, new Date(0), new Date(0));
+    await rm(path);
     await waiting;
     expect(entered).toBe(true);
   });
@@ -84,6 +88,25 @@ describe("withFileLock", () => {
     expect(entered).toBe(false);
     await waiting;
     expect(entered).toBe(true);
+  });
+
+  it("names the holder with a token the lock file carries", async () => {
+    const path = join(dir, "token.lock");
+    await withFileLock(path, async (token) => {
+      expect(await holdsLock(path, token)).toBe(true);
+      expect(await holdsLock(path, "another")).toBe(false);
+    });
+    expect(await holdsLock(path, "anything")).toBe(false);
+  });
+
+  it("does not remove a lock that was taken over from its holder", async () => {
+    const path = join(dir, "taken.lock");
+    await withFileLock(path, async () => {
+      await rm(path);
+      await writeFile(path, `${process.pid}\nsomeone-else\n`);
+    });
+    expect(await holdsLock(path, "someone-else")).toBe(true);
+    await rm(path);
   });
 
   it("T6-02: keeps two processes' read-modify-writes of one file from overwriting each other", async () => {
@@ -106,4 +129,37 @@ describe("withFileLock", () => {
     expect(await Promise.all([run(), run(), run()])).toEqual([0, 0, 0]);
     expect(JSON.parse(await readFile(counter, "utf8"))).toEqual({ n: 45 });
   }, 60_000);
+});
+
+describe("withInheritedLock", () => {
+  it("runs under the lock its parent holds without waiting for it", async () => {
+    const path = join(dir, "inherited.lock");
+    await withFileLock(path, async (token) => {
+      let ran = false;
+      await withInheritedLock(path, token, async () => void (ran = true));
+      expect(ran).toBe(true);
+      expect(await holdsLock(path, token)).toBe(true);
+    });
+  });
+
+  it("takes a lock of its own when the token names no held lock", async () => {
+    const path = join(dir, "forged.lock");
+    await writeFile(path, `${process.pid}\nreal\n`);
+    let entered = false;
+    const waiting = withInheritedLock(path, "forged", async () => void (entered = true));
+    await sleep(150);
+    expect(entered).toBe(false);
+    await rm(path);
+    await waiting;
+    expect(entered).toBe(true);
+  });
+
+  it("takes a lock of its own when there is no token", async () => {
+    const path = join(dir, "own.lock");
+    await withInheritedLock(path, undefined, async () => {
+      expect((await readFile(path, "utf8")).trim().split("\n")[0]).toBe(
+        String(process.pid),
+      );
+    });
+  });
 });
