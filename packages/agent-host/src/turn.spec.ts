@@ -22,6 +22,7 @@ import { acpLauncher, type AgentLauncher } from "./acp.js";
 import type { AppGrant } from "./grants.js";
 import type { AppLink } from "./link.js";
 import { createMcpProxy, type McpProxy } from "./mcp-proxy.js";
+import { computerName } from "./naming.js";
 import { DEFAULT_POLICY, DEV_POLICY, type RemotePolicy } from "./policy.js";
 import { createSessionPool, type SessionPool } from "./pool.js";
 import type { LocalPrompter } from "./prompter.js";
@@ -695,6 +696,7 @@ describe("runTurn against the fake agent over real stdio", () => {
 
 const APP = grant.appOrigin;
 const MINUTE = 60_000;
+const WAIT = { timeout: 10_000 };
 
 const pinOf = (device: TestDevice): TrustedDevice => ({
   deviceId: device.id,
@@ -935,22 +937,37 @@ describe("runTurn trusting the device that sent the prompt", () => {
     expect(await trust.get(APP, device.id)).toBeUndefined();
   });
 
-  it("refuses an unsigned prompt, and a prompt from a device the account does not know", async () => {
+  it("T6-08: tells the user to update when a prompt arrives unsigned, as an older client sends it", async () => {
     const device = await TestDevice.create();
     const approveDevice = vi.fn(async () => true);
     const run = harness(undefined, { policy, prompter: { approveDevice } });
+    const before = prompts().length;
     const unsigned = await signedClaim(
       device,
-      asId("thread", "t5-unsigned"),
+      asId("thread", "t608-unsigned"),
       "unsigned-one",
-      {
-        sign: false,
-      },
+      { sign: false },
     );
     expect(await runTurn(unsigned, run.deps)).toEqual({
       state: "failed",
-      reason: "signature_invalid",
+      reason: "device_rejected",
     });
+    expect(finishOf(run)).toEqual({ state: "failed", reason: "device_rejected" });
+    expect(eventsOf(run)).toEqual([
+      {
+        event: "turn_failed",
+        detail: `Update Hello to send messages to ${computerName()}: this version does not sign them.`,
+      },
+    ]);
+    expect(prompts()).toHaveLength(before);
+    expect(ranAgentFor("unsigned-one")).toBe(false);
+    expect(approveDevice).not.toHaveBeenCalled();
+  });
+
+  it("refuses a prompt from a device the account does not know", async () => {
+    const device = await TestDevice.create();
+    const approveDevice = vi.fn(async () => true);
+    const run = harness(undefined, { policy, prompter: { approveDevice } });
     const unknown = await signedClaim(
       device,
       asId("thread", "t5-unknown"),
@@ -1095,6 +1112,7 @@ describe("runTurn taking answers only as the policy says", () => {
   function chatAnswers(
     run: () => ReturnType<typeof harness>,
     bodies: () => readonly Record<string, unknown>[] | undefined,
+    devices: readonly DeviceKeys[] = [],
   ) {
     let sent = 0;
     return (afterSeq: number): TurnSignals[] => {
@@ -1120,6 +1138,7 @@ describe("runTurn taking answers only as the policy says", () => {
               body: { askId: ask.id, choice: "allow", ...queued[sent - 1] },
             } as LoggedItem<"answer">,
           ],
+          ...(devices.length > 0 ? { devices } : {}),
         },
       ];
     };
@@ -1351,5 +1370,282 @@ describe("runTurn taking answers only as the policy says", () => {
     expect(await runTurn(turn, run.deps)).toMatchObject({ state: "done" });
     expect(askOf(run)!.body).toMatchObject({ approval: "computer" });
     expect(answerHere).toHaveBeenCalledOnce();
+  }, 30_000);
+  const presenceAsk = async (
+    run: () => ReturnType<typeof harness>,
+    answers: () => Record<string, unknown>[] | undefined,
+    pinned: TestDevice,
+    devices: readonly DeviceKeys[] = [],
+    options: {
+      readonly prompter?: Partial<LocalPrompter>;
+      readonly trust?: TrustStore;
+    } = {},
+  ) => {
+    const trust = options.trust ?? memoryTrust();
+    await trust.pin(APP, pinOf(pinned));
+    const started: ReturnType<typeof harness> = harness(
+      chatAnswers(run, answers, devices),
+      { trust, policy: DEFAULT_POLICY, prompter: options.prompter ?? {} },
+    );
+    return { trust, started };
+  };
+
+  const asked = (run: ReturnType<typeof harness>) => askOf(run)!.id;
+  const rejections = (run: ReturnType<typeof harness>) =>
+    eventsOf(run)
+      .filter((body) => body.event === "answer_rejected")
+      .map((body) => body.itemId);
+  const toolDone = (run: ReturnType<typeof harness>) =>
+    run.appended().some((item) => item.kind === "tool");
+
+  describe("T6-06: a device that never prompted answers after the computer approves it", () => {
+    it("T6-06: Allow pins the phone by its name and platform, then hands its answer to the agent", async () => {
+      const tab = await TestDevice.create();
+      const phone = await TestDevice.create("device-2", "iPhone", "capacitor");
+      let answers: Record<string, unknown>[] | undefined;
+      let allow!: (answer: boolean) => void;
+      const approveDevice = vi.fn(
+        () => new Promise<boolean>((resolve) => (allow = resolve)),
+      );
+      const trust = memoryTrust();
+      await trust.pin(APP, pinOf(tab));
+      const run: ReturnType<typeof harness> = harness(
+        chatAnswers(
+          () => run,
+          () => answers,
+          [phone.keys],
+        ),
+        { trust, policy: DEFAULT_POLICY, prompter: { approveDevice } },
+      );
+      const running = runTurn(await signedClaim(tab, askThread, "scripted"), run.deps);
+      await vi.waitFor(() => expect(askOf(run)).toBeDefined(), WAIT);
+      answers = [
+        {
+          signed: await phone.signAnswer(
+            APP,
+            { threadId: askThread, askId: asked(run), choice: "allow" },
+            Date.now(),
+            true,
+          ),
+        },
+      ];
+      await vi.waitFor(() => expect(approveDevice).toHaveBeenCalledOnce(), WAIT);
+      expect(approveDevice).toHaveBeenCalledWith(
+        expect.objectContaining({
+          appName: "Hello",
+          account: grant.account,
+          device: { name: "iPhone", platform: "capacitor" },
+        }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+      expect(toolDone(run)).toBe(false);
+      expect(rejections(run)).toEqual([]);
+      expect(await trust.get(APP, phone.id)).toBeUndefined();
+      allow(true);
+      expect(await running).toMatchObject({ state: "done" });
+      expect(run.appended().find((item) => item.kind === "tool")!.body).toMatchObject({
+        status: "done",
+      });
+      expect(rejections(run)).toEqual([]);
+      expect(await trust.get(APP, phone.id)).toMatchObject({
+        deviceId: phone.id,
+        name: "iPhone",
+        platform: "capacitor",
+        via: "local",
+        signingKey: phone.keys.signingKey,
+        presenceKey: phone.keys.presenceKey,
+      });
+    }, 30_000);
+
+    it("T6-06: Don't allow rejects the answer, leaves the phone unpinned and the ask open", async () => {
+      const tab = await TestDevice.create();
+      const phone = await TestDevice.create("device-2", "iPhone", "capacitor");
+      let answers: Record<string, unknown>[] | undefined;
+      let deny!: (answer: boolean) => void;
+      const approveDevice = vi.fn(
+        () => new Promise<boolean>((resolve) => (deny = resolve)),
+      );
+      const trust = memoryTrust();
+      await trust.pin(APP, pinOf(tab));
+      const run: ReturnType<typeof harness> = harness(
+        chatAnswers(
+          () => run,
+          () => answers,
+          [phone.keys],
+        ),
+        { trust, policy: DEFAULT_POLICY, prompter: { approveDevice } },
+      );
+      const running = runTurn(await signedClaim(tab, askThread, "scripted"), run.deps);
+      await vi.waitFor(() => expect(askOf(run)).toBeDefined(), WAIT);
+      const answer = { threadId: askThread, askId: asked(run), choice: "allow" };
+      answers = [{ signed: await phone.signAnswer(APP, answer, Date.now(), true) }];
+      await vi.waitFor(() => expect(approveDevice).toHaveBeenCalledOnce(), WAIT);
+      expect(toolDone(run)).toBe(false);
+      deny(false);
+      await vi.waitFor(() => expect(rejections(run)).toEqual(["a1"]), WAIT);
+      expect(toolDone(run)).toBe(false);
+      expect(trust.pins().map((pin) => pin.deviceId)).toEqual([tab.id]);
+      answers = [
+        answers[0]!,
+        { signed: await tab.signAnswer(APP, answer, Date.now(), true) },
+      ];
+      expect(await running).toMatchObject({ state: "done" });
+      expect(rejections(run)).toEqual(["a1"]);
+    }, 30_000);
+
+    it("T6-06: keeps reading signals, so a stop request ends the turn while the dialog is open", async () => {
+      const tab = await TestDevice.create();
+      const phone = await TestDevice.create("device-2", "iPhone", "capacitor");
+      let answers: Record<string, unknown>[] | undefined;
+      let dialog: AbortSignal | undefined;
+      const approveDevice = vi.fn(
+        ({ signal }: { signal?: AbortSignal | undefined }) =>
+          new Promise<boolean>((resolve) => {
+            dialog = signal;
+            signal?.addEventListener("abort", () => resolve(false));
+          }),
+      );
+      let cancelled = false;
+      const trust = memoryTrust();
+      await trust.pin(APP, pinOf(tab));
+      const answering = chatAnswers(
+        () => run,
+        () => answers,
+        [phone.keys],
+      );
+      const run: ReturnType<typeof harness> = harness(
+        (afterSeq) => {
+          const batches = answering(afterSeq);
+          if (!cancelled) return batches;
+          const turnId = asId("turn", `u${turns}`);
+          return [
+            ...batches,
+            {
+              turnId,
+              items: [
+                {
+                  id: asId("item", "c1"),
+                  threadId: askThread,
+                  turnId,
+                  seq: afterSeq + 2,
+                  at: Date.now(),
+                  author: "user",
+                  kind: "cancel",
+                  body: {},
+                },
+              ],
+            },
+          ];
+        },
+        { trust, policy: DEFAULT_POLICY, prompter: { approveDevice } },
+      );
+      const running = runTurn(await signedClaim(tab, askThread, "scripted"), run.deps);
+      await vi.waitFor(() => expect(askOf(run)).toBeDefined(), WAIT);
+      answers = [
+        {
+          signed: await phone.signAnswer(
+            APP,
+            { threadId: askThread, askId: asked(run), choice: "allow" },
+            Date.now(),
+            true,
+          ),
+        },
+      ];
+      await vi.waitFor(() => expect(approveDevice).toHaveBeenCalledOnce(), WAIT);
+      cancelled = true;
+      expect(await running).toEqual({ state: "cancelled" });
+      await vi.waitFor(() => expect(dialog?.aborted).toBe(true), WAIT);
+      expect(trust.pins().map((pin) => pin.deviceId)).toEqual([tab.id]);
+    }, 30_000);
+
+    it("T6-06: rejects the answer of an unpinned device the signals carry no keys for", async () => {
+      const tab = await TestDevice.create();
+      const phone = await TestDevice.create("device-2", "iPhone", "capacitor");
+      let answers: Record<string, unknown>[] | undefined;
+      const approveDevice = vi.fn(async () => true);
+      const { trust, started: run } = await presenceAsk(
+        () => run,
+        () => answers,
+        tab,
+        [],
+        { prompter: { approveDevice } },
+      );
+      const running = runTurn(await signedClaim(tab, askThread, "scripted"), run.deps);
+      await vi.waitFor(() => expect(askOf(run)).toBeDefined(), WAIT);
+      const answer = { threadId: askThread, askId: asked(run), choice: "allow" };
+      answers = [{ signed: await phone.signAnswer(APP, answer, Date.now(), true) }];
+      await vi.waitFor(() => expect(rejections(run)).toEqual(["a1"]), WAIT);
+      answers = [
+        answers[0]!,
+        { signed: await tab.signAnswer(APP, answer, Date.now(), true) },
+      ];
+      expect(await running).toMatchObject({ state: "done" });
+      expect(approveDevice).not.toHaveBeenCalled();
+      expect(trust.pins().map((pin) => pin.deviceId)).toEqual([tab.id]);
+    }, 30_000);
+  });
+
+  it("T6-09: a mislabeled, wrong-app or key-swapped answer never reaches the agent, and an extra field does no harm", async () => {
+    const tab = await TestDevice.create();
+    const phone = await TestDevice.create("device-2", "iPhone", "capacitor");
+    const impostor = await TestDevice.create("device-2", "iPhone", "capacitor");
+    const logFile = join(dir, "t609.log");
+    const { openHostLog } = await import("./log.js");
+    openHostLog(logFile);
+    let answers: Record<string, unknown>[] | undefined;
+    const approveDevice = vi.fn(async () => true);
+    const { trust, started: run } = await presenceAsk(
+      () => run,
+      () => answers,
+      tab,
+      [impostor.keys],
+      { prompter: { approveDevice } },
+    );
+    const running = runTurn(await signedClaim(tab, askThread, "scripted"), run.deps);
+    await vi.waitFor(() => expect(askOf(run)).toBeDefined(), WAIT);
+    const answer = { threadId: askThread, askId: asked(run), choice: "allow" };
+    const at = Date.now();
+    const relabeled = await tab.signAnswer(APP, answer, at, false);
+    const forged = await phone.signAnswer(APP, answer, at, true);
+    const withExtras = await tab.signAnswer(APP, answer, at, true);
+    answers = [
+      {
+        signed: {
+          ...relabeled,
+          signature: { ...relabeled.signature, presence: "user" },
+        },
+      },
+      { signed: await tab.signAnswer("https://evil.example", answer, at, true) },
+      { signed: forged },
+    ];
+    await vi.waitFor(() => expect(rejections(run)).toEqual(["a1", "a2", "a3"]), WAIT);
+    expect(toolDone(run)).toBe(false);
+    expect(approveDevice).not.toHaveBeenCalled();
+    expect(trust.pins().map((pin) => pin.deviceId)).toEqual([tab.id]);
+    const verified = readFileSync(logFile, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((entry) => entry.event === "statement_verified" && entry.kind === "answer");
+    expect(verified).toContainEqual(
+      expect.objectContaining({
+        deviceId: phone.id,
+        outcome: "invalid",
+        sha256: expect.any(String),
+      }),
+    );
+    answers = [
+      ...answers,
+      {
+        signed: {
+          ...withExtras,
+          unknown: "field",
+          signature: { ...withExtras.signature, unknown: "field" },
+        },
+      },
+    ];
+    expect(await running).toMatchObject({ state: "done" });
+    expect(rejections(run)).toEqual(["a1", "a2", "a3"]);
+    expect(toolDone(run)).toBe(true);
   }, 30_000);
 });

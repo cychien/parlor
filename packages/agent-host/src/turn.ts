@@ -20,6 +20,7 @@ import type {
   TurnSignals,
 } from "@parlor/chat";
 import { ActionError, asId, type ItemId } from "@parlor/core";
+import type { DeviceKeys } from "@parlor/server";
 
 import {
   type AgentAsk,
@@ -36,7 +37,7 @@ import { finishFold, foldUpdate, startFold, type TurnFold } from "./fold.js";
 import type { AppLink } from "./link.js";
 import { logEvent } from "./log.js";
 import type { McpProxy, ProxySession } from "./mcp-proxy.js";
-import { appServerOf } from "./naming.js";
+import { appServerOf, computerName } from "./naming.js";
 import { approvalFor, isAppTool, type RemotePolicy } from "./policy.js";
 import type { LiveSession, SessionPool } from "./pool.js";
 import type { LocalPrompter } from "./prompter.js";
@@ -304,7 +305,10 @@ export async function runTurn(
     return "stopped";
   };
 
-  const approve = async (device: NonNullable<ClaimedTurn["device"]>) => {
+  const approve = async (
+    device: NonNullable<ClaimedTurn["device"]>,
+    interrupted: Promise<"cancelled" | "stopped">,
+  ) => {
     const approval = joinApproval(`${origin}\n${device.id}`, async (signal) => {
       const timeout = AbortSignal.timeout(APPROVAL_TIMEOUT_MS);
       const allowed = await deps.prompter.approveDevice({
@@ -335,16 +339,14 @@ export async function runTurn(
       });
       return true;
     });
-    const watching = new AbortController();
     try {
       return await Promise.race([
         approval.settled.then((allowed): "allowed" | "denied" =>
           allowed ? "allowed" : "denied",
         ),
-        cancelRequested(watching.signal),
+        interrupted,
       ]);
     } finally {
-      watching.abort();
       approval.leave();
     }
   };
@@ -359,8 +361,13 @@ export async function runTurn(
 
   const admit = async (): Promise<Admission> => {
     const signed = await signedPrompt(origin, claimed.prompt);
-    if (!signed)
-      return refuse("signature_invalid", "turn_failed", "This prompt is not signed.");
+    if (!signed) {
+      return refuse(
+        "device_rejected",
+        "turn_failed",
+        `Update ${grant.appName} to send messages to ${computerName()}: this version does not sign them.`,
+      );
+    }
     const known = await deps.trust.get(origin, signed.deviceId);
     const keys = claimed.device;
     if (known && !keys) {
@@ -399,7 +406,10 @@ export async function runTurn(
     }
     if (known) return { device: known };
     await event("device_pending");
-    const decision = await approve(keys);
+    const watching = new AbortController();
+    const decision = await approve(keys, cancelRequested(watching.signal)).finally(() =>
+      watching.abort(),
+    );
     if (decision === "cancelled")
       return { outcome: await finish({ state: "cancelled" }) };
     if (decision !== "allowed") return refuse("device_rejected", "device_rejected");
@@ -487,11 +497,13 @@ export async function runTurn(
       preview: text.slice(0, 80),
     });
 
+    const turnOver = new AbortController();
     const cancel = () => {
       if (cancelled) return;
       cancelled = true;
       void session.cancel();
       settleAll();
+      turnOver.abort();
     };
 
     const ask = async (question: AgentAsk): Promise<AgentAskAnswer> => {
@@ -540,25 +552,45 @@ export async function runTurn(
       return answered;
     };
 
-    const rejectionOf = async (
+    type Decided =
+      | { readonly kind: "accepted" }
+      | { readonly kind: "rejected"; readonly reason: string };
+    type AnswerVerdict =
+      | Decided
+      | { readonly kind: "unpinned"; readonly device: DeviceKeys };
+
+    const rejected = (reason: string): Decided => ({ kind: "rejected", reason });
+
+    const verdictOf = async (
       waiting: Pending,
       item: LoggedItem<"answer">,
-    ): Promise<string | undefined> => {
+      devices: readonly DeviceKeys[],
+    ): Promise<AnswerVerdict> => {
       if (waiting.approval === "computer") {
-        return "This question is answered on the computer.";
+        return rejected("This question is answered on the computer.");
       }
       if (deps.policy.deviceApproval !== "local" && waiting.approval !== "presence") {
-        return undefined;
+        return { kind: "accepted" };
       }
       const { signed, askId, choice, values } = item.body;
       const pinned = signed ? await deps.trust.get(origin, signed.deviceId) : undefined;
-      if (!signed || !pinned) {
+      const listed = signed
+        ? devices.find((keys) => keys.id === signed.deviceId)
+        : undefined;
+      const known: PinnedDevice | undefined =
+        pinned ??
+        (listed && {
+          deviceId: listed.id,
+          signingKey: listed.signingKey,
+          presenceKey: listed.presenceKey,
+        });
+      if (!signed || !known) {
         logEvent("statement_verified", {
           kind: "answer",
           deviceId: signed?.deviceId,
           outcome: "invalid",
         });
-        return "This device cannot answer here.";
+        return rejected("This device cannot answer here.");
       }
       const statement = await answerStatement(
         origin,
@@ -567,7 +599,7 @@ export async function runTurn(
       );
       const outcome = await verifyStatement(
         { statement, deviceId: signed.deviceId, signature: signed.signature },
-        pinned,
+        known,
         {
           requirePresence: waiting.approval === "presence",
           now: deps.now(),
@@ -580,10 +612,60 @@ export async function runTurn(
         outcome,
         sha256: await hex(statementBytes(statement)),
       });
-      if (outcome === "valid") return undefined;
-      return outcome === "presence_required"
-        ? "This answer needs a presence check."
-        : "This answer's signature did not check out.";
+      if (outcome === "presence_required") {
+        return rejected("This answer needs a presence check.");
+      }
+      if (outcome !== "valid")
+        return rejected("This answer's signature did not check out.");
+      return pinned || !listed
+        ? { kind: "accepted" }
+        : { kind: "unpinned", device: listed };
+    };
+
+    const interrupted = new Promise<"cancelled" | "stopped">((resolve) =>
+      turnOver.signal.addEventListener(
+        "abort",
+        () => resolve(cancelled ? "cancelled" : "stopped"),
+        { once: true },
+      ),
+    );
+
+    const deliver = (waiting: Pending, item: LoggedItem<"answer">, verdict: Decided) => {
+      const answer =
+        verdict.kind === "accepted" ? answerOf(waiting, item.body) : undefined;
+      if (!answer) {
+        void event(
+          "answer_rejected",
+          verdict.kind === "rejected"
+            ? verdict.reason
+            : "That is not one of the choices.",
+          item.id,
+        );
+        return;
+      }
+      settle(item.body.askId, answer);
+    };
+
+    const admitAnswer = async (
+      waiting: Pending,
+      item: LoggedItem<"answer">,
+      devices: readonly DeviceKeys[],
+    ) => {
+      const verdict = await verdictOf(waiting, item, devices);
+      if (verdict.kind !== "unpinned") {
+        deliver(waiting, item, verdict);
+        return;
+      }
+      void approve(verdict.device, interrupted).then((decision) => {
+        if (decision === "cancelled" || decision === "stopped") return;
+        deliver(
+          waiting,
+          item,
+          decision === "allowed"
+            ? { kind: "accepted" }
+            : rejected("This device was not approved on the computer."),
+        );
+      });
     };
 
     let afterSeq = claimed.prompt.seq;
@@ -598,26 +680,16 @@ export async function runTurn(
         } catch {
           continue;
         }
-        for (const item of batches.flatMap((batch) => batch.items)) {
-          afterSeq = Math.max(afterSeq, item.seq);
-          if (item.kind === "cancel") {
-            cancel();
-            continue;
+        for (const batch of batches) {
+          for (const item of batch.items) {
+            afterSeq = Math.max(afterSeq, item.seq);
+            if (item.kind === "cancel") {
+              cancel();
+              continue;
+            }
+            const waiting = pending.get(item.body.askId);
+            if (waiting) await admitAnswer(waiting, item, batch.devices ?? []);
           }
-          const waiting = pending.get(item.body.askId);
-          if (!waiting) continue;
-          const rejection = await rejectionOf(waiting, item);
-          const answer =
-            rejection === undefined ? answerOf(waiting, item.body) : undefined;
-          if (!answer) {
-            void event(
-              "answer_rejected",
-              rejection ?? "That is not one of the choices.",
-              item.id,
-            );
-            continue;
-          }
-          settle(item.body.askId, answer);
         }
       }
     };
@@ -650,10 +722,11 @@ export async function runTurn(
     } finally {
       polling = false;
       settleAll();
+      turnOver.abort();
     }
 
-    const interrupted = failure !== undefined || cancelled || stop === "cancelled";
-    const final = finishFold(fold, interrupted);
+    const stopped = failure !== undefined || cancelled || stop === "cancelled";
+    const final = finishFold(fold, stopped);
     fold = final.fold;
     void write(final.closed);
 
@@ -665,7 +738,7 @@ export async function runTurn(
     }
     if (lost) return { state: "failed", reason: "host_lost" };
     return finish(
-      interrupted ? { state: "cancelled" } : { state: "done", stopReason: stop! },
+      stopped ? { state: "cancelled" } : { state: "done", stopReason: stop! },
     );
   };
 

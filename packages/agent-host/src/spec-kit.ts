@@ -233,7 +233,11 @@ export class TestDevice {
     private readonly presence: CryptoKey,
   ) {}
 
-  static async create(id = "device-1", name = "Chrome on macOS"): Promise<TestDevice> {
+  static async create(
+    id = "device-1",
+    name = "Chrome on macOS",
+    platform = "web",
+  ): Promise<TestDevice> {
     const make = async () => {
       const pair = await crypto.subtle.generateKey(
         { name: "ECDSA", namedCurve: "P-256" },
@@ -251,7 +255,7 @@ export class TestDevice {
       {
         id: asId("device", id),
         name,
-        platform: "web",
+        platform,
         signingKey: signing.publicKey,
         presenceKey: {
           format: "es256-raw",
