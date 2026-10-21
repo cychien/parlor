@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, open as openFile, mkdir, rm } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,15 +7,9 @@ import { defineCommand, runMain } from "citty";
 
 import type { AppGrant, GrantStore } from "./grants.js";
 import { printable } from "./prompter.js";
+import { HOST_VERSION as version } from "./version.js";
 
 const KEYCHAIN_SERVICE = "dev.parlor.host";
-const DAEMON_READY_MS = 15_000;
-
-const { version } = createRequire(import.meta.url)("../package.json") as {
-  readonly version: string;
-};
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function shutdownSignal(): AbortSignal {
   const controller = new AbortController();
@@ -49,7 +42,7 @@ async function host() {
     { acpLauncher },
     { HOST_PROTOCOL },
     { CONTROL_PROTOCOL, connectControl },
-    { createHostDaemon },
+    { createHostDaemon, HostAlreadyRunning },
     { fileGrantStore, keychainHostKeys },
     { createMcpProxy },
     { hostPaths },
@@ -58,6 +51,7 @@ async function host() {
     { macDialogPrompter, terminalPrompter },
     { revokeGrant },
     { fileTrustStore },
+    { ensureService },
   ] = await Promise.all([
     import("./acp.js"),
     import("@parlor/chat"),
@@ -71,17 +65,19 @@ async function host() {
     import("./prompter.js"),
     import("./revoke.js"),
     import("./trust.js"),
+    import("./service.js"),
   ]);
   type Paths = ReturnType<typeof hostPaths>;
   type Grants = ReturnType<typeof fileGrantStore>;
   type Prompter = ReturnType<typeof terminalPrompter>;
+  const release = {
+    version,
+    protocols: { min: 1, max: HOST_PROTOCOL },
+    control: CONTROL_PROTOCOL,
+  };
   const daemonFor = (paths: Paths, grants: Grants, prompter: Prompter) =>
     createHostDaemon({
-      release: {
-        version,
-        protocols: { min: 1, max: HOST_PROTOCOL },
-        control: CONTROL_PROTOCOL,
-      },
+      release,
       paths,
       grants,
       keys: keychainHostKeys(KEYCHAIN_SERVICE),
@@ -92,28 +88,6 @@ async function host() {
       prompter,
       policy: DEFAULT_POLICY,
     });
-  const ensureDaemon = async (paths: Paths) => {
-    const running = await connectControl(paths.control);
-    if (running) return running;
-    await mkdir(join(paths.root, "logs"), { recursive: true, mode: 0o700 });
-    const output = await openFile(join(paths.root, "logs", "daemon.out"), "a", 0o600);
-    const child = spawn(process.execPath, [process.argv[1]!, "daemon"], {
-      cwd: paths.root,
-      detached: true,
-      stdio: ["ignore", output.fd, output.fd],
-      env: process.env,
-    });
-    child.unref();
-    await output.close();
-    for (const deadline = Date.now() + DAEMON_READY_MS; Date.now() < deadline;) {
-      const client = await connectControl(paths.control);
-      if (client) return client;
-      await sleep(100);
-    }
-    throw new Error(
-      `Parlor Host did not start; see ${join(paths.root, "logs", "daemon.out")}.`,
-    );
-  };
   const disconnectFrom = async (origin: string) => {
     const paths = hostPaths();
     const client = await connectControl(paths.control);
@@ -142,12 +116,14 @@ async function host() {
     DEFAULT_POLICY,
     daemonFor,
     disconnectFrom,
-    ensureDaemon,
+    ensureService,
     fileGrantStore,
+    HostAlreadyRunning,
     hostPaths,
     keychainHostKeys,
     loadPolicy,
     macDialogPrompter,
+    release,
     terminalPrompter,
   };
 }
@@ -211,7 +187,21 @@ const connect = defineCommand({
       grant = outcome.grant;
       await grants.save(grant);
     }
-    const client = await kit.ensureDaemon(paths);
+    const adopted = await kit.ensureService(paths, {
+      kind: "cli",
+      release: kit.release,
+    });
+    if (adopted.kind === "refused") {
+      fail(
+        "An older Parlor Host is already running on this computer; stop it, then connect again.",
+      );
+      return;
+    }
+    const client = await kit.connectControl(paths.control);
+    if (!client) {
+      fail("Parlor Host stopped answering.");
+      return;
+    }
     const reply = await client.send({ op: "connect", appOrigin: origin });
     client.close();
     if (!reply.ok) {
@@ -243,7 +233,9 @@ const status = defineCommand({
     const client = await kit.connectControl(kit.hostPaths().control);
     const reply = client ? await client.send({ op: "status" }) : undefined;
     client?.close();
-    const current = reply?.ok ? reply.status : ({ state: "stopped" } as const);
+    const current = reply?.ok
+      ? { ...reply.status, grants: reply.grants }
+      : ({ state: "stopped" } as const);
     if (args.json) {
       process.stdout.write(`${JSON.stringify(current)}\n`);
     } else if (current.state === "stopped") {
@@ -262,17 +254,58 @@ const daemon = defineCommand({
     name: "daemon",
     description: "Run the background host for every connected app",
   },
-  async run() {
+  args: {
+    ensure: {
+      type: "boolean",
+      description:
+        "Adopt, install or upgrade the per-user service, print one JSON line, exit",
+    },
+    app: { type: "string", description: "With --ensure: the app's bundle id" },
+    binary: { type: "string", description: "With --ensure: the bundled parlor-host" },
+    signature: { type: "string", description: "With --ensure: its parlor-host.sig" },
+  },
+  async run({ args }) {
     const kit = await host();
     const paths = kit.hostPaths();
+    if (args.ensure) {
+      if (!args.app || !args.binary || !args.signature) {
+        fail("--ensure needs --app, --binary and --signature.");
+        return;
+      }
+      const started = performance.now();
+      const outcome = await kit.ensureService(paths, {
+        kind: "desktop-sidecar",
+        app: args.app,
+        release: kit.release,
+        binary: args.binary,
+        signature: args.signature,
+      });
+      process.stdout.write(
+        `${JSON.stringify({
+          event: "ensure",
+          outcome: outcome.kind,
+          ms: Math.round(performance.now() - started),
+          ...(outcome.kind === "refused" ? { reason: outcome.reason } : {}),
+        })}\n`,
+      );
+      return;
+    }
     const shutdown = shutdownSignal();
     const running = kit.daemonFor(
       paths,
       kit.fileGrantStore(paths.grants),
       process.platform === "darwin" ? kit.macDialogPrompter() : kit.terminalPrompter(),
     );
-    await running.start();
-    await untilAborted(shutdown);
+    try {
+      await running.start();
+    } catch (error) {
+      if (error instanceof kit.HostAlreadyRunning) process.exit(0);
+      throw error;
+    }
+    const handedOver = running.drained.then(() => true);
+    if (await Promise.race([handedOver, untilAborted(shutdown).then(() => false)])) {
+      process.exit(0);
+    }
     await running.stop();
     process.exit(0);
   },
@@ -377,10 +410,11 @@ const mcpProxy = defineCommand({
   },
 });
 
-await runMain(
+void runMain(
   defineCommand({
     meta: {
       name: "parlor-host",
+      version,
       description: "Run your own agents for your Parlor apps",
     },
     subCommands: {

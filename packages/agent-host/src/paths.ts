@@ -13,11 +13,16 @@ export interface HostPaths {
   readonly versions: string;
   /** What the login item points at; a link into `versions/<version>/`, never into an app bundle. */
   readonly current: string;
+  /** Held by `ensureService` from the first look at the service until it answers. */
+  readonly lock: string;
+  readonly logs: string;
+  readonly launchAgent: string;
   readonly workspaces: string;
 }
 
 export function hostPaths(root: string = join(homedir(), ".parlor", "host")): HostPaths {
   const run = join(root, "run");
+  const home = dirname(dirname(root));
   return {
     root,
     grants: join(root, "grants.json"),
@@ -29,6 +34,9 @@ export function hostPaths(root: string = join(homedir(), ".parlor", "host")): Ho
     proxy: join(run, "proxy.sock"),
     versions: join(root, "versions"),
     current: join(root, "current"),
-    workspaces: join(dirname(dirname(root)), "Parlor"),
+    lock: join(root, "service.lock"),
+    logs: join(root, "logs"),
+    launchAgent: join(home, "Library", "LaunchAgents", "dev.parlor.host.plist"),
+    workspaces: join(home, "Parlor"),
   };
 }

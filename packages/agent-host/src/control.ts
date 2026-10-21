@@ -34,6 +34,13 @@ export type ControlRequest =
 
 export type ControlOp = ControlRequest["op"];
 
+/** One app the service holds a grant for, which `status` lists so two apps stay apart. */
+export interface GrantSummary {
+  readonly appOrigin: string;
+  readonly appName: string;
+  readonly grantId: string;
+}
+
 export type ControlFailure = { readonly ok: false; readonly error: string };
 
 interface ControlReplies {
@@ -41,7 +48,11 @@ interface ControlReplies {
   readonly handover:
     | { readonly ok: true }
     | { readonly ok: false; readonly error: "unsigned" | "downgrade" };
-  readonly status: { readonly ok: true; readonly status: LocalHostStatus };
+  readonly status: {
+    readonly ok: true;
+    readonly status: LocalHostStatus;
+    readonly grants: readonly GrantSummary[];
+  };
   readonly connect: { readonly ok: true };
   readonly begin_local_pairing: { readonly ok: true; readonly pairing: HostPairing };
   readonly finish_local_pairing: {

@@ -241,4 +241,45 @@ describe("an app link", () => {
       "/_parlor/auth/hosts/revoke",
     ]);
   });
+  it("T6-02: a draining link wakes nobody but keeps its calls and streams for the turns it runs", async () => {
+    const app = stubApp((seen) => {
+      if (seen.path.endsWith("/hostHello")) return data(welcome);
+      if (seen.path.endsWith("/sync/token")) return new Response(null, { status: 503 });
+      return data({ id: "t1" });
+    });
+    const onWake = vi.fn();
+    const link = createAppLink(grant, deps(app.fetch, { onWake }));
+    expect(link.mode).toBe("idle");
+    link.start();
+    expect(link.mode).toBe("serving");
+    await vi.waitFor(() => expect(onWake).toHaveBeenCalledOnce());
+    link.drain();
+    expect(link.mode).toBe("draining");
+    await link.api.calls.call("hostAppend", { turnId, items: [] });
+    await link.api.heartbeat();
+    expect(app.seen.map((seen) => seen.path)).toContain(
+      "/_parlor/chat/actions/hostAppend",
+    );
+    expect(onWake).toHaveBeenCalledOnce();
+    await link.stop();
+    expect(link.mode).toBe("closed");
+    link.drain();
+    expect(link.mode).toBe("closed");
+  });
+
+  it("T6-02: a link drained before its welcome never wakes the host", async () => {
+    const app = stubApp((seen) => {
+      if (seen.path.endsWith("/hostHello")) return data(welcome);
+      if (seen.path.endsWith("/sync/token")) return new Response(null, { status: 503 });
+      return data({ id: "t1" });
+    });
+    const onWake = vi.fn();
+    const link = createAppLink(grant, deps(app.fetch, { onWake }));
+    link.start();
+    link.drain();
+    await settle();
+    expect(onWake).not.toHaveBeenCalled();
+    expect(link.protocol).toBe(HOST_PROTOCOL);
+    await link.stop();
+  });
 });

@@ -19,6 +19,8 @@ import { logEvent } from "./log.js";
 export interface McpProxy {
   listen(socketPath: string): Promise<void>;
   open(appServer: string, appOrigin: string): ProxySession;
+  /** Accepts no new connection and leaves the live ones alone, for a service handing over to a newer one. */
+  stopListening(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -302,6 +304,13 @@ export function createMcpProxy(hostBinary: string): McpProxy {
         },
       };
     },
+    async stopListening() {
+      const closing = server;
+      server = undefined;
+      if (!closing) return;
+      closing.close();
+      if (socketPath) await rm(socketPath, { force: true });
+    },
     async close() {
       for (const live of sessions.values()) {
         for (const controller of live.inflight) controller.abort();
@@ -310,8 +319,10 @@ export function createMcpProxy(hostBinary: string): McpProxy {
       sessions.clear();
       const closing = server;
       server = undefined;
-      if (closing) await new Promise<void>((resolve) => closing.close(() => resolve()));
-      if (socketPath) await rm(socketPath, { force: true });
+      if (closing) {
+        await new Promise<void>((resolve) => closing.close(() => resolve()));
+        if (socketPath) await rm(socketPath, { force: true });
+      }
     },
   };
 }

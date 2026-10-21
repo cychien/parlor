@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { pair, type PairInput } from "./pairing.js";
+import { pair, type PairInput, pairingDeviceOf, startLocalPairing } from "./pairing.js";
 import type { LocalPrompter } from "./prompter.js";
 import { type Browser, memoryHostKeys, type SpecApp, startSpecApp } from "./spec-kit.js";
 
@@ -150,5 +150,117 @@ describe("pairing a computer from its terminal", () => {
     const attempt = connectAs(dave, { decision: "cancel" });
     expect(await attempt.outcome).toEqual({ paired: false, reason: "declined_in_app" });
     expect(attempt.prompted).toEqual([]);
+  });
+});
+
+describe("pairing a computer from the desktop app", () => {
+  const authorize = async (
+    browser: Browser,
+    pairing: Record<string, unknown>,
+    decision: "connect" | "cancel" = "connect",
+  ) => {
+    const response = await browser.fetch("/_parlor/auth/hosts/authorize", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...pairing, redirectUri: "urn:parlor:ipc", decision }),
+    });
+    return ((await response.json()) as { code: string }).code;
+  };
+
+  const start = (keys = memoryHostKeys()) => ({
+    keys,
+    local: startLocalPairing({
+      appOrigin: app.origin,
+      hostName: "Alice's MacBook Pro",
+      platform: "macos",
+      keys,
+      workspaceRoot: "/Users/alice/Parlor",
+    }),
+  });
+
+  it("C8: shows the account and code the host got from the backend, and pairs once the user confirms", async () => {
+    const alice = await app.signUp("Ivy");
+    const { keys, local } = start();
+    const pairing = await local.pairing;
+    expect(pairing).toMatchObject({
+      hostName: "Alice's MacBook Pro",
+      platform: "macos",
+      matchingCode: expect.stringMatching(/^[A-Z2-9]{3}-[A-Z2-9]{3}$/),
+    });
+    const review = await local.finish(await authorize(alice, pairing));
+    expect(review).toEqual({
+      account: "ivy@example.com",
+      appName: "Hello",
+      matchingCode: pairing.matchingCode,
+    });
+    expect(keys.origins()).toEqual([]);
+    expect(await local.confirm(true)).toMatchObject({
+      paired: true,
+      grant: { appOrigin: app.origin, account: { email: "ivy@example.com" } },
+    });
+    expect(keys.origins()).toEqual([app.origin]);
+  });
+
+  it("revokes the grant and keeps nothing when the user cancels the native dialog", async () => {
+    const jack = await app.signUp("Jack");
+    const { keys, local } = start();
+    const review = local.finish(await authorize(jack, await local.pairing));
+    await review;
+    expect(await local.confirm(false)).toEqual({
+      paired: false,
+      reason: "declined_locally",
+    });
+    expect(keys.origins()).toEqual([]);
+    const hosts = await jack.fetch("/_parlor/auth/actions/hosts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(((await hosts.json()) as { data: unknown[] }).data).toEqual([]);
+  });
+
+  it("fails the finish when the code is not one the backend issued for this pairing", async () => {
+    const { local } = start();
+    await local.pairing;
+    await expect(local.finish("not-a-code")).rejects.toThrow();
+  });
+});
+
+describe("pairingDeviceOf", () => {
+  const device = {
+    deviceId: "device-1",
+    name: "Hello on macOS",
+    platform: "tauri",
+    signingKey: { kty: "EC", crv: "P-256", x: "x", y: "y", d: "private" },
+    presenceKey: {
+      format: "es256-raw",
+      keyId: "k",
+      publicKey: { kty: "EC", crv: "P-256", x: "x", y: "y", d: "private" },
+    },
+  };
+
+  it("keeps the public point of each key and nothing else", () => {
+    expect(pairingDeviceOf(device)).toEqual({
+      deviceId: "device-1",
+      name: "Hello on macOS",
+      platform: "tauri",
+      signingKey: { kty: "EC", crv: "P-256", x: "x", y: "y" },
+      presenceKey: {
+        format: "es256-raw",
+        keyId: "k",
+        publicKey: { kty: "EC", crv: "P-256", x: "x", y: "y" },
+      },
+    });
+  });
+
+  it("drops a presence key that is not whole, and refuses a device with no usable signing key", () => {
+    expect(
+      pairingDeviceOf({ ...device, presenceKey: { format: "webauthn" } }),
+    ).toMatchObject({
+      presenceKey: undefined,
+    });
+    expect(pairingDeviceOf({ ...device, signingKey: { kty: "RSA" } })).toBeUndefined();
+    expect(pairingDeviceOf({ ...device, deviceId: "" })).toBeUndefined();
+    expect(pairingDeviceOf(null)).toBeUndefined();
   });
 });

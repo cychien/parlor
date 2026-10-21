@@ -1,13 +1,6 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
-import {
-  createServer,
-  type IncomingMessage,
-  type Server,
-  type ServerResponse,
-} from "node:http";
-import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,173 +16,19 @@ import { createMcpProxy } from "./mcp-proxy.js";
 import { hostPaths } from "./paths.js";
 import { DEFAULT_POLICY, DEV_POLICY } from "./policy.js";
 import { createSessionPool } from "./pool.js";
-import { memoryHostKeys } from "./spec-kit.js";
+import {
+  claimedTurn,
+  grantFor,
+  hostRoutes,
+  json,
+  memoryHostKeys,
+  type StubApp,
+  stubApp,
+} from "./spec-kit.js";
 import { fileTrustStore } from "./trust.js";
 
 const BIN = fileURLToPath(new URL("../bin/parlor-host-dev.mjs", import.meta.url));
 const FAKE = fileURLToPath(new URL("../bin/fake-agent.mjs", import.meta.url));
-
-interface StubApp {
-  readonly origin: string;
-  readonly seen: {
-    readonly method: string;
-    readonly path: string;
-    readonly body: string;
-  }[];
-  close(): Promise<void>;
-}
-
-type Route = (
-  request: IncomingMessage,
-  body: string,
-  response: ServerResponse,
-) => boolean;
-
-async function stubApp(route: Route): Promise<StubApp> {
-  const seen: StubApp["seen"][number][] = [];
-  const server: Server = createServer((request, response) => {
-    let body = "";
-    request.setEncoding("utf8");
-    request.on("data", (chunk: string) => (body += chunk));
-    request.on("end", () => {
-      const path = new URL(request.url ?? "/", "http://stub").pathname;
-      seen.push({ method: request.method ?? "GET", path, body });
-      if (!route(request, body, response)) response.writeHead(404).end();
-    });
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return {
-    origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
-    seen,
-    close: () =>
-      new Promise((resolve) => {
-        server.closeAllConnections();
-        server.close(() => resolve());
-      }),
-  };
-}
-
-const json = (response: ServerResponse, value: unknown, status = 200) =>
-  response
-    .writeHead(status, { "content-type": "application/json" })
-    .end(JSON.stringify(value));
-
-const welcome = {
-  id: "h",
-  accepted: true,
-  protocol: HOST_PROTOCOL,
-  leaseMs: 60_000,
-  heartbeatMs: 30_000,
-};
-
-function hostRoutes(options: {
-  readonly wake: boolean;
-  readonly turn?: () => unknown;
-}): Route {
-  let claimed = false;
-  return (request, body, response) => {
-    const path = new URL(request.url ?? "/", "http://stub").pathname;
-    const action = path.startsWith("/_parlor/chat/actions/")
-      ? path.split("/").at(-1)
-      : undefined;
-    if (action === "hostHello")
-      return (json(response, { data: welcome, tags: [] }), true);
-    if (action === "hostClaim") {
-      if (options.turn && !claimed) {
-        claimed = true;
-        return (json(response, { data: options.turn(), tags: [] }), true);
-      }
-      return (
-        json(response, { error: { code: "not_found", message: "No turn." } }, 404), true
-      );
-    }
-    if (action === "hostSignals") return (json(response, { data: [], tags: [] }), true);
-    if (action) {
-      return (
-        json(response, {
-          data: {
-            id: "t1",
-            leaseUntil: Date.now() + 60_000,
-            token: { token: "turn-2", expiresAt: Date.now() + 60_000 },
-          },
-          tags: [],
-        }),
-        true
-      );
-    }
-    if (path === "/_parlor/sync/token") {
-      return (
-        json(response, {
-          protocol: 1,
-          transport: "sse",
-          endpoint: "/_parlor/sync/stream",
-          pollIntervalMs: 2_000,
-        }),
-        true
-      );
-    }
-    if (path === "/_parlor/sync/stream") {
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      response.write(
-        `event: handshake\ndata: ${JSON.stringify({ capabilities: [], keepAliveMs: 10_000 })}\n\n`,
-      );
-      if (options.wake) {
-        const events = [{ version: 1, id: "e1", tags: [["parlor_chat", "t1"]] }];
-        response.write(
-          `event: message\ndata: ${JSON.stringify({ events, cursor: "1.e1" })}\n\n`,
-        );
-      }
-      return true;
-    }
-    if (path === "/_parlor/mcp") {
-      const message = JSON.parse(body) as { id?: number; method: string };
-      if (message.id === undefined) return (response.writeHead(202).end(), true);
-      const result =
-        message.method === "initialize"
-          ? {
-              protocolVersion: "2025-06-18",
-              capabilities: { tools: {} },
-              serverInfo: { name: "stub", version: "1" },
-            }
-          : message.method === "tools/list"
-            ? { tools: [] }
-            : { content: [{ type: "text", text: "[]" }] };
-      return (json(response, { jsonrpc: "2.0", id: message.id, result }), true);
-    }
-    return false;
-  };
-}
-
-const claimedTurn = (turnId: string, agentId: string, context: string, text: string) => ({
-  id: "t1",
-  turnId,
-  agent: { hostId: "h-A", agentId },
-  clientId: "tab",
-  prompt: {
-    id: `p-${turnId}`,
-    threadId: "t1",
-    turnId,
-    seq: 1,
-    at: Date.now(),
-    author: "user",
-    kind: "prompt",
-    body: { text, agent: { hostId: "h-A", agentId } },
-  },
-  device: undefined,
-  context,
-  token: { token: "turn-1", expiresAt: Date.now() + 60_000 },
-  leaseUntil: Date.now() + 60_000,
-});
-
-const grantFor = (origin: string, name: string, workspace: string): AppGrant => ({
-  appOrigin: origin,
-  appName: name,
-  grantId: asId("grant", `host:${name}`),
-  hostId: asId("host", `h-${name}`),
-  account: { userId: asId("user", "alice"), name: "Alice", email: "alice@example.com" },
-  workspace,
-  createdAt: 1,
-});
 
 describe("the host daemon", () => {
   let home: string;
@@ -628,7 +467,7 @@ describe("what the daemon enforces on a grant's turns", () => {
       await host.start();
       await vi.waitFor(() => expect(outcomeOf(first)).toBeDefined(), { timeout: 15_000 });
       await vi.waitFor(() => expect(outcomeOf(dev)).toBeDefined(), { timeout: 15_000 });
-      expect(outcomeOf(first)).toEqual({ state: "failed", reason: "signature_invalid" });
+      expect(outcomeOf(first)).toEqual({ state: "failed", reason: "device_rejected" });
       expect(outcomeOf(dev)).toEqual({ state: "failed", reason: "agent_unavailable" });
 
       await writeFile(paths.policy, JSON.stringify({ deviceApproval: "off" }));

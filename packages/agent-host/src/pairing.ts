@@ -3,12 +3,12 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
 import type { HostGrantResponse } from "@parlor/auth";
-import type { HostPairing } from "@parlor/capabilities";
+import type { HostPairing, PairingDevice } from "@parlor/capabilities";
 
 import { hostAssertion } from "./assertion.js";
 import type { AppGrant, HostKeyPair, HostKeys } from "./grants.js";
 import { workspaceOf } from "./naming.js";
-import type { LocalPrompter } from "./prompter.js";
+import { type LocalPrompter, printable } from "./prompter.js";
 import { revokeGrant } from "./revoke.js";
 
 export const PAIRING_TIMEOUT_MS = 10 * 60_000;
@@ -233,4 +233,148 @@ export async function pair(input: PairInput): Promise<PairOutcome> {
   } finally {
     deadline.clear();
   }
+}
+
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+  readonly reject: (error: unknown) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  promise.catch(() => undefined);
+  return { promise, resolve, reject };
+}
+
+/** What the host exchanged the page's code for, shown by the shell's own dialog, never the page's claim. */
+export interface LocalPairingReview {
+  readonly account: string;
+  readonly appName: string;
+  readonly matchingCode: string;
+}
+
+/**
+ * A pairing driven over the control socket by the desktop shell: `pairing` once the host
+ * made its key and code, `finish` with the code the signed-in page got from the backend,
+ * `confirm` with the user's answer in the native dialog.
+ */
+export interface LocalPairing {
+  readonly pairing: Promise<HostPairing>;
+  finish(code: string): Promise<LocalPairingReview>;
+  confirm(connect: boolean): Promise<PairOutcome>;
+}
+
+export function startLocalPairing(
+  input: Omit<PairInput, "channel" | "prompter">,
+): LocalPairing {
+  const ready = deferred<HostPairing>();
+  const code = deferred<string>();
+  const review = deferred<LocalPairingReview>();
+  const decision = deferred<boolean>();
+  const prompter: LocalPrompter = {
+    confirmPairing: (shown) => {
+      review.resolve({
+        account: printable(shown.account.email ?? shown.account.name),
+        appName: printable(shown.appName),
+        matchingCode: shown.matchingCode,
+      });
+      return decision.promise;
+    },
+    approveDevice: async () => false,
+    answerHere: async () => undefined,
+    turnStarted: () => undefined,
+  };
+  const outcome = pair({
+    ...input,
+    prompter,
+    channel: {
+      kind: "ipc",
+      authorize: (pairing) => {
+        ready.resolve(pairing);
+        return code.promise;
+      },
+    },
+  });
+  outcome.then(
+    (result) => {
+      if (result.paired) return;
+      const stopped = new Error(`The pairing ended: ${result.reason}.`);
+      ready.reject(stopped);
+      review.reject(stopped);
+    },
+    (error: unknown) => {
+      ready.reject(error);
+      review.reject(error);
+    },
+  );
+  outcome.catch(() => undefined);
+  return {
+    pairing: ready.promise,
+    finish: (value) => {
+      code.resolve(value);
+      return review.promise;
+    },
+    confirm: (connect) => {
+      decision.resolve(connect);
+      return outcome;
+    },
+  };
+}
+
+const isText = (value: unknown): value is string =>
+  typeof value === "string" && value !== "";
+
+type Point = JsonWebKey & { readonly x: string; readonly y: string };
+
+const isPoint = (value: unknown): value is Point => {
+  if (typeof value !== "object" || value === null) return false;
+  const key = value as Record<string, unknown>;
+  return key.kty === "EC" && key.crv === "P-256" && isText(key.x) && isText(key.y);
+};
+
+function presenceKeyOf(value: unknown): PairingDevice["presenceKey"] {
+  if (typeof value !== "object" || value === null) return undefined;
+  const key = value as Record<string, unknown>;
+  if (!isPoint(key.publicKey)) return undefined;
+  const publicKey = { kty: "EC", crv: "P-256", x: key.publicKey.x, y: key.publicKey.y };
+  if (key.format === "webauthn" && isText(key.credentialId) && isText(key.rpId)) {
+    return {
+      format: "webauthn",
+      credentialId: key.credentialId,
+      rpId: key.rpId,
+      publicKey,
+    };
+  }
+  if (key.format === "es256-raw" && isText(key.keyId)) {
+    return { format: "es256-raw", keyId: key.keyId, publicKey };
+  }
+  return undefined;
+}
+
+/** The device a shell hands over, kept only when it is whole: a half-formed one pins nothing. */
+export function pairingDeviceOf(value: unknown): PairingDevice | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const device = value as Record<string, unknown>;
+  if (!isText(device.deviceId) || !isText(device.name) || !isText(device.platform)) {
+    return undefined;
+  }
+  if (!isPoint(device.signingKey)) return undefined;
+  return {
+    deviceId: device.deviceId,
+    name: device.name,
+    platform: device.platform,
+    signingKey: {
+      kty: "EC",
+      crv: "P-256",
+      x: device.signingKey.x,
+      y: device.signingKey.y,
+    },
+    presenceKey: presenceKeyOf(device.presenceKey),
+  };
 }

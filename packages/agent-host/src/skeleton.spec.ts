@@ -165,6 +165,10 @@ const DIFFERENCES_6: Readonly<
     agreed: true,
     why: "spec 8.6: a signature mismatch, a downgrade and a daemon without `hello` are outcomes, not throws",
   },
+  "agent-host/src/service.ts ServiceClient changed": {
+    agreed: false,
+    why: "the `.sig` of a bundled binary lives in the app's resources, not beside it, so the client carries its path",
+  },
   "agent-host/src/control.ts ControlRequest changed": {
     agreed: true,
     why: "spec 8.6: `handover` carries the binary and signature, `confirm_local_pairing` is new",
@@ -190,8 +194,22 @@ const DIFFERENCES_6: Readonly<
 describe("the phase 6 skeleton contract", () => {
   it("K6: every file this phase implements keeps the skeleton's exported signatures, but for the differences listed here", () => {
     const found = [
-      ...drift6("packages/agent-host/src/service.ts"),
-      ...drift6("packages/agent-host/src/control.ts"),
+      ...drift6("packages/agent-host/src/service.ts", [
+        "HostRelease",
+        "ServiceClient",
+        "AdoptOutcome",
+        "ensureService",
+        "installLoginItem",
+      ]),
+      ...drift6("packages/agent-host/src/control.ts", [
+        "CONTROL_PROTOCOL",
+        "ControlRequest",
+        "ControlOp",
+        "ControlFailure",
+        "ControlResponse",
+        "ControlClient",
+        "connectControl",
+      ]),
       ...drift6("packages/agent-host/src/pairing.ts", ["PairingChannel"]),
       ...drift6("packages/agent-host/src/daemon.ts", ["DaemonDeps", "HostDaemon"]),
       ...drift6("packages/capabilities/src/device-key/capacitor.ts"),
