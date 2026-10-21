@@ -422,19 +422,39 @@ export function createWebview({
     const pid = String(macPid(state));
     const node = macFind(state, role, name);
     if (role === "combobox") {
+      const chosen = async () => {
+        for (let i = 0; i < 10; i++) {
+          const now = axNodes(macTree(state)).find((n) => n.path === node.path);
+          if (now?.value === text) return true;
+          await sleep(150);
+        }
+        return false;
+      };
       ax(["press", pid, node.path]);
-      for (let i = 0; i < 20; i++) {
+      let pressed = false;
+      for (let i = 0; i < 20 && !pressed; i++) {
         await sleep(150);
         const item = axNodes(macTree(state)).find(
           (n) => n.role === "menuitem" && n.name === text,
         );
         if (item) {
           ax(["press", pid, item.path]);
-          return { role, name, value: text };
+          pressed = true;
         }
       }
+      if (pressed && (await chosen())) return { role, name, value: text, via: "menu" };
+      // WebKit's popup menu sometimes ignores an AXPress on its item; choose the option in the page.
+      const picked = await macEval(
+        state,
+        `() => { const W = ${DOM_LIB}; return W.fill(${JSON.stringify(role)}, ${JSON.stringify(name)}, ${JSON.stringify(text)}); }`,
+      ).catch((error) =>
+        fail(
+          `could not choose ${JSON.stringify(text)} in combobox ${JSON.stringify(name)}: ${error.message}`,
+        ),
+      );
+      if (await chosen()) return { ...picked, via: "page" };
       fail(
-        `no menu item ${JSON.stringify(text)} after opening combobox ${JSON.stringify(name)}`,
+        `combobox ${JSON.stringify(name)} does not show ${JSON.stringify(text)} after choosing it`,
       );
     }
     ax(["setvalue", pid, node.path, text]);
