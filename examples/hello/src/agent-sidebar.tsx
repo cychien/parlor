@@ -143,9 +143,6 @@ function Computers() {
         ))}
       </select>
       {agent?.problem ? <p className="problem">{agent.problem}</p> : null}
-      {!agent && agents.every((choice) => !choice.online) ? (
-        <p className="problem">Your computer is offline.</p>
-      ) : null}
     </div>
   );
 }
@@ -163,7 +160,7 @@ function ThreadEmpty() {
 }
 
 function Composer() {
-  const { status, error, draft } = useChat();
+  const { error, draft } = useChat();
   const problem = isPromptTooLong(draft) ? PROMPT_LIMIT_MESSAGE : error;
   return (
     <Chat.Composer className="composer">
@@ -180,9 +177,7 @@ function Composer() {
         </p>
       ) : null}
       <div className="composer-bar">
-        <p className="composer-status" role="status">
-          {status === "sending" ? "Sending..." : status === "running" ? "Working..." : ""}
-        </p>
+        <Chat.Status className="composer-status" />
         <Chat.Stop>Stop</Chat.Stop>
         <Chat.Send className="primary">Send</Chat.Send>
       </div>
@@ -191,25 +186,13 @@ function Composer() {
 }
 
 const TURN_STATE: Partial<Record<TurnState, string>> = {
-  queued: "Waiting for the computer",
+  queued: "Queued",
   cancelled: "Stopped",
   failed: "Failed",
 };
 
-type Items = readonly ChatItem<AgentConfirmation>[];
 type PromptItem = Extract<ChatItem<AgentConfirmation>, { kind: "prompt" }>;
 type AskItem = Extract<ChatItem<AgentConfirmation>, { kind: "ask" }>;
-
-function awaitsApproval(items: Items, prompt: PromptItem): boolean {
-  if (prompt.state !== "queued" && prompt.state !== "running") return false;
-  let waiting = false;
-  for (const item of items) {
-    if (item.turnId !== prompt.turnId) continue;
-    if (item.kind === "event" && item.event === "device_pending") waiting = true;
-    else if (item.kind !== "prompt" && item.kind !== "confirm") waiting = false;
-  }
-  return waiting;
-}
 
 function useHostName(hostId: string | undefined): string {
   const { hosts } = useChat();
@@ -217,7 +200,7 @@ function useHostName(hostId: string | undefined): string {
 }
 
 function PromptMeta({ item }: { readonly item: PromptItem }) {
-  const { items, resend } = useChat();
+  const { resend } = useChat();
   const hostName = useHostName(item.agent.hostId);
   if (item.failure === "prompt_expired") {
     return (
@@ -229,11 +212,6 @@ function PromptMeta({ item }: { readonly item: PromptItem }) {
           </button>
         </div>
       </>
-    );
-  }
-  if (awaitsApproval(items, item)) {
-    return (
-      <p className="item-meta">{`Waiting for ${hostName} to approve this device`}</p>
     );
   }
   const text = TURN_STATE[item.state];

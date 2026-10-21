@@ -11,6 +11,7 @@ function fakeSyncClient() {
     stop: () => {},
     cursor: "",
     transport: undefined,
+    reconnectNow: () => {},
     addChannel(channel) {
       log.push(`add ${channel.event}`);
       return () => log.push(`detach ${channel.event}`);
@@ -79,5 +80,26 @@ describe("SyncBridge", () => {
     off();
     bridge.emit([event("3")]);
     expect(seen).toEqual(["a:1,2", "b:1,2", "b:3"]);
+  });
+
+  it("tells every resume listener until it unsubscribes", () => {
+    const bridge = new SyncBridge();
+    const seen: string[] = [];
+    const off = bridge.onResume(() => seen.push("a"));
+    bridge.onResume(() => seen.push("b"));
+    bridge.resumed();
+    off();
+    bridge.resumed();
+    expect(seen).toEqual(["a", "b", "b"]);
+  });
+
+  it("reports the negotiated transport only while a client is attached", () => {
+    const bridge = new SyncBridge();
+    expect(bridge.transport()).toBeUndefined();
+    const release = bridge.attach(fakeSyncClient().client);
+    bridge.negotiated("poll");
+    expect(bridge.transport()).toBe("poll");
+    release();
+    expect(bridge.transport()).toBeUndefined();
   });
 });

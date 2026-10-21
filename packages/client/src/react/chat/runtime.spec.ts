@@ -16,7 +16,7 @@ import type {
 } from "@parlor/chat";
 import { ActionError, asId, type Tag } from "@parlor/core";
 import type { ClientChannel } from "@parlor/sync";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DeviceSource, HostAuthorizer } from "../../session.js";
 import { createChatRuntime } from "./runtime.js";
@@ -101,6 +101,8 @@ function setup(
     threadId?: string;
     localHost?: CapabilityHandle<LocalAgentHost>;
     auth?: Partial<DeviceSource & HostAuthorizer>;
+    transport?: "sse" | "poll";
+    hidden?: () => boolean;
   } = {},
 ) {
   const calls: { name: string; input: unknown }[] = [];
@@ -111,6 +113,7 @@ function setup(
     send: (input: { threadId: string }) => ({ id: input.threadId, turnId: "t" }),
     cancel: (input: { threadId: string }) => ({ id: input.threadId }),
     answer: (input: { threadId: string }) => ({ id: input.threadId }),
+    userActive: () => ({ ok: true }),
   };
   const call = vi.fn(async (name: string, input: unknown) => {
     calls.push({ name, input });
@@ -119,6 +122,7 @@ function setup(
   let channel: ClientChannel | undefined;
   const detachChannel = vi.fn();
   const tagListeners = new Set<(tags: readonly Tag[]) => void>();
+  const resumeListeners = new Set<() => void>();
   const stopWatching = vi.fn();
   const watch = vi.fn(() => stopWatching);
   const confirmationListeners = new Set<() => void>();
@@ -146,6 +150,12 @@ function setup(
       tagListeners.add(listener);
       return () => tagListeners.delete(listener);
     },
+    onResume: (listener) => {
+      resumeListeners.add(listener);
+      return () => resumeListeners.delete(listener);
+    },
+    transport: () => options.transport,
+    isHidden: options.hidden,
     auth: options.auth,
     localHost: Promise.resolve(
       options.localHost ?? { available: false, reason: "no host" },
@@ -163,6 +173,9 @@ function setup(
     frame: (frame: unknown) => channel!.receive(JSON.stringify(frame)),
     tags: (...tags: Tag[]) => {
       for (const listener of tagListeners) listener(tags);
+    },
+    resume: () => {
+      for (const listener of resumeListeners) listener();
     },
     setConfirmations(next: readonly AgentConfirmation[]) {
       confirmations = next;
@@ -1403,5 +1416,373 @@ describe("createChatRuntime resend", () => {
     await vi.waitFor(() => expect(h.runtime.get().items).toHaveLength(1));
     await h.runtime.resend("nope");
     expect(h.names()).toEqual(["open"]);
+  });
+});
+
+describe("createChatRuntime degradation", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const SECOND = 1000;
+  const running = () =>
+    snapshot({
+      items: [logged(1, "item_p", "prompt", "go")],
+      turns: [turn("turn_1", "running")],
+    });
+  const finished = () =>
+    snapshot({
+      items: [
+        logged(1, "item_p", "prompt", "go"),
+        logged(2, "turn_1.1", "reply", "Done"),
+      ],
+      turns: [turn("turn_1", "done")],
+    });
+  const settle = () => vi.advanceTimersByTimeAsync(0);
+  const opens = (h: ReturnType<typeof setup>) => h.names().filter((n) => n === "open");
+
+  function flaky(failures: number, then: () => ChatSnapshot) {
+    const times: number[] = [];
+    const t0 = Date.now();
+    let failed = 0;
+    return {
+      times: () => times.map((at) => at - t0),
+      open: async () => {
+        times.push(Date.now());
+        if (failed < failures) {
+          failed += 1;
+          throw new Error("offline");
+        }
+        return then();
+      },
+    };
+  }
+
+  it("T7-03 (a) retries a failed first open in the background, backing off to 30 s, until it shows the thread", async () => {
+    const server = flaky(9, finished);
+    const h = setup({ open: server.open });
+    h.runtime.start();
+    await settle();
+    expect(h.runtime.get().status).toBe("unavailable");
+
+    await vi.advanceTimersByTimeAsync(200 * SECOND);
+    expect(server.times()).toEqual([
+      0, 1000, 3000, 7000, 15_000, 31_000, 61_000, 91_000, 121_000, 151_000,
+    ]);
+    expect(h.runtime.get().status).toBe("idle");
+    expect(h.shown().map((item) => item.id)).toEqual(["item_p", "turn_1.1"]);
+    const reads = server.times().length;
+    await vi.advanceTimersByTimeAsync(100 * SECOND);
+    expect(server.times()).toHaveLength(reads);
+  });
+
+  it("T7-03 (b) retries a sync-triggered refresh that failed, with no further event, and shows the finished turn", async () => {
+    let answer: () => ChatSnapshot = running;
+    let broken = false;
+    const h = setup({
+      open: async () => {
+        if (broken) throw new Error("offline");
+        return answer();
+      },
+    });
+    h.runtime.start();
+    await settle();
+    expect(h.runtime.get().status).toBe("running");
+
+    broken = true;
+    answer = finished;
+    h.tags(["parlor_chat", "thr_1"]);
+    await settle();
+    expect(h.runtime.get().status).toBe("running");
+
+    broken = false;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.runtime.get().status).toBe("idle");
+    expect(h.shown().map((item) => item.id)).toEqual(["item_p", "turn_1.1"]);
+    const reads = h.names().length;
+    await vi.advanceTimersByTimeAsync(60 * SECOND);
+    expect(h.names()).toHaveLength(reads);
+  });
+
+  it("T7-03 (b) folds sync events that arrive while a retry is pending into the same loop", async () => {
+    let broken = false;
+    const h = setup({
+      open: async () => {
+        if (broken) throw new Error("offline");
+        return running();
+      },
+    });
+    h.runtime.start();
+    await settle();
+    broken = true;
+    h.tags(["parlor_chat", "thr_1"]);
+    await settle();
+    h.tags(["parlor_chat", "thr_1"]);
+    await settle();
+    const failedReads = opens(h).length;
+
+    await vi.advanceTimersByTimeAsync(SECOND);
+    expect(opens(h)).toHaveLength(failedReads + 1);
+  });
+
+  it.each(["sse", "poll"] as const)(
+    "T7-03 (c) rereads once after the sync stream reconnects on %s, and shows the turn that finished meanwhile",
+    async (transport) => {
+      let answer: () => ChatSnapshot = running;
+      const h = setup({ open: async () => answer(), transport });
+      h.runtime.start();
+      await settle();
+      expect(h.runtime.get().status).toBe("running");
+      const before = h.names().length;
+
+      answer = finished;
+      h.resume();
+      if (transport === "sse") h.channel().opened();
+      await settle();
+
+      expect(h.names().slice(before)).toEqual(["open"]);
+      expect(h.runtime.get().status).toBe("idle");
+      expect(h.shown().map((item) => item.id)).toEqual(["item_p", "turn_1.1"]);
+    },
+  );
+
+  it("T7-03 (c) rereads only what came after the last item on a resume with no turn running", async () => {
+    const h = setup({
+      open: async () =>
+        snapshot({
+          items: [logged(1, "item_p", "prompt", "go")],
+          turns: [turn("turn_1", "done")],
+        }),
+      items: () => [logged(2, "turn_2.1", "reply", "late")],
+    });
+    h.runtime.start();
+    await settle();
+    h.resume();
+    await settle();
+    expect(h.calls.at(-1)).toEqual({
+      name: "items",
+      input: { threadId: "thr_1", afterSeq: 1 },
+    });
+  });
+
+  it("T7-03 (d) does not retry a first open that fails with not_found, and ignores a resume", async () => {
+    const h = setup({
+      open: async () => {
+        throw new ActionError("not_found", "Action request failed with HTTP 404");
+      },
+    });
+    h.runtime.start();
+    await settle();
+    expect(h.runtime.get().status).toBe("unavailable");
+
+    await vi.advanceTimersByTimeAsync(120 * SECOND);
+    h.resume();
+    await settle();
+    expect(opens(h)).toHaveLength(1);
+    expect(h.runtime.get().status).toBe("unavailable");
+  });
+
+  it.each(["unauthenticated", "forbidden"] as const)(
+    "T7-03 (d) does not retry a first open refused as %s",
+    async (code) => {
+      const h = setup({
+        open: async () => {
+          throw new ActionError(code, "refused");
+        },
+      });
+      h.runtime.start();
+      await settle();
+      await vi.advanceTimersByTimeAsync(120 * SECOND);
+      expect(opens(h)).toHaveLength(1);
+    },
+  );
+
+  it("T7-03 (d) runs no retry after the sidebar unmounts", async () => {
+    const server = flaky(Number.POSITIVE_INFINITY, finished);
+    const h = setup({ open: server.open });
+    const stop = h.runtime.start();
+    await settle();
+    expect(server.times()).toHaveLength(1);
+
+    stop();
+    await vi.advanceTimersByTimeAsync(120 * SECOND);
+    expect(server.times()).toHaveLength(1);
+  });
+
+  it("T7-03 (d) runs no retry of a failed refresh after the sidebar unmounts", async () => {
+    let broken = false;
+    const h = setup({
+      open: async () => {
+        if (broken) throw new Error("offline");
+        return running();
+      },
+    });
+    const stop = h.runtime.start();
+    await settle();
+    broken = true;
+    h.tags(["parlor_chat", "thr_1"]);
+    await settle();
+    const reads = opens(h).length;
+    stop();
+    await vi.advanceTimersByTimeAsync(120 * SECOND);
+    expect(opens(h)).toHaveLength(reads);
+  });
+});
+
+describe("createChatRuntime activity events", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("T7-05 (e) makes no read for an activity event, loaded or still loading", async () => {
+    const loading = setup({ open: () => new Promise(() => undefined) });
+    loading.runtime.start();
+    loading.tags(["parlor_chat_activity"]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(loading.names()).toEqual(["open"]);
+
+    const loaded = setup();
+    loaded.runtime.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const before = loaded.names().length;
+    loaded.tags(["parlor_chat_activity"]);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(loaded.names()).toHaveLength(before);
+    expect(loaded.names()).not.toContain("items");
+  });
+
+  const pings = (h: ReturnType<typeof setup>) =>
+    h.names().filter((name) => name === "userActive").length;
+
+  it("announces activity on a poll deployment when it starts, and at most once a minute after setDraft and send", async () => {
+    const h = setup({ transport: "poll" });
+    h.runtime.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pings(h)).toBe(1);
+
+    h.runtime.setDraft("h");
+    h.runtime.setDraft("hi");
+    await vi.advanceTimersByTimeAsync(59_000);
+    h.runtime.setDraft("hi!");
+    expect(pings(h)).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(2000);
+    h.runtime.setDraft("hi!!");
+    expect(pings(h)).toBe(2);
+
+    await vi.advanceTimersByTimeAsync(61_000);
+    await h.runtime.send("hi!!");
+    expect(pings(h)).toBe(3);
+  });
+
+  it("never announces on an SSE deployment, while the tab is hidden, or before sync has negotiated", async () => {
+    for (const options of [
+      { transport: "sse" as const },
+      { transport: "poll" as const, hidden: () => true },
+      {},
+    ]) {
+      const h = setup(options);
+      h.runtime.start();
+      h.runtime.setDraft("hello");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pings(h)).toBe(0);
+    }
+  });
+
+  it("swallows a server that has no userActive and stops asking", async () => {
+    const h = setup({ transport: "poll" });
+    const answer = h.call.getMockImplementation()!;
+    h.call.mockImplementation(async (name, input) => {
+      if (name === "userActive") {
+        h.calls.push({ name, input });
+        throw new ActionError("not_found", "Action request failed with HTTP 404");
+      }
+      return answer(name, input);
+    });
+    h.runtime.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(120_000);
+    h.runtime.setDraft("hello");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pings(h)).toBe(1);
+    expect(h.runtime.get().status).toBe("idle");
+  });
+});
+
+describe("createChatRuntime waiting reasons", () => {
+  const queued = (hostOnline: boolean, extra: Partial<ChatSnapshot["page"]> = {}) => ({
+    threads: [thread("thr_1")],
+    hosts: [claudeOnMac(hostOnline)],
+    page: {
+      thread: thread("thr_1"),
+      items: [logged(1, "item_p", "prompt", "go")],
+      open: [],
+      turns: [turn("turn_1", "queued")],
+      hasMore: false,
+      ...extra,
+    },
+  });
+
+  const read = async (snap: ChatSnapshot) => {
+    const h = setup({ open: async () => snap });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).not.toBe("loading"));
+    return h.runtime.get();
+  };
+
+  it("T7-01a derives waiting for a queued prompt whose computer is offline, naming it", async () => {
+    const state = await read(queued(false));
+    expect(state.status).toBe("waiting");
+    expect(state.wait).toEqual({
+      reason: "offline",
+      hostId: "host_mac",
+      hostName: "Alice's Mac",
+    });
+  });
+
+  it("T7-01a keeps a prompt queued for an online computer running, with no wait", async () => {
+    const state = await read(queued(true));
+    expect(state.status).toBe("running");
+    expect(state.wait).toBeUndefined();
+  });
+
+  it("T7-01a does not call a running turn waiting because its computer went offline", async () => {
+    const state = await read(queued(false, { turns: [turn("turn_1", "running")] }));
+    expect(state.status).toBe("running");
+    expect(state.wait).toBeUndefined();
+  });
+
+  it("T7-01a names the approval over the offline wait when both hold", async () => {
+    const pending: LoggedItem = {
+      id: asId("item", "turn_1.1"),
+      threadId: asId("thread", "thr_1"),
+      turnId: asId("turn", "turn_1"),
+      seq: 2,
+      at: 2,
+      author: "host",
+      kind: "event",
+      body: { event: "device_pending" },
+    };
+    const state = await read(
+      queued(false, {
+        items: [logged(1, "item_p", "prompt", "go"), pending],
+      }),
+    );
+    expect(state.status).toBe("waiting");
+    expect(state.wait).toMatchObject({ reason: "approval", hostName: "Alice's Mac" });
+  });
+
+  it("T7-01a derives the wait from the sync event that takes the computer offline", async () => {
+    let online = true;
+    const h = setup({
+      open: async () => queued(online),
+    });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("running"));
+    h.call.mockImplementation(async (name: string) =>
+      name === "hosts" ? [claudeOnMac(false)] : undefined,
+    );
+    online = false;
+    h.tags(["parlor_chat_hosts", "host_mac"]);
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("waiting"));
+    expect(h.runtime.get().wait?.reason).toBe("offline");
   });
 });

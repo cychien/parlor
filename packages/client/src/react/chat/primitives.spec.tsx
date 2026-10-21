@@ -428,6 +428,91 @@ describe("Chat.AskForm", () => {
   });
 });
 
+describe("Chat.Status", () => {
+  const mac = { reason: "offline", hostId: "host_mac", hostName: "Alice's Mac" } as const;
+
+  function status(initial: Partial<ChatState>) {
+    mount(
+      fakeRuntime(initial).runtime,
+      <>
+        <Chat.Thread>{() => null}</Chat.Thread>
+        <Chat.Status className="line" />
+      </>,
+    );
+    return screen.getByRole("status");
+  }
+
+  it("T7-01a (a) names the computer a queued prompt waits to come online", () => {
+    const line = status({ status: "waiting", wait: mac });
+    expect(line.textContent).toBe("Waiting for Alice's Mac to come online");
+    expect(line.dataset.status).toBe("waiting");
+    expect(line.dataset.wait).toBe("offline");
+    expect(line.className).toBe("line");
+  });
+
+  it("T7-01a (b) names the computer that must approve this device", () => {
+    const line = status({ status: "waiting", wait: { ...mac, reason: "approval" } });
+    expect(line.textContent).toBe("Waiting for Alice's Mac to approve this device");
+    expect(line.dataset.wait).toBe("approval");
+  });
+
+  it("T7-01a (c) says Working... without a streaming row when the deployment cannot stream", () => {
+    const line = status({
+      status: "running",
+      items: [
+        {
+          kind: "prompt",
+          id: asId("item", "item_p"),
+          turnId,
+          text: "go",
+          agent: agentRef,
+          state: "running",
+          mine: true,
+        },
+        reply("turn_1.1", "Done.", false),
+      ],
+    });
+    expect(line.textContent).toBe("Working...");
+    expect(document.querySelector('[data-streaming="true"]')).toBeNull();
+    expect(screen.getByRole("log").dataset.status).toBe("running");
+  });
+
+  it.each([
+    ["sending", undefined, "Sending..."],
+    ["running", undefined, "Working..."],
+    ["waiting", mac, "Waiting for Alice's Mac to come online"],
+    [
+      "waiting",
+      { ...mac, reason: "approval" },
+      "Waiting for Alice's Mac to approve this device",
+    ],
+  ] as const)(
+    "T7-01a: %s %j never shows without text or as a bare spinner",
+    (state, wait, text) => {
+      const line = status({ status: state, wait });
+      expect(line.textContent).toBe(text);
+      expect(
+        document.querySelector('[aria-busy="true"], [role="progressbar"]'),
+      ).toBeNull();
+    },
+  );
+
+  it.each(["loading", "idle", "unavailable"] as const)(
+    "keeps an empty status line while %s",
+    (state) => {
+      expect(status({ status: state }).textContent).toBe("");
+    },
+  );
+
+  it("lets the app replace the text", () => {
+    mount(
+      fakeRuntime({ status: "running" }).runtime,
+      <Chat.Status>Thinking</Chat.Status>,
+    );
+    expect(screen.getByRole("status").textContent).toBe("Thinking");
+  });
+});
+
 describe("useChat", () => {
   function Probe() {
     const chat = useChat();

@@ -161,10 +161,20 @@ function SyncConnection({
       },
       isHidden: () => globalThis.document?.visibilityState === "hidden",
       channels: [value.agentUi],
+      onNegotiated: (transport) => value.bridge.negotiated(transport),
+      onResume: () => value.bridge.resumed(),
     });
+    const reconnectWhenVisible = () => {
+      if (globalThis.document?.visibilityState !== "hidden") syncClient.reconnectNow();
+    };
+    const reconnect = () => syncClient.reconnectNow();
+    globalThis.addEventListener?.("online", reconnect);
+    globalThis.document?.addEventListener("visibilitychange", reconnectWhenVisible);
     const detach = value.bridge.attach(syncClient);
     syncClient.start();
     return () => {
+      globalThis.removeEventListener?.("online", reconnect);
+      globalThis.document?.removeEventListener("visibilitychange", reconnectWhenVisible);
       syncClient.stop();
       detach();
     };
