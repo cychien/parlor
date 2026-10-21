@@ -533,9 +533,16 @@ button.danger {
 }
 
 .composer-status {
-  margin: 0 auto 0 0;
+  flex: 1;
+  min-width: 0;
+  margin: 0;
   color: var(--muted);
   font-size: 13px;
+}
+
+.composer-bar button {
+  flex: none;
+  white-space: nowrap;
 }
 
 .card:focus-visible,
