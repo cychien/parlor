@@ -10,6 +10,7 @@ import {
   lstatSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   readlinkSync,
   realpathSync,
   rmSync,
@@ -21,6 +22,13 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { HOMES_ROOT } from "./agent-home.mjs";
+import {
+  deleteAppKeychain,
+  deleteKeychainItems,
+  SESSION_ACCOUNT,
+  summarizeDeletions,
+  TAURI_CARGO_PACKAGE,
+} from "./keychain.mjs";
 import {
   Inconclusive,
   PAGE_LIB,
@@ -40,6 +48,12 @@ import {
   sleep,
   writeAgentProfiles,
 } from "./phase4-kit.mjs";
+import {
+  blockedMessage,
+  dismissPrompt,
+  unexpectedPrompts,
+  withExpectedPrompt,
+} from "./system-prompts.mjs";
 import { evalBody, nativeTool } from "./webview.mjs";
 
 export * from "./phase5-kit.mjs";
@@ -50,7 +64,7 @@ export const HARNESS_HOME =
 const TOOLS_DIR = join(HARNESS_HOME, "tools");
 export const HELLO_APP_ID = "dev.parlor.hello";
 export const SECOND_APP = { id: "dev.parlor.hellotwo", name: "Hello Two" };
-export const SESSION_ACCOUNT = "parlor.session";
+export { SESSION_ACCOUNT };
 
 /** A short, unique instance id; chosen before `up` so a check knows the snapshot path in advance. */
 export function instanceId(tag) {
@@ -76,7 +90,7 @@ export async function upNative(
     sharedOrigin,
   },
 ) {
-  const args = ["up", "--target", target];
+  const args = ["up", "--target", target, "--evidence", check.dir];
   if (id) args.push("--id", id);
   if (seed) args.push("--seed", seed);
   if (home) args.push("--home", home);
@@ -446,117 +460,39 @@ export async function withMachineLock(name, fn, { ms = 3 * 60 * 60_000, onWait }
   }
 }
 
-const SECURITY_PROMPT = /parlor|Hello/;
-
-/** Every SecurityAgent (Keychain access) prompt on screen whose text names one of the apps under test. */
-export function securityPrompts() {
-  const pids = runSync("pgrep", ["-x", "SecurityAgent"])
-    .stdout.split("\n")
-    .filter(Boolean)
-    .map(Number);
-  const found = [];
-  for (const pid of pids) {
-    let tree;
-    try {
-      tree = axTree(pid);
-    } catch {
-      continue;
-    }
-    for (const window of tree.windows) {
-      const { texts, buttons } = scanDialog(window);
-      if (texts.some((t) => SECURITY_PROMPT.test(t)))
-        found.push({ pid, texts, buttons, frame: window.frame });
-    }
-    if (tree.windows.length === 0) {
-      for (const frame of securityAgentWindows(pid))
-        found.push({
-          pid,
-          texts: [
-            "a SecurityAgent prompt is on screen (Accessibility shows no text; see the screenshot)",
-          ],
-          buttons: [],
-          frame,
-        });
-    }
-  }
-  return found;
-}
-
-const SECURITY_WINDOWS = `ObjC.import("CoreGraphics");
-function run(argv) {
-  const all = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, 0)));
-  return JSON.stringify(all.filter((w) => w.kCGWindowOwnerPID === Number(argv[0]) && w.kCGWindowBounds.Width > 200)
-    .map((w) => ({ x: w.kCGWindowBounds.X, y: w.kCGWindowBounds.Y, w: w.kCGWindowBounds.Width, h: w.kCGWindowBounds.Height })));
-}`;
-
-/** SecurityAgent's on-screen prompt windows, which Accessibility does not always expose. */
-function securityAgentWindows(pid) {
-  const out = runSync("osascript", [
-    "-l",
-    "JavaScript",
-    "-e",
-    SECURITY_WINDOWS,
-    String(pid),
-  ]);
-  try {
-    return JSON.parse(out.stdout.trim());
-  } catch {
-    return [];
-  }
-}
-
 /**
  * Runs a Mac check's `body` alone on the machine (the app's session item and the host's items
- * live in the one login Keychain, and an ad-hoc build reading an item another build wrote makes
- * macOS ask for the login password) and watches for such Keychain prompts. A prompt that names
- * the apps under test is saved, denied so nothing waits on it, and makes the check INCONCLUSIVE:
- * no script can type the user's password.
+ * live in the one login Keychain). Prompts of the apps under test left on screen from before are
+ * dismissed first; during the body each native instance's prompt watcher fails the driver call in
+ * flight when a prompt that needs a human appears. Any such prompt makes the check INCONCLUSIVE;
+ * the apps' own are dismissed when the body ends, and the record and screenshots stay in the check
+ * dir.
  */
 export async function macCheck(check, body) {
   return withMachineLock(
     "mac-check",
     async () => {
-      const inherited = securityPrompts();
-      for (const prompt of inherited)
-        runSync(axTool(), ["type", String(prompt.pid), "\u001b", "10"]);
+      const inherited = unexpectedPrompts(HARNESS_HOME).filter(namesAppUnderTest);
       if (inherited.length) {
-        check.save(`${check.id}.keychain-prompts-inherited.json`, inherited);
+        check.save(`${check.id}.prompts-inherited.json`, inherited);
+        for (const prompt of inherited) dismissPrompt(HARNESS_HOME, prompt);
         await sleep(1500);
       }
-      const prompts = [];
-      const run = { stopped: false };
-      const watcher = (async () => {
-        while (!run.stopped) {
-          for (const prompt of securityPrompts()) {
-            prompts.push({ at: Date.now(), ...prompt });
-            await screenshotRegion(
-              check,
-              prompt.frame,
-              `${check.id}.keychain-prompt-${prompts.length}.png`,
-            );
-            const deny = prompt.buttons.find((b) =>
-              ["拒絕", "Deny", "Cancel", "取消"].includes(b.name),
-            );
-            if (deny) runSync(axTool(), ["press", String(prompt.pid), deny.path]);
-            else runSync(axTool(), ["type", String(prompt.pid), "\u001b", "10"]);
-          }
-          await sleep(1000);
-        }
-      })();
+      const startedAt = Date.now();
       let failure;
       try {
         await body();
       } catch (error) {
         failure = error;
       }
-      run.stopped = true;
-      await watcher;
-      if (prompts.length) {
-        check.save(`${check.id}.keychain-prompts.json`, prompts);
+      for (const prompt of unexpectedPrompts(HARNESS_HOME).filter(namesAppUnderTest))
+        dismissPrompt(HARNESS_HOME, prompt);
+      const seen = promptsSeen(check, startedAt);
+      const blocked = String(failure?.message ?? "").match(BLOCKED)?.[0];
+      if (seen.length || blocked)
         throw new Inconclusive(
-          `macOS asked for the login Keychain password (${prompts[0].texts[0]}; screenshots ${check.id}.keychain-prompt-*.png); no script can type the password`,
+          `${blocked ?? blockedMessage(seen[0])}; no script can answer it`,
         );
-      }
       if (failure) throw failure;
     },
     {
@@ -564,6 +500,27 @@ export async function macCheck(check, body) {
         check.log(`waiting for the mac-check lock held by pid ${holder}`),
     },
   );
+}
+
+const BLOCKED = /blocked by a system prompt: [^\n]*/;
+const APP_UNDER_TEST = /parlor|Hello/;
+
+function namesAppUnderTest(prompt) {
+  return prompt.texts.some((text) => APP_UNDER_TEST.test(text));
+}
+
+/** The prompts the instances' watchers recorded into the check dir since `since`. */
+function promptsSeen(check, since) {
+  return readdirSync(check.dir)
+    .filter((name) => name.endsWith(".prompts.json"))
+    .flatMap((name) => {
+      try {
+        return JSON.parse(readFileSync(join(check.dir, name), "utf8"));
+      } catch {
+        return [];
+      }
+    })
+    .filter((prompt) => prompt.at >= since);
 }
 
 export async function screenshotRegion(check, frame, name) {
@@ -736,123 +693,37 @@ export function sessionItem(appId) {
   };
 }
 
-export function deleteSessionItem(appId) {
-  for (let i = 0; i < 5; i++) {
-    if (
-      runSync("security", ["delete-generic-password", "-s", appId, "-a", SESSION_ACCOUNT])
-        .status !== 0
-    )
-      break;
-  }
-}
+export { deviceKeyNames, KeychainBlocked } from "./keychain.mjs";
 
-export class KeychainBlocked extends Error {}
-
-/** The Mac app's device keys as the Drive contract names them (SecKey items, class key, P-256). */
-export function deviceKeyNames(appId) {
-  return [
-    { label: `${appId} device signing key`, tag: `${appId}.device-key.signing` },
-    { label: `${appId} device presence key`, tag: `${appId}.device-key.presence` },
-  ];
-}
-
-/**
- * Deletes exactly the contract's device keys of `appId` (by class key, label and application tag;
- * the Keychain is never listed). Throws KeychainBlocked when the deletion is refused or does not
- * answer within 20 s (a password prompt), with what macOS said.
- */
-export async function deleteDeviceKeys(appId) {
-  const tool = nativeTool(TOOLS_DIR, "delete-device-key");
-  const results = [];
-  for (const { label, tag } of deviceKeyNames(appId)) {
-    const result = await runAsync(tool, [label, tag], { timeout: 20_000 });
-    let parsed;
-    try {
-      parsed = JSON.parse(result.stdout.trim());
-    } catch {
-      parsed = undefined;
-    }
-    if (result.timedOut || result.status !== 0 || !parsed) {
-      const prompts = securityPrompts();
-      throw new KeychainBlocked(
-        `deleting the Keychain key "${label}" (tag ${tag}) ${result.timedOut ? "did not return within 20 s" : `failed: ${(parsed?.message ?? result.stderr) || result.stdout}`}${prompts.length ? `; SecurityAgent shows: ${prompts.map((p) => p.texts.join(" / ")).join(" | ")}` : ""}`,
-      );
-    }
-    results.push(parsed);
-  }
-  return results;
-}
-
-/**
- * Deletes the generic password(s) with exactly `label` (the contract's WebKit item, for example
- * `parlor_app WebCrypto Master Key`), never listing the Keychain. Throws KeychainBlocked when a
- * deletion is refused or does not return within 20 s (a password prompt).
- */
-export async function deleteLabeledPassword(label) {
-  let deleted = 0;
-  for (let round = 0; round < 20; round++) {
-    const result = await runAsync("security", ["delete-generic-password", "-l", label], {
-      timeout: 20_000,
-    });
-    if (result.timedOut) {
-      const prompts = securityPrompts();
-      throw new KeychainBlocked(
-        `deleting the Keychain item "${label}" did not return within 20 s${prompts.length ? `; SecurityAgent shows: ${prompts.map((p) => p.texts.join(" / ")).join(" | ")}` : ""}`,
-      );
-    }
-    if (result.status === 44) return { label, deleted };
-    if (result.status !== 0)
-      throw new KeychainBlocked(
-        `deleting the Keychain item "${label}" failed (${result.status}): ${result.stderr.trim()}`,
-      );
-    deleted++;
-  }
-  return { label, deleted };
-}
-
-/** The webview's WebKit item the contract names, deleted now and when the check ends. */
-export async function ownWebKitItem(check, label) {
-  check.log(`deleted ${JSON.stringify(await deleteLabeledPassword(label))}`);
-  check.onCleanup(async () => {
-    try {
-      await deleteLabeledPassword(label);
-    } catch (error) {
-      check.log(`cleanup: ${error.message}`);
-    }
-  });
-}
-
-/** The app's Keychain items the contract names: its `parlor.session` item and both device keys. */
+/** Deletes every Keychain item the app `appId` owns, with the driver's own implementation. */
 export async function clearAppKeychain(check, appId) {
-  deleteSessionItem(appId);
-  const keys = await deleteDeviceKeys(appId);
-  check.log(
-    `cleared ${appId} keychain: ${keys.map((k) => `${k.label} deleted ${k.deleted}`).join(", ")}`,
+  const results = await deleteAppKeychain(
+    { appId, cargoPackage: TAURI_CARGO_PACKAGE },
+    { toolsDir: TOOLS_DIR },
   );
-  return keys;
+  check.log(`cleared ${appId} keychain: ${summarizeDeletions(results)}`);
+  return results;
 }
 
 /** Clears the Keychain items of `appIds` before the check launches anything and again when it ends. */
 export async function ownAppKeychain(check, appIds) {
   for (const appId of appIds) await clearAppKeychain(check, appId);
   check.onCleanup(async () => {
-    for (const appId of appIds) {
-      deleteSessionItem(appId);
-      try {
-        await deleteDeviceKeys(appId);
-      } catch (error) {
-        check.log(`cleanup: ${error.message}`);
-      }
-    }
+    for (const appId of appIds)
+      await clearAppKeychain(check, appId).catch((error) =>
+        check.log(`cleanup: ${error.message}`),
+      );
   });
 }
 
-/** Deletes the session items of `appIds` now and when the check ends. */
-export function ownSessionItems(check, appIds) {
-  for (const appId of appIds) deleteSessionItem(appId);
-  check.onCleanup(() => {
-    for (const appId of appIds) deleteSessionItem(appId);
-  });
+/** The generic password labeled exactly `label`, deleted now and when the check ends. */
+export async function ownWebKitItem(check, label) {
+  const remove = () =>
+    deleteKeychainItems([{ kind: "password", label }], { toolsDir: TOOLS_DIR });
+  check.log(`deleted ${summarizeDeletions(await remove())}`);
+  check.onCleanup(() =>
+    remove().catch((error) => check.log(`cleanup: ${error.message}`)),
+  );
 }
 
 /** Fails the check when it touched the developer's own `~/.parlor` or LaunchAgents. */
@@ -1183,26 +1054,35 @@ export async function connectHere(
     )
   )
     return undefined;
-  const clickedAt = Date.now();
-  await webview.click("button", "Use agents on this computer");
-  const current = await instanceInfo(webview.id);
   const title = `Connect this Mac to ${appName}`;
-  const dialog = await waitNativeDialog(current.appPid, title, ms);
-  if (
-    !check.expect(
-      `${label}: the app shows the native dialog "${title}"`,
-      Boolean(dialog),
-      dialog ?? null,
-    )
-  ) {
-    await webview.screenshot(`${label}.no-dialog.png`);
-    return undefined;
-  }
-  await screenshotRegion(check, dialog.frame, `${label}.dialog.png`);
-  await webview.screenshot(`${label}.dialog-window.png`);
-  check.save(`${label}.dialog.json`, dialog);
-  const answeredAt = pressDialogButton(dialog, answer);
-  return { dialog, clickedAt, answeredAt };
+  return withExpectedPrompt(
+    HARNESS_HOME,
+    { owner: "UserNotificationCenter", text: title },
+    async () => {
+      const clickedAt = Date.now();
+      await webview.click("button", "Use agents on this computer");
+      const current = await instanceInfo(webview.id);
+      const dialog = await waitNativeDialog(current.appPid, title, ms);
+      if (
+        !check.expect(
+          `${label}: the app shows the native dialog "${title}"`,
+          Boolean(dialog),
+          dialog ?? null,
+        )
+      ) {
+        await webview.screenshot(`${label}.no-dialog.png`);
+        return undefined;
+      }
+      await screenshotRegion(check, dialog.frame, `${label}.dialog.png`);
+      await webview.screenshot(`${label}.dialog-window.png`);
+      check.save(`${label}.dialog.json`, dialog);
+      const answeredAt = pressDialogButton(dialog, answer);
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline && findNativeDialog(current.appPid, title))
+        await sleep(200);
+      return { dialog, clickedAt, answeredAt };
+    },
+  );
 }
 
 /** `listTasks` as `user` over HTTP: the second view of a task mutation that must not restart the instance. */
