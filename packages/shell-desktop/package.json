@@ -3,7 +3,9 @@
   "version": "0.0.0",
   "files": [
     "dist",
-    "assets"
+    "assets",
+    "rust/Cargo.toml",
+    "rust/src"
   ],
   "type": "module",
   "exports": {

@@ -5,7 +5,15 @@ import { join } from "node:path";
 import { parseConfig } from "@parlor/config";
 import { describe, expect, it } from "vitest";
 
-import { ensureTauriProject, tauriConfig, tauriProjectFiles } from "./project.js";
+import {
+  AGENT_HOST_SIDECAR,
+  ensureTauriProject,
+  libRs,
+  stageAgentHost,
+  stageAgentHostFrom,
+  tauriConfig,
+  tauriProjectFiles,
+} from "./project.js";
 
 const config = parseConfig({
   app: { id: "dev.parlor.hello", name: "Hello", scheme: "hello", version: "1.2.3" },
@@ -54,6 +62,119 @@ describe("tauriProjectFiles", () => {
     expect(files["src-tauri/src/lib.rs"]).toContain("tauri_plugin_deep_link::init()");
     expect(files["src-tauri/capabilities/default.json"]).toContain(
       "notification:default",
+    );
+  });
+});
+
+const withHost = parseConfig({
+  app: { id: "dev.parlor.hello", name: "Hello", scheme: "hello", version: "1.2.3" },
+  desktop: { width: 900, height: 700, agentHost: true },
+});
+
+const PLAIN_LIB_RS = `#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_notification::init())
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+`;
+
+const PLAIN_CARGO_DEPENDENCIES = `[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-deep-link = "2"
+tauri-plugin-notification = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+`;
+
+describe("desktop.agentHost", () => {
+  it("K6: tauriConfig lists the sidecar as externalBin only with desktop.agentHost", () => {
+    expect(AGENT_HOST_SIDECAR).toBe("binaries/parlor-host");
+    expect(tauriConfig(config)).toMatchObject({ bundle: { active: true } });
+    expect((tauriConfig(config) as { bundle: object }).bundle).not.toHaveProperty(
+      "externalBin",
+    );
+    expect(tauriConfig(withHost)).toMatchObject({
+      bundle: { externalBin: [AGENT_HOST_SIDECAR], resources: ["parlor-host.sig"] },
+    });
+  });
+
+  it("leaves the generated project byte-identical when it is unset", () => {
+    const files = tauriProjectFiles(config);
+    expect(libRs(config)).toBe(PLAIN_LIB_RS);
+    expect(files["src-tauri/src/lib.rs"]).toBe(PLAIN_LIB_RS);
+    expect(files["src-tauri/Cargo.toml"]).toContain(PLAIN_CARGO_DEPENDENCIES);
+    expect(JSON.parse(files["src-tauri/capabilities/default.json"]!).permissions).toEqual(
+      ["core:default", "notification:default", "deep-link:default"],
+    );
+  });
+
+  it("adds the dialog plugin, the shell crate, the sidecar launch and the eight commands", () => {
+    const files = tauriProjectFiles(withHost);
+    const cargo = files["src-tauri/Cargo.toml"]!;
+    expect(cargo).toContain('tauri-plugin-dialog = "2"');
+    expect(cargo).toMatch(/parlor-shell = \{ path = ".*shell-desktop\/rust" \}/);
+    expect(
+      JSON.parse(files["src-tauri/capabilities/default.json"]!).permissions,
+    ).toContain("dialog:default");
+    const lib = files["src-tauri/src/lib.rs"]!;
+    expect(lib).toContain("tauri_plugin_dialog::init()");
+    expect(lib).toContain(".setup(|app| parlor_shell::setup(app))");
+    expect(lib.match(/parlor_shell::parlor_\w+,/g)).toEqual([
+      "parlor_shell::parlor_host_bundled,",
+      "parlor_shell::parlor_host_status,",
+      "parlor_shell::parlor_host_begin,",
+      "parlor_shell::parlor_host_finish,",
+      "parlor_shell::parlor_device_key_public,",
+      "parlor_shell::parlor_device_key_sign,",
+      "parlor_shell::parlor_session_get,",
+      "parlor_shell::parlor_session_set,",
+    ]);
+  });
+});
+
+describe("stageAgentHost", () => {
+  async function prebuilt(): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "parlor-host-pkg-"));
+    await mkdir(join(dir, "bin"));
+    await writeFile(join(dir, "bin", "parlor-host"), "binary");
+    await writeFile(join(dir, "bin", "parlor-host.sig"), "{}");
+    return dir;
+  }
+
+  it("copies the binary beside the target triple and the signature into the project", async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), "parlor-tauri-"));
+    const sidecar = await stageAgentHostFrom(
+      await prebuilt(),
+      projectDir,
+      "aarch64-apple-darwin",
+    );
+    expect(sidecar).toBe(
+      join(projectDir, "src-tauri", "binaries", "parlor-host-aarch64-apple-darwin"),
+    );
+    expect(await readFile(sidecar, "utf8")).toBe("binary");
+    expect((await stat(sidecar)).mode & 0o777).toBe(0o755);
+    expect(await readFile(join(projectDir, "src-tauri", "parlor-host.sig"), "utf8")).toBe(
+      "{}",
+    );
+  });
+
+  it("says how to build the package when its bin is missing", async () => {
+    const empty = await mkdtemp(join(tmpdir(), "parlor-host-pkg-"));
+    await expect(
+      stageAgentHostFrom(
+        empty,
+        await mkdtemp(join(tmpdir(), "p-")),
+        "aarch64-apple-darwin",
+      ),
+    ).rejects.toThrow(/pnpm --filter @parlor\/agent-host-darwin-arm64 build/);
+  });
+
+  it("has no prebuilt host for another target", async () => {
+    await expect(stageAgentHost("/tmp/x", "x86_64-unknown-linux-gnu")).rejects.toThrow(
+      /no prebuilt Parlor Host for x86_64-unknown-linux-gnu/,
     );
   });
 });

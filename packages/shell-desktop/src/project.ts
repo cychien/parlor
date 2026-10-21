@@ -1,4 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -14,6 +15,8 @@ const ICONS = [
 ] as const;
 
 export const TAURI_CARGO_PACKAGE = "parlor_app";
+const AGENT_HOST_SIGNATURE = "parlor-host.sig";
+const SHELL_CRATE_DIR = fileURLToPath(new URL("../rust", import.meta.url));
 
 export function tauriProjectDir(rootDir: string): string {
   return join(rootDir, GENERATED_DIR, "tauri");
@@ -48,12 +51,21 @@ export function tauriConfig(config: ParlorConfig): Record<string, unknown> {
       active: true,
       targets: "all",
       icon: ICONS.map((icon) => `icons/${icon}`),
-      ...(config.desktop.agentHost ? { externalBin: [AGENT_HOST_SIDECAR] } : {}),
+      ...(config.desktop.agentHost
+        ? { externalBin: [AGENT_HOST_SIDECAR], resources: [AGENT_HOST_SIGNATURE] }
+        : {}),
     },
     plugins: {
       "deep-link": { desktop: { schemes: config.app.scheme ? [config.app.scheme] : [] } },
     },
   };
+}
+
+function agentHostDependencies(config: ParlorConfig): string {
+  if (!config.desktop.agentHost) return "";
+  return `tauri-plugin-dialog = "2"
+parlor-shell = { path = ${JSON.stringify(SHELL_CRATE_DIR)} }
+`;
 }
 
 export function cargoToml(config: ParlorConfig): string {
@@ -74,7 +86,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-deep-link = "2"
 tauri-plugin-notification = "2"
-serde = { version = "1", features = ["derive"] }
+${agentHostDependencies(config)}serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 `;
 }
@@ -91,14 +103,87 @@ pub fn run() {
 
 export const AGENT_HOST_SIDECAR = "binaries/parlor-host";
 
+const AGENT_HOST_COMMANDS = [
+  "parlor_host_bundled",
+  "parlor_host_status",
+  "parlor_host_begin",
+  "parlor_host_finish",
+  "parlor_device_key_public",
+  "parlor_device_key_sign",
+  "parlor_session_get",
+  "parlor_session_set",
+];
+
+const AGENT_HOST_LIB_RS = `#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
+        .setup(|app| parlor_shell::setup(app))
+        .invoke_handler(tauri::generate_handler![
+${AGENT_HOST_COMMANDS.map((command) => `            parlor_shell::${command},`).join("\n")}
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+`;
+
 /**
  * With `desktop.agentHost`, `setup()` runs the bundled `parlor-host daemon --ensure`
- * (adopt, install or upgrade the per-user service) and registers the `parlor_host_*` and
- * `parlor_device_key_*` commands the capabilities call.
+ * (adopt, install or upgrade the per-user service) and registers the `parlor_host_*`,
+ * `parlor_device_key_*` and `parlor_session_*` commands the capabilities call.
  */
 export function libRs(config: ParlorConfig): string {
-  if (!config.desktop.agentHost) return LIB_RS;
-  throw new Error("not implemented");
+  return config.desktop.agentHost ? AGENT_HOST_LIB_RS : LIB_RS;
+}
+
+const PREBUILT_HOST_PACKAGES: Readonly<Record<string, string>> = {
+  "aarch64-apple-darwin": "@parlor/agent-host-darwin-arm64",
+};
+
+export class AgentHostStageError extends Error {
+  override readonly name = "AgentHostStageError";
+}
+
+function prebuiltHostDir(targetTriple: string): string {
+  const name = PREBUILT_HOST_PACKAGES[targetTriple];
+  if (!name) {
+    throw new AgentHostStageError(
+      `There is no prebuilt Parlor Host for ${targetTriple}; desktop.agentHost supports ${Object.keys(PREBUILT_HOST_PACKAGES).join(", ")}.`,
+    );
+  }
+  try {
+    return dirname(createRequire(import.meta.url).resolve(`${name}/package.json`));
+  } catch (error) {
+    throw new AgentHostStageError(`${name} is not installed.`, { cause: error });
+  }
+}
+
+/** Copies a prebuilt host's `bin/` into the Tauri project, where `externalBin` and `resources` expect it. */
+export async function stageAgentHostFrom(
+  packageDir: string,
+  projectDir: string,
+  targetTriple: string,
+): Promise<string> {
+  const bin = join(packageDir, "bin");
+  const source = {
+    binary: join(bin, "parlor-host"),
+    signature: join(bin, AGENT_HOST_SIGNATURE),
+  };
+  for (const file of Object.values(source)) {
+    if (!(await stat(file).catch(() => undefined))) {
+      throw new AgentHostStageError(
+        `${file} is missing: build it with pnpm --filter @parlor/agent-host-darwin-arm64 build (needs PARLOR_HOST_SIGNING_KEY and PARLOR_HOST_RELEASE_KEY_FILE).`,
+      );
+    }
+  }
+  const sidecar = join(projectDir, "src-tauri", `${AGENT_HOST_SIDECAR}-${targetTriple}`);
+  await mkdir(dirname(sidecar), { recursive: true });
+  await copyFile(source.binary, sidecar);
+  await chmod(sidecar, 0o755);
+  await copyFile(source.signature, join(projectDir, "src-tauri", AGENT_HOST_SIGNATURE));
+  return sidecar;
 }
 
 /**
@@ -109,9 +194,7 @@ export async function stageAgentHost(
   projectDir: string,
   targetTriple: string,
 ): Promise<string> {
-  void projectDir;
-  void targetTriple;
-  throw new Error("not implemented");
+  return stageAgentHostFrom(prebuiltHostDir(targetTriple), projectDir, targetTriple);
 }
 
 export const MAIN_RS = `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -134,6 +217,14 @@ export const CAPABILITIES = {
   permissions: ["core:default", "notification:default", "deep-link:default"],
 };
 
+function capabilitiesOf(config: ParlorConfig) {
+  if (!config.desktop.agentHost) return CAPABILITIES;
+  return {
+    ...CAPABILITIES,
+    permissions: [...CAPABILITIES.permissions, "dialog:default"],
+  };
+}
+
 export function tauriProjectFiles(config: ParlorConfig): Record<string, string> {
   return {
     "src-tauri/tauri.conf.json": `${JSON.stringify(tauriConfig(config), null, 2)}\n`,
@@ -141,7 +232,7 @@ export function tauriProjectFiles(config: ParlorConfig): Record<string, string> 
     "src-tauri/build.rs": BUILD_RS,
     "src-tauri/src/main.rs": MAIN_RS,
     "src-tauri/src/lib.rs": libRs(config),
-    "src-tauri/capabilities/default.json": `${JSON.stringify(CAPABILITIES, null, 2)}\n`,
+    "src-tauri/capabilities/default.json": `${JSON.stringify(capabilitiesOf(config), null, 2)}\n`,
     "src-tauri/.gitignore": "target/\ngen/schemas/\n",
     ".gitignore": "*\n",
   };

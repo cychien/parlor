@@ -5,6 +5,7 @@ export {
   ensureTauriProject,
   libRs,
   stageAgentHost,
+  stageAgentHostFrom,
   tauriConfig,
   tauriProjectDir,
   tauriProjectFiles,
