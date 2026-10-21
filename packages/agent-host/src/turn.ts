@@ -89,7 +89,6 @@ class LeaseLapsed extends Error {
   override readonly name = "LeaseLapsed";
 }
 
-/** Rejects once `ms` passed, unless cancelled first. */
 function lapseAfter(ms: number) {
   let timer: NodeJS.Timeout | undefined;
   const lapsed = new Promise<never>((_, reject) => {

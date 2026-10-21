@@ -763,6 +763,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       emit();
     });
     await loadFirst();
+    announceActivity();
     emit();
   }
 

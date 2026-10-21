@@ -131,7 +131,6 @@ class RequestTimeout extends Error {
   }
 }
 
-/** Aborts a request whose headers have not arrived in `ms`; the body is not timed. */
 function untilHeaders(inner: typeof fetch, ms: number): typeof fetch {
   return async (input, init) => {
     const own = new AbortController();
@@ -145,17 +144,11 @@ function untilHeaders(inner: typeof fetch, ms: number): typeof fetch {
   };
 }
 
-/**
- * How often a poll deployment's `/sync` is read: fast while a turn runs or within two
- * minutes of the user's last activity, slow otherwise. A server that does not advertise
- * user activity cannot be known idle, so it is always fast.
- */
 function adaptivePoll(advertised: boolean, busy: () => boolean) {
   let activeUntil = 0;
   const idle = () => advertised && !busy() && Date.now() >= activeUntil;
   return {
     pollEveryMs: () => (idle() ? IDLE_POLL_MS : ACTIVE_POLL_MS),
-    /** Records activity and says whether the host was idle before it. */
     touch: () => {
       const wasIdle = idle();
       activeUntil = Date.now() + USER_ACTIVE_WINDOW_MS;
