@@ -25,7 +25,31 @@ export type LocalHostStatus =
 export interface LocalConnectInput {
   readonly appOrigin: string;
   authorize(pairing: HostPairing): Promise<string>;
+  /** This app's own device, pinned at pairing so its first prompt needs no second approval. */
+  readonly device?: PairingDevice | undefined;
 }
+
+/** The public half of a device's keys, as the account registered them. */
+export interface PairingDevice {
+  readonly deviceId: string;
+  readonly name: string;
+  readonly platform: string;
+  readonly signingKey: JsonWebKey;
+  readonly presenceKey?: PairingPresenceKey | undefined;
+}
+
+export type PairingPresenceKey =
+  | {
+      readonly format: "webauthn";
+      readonly credentialId: string;
+      readonly rpId: string;
+      readonly publicKey: JsonWebKey;
+    }
+  | {
+      readonly format: "es256-raw";
+      readonly keyId: string;
+      readonly publicKey: JsonWebKey;
+    };
 
 /** What the backend's host authorize endpoint needs from the host, and shows on consent. */
 export interface HostPairing {

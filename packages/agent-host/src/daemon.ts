@@ -51,6 +51,8 @@ export interface HostDaemon {
   start(): Promise<void>;
   connect(appOrigin: string): Promise<void>;
   disconnect(appOrigin: string): Promise<void>;
+  /** Hands links over to a newer release; running turns finish here first. */
+  handover(): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -317,6 +319,9 @@ export function createHostDaemon(deps: DaemonDeps): HostDaemon {
       }
       await closeLink(appOrigin, "disconnected");
       await forget(grant);
+    },
+    async handover() {
+      throw new Error("not implemented");
     },
     async stop() {
       await Promise.all(

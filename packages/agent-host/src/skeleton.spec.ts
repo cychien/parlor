@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { compact, differences, type Difference } from "./skeleton-kit.js";
+
 const PACKAGE = fileURLToPath(new URL("..", import.meta.url));
 const REPOSITORY = join(PACKAGE, "..", "..");
 const SDK_IMPORT =
@@ -17,160 +19,6 @@ function sources(dir: string): string[] {
     if (statSync(path).isDirectory()) return sources(path);
     return /\.(ts|tsx|mts|mjs|js)$/.test(name) ? [path] : [];
   });
-}
-
-const OPENING = "([{";
-const CLOSING = ")]}";
-
-function statementsOf(text: string): string[] {
-  const statements: string[] = [];
-  let current = "";
-  let depth = 0;
-  const open: string[] = [];
-  for (let at = 0; at < text.length; at += 1) {
-    const char = text[at]!;
-    const next = text[at + 1];
-    if (char === "/" && next === "/") {
-      while (at < text.length && text[at] !== "\n") at += 1;
-      continue;
-    }
-    if (char === "/" && next === "*") {
-      at = text.indexOf("*/", at + 2) + 1;
-      continue;
-    }
-    if (char === '"' || char === "'" || char === "`") {
-      let end = at + 1;
-      while (end < text.length && text[end] !== char) end += text[end] === "\\" ? 2 : 1;
-      current += text.slice(at, end + 1);
-      at = end;
-      continue;
-    }
-    if (CLOSING.includes(char) && depth === 0) {
-      current = "";
-      continue;
-    }
-    current += char;
-    if (OPENING.includes(char)) {
-      depth += 1;
-      open.push(CLOSING[OPENING.indexOf(char)]!);
-    } else if (CLOSING.includes(char)) {
-      depth -= 1;
-      open.pop();
-      const blockEnded = char === "}" && depth === 0;
-      const rest = text.slice(at + 1).match(/^\s*(\S)/)?.[1];
-      if (blockEnded && rest !== ";" && rest !== "," && rest !== "." && rest !== ")") {
-        const head = current.trim();
-        const isBlock = /^(export\s+)?(async\s+)?(function|interface|class|enum)\b/.test(
-          head,
-        );
-        const hasBody =
-          !/^(export\s+)?(async\s+)?function\b/.test(head) ||
-          endOfSignature(head) < head.length;
-        if (isBlock && hasBody) {
-          statements.push(current.trim());
-          current = "";
-        }
-      }
-    } else if (char === ";" && depth === 0) {
-      statements.push(current.trim());
-      current = "";
-    }
-  }
-  if (current.trim()) statements.push(`${current.trim()}${open.reverse().join("")}`);
-  return statements;
-}
-
-const compact = (text: string) =>
-  text
-    .replace(/\s+/g, " ")
-    .replace(/\s*([(){}[\],;:<>|&=?])\s*/g, "$1")
-    .replace(/[,;](?=[)\]}>])/g, "");
-
-function endOfSignature(statement: string): number {
-  let parens = 0;
-  let angles = 0;
-  let seenParams = false;
-  for (let at = 0; at < statement.length; at += 1) {
-    const char = statement[at]!;
-    if (char === "(") parens += 1;
-    else if (char === ")") {
-      parens -= 1;
-      if (parens === 0) seenParams = true;
-    } else if (parens === 0 && seenParams) {
-      if (char === "<") angles += 1;
-      else if (char === ">" && statement[at - 1] !== "=") angles -= 1;
-      else if (
-        char === "{" &&
-        angles === 0 &&
-        !/[:|&]\s*$/.test(statement.slice(0, at))
-      ) {
-        return at;
-      }
-    }
-  }
-  return statement.length;
-}
-
-function signaturesOf(text: string): Map<string, string> {
-  const signatures = new Map<string, string>();
-  const add = (name: string, signature: string) =>
-    signatures.set(
-      name,
-      [signatures.get(name), compact(signature)].filter(Boolean).join("\n"),
-    );
-  for (const statement of statementsOf(text)) {
-    if (!statement.startsWith("export")) continue;
-    const declaration = statement.replace(/^export\s+(default\s+)?/, "");
-    const named = /^(?:async\s+)?(function|interface|type|class|enum)\s+(\w+)/.exec(
-      declaration,
-    );
-    if (named) {
-      const [, kind, name] = named;
-      const keep =
-        kind === "function"
-          ? declaration.slice(0, endOfSignature(declaration)).replace(/^async\s+/, "")
-          : declaration;
-      add(name!, keep);
-    } else if (/^(const|let)\s/.test(declaration)) {
-      const name = /^(?:const|let)\s+(\w+)/.exec(declaration)![1]!;
-      const [head] = declaration.split(/(?<![=!<>])=(?![=>])/);
-      const annotated = /^(?:const|let)\s+\w+\s*:/.test(declaration);
-      const callee = /=\s*([\w.]+(?:<[^(]*>)?)\(/.exec(declaration)?.[1];
-      add(name, annotated ? head! : `${name} = ${callee ?? ""}`);
-    } else if (/^(type\s+)?\{/.test(declaration) || declaration.startsWith("*")) {
-      for (const [, name] of declaration.matchAll(/(?:\btype\s+)?(\w+)(?=\s*[,}])/g)) {
-        if (name !== "type") add(name!, "re-export");
-      }
-    }
-  }
-  return signatures;
-}
-
-interface Difference {
-  readonly file: string;
-  readonly symbol: string;
-  readonly kind: "changed" | "missing" | "added";
-}
-
-function differences(
-  file: string,
-  skeleton: string,
-  actual: string,
-  only?: readonly string[],
-): Difference[] {
-  const wanted = signaturesOf(skeleton);
-  const found = signaturesOf(actual);
-  const names = new Set([...wanted.keys(), ...found.keys()]);
-  const out: Difference[] = [];
-  for (const symbol of [...names].sort()) {
-    if (only && !only.includes(symbol)) continue;
-    const before = wanted.get(symbol);
-    const after = found.get(symbol);
-    if (before === undefined) out.push({ file, symbol, kind: "added" });
-    else if (after === undefined) out.push({ file, symbol, kind: "missing" });
-    else if (before !== after) out.push({ file, symbol, kind: "changed" });
-  }
-  return out;
 }
 
 describe("the phase 4 skeleton contract", () => {
@@ -219,30 +67,6 @@ const DIFFERENCES: Readonly<
   "auth/src/client/index.ts AuthClientOptions changed": {
     agreed: true,
     why: "`deviceKey` injects the keys, as `session` injects the session store",
-  },
-  "capabilities/src/device-key/index.ts CapacitorDeviceKeyModule missing": {
-    agreed: true,
-    why: "the native adapters report unavailable until phase 6, so they load nothing",
-  },
-  "capabilities/src/device-key/index.ts TauriInvoke missing": {
-    agreed: true,
-    why: "the native adapters report unavailable until phase 6, so they load nothing",
-  },
-  "capabilities/src/device-key/tauri.ts TauriInvoke missing": {
-    agreed: true,
-    why: "the native adapters report unavailable until phase 6, so they load nothing",
-  },
-  "capabilities/src/device-key/tauri.ts tauriDeviceKey changed": {
-    agreed: true,
-    why: "no `load` parameter: nothing to load while unavailable",
-  },
-  "capabilities/src/device-key/capacitor.ts CapacitorDeviceKeyModule missing": {
-    agreed: true,
-    why: "the native adapters report unavailable until phase 6, so they load nothing",
-  },
-  "capabilities/src/device-key/capacitor.ts capacitorDeviceKey changed": {
-    agreed: true,
-    why: "no `load` parameter: nothing to load while unavailable",
   },
   "agent-host/src/policy.ts changePolicy added": {
     agreed: true,
@@ -320,4 +144,79 @@ describe("the phase 5 skeleton contract", () => {
       ),
     ).not.toThrow();
   }, 60_000);
+});
+
+const SKELETON_6: Readonly<Record<string, string>> = JSON.parse(
+  readFileSync(join(PACKAGE, "src", "testing", "skeleton-phase6.json"), "utf8"),
+);
+
+function drift6(file: string, only?: readonly string[]): Difference[] {
+  const text = SKELETON_6[file];
+  if (text === undefined) throw new Error(`The skeleton fixture has no ${file}.`);
+  return differences(file, text, source(file), only);
+}
+
+const DIFFERENCES_6: Readonly<
+  Record<string, { readonly agreed: boolean; readonly why: string }>
+> = {
+  "agent-host/src/service.ts AdoptOutcome changed": {
+    agreed: true,
+    why: "spec 8.6: a signature mismatch, a downgrade and a daemon without `hello` are outcomes, not throws",
+  },
+  "agent-host/src/control.ts ControlRequest changed": {
+    agreed: true,
+    why: "spec 8.6: `handover` carries the binary and signature, `confirm_local_pairing` is new",
+  },
+  "capabilities/src/local-agent-host/interface.ts LocalConnectInput changed": {
+    agreed: true,
+    why: "spec 8.6: the optional `device` is pinned at pairing",
+  },
+  "capabilities/src/local-agent-host/interface.ts PairingDevice added": {
+    agreed: true,
+    why: "spec 8.6: the app's own device keys, carried by `LocalConnectInput` and the control protocol",
+  },
+  "capabilities/src/local-agent-host/interface.ts PairingPresenceKey added": {
+    agreed: true,
+    why: "spec 8.6: the registered presence key shape, so the capability needs no server import",
+  },
+};
+
+describe("the phase 6 skeleton contract", () => {
+  it("K6: every file this phase implements keeps the skeleton's exported signatures, but for the differences listed here", () => {
+    const found = [
+      ...drift6("packages/agent-host/src/service.ts"),
+      ...drift6("packages/agent-host/src/control.ts"),
+      ...drift6("packages/agent-host/src/pairing.ts", ["PairingChannel"]),
+      ...drift6("packages/agent-host/src/daemon.ts", ["DaemonDeps", "HostDaemon"]),
+      ...drift6("packages/capabilities/src/device-key/capacitor.ts"),
+      ...drift6("packages/capabilities/src/device-key/tauri.ts"),
+      ...drift6("packages/capabilities/src/local-agent-host/capacitor.ts"),
+      ...drift6("packages/capabilities/src/local-agent-host/index.ts"),
+      ...drift6("packages/capabilities/src/local-agent-host/interface.ts"),
+      ...drift6("packages/capabilities/src/local-agent-host/tauri.ts"),
+      ...drift6("packages/capabilities/src/local-agent-host/web.ts"),
+      ...drift6("packages/shell-desktop/src/project.ts", [
+        "AGENT_HOST_SIDECAR",
+        "libRs",
+        "stageAgentHost",
+      ]),
+      ...drift6("packages/shell-mobile/src/project.ts", ["DEVICE_KEY_PLUGIN"]),
+      ...drift6("packages/client/src/react/chat/runtime.ts", ["ConnectOption"]),
+    ].map(
+      ({ file, symbol, kind }) =>
+        `${file.split("/").slice(1).join("/")} ${symbol} ${kind}`,
+    );
+    expect(found.sort()).toEqual(Object.keys(DIFFERENCES_6).sort());
+  });
+
+  it("K6: use-chat.spec-d.ts still pins ConnectOption to command and here, under the type checker", () => {
+    const client = join(REPOSITORY, "packages", "client");
+    expect(() =>
+      execFileSync(
+        join(client, "node_modules", ".bin", "tsc"),
+        ["-p", "tsconfig.spec.json", "--noEmit"],
+        { cwd: client, stdio: "pipe" },
+      ),
+    ).not.toThrow();
+  }, 120_000);
 });

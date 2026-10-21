@@ -97,6 +97,12 @@ export {
   type SessionPool,
 } from "./pool.js";
 export { type LocalPrompter, macDialogPrompter, terminalPrompter } from "./prompter.js";
-export { type HostRelease } from "./service.js";
+export {
+  type AdoptOutcome,
+  ensureService,
+  type HostRelease,
+  installLoginItem,
+  type ServiceClient,
+} from "./service.js";
 export { fileTrustStore, type TrustedDevice, type TrustStore } from "./trust.js";
 export { PROMPT_MAX_AGE_MS, runTurn, type TurnDeps } from "./turn.js";

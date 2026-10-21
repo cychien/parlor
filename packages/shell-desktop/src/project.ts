@@ -48,6 +48,7 @@ export function tauriConfig(config: ParlorConfig): Record<string, unknown> {
       active: true,
       targets: "all",
       icon: ICONS.map((icon) => `icons/${icon}`),
+      ...(config.desktop.agentHost ? { externalBin: [AGENT_HOST_SIDECAR] } : {}),
     },
     plugins: {
       "deep-link": { desktop: { schemes: config.app.scheme ? [config.app.scheme] : [] } },
@@ -88,6 +89,31 @@ pub fn run() {
 }
 `;
 
+export const AGENT_HOST_SIDECAR = "binaries/parlor-host";
+
+/**
+ * With `desktop.agentHost`, `setup()` runs the bundled `parlor-host daemon --ensure`
+ * (adopt, install or upgrade the per-user service) and registers the `parlor_host_*` and
+ * `parlor_device_key_*` commands the capabilities call.
+ */
+export function libRs(config: ParlorConfig): string {
+  if (!config.desktop.agentHost) return LIB_RS;
+  throw new Error("not implemented");
+}
+
+/**
+ * Copies the prebuilt host for `targetTriple` from its `@parlor/agent-host-<platform>`
+ * package to `binaries/parlor-host-<triple>`; copies only, compiles nothing.
+ */
+export async function stageAgentHost(
+  projectDir: string,
+  targetTriple: string,
+): Promise<string> {
+  void projectDir;
+  void targetTriple;
+  throw new Error("not implemented");
+}
+
 export const MAIN_RS = `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
@@ -114,7 +140,7 @@ export function tauriProjectFiles(config: ParlorConfig): Record<string, string> 
     "src-tauri/Cargo.toml": cargoToml(config),
     "src-tauri/build.rs": BUILD_RS,
     "src-tauri/src/main.rs": MAIN_RS,
-    "src-tauri/src/lib.rs": LIB_RS,
+    "src-tauri/src/lib.rs": libRs(config),
     "src-tauri/capabilities/default.json": `${JSON.stringify(CAPABILITIES, null, 2)}\n`,
     "src-tauri/.gitignore": "target/\ngen/schemas/\n",
     ".gitignore": "*\n",

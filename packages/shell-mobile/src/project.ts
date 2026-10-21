@@ -9,6 +9,12 @@ export const CAPACITOR_PLUGINS = [
   "@capacitor/local-notifications",
 ] as const;
 
+/** The native plugin behind the `deviceKey` capability and the Keychain `sessionStore`. */
+export const DEVICE_KEY_PLUGIN = {
+  name: "ParlorDeviceKey",
+  package: "@parlor/capacitor-device-key",
+} as const;
+
 export interface CapacitorProjectOptions {
   readonly devUrl?: string | undefined;
 }

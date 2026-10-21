@@ -1,8 +1,9 @@
 import { connect } from "node:net";
 
-import type { LocalHostStatus } from "@parlor/capabilities";
+import type { HostPairing, LocalHostStatus, PairingDevice } from "@parlor/capabilities";
 
 import { onLines } from "./lines.js";
+import type { HostRelease, ServiceClient } from "./service.js";
 
 export const CONTROL_PROTOCOL = 1;
 
@@ -11,8 +12,22 @@ export const CONTROL_PROTOCOL = 1;
  * `parlor-host` CLI and the desktop shell's Rust side. No TCP listener exists.
  */
 export type ControlRequest =
+  | { readonly op: "hello"; readonly client: ServiceClient }
+  | { readonly op: "handover"; readonly binary: string; readonly signature: string }
   | { readonly op: "status" }
   | { readonly op: "connect"; readonly appOrigin: string }
+  | { readonly op: "begin_local_pairing"; readonly appOrigin: string }
+  | {
+      readonly op: "finish_local_pairing";
+      readonly appOrigin: string;
+      readonly code: string;
+    }
+  | {
+      readonly op: "confirm_local_pairing";
+      readonly appOrigin: string;
+      readonly connect: boolean;
+      readonly device?: PairingDevice;
+    }
   | { readonly op: "disconnect"; readonly appOrigin: string }
   | { readonly op: "dev_attach"; readonly appOrigin: string; readonly hostToken: string }
   | { readonly op: "dev_detach"; readonly appOrigin: string };
@@ -22,8 +37,22 @@ export type ControlOp = ControlRequest["op"];
 export type ControlFailure = { readonly ok: false; readonly error: string };
 
 interface ControlReplies {
+  readonly hello: { readonly ok: true; readonly release: HostRelease };
+  readonly handover:
+    | { readonly ok: true }
+    | { readonly ok: false; readonly error: "unsigned" | "downgrade" };
   readonly status: { readonly ok: true; readonly status: LocalHostStatus };
   readonly connect: { readonly ok: true };
+  readonly begin_local_pairing: { readonly ok: true; readonly pairing: HostPairing };
+  readonly finish_local_pairing: {
+    readonly ok: true;
+    readonly account: string;
+    readonly appName: string;
+    readonly matchingCode: string;
+  };
+  readonly confirm_local_pairing:
+    | { readonly ok: true }
+    | { readonly ok: false; readonly error: "declined_locally" };
   readonly disconnect: { readonly ok: true };
   readonly dev_attach: { readonly ok: true };
   readonly dev_detach: { readonly ok: true };

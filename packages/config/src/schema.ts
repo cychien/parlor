@@ -56,6 +56,8 @@ export const parlorConfigSchema = z.object({
     .object({
       width: z.number().int().positive().default(1024),
       height: z.number().int().positive().default(768),
+      /** Bundle Parlor Host as a sidecar so the chat can use this computer's agents. */
+      agentHost: z.boolean().optional(),
     })
     .prefault({}),
   database: z

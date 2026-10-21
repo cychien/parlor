@@ -24,5 +24,6 @@ export {
   capacitorConfig,
   capacitorProjectDir,
   capacitorProjectFiles,
+  DEVICE_KEY_PLUGIN,
   ensureCapacitorProject,
 } from "./project.js";
