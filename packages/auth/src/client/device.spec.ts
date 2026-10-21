@@ -310,6 +310,8 @@ describe("the auth client's device", () => {
       } as unknown as AgentUiClient,
       addChannel: () => () => undefined,
       onSyncTags: (_listener: (tags: readonly Tag[]) => void) => () => undefined,
+      onResume: () => () => undefined,
+      transport: () => undefined,
       auth,
       localHost: Promise.resolve({ available: false, reason: "no host" }),
       threadId: undefined,
