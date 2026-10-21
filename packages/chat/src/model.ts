@@ -83,6 +83,7 @@ export interface TurnStatus {
   readonly turnId: TurnId;
   readonly state: TurnState;
   readonly agent: AgentRef;
+  readonly failure?: TurnFailure | undefined;
 }
 
 export interface ThreadPage {

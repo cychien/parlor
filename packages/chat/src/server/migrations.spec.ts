@@ -5,16 +5,17 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CHAT_MIGRATIONS } from "./migrations.js";
 import { drivers, openDatabase, resetDatabase, rows, serveChat } from "./spec-kit.js";
 
-describe("chat/0001_threads", () => {
-  it("is one migration of plain statements", () => {
+describe("chat migrations", () => {
+  it("are plain statements, in order", () => {
     expect(CHAT_MIGRATIONS.map((migration) => migration.id)).toEqual([
       "chat/0001_threads",
+      "chat/0002_answer_retry",
     ]);
-    expect(CHAT_MIGRATIONS[0]?.sql).not.toContain("$");
+    for (const migration of CHAT_MIGRATIONS) expect(migration.sql).not.toContain("$");
   });
 });
 
-describe.each(drivers)("applying chat/0001_threads on $name", (driver) => {
+describe.each(drivers)("applying the chat migrations on $name", (driver) => {
   let handle: DatabaseHandle;
   beforeAll(async () => {
     handle = await openDatabase(driver);
@@ -41,6 +42,7 @@ describe.each(drivers)("applying chat/0001_threads on $name", (driver) => {
       { id: "auth/0001_revocations" },
       { id: "auth/0002_revocations_revoked_at" },
       { id: "chat/0001_threads" },
+      { id: "chat/0002_answer_retry" },
     ]);
     expect(
       await rows(
@@ -56,7 +58,7 @@ describe.each(drivers)("applying chat/0001_threads on $name", (driver) => {
   });
 });
 
-describe.each(drivers)("the indexes of chat/0001_threads on $name", (driver) => {
+describe.each(drivers)("the indexes of the chat migrations on $name", (driver) => {
   let handle: DatabaseHandle;
   beforeAll(async () => {
     handle = await openDatabase(driver);
@@ -89,6 +91,13 @@ describe.each(drivers)("the indexes of chat/0001_threads on $name", (driver) => 
   it("serves the lapsed computer scan by liveness time", async () => {
     expect(await definitionOf("parlor_chat_hosts_lapse")).toEqual([
       "CREATE INDEX parlor_chat_hosts_lapse ON public.parlor_chat_hosts USING btree (online_until) WHERE announced_online",
+    ]);
+  });
+
+  it("serves the answers to a question by plain index, so a rejected one can be answered again", async () => {
+    expect(await definitionOf("parlor_chat_items_one_answer")).toEqual([]);
+    expect(await definitionOf("parlor_chat_items_answers")).toEqual([
+      "CREATE INDEX parlor_chat_items_answers ON public.parlor_chat_items USING btree (thread_id, ((body ->> 'askId'::text))) WHERE (kind = 'answer'::text)",
     ]);
   });
 });

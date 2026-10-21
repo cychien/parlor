@@ -35,6 +35,7 @@ import {
   threadRow,
   toLoggedItem,
   toThreadSummary,
+  TURN_FAILURES,
   turnStateSchema,
 } from "./rows.js";
 
@@ -189,6 +190,7 @@ export interface ChatStore {
 
 export interface StoredHost extends HostSummary {
   readonly grantId: GrantId;
+  readonly protocol: number;
 }
 
 function rowsOf(result: unknown): unknown[] {
@@ -334,6 +336,7 @@ const turnRow = z.object({
   agent_id: z.string(),
   state: turnStateSchema,
   lapsed: z.boolean(),
+  failure: z.enum(TURN_FAILURES).nullable(),
 });
 
 async function createTurn(
@@ -387,26 +390,41 @@ async function admitsUserItem(
     const askId = draft.body.askId;
     const [ask] = await query(
       tx,
-      sql`select turn_id from parlor_chat_items
+      sql`select turn_id, body->>'approval' as approval from parlor_chat_items
         where thread_id = ${threadId} and id = ${askId} and kind = 'ask'`,
-      z.object({ turn_id: z.string() }),
+      z.object({ turn_id: z.string(), approval: z.string().nullable() }),
     );
     if (!ask || ask.turn_id !== turnId)
       throw new ActionError("not_found", "Question not found");
-    const [answered] = await query(
-      tx,
-      sql`select id from parlor_chat_items
-        where thread_id = ${threadId} and kind = 'answer' and body->>'askId' = ${askId}`,
-      z.object({ id: z.string() }),
-    );
-    if (answered) {
-      throw new ActionError("invalid_input", "This question was already answered.");
+    if (ask.approval === "computer") {
+      throw new ActionError("forbidden", "This question is answered on the computer.");
+    }
+    const { signed } = draft.body;
+    if (
+      ask.approval === "presence" &&
+      !(signed?.signature.format === "webauthn" && signed.signature.presence === "user")
+    ) {
+      throw new ActionError("forbidden", "This question needs a presence check.");
     }
     const [state] = await query(
       tx,
-      sql`select state from parlor_chat_turns where id = ${turnId}`,
+      sql`select state from parlor_chat_turns where id = ${turnId} for update`,
       z.object({ state: z.string() }),
     );
+    const [standing] = await query(
+      tx,
+      sql`select a.id from parlor_chat_items a
+        where a.thread_id = ${threadId} and a.kind = 'answer' and a.body->>'askId' = ${askId}
+          and not exists (
+            select 1 from parlor_chat_items e
+            where e.thread_id = ${threadId} and e.kind = 'event'
+              and e.body->>'event' = 'answer_rejected' and e.body->>'itemId' = a.id)
+        limit 1`,
+      z.object({ id: z.string() }),
+    );
+    if (standing) {
+      throw new ActionError("invalid_input", "This question was already answered.");
+    }
     if (state?.state !== "running") {
       throw new ActionError(
         "invalid_input",
@@ -578,7 +596,8 @@ export const sqlChatStore: ChatStore = {
       ? await query(
           db,
           sql`select id, thread_id, host_id, agent_id, state,
-              coalesce(state = 'running' and lease_until < now(), false) as lapsed
+              coalesce(state = 'running' and lease_until < now(), false) as lapsed,
+              case when state = 'failed' then outcome->>'reason' end as failure
             from parlor_chat_turns
             where thread_id = ${row.id}
               and id in (select turn_id from parlor_chat_items
@@ -594,6 +613,7 @@ export const sqlChatStore: ChatStore = {
         turnId: turn.id,
         state: turn.lapsed ? "failed" : turn.state,
         agent: { hostId: turn.host_id, agentId: turn.agent_id },
+        failure: turn.lapsed ? "host_lost" : (turn.failure ?? undefined),
       })),
       hasMore,
     };
@@ -862,7 +882,7 @@ export const sqlChatStore: ChatStore = {
   async listHosts(db, owner) {
     return query(
       db,
-      sql`select id, grant_id, name, platform, agents, online_until > now() as online
+      sql`select id, grant_id, protocol, name, platform, agents, online_until > now() as online
         from parlor_chat_hosts
         where owner_id = ${owner.userId} and scope = ${owner.scope}
         order by name, id`,
@@ -870,6 +890,7 @@ export const sqlChatStore: ChatStore = {
         .object({
           id: idSchema("host"),
           grant_id: idSchema("grant"),
+          protocol: z.number().int(),
           name: z.string(),
           platform: z.string(),
           agents: z.array(agentInfoSchema),

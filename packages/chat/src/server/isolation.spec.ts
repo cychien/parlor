@@ -13,7 +13,7 @@ import {
 } from "./spec-kit.js";
 
 const hello = (name: string) => ({
-  protocols: { min: 1, max: 1 },
+  protocols: { min: 2, max: 2 },
   hostVersion: "1.0.0",
   name,
   platform: "darwin",

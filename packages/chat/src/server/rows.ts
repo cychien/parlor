@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { idSchema } from "../id-schemas.js";
 import { chatItemBodies, type LoggedItem } from "../items.js";
-import type { AgentRef, ThreadSummary, TurnState } from "../model.js";
+import type { AgentRef, ThreadSummary, TurnFailure, TurnState } from "../model.js";
 
 export const agentInfoSchema = z.object({
   id: z.string().min(1),
@@ -133,6 +133,15 @@ export function toThreadSummary(row: z.output<typeof threadRow>): ThreadSummary 
     lastSeq: row.last_seq,
   };
 }
+
+export const TURN_FAILURES = [
+  "agent_exited",
+  "agent_unavailable",
+  "device_rejected",
+  "signature_invalid",
+  "prompt_expired",
+  "host_lost",
+] as const satisfies readonly TurnFailure[];
 
 export const TURN_STATES = ["queued", "running", "done", "failed", "cancelled"] as const;
 export const turnStateSchema = z.enum(TURN_STATES) satisfies z.ZodType<TurnState>;

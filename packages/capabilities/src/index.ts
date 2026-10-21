@@ -7,6 +7,7 @@ export {
   resolveCapability,
 } from "./capability.js";
 export * from "./deep-link/index.js";
+export * from "./device-key/index.js";
 export type {
   HostPairing,
   LocalAgentHost,

@@ -28,6 +28,7 @@ import {
 } from "@agentclientprotocol/sdk";
 
 import type { AgentProfile } from "./agents.js";
+import { logEvent } from "./log.js";
 
 /**
  * The only file that knows ACP. The v1 adapter speaks ndjson over stdio through
@@ -80,6 +81,7 @@ export interface OpenSessionInput {
   readonly resume?: string | undefined;
   /** A remote turn never runs in a bypass mode. */
   readonly pinAskMode: boolean;
+  readonly strictAsk?: boolean | undefined;
 }
 
 export interface StdioMcpServer {
@@ -231,6 +233,7 @@ const AUTH_REQUIRED = -32000;
 const MCP_PREFIX = "mcp__";
 
 const ASK_MODES_BY_PREFERENCE = ["default", "workspace-write", "read-only"];
+const STRICT_ASK_MODES_BY_PREFERENCE = ["default", "read-only", "workspace-write"];
 
 type Fields = Readonly<Record<string, unknown>>;
 
@@ -522,6 +525,24 @@ function tapUpdates(
   };
 }
 
+function tapSends(stream: Stream): Stream {
+  const writer = stream.writable.getWriter();
+  return {
+    readable: stream.readable,
+    writable: new WritableStream({
+      write(message) {
+        const fields: unknown = message;
+        if (isFields(fields) && typeof fields.method === "string") {
+          logEvent("acp_send", { method: fields.method });
+        }
+        return writer.write(message);
+      },
+      close: () => writer.close(),
+      abort: (reason) => writer.abort(reason),
+    }),
+  };
+}
+
 function commandOf(profile: AgentProfile): {
   readonly command: string;
   readonly args: readonly string[];
@@ -544,9 +565,13 @@ interface LiveState {
   readonly pinned: string | undefined;
 }
 
-function askingModeOf(modes: SessionModeState): string | undefined {
-  if (ASK_MODES_BY_PREFERENCE.includes(modes.currentModeId)) return modes.currentModeId;
+function askingModeOf(modes: SessionModeState, strict: boolean): string | undefined {
   const available = new Set(modes.availableModes.map((mode) => mode.id));
+  if (strict) {
+    available.add(modes.currentModeId);
+    return STRICT_ASK_MODES_BY_PREFERENCE.find((mode) => available.has(mode));
+  }
+  if (ASK_MODES_BY_PREFERENCE.includes(modes.currentModeId)) return modes.currentModeId;
   return ASK_MODES_BY_PREFERENCE.find((mode) => available.has(mode));
 }
 
@@ -635,9 +660,11 @@ export function acpLauncher(): AgentLauncher {
         state.handlers?.update(mapped);
       };
       const stream = tapUpdates(
-        ndJsonStream(
-          Writable.toWeb(child.stdin) as WritableStream<Uint8Array>,
-          Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>,
+        tapSends(
+          ndJsonStream(
+            Writable.toWeb(child.stdin) as WritableStream<Uint8Array>,
+            Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>,
+          ),
         ),
         deliver,
       );
@@ -748,7 +775,9 @@ export function acpLauncher(): AgentLauncher {
             );
           };
           const modes = input.pinAskMode ? opened.modes : undefined;
-          const pinned = modes ? askingModeOf(modes) : undefined;
+          const pinned = modes
+            ? askingModeOf(modes, input.strictAsk === true)
+            : undefined;
           if (modes && pinned === undefined) {
             throw new SessionRefused(
               `${profile.name} offers no mode that asks before it acts, so it cannot take a turn from an app.`,

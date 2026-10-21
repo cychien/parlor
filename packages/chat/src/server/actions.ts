@@ -17,7 +17,6 @@ import type {
   ChatSnapshot,
   ClaimedTurn,
   HostSummary,
-  TurnFailure,
   TurnSignals,
 } from "../model.js";
 import { HOST_PROTOCOL, type HostWelcome } from "../protocol.js";
@@ -25,7 +24,7 @@ import { CHAT_TAG, HOSTS_TAG } from "../tags.js";
 import { turnContext } from "./context.js";
 import type { LiveRelay } from "./live.js";
 import { type ChatHost, chatAction } from "./party.js";
-import { agentInfoSchema } from "./rows.js";
+import { agentInfoSchema, TURN_FAILURES } from "./rows.js";
 import type { ChatDb, ChatStore, StoredHost } from "./store.js";
 
 export { CHAT_TAG, HOSTS_TAG, HOST_GRANTS_TAG };
@@ -66,16 +65,7 @@ const turnId = idSchema("turn");
 const itemId = idSchema("item");
 const afterSeq = z.number().int().min(0);
 
-const TURN_FAILURES = [
-  "agent_exited",
-  "agent_unavailable",
-  "device_rejected",
-  "signature_invalid",
-  "prompt_expired",
-  "host_lost",
-] as const satisfies readonly TurnFailure[];
-
-const MIN_HOST_PROTOCOL = 1;
+const MIN_HOST_PROTOCOL = 2;
 const CONTEXT_HISTORY_ITEMS = 200;
 const TERMINAL: ReadonlySet<string> = new Set(["done", "failed", "cancelled"]);
 
@@ -102,7 +92,11 @@ async function activeHosts(
   return hosts.filter((_host, at) => holding[at]);
 }
 
-const summaryOf = ({ grantId: _grantId, ...summary }: StoredHost): HostSummary => summary;
+const summaryOf = ({
+  grantId: _grantId,
+  protocol: _protocol,
+  ...summary
+}: StoredHost): HostSummary => summary;
 
 export function userChatActions(deps: ChatActionDeps) {
   const { enforcing } = deps;
@@ -174,9 +168,6 @@ export function userChatActions(deps: ChatActionDeps) {
           (candidate) => candidate.id === input.prompt.agent.hostId,
         );
         if (!host) throw new ActionError("not_found", "Computer not found");
-        if (!host.online) {
-          throw new ActionError("invalid_input", `${host.name} is offline.`);
-        }
         return deps.transact(ctx.scope, async (tx) => {
           await deps.store.appendUserItems(tx, user, {
             threadId: input.threadId,
@@ -200,14 +191,22 @@ export function userChatActions(deps: ChatActionDeps) {
     answer: chatAction("user", enforcing, {
       description: "Answer the agent's permission prompt or question.",
       input: z.object({ threadId, turnId, itemId, answer: chatItemBodies.answer.body }),
-      writes: [CHAT_TAG],
       run: async (input, user, ctx): Promise<{ readonly id: string }> => {
-        await deps.store.appendUserItems(dbOf(ctx), user, {
-          threadId: input.threadId,
-          turnId: input.turnId,
-          items: [{ id: input.itemId, kind: "answer", body: input.answer }],
+        const { signed } = input.answer;
+        if (signed && deps.auth.device) {
+          const device = await deps.auth.device(user.userId, signed.deviceId);
+          if (!device) {
+            throw new ActionError("forbidden", "This device cannot answer.");
+          }
+        }
+        return deps.transact(ctx.scope, async (tx) => {
+          await deps.store.appendUserItems(tx, user, {
+            threadId: input.threadId,
+            turnId: input.turnId,
+            items: [{ id: input.itemId, kind: "answer", body: input.answer }],
+          });
+          return { result: { id: input.threadId }, threadId: input.threadId };
         });
-        return { id: input.threadId };
       },
     }),
     cancel: chatAction("user", enforcing, {
@@ -234,6 +233,10 @@ export function hostChatActions(deps: ChatActionDeps) {
     const hosts = await deps.store.listHosts(db, host);
     const known = hosts.find((candidate) => candidate.id === host.host.hostId);
     if (!known) throw new ActionError("forbidden", "Say hello before anything else.");
+    if (known.protocol < MIN_HOST_PROTOCOL) {
+      await deps.pruneHosts(host, [known.id]);
+      throw new ActionError("forbidden", "Say hello before anything else.");
+    }
     welcomed.add(known.id);
     return known;
   };
@@ -287,13 +290,14 @@ export function hostChatActions(deps: ChatActionDeps) {
       run: async (input, host, ctx): Promise<HostWelcome & { readonly id: string }> => {
         const id = host.host.hostId;
         const protocols = { min: MIN_HOST_PROTOCOL, max: HOST_PROTOCOL };
-        if (input.protocols.max < protocols.min) {
-          return { id, accepted: false, reason: "host_too_old", protocols };
-        }
+        const refuse = async (reason: "host_too_old" | "app_too_old") => {
+          welcomed.delete(id);
+          await deps.store.pruneHosts(dbOf(ctx), host, [id]);
+          return { id, accepted: false as const, reason, protocols };
+        };
+        if (input.protocols.max < protocols.min) return refuse("host_too_old");
         const protocol = Math.min(input.protocols.max, protocols.max);
-        if (protocol < input.protocols.min) {
-          return { id, accepted: false, reason: "app_too_old", protocols };
-        }
+        if (protocol < input.protocols.min) return refuse("app_too_old");
         await deps.store.reportHost(dbOf(ctx), host, host.host, {
           protocol,
           name: input.name,
@@ -325,7 +329,7 @@ export function hostChatActions(deps: ChatActionDeps) {
         const db = dbOf(ctx);
         const known = await welcome(host, db);
         const { onlineUntil } = await deps.store.reportHost(db, host, host.host, {
-          protocol: HOST_PROTOCOL,
+          protocol: known.protocol,
           name: known.name,
           platform: known.platform,
           agents: input.agents,

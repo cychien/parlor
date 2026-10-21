@@ -33,7 +33,7 @@ describe.each(drivers)("the agent a turn token names on $name", (driver) => {
 
   it("is the name the computer reported for the profile, as audit records and cards show it", async () => {
     await app.action("alice-host", "hostHello", {
-      protocols: { min: 1, max: 1 },
+      protocols: { min: 2, max: 2 },
       hostVersion: "1",
       name: "Mac",
       platform: "macos",
@@ -60,7 +60,7 @@ describe.each(drivers)("the agent a turn token names on $name", (driver) => {
 
   it("finds the name in the store after a restart forgot it", async () => {
     await app.action("alice-host", "hostHello", {
-      protocols: { min: 1, max: 1 },
+      protocols: { min: 2, max: 2 },
       hostVersion: "1",
       name: "Mac",
       platform: "macos",

@@ -19,10 +19,16 @@ function record(line) {
   } catch {
     return;
   }
+  if (message?.result !== undefined && message.method === undefined) {
+    const response = { at: Date.now(), method: "response", pid: process.pid };
+    appendFileSync(log, `${JSON.stringify({ ...response, result: message.result })}\n`);
+    return;
+  }
   if (typeof message?.method !== "string") return;
   const entry = { at: Date.now(), method: message.method, pid: process.pid };
   if (typeof message.params?.sessionId === "string")
     entry.sessionId = message.params.sessionId;
+  if (typeof message.params?.modeId === "string") entry.modeId = message.params.modeId;
   if (message.method === "session/prompt") {
     entry.text = (message.params?.prompt ?? [])
       .map((block) => block.text ?? "")

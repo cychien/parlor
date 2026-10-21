@@ -1,8 +1,15 @@
 import { asId, type DeviceId, type ItemId, type TurnId } from "@parlor/core";
 
-import type { ChatEvent } from "./events.js";
+import type { ChatEvent, FoldedEvent } from "./events.js";
 import type { ChatItemBody, ChatItemKind, LoggedItem } from "./items.js";
-import type { AgentRef, OpenItem, OpenTurn, TurnState, TurnStatus } from "./model.js";
+import type {
+  AgentRef,
+  OpenItem,
+  OpenTurn,
+  TurnFailure,
+  TurnState,
+  TurnStatus,
+} from "./model.js";
 
 export type AskState =
   | { readonly state: "open" }
@@ -18,6 +25,7 @@ export type ChatItem<C = unknown> =
       readonly text: string;
       readonly agent: AgentRef;
       readonly state: TurnState;
+      readonly failure: TurnFailure | undefined;
       readonly mine: boolean;
     }
   | {
@@ -64,7 +72,7 @@ export type ChatItem<C = unknown> =
       readonly kind: "event";
       readonly id: ItemId;
       readonly turnId: TurnId;
-      readonly event: ChatEvent;
+      readonly event: Exclude<ChatEvent, FoldedEvent>;
       readonly detail: string | undefined;
     };
 
@@ -101,6 +109,20 @@ export function foldThread<C extends ThreadConfirmation>(
   const states = new Map<TurnId, TurnState>();
   for (const turn of input.turns) states.set(turn.turnId, turn.state);
   const stateOf = (turnId: TurnId): TurnState => states.get(turnId) ?? "done";
+  const failures = new Map<TurnId, TurnFailure>();
+  for (const turn of input.turns) {
+    if (turn.failure) failures.set(turn.turnId, turn.failure);
+  }
+  const rejected = new Set<ItemId>();
+  for (const item of input.items) {
+    if (
+      item.kind === "event" &&
+      item.body.event === "answer_rejected" &&
+      item.body.itemId
+    ) {
+      rejected.add(item.body.itemId);
+    }
+  }
 
   const rows: ChatItem<C>[] = [];
   const durable = new Set<ItemId>();
@@ -124,6 +146,7 @@ export function foldThread<C extends ThreadConfirmation>(
           text: item.body.text,
           agent: item.body.agent,
           state: stateOf(item.turnId),
+          failure: failures.get(item.turnId),
           mine:
             input.deviceId !== undefined && item.body.signed?.deviceId === input.deviceId,
         }),
@@ -131,7 +154,7 @@ export function foldThread<C extends ThreadConfirmation>(
     },
     answer: (item) => {
       const at = asks.get(item.body.askId);
-      if (at === undefined) return;
+      if (at === undefined || rejected.has(item.id)) return;
       const row = rows[at];
       if (row?.kind === "ask" && row.answer.state === "open") {
         rows[at] = {
@@ -199,11 +222,25 @@ export function foldThread<C extends ThreadConfirmation>(
       );
     },
     event: (item) => {
+      const { event, itemId, choice } = item.body;
+      if (event === "answered_on_computer") {
+        const at = itemId === undefined ? undefined : asks.get(itemId);
+        const row = at === undefined ? undefined : rows[at];
+        if (
+          at !== undefined &&
+          choice !== undefined &&
+          row?.kind === "ask" &&
+          row.answer.state === "open"
+        ) {
+          rows[at] = { ...row, answer: { state: "answered", choice } };
+        }
+        return;
+      }
       push({
         kind: "event",
         id: item.id,
         turnId: item.turnId,
-        event: item.body.event,
+        event,
         detail: item.body.detail,
       });
     },

@@ -22,11 +22,12 @@ import { logEvent, openHostLog } from "./log.js";
 import type { McpProxy } from "./mcp-proxy.js";
 import { computerName, platformName, workspaceOf } from "./naming.js";
 import type { HostPaths } from "./paths.js";
-import type { RemotePolicy } from "./policy.js";
+import { DEV_POLICY, loadPolicy, type RemotePolicy } from "./policy.js";
 import type { SessionPool } from "./pool.js";
 import { type LocalPrompter, printable } from "./prompter.js";
 import { revokeGrant } from "./revoke.js";
 import type { HostRelease } from "./service.js";
+import type { TrustStore } from "./trust.js";
 import { runTurn } from "./turn.js";
 
 export interface DaemonDeps {
@@ -34,6 +35,7 @@ export interface DaemonDeps {
   readonly paths: HostPaths;
   readonly grants: GrantStore;
   readonly keys: HostKeys;
+  readonly trust: TrustStore;
   readonly pool: SessionPool;
   readonly proxy: McpProxy;
   readonly launcher: AgentLauncher;
@@ -113,20 +115,25 @@ export function createHostDaemon(deps: DaemonDeps): HostDaemon {
 
   const run = (link: AppLink, claimed: ClaimedTurn) => {
     logEvent("turn_claimed", { appOrigin: link.grant.appOrigin, turnId: claimed.turnId });
-    runTurn(claimed, {
-      link,
-      profiles,
-      launcher: deps.launcher,
-      pool: deps.pool,
-      proxy: deps.proxy,
-      policy: deps.policy,
-      prompter: deps.prompter,
-      now: Date.now,
-    }).then(
-      (outcome) => logEvent("turn_finished", { turnId: claimed.turnId, outcome }),
-      (error: unknown) =>
-        logEvent("turn_finished", { turnId: claimed.turnId, error: String(error) }),
-    );
+    (link.grant.dev ? Promise.resolve(DEV_POLICY) : loadPolicy(paths.policy, deps.policy))
+      .then((policy) =>
+        runTurn(claimed, {
+          link,
+          profiles,
+          launcher: deps.launcher,
+          pool: deps.pool,
+          proxy: deps.proxy,
+          trust: deps.trust,
+          policy,
+          prompter: deps.prompter,
+          now: Date.now,
+        }),
+      )
+      .then(
+        (outcome) => logEvent("turn_finished", { turnId: claimed.turnId, outcome }),
+        (error: unknown) =>
+          logEvent("turn_finished", { turnId: claimed.turnId, error: String(error) }),
+      );
   };
 
   const wake = async (state: LinkState) => {
@@ -163,6 +170,7 @@ export function createHostDaemon(deps: DaemonDeps): HostDaemon {
     devTokens.delete(grant.appOrigin);
     await deps.grants.remove(grant.appOrigin);
     await deps.keys.remove(grant.appOrigin);
+    await deps.trust.forget(grant.appOrigin);
     await deps.pool.forget(grant);
   };
 

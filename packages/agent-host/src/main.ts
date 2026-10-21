@@ -53,10 +53,11 @@ async function host() {
     { fileGrantStore, keychainHostKeys },
     { createMcpProxy },
     { hostPaths },
-    { DEV_POLICY },
+    { changePolicy, DEFAULT_POLICY, loadPolicy },
     { createSessionPool },
-    { terminalPrompter },
+    { macDialogPrompter, terminalPrompter },
     { revokeGrant },
+    { fileTrustStore },
   ] = await Promise.all([
     import("./acp.js"),
     import("@parlor/chat"),
@@ -69,11 +70,12 @@ async function host() {
     import("./pool.js"),
     import("./prompter.js"),
     import("./revoke.js"),
+    import("./trust.js"),
   ]);
-  const POLICY_UNTIL_DEVICE_TRUST = DEV_POLICY;
   type Paths = ReturnType<typeof hostPaths>;
   type Grants = ReturnType<typeof fileGrantStore>;
-  const daemonFor = (paths: Paths, grants: Grants) =>
+  type Prompter = ReturnType<typeof terminalPrompter>;
+  const daemonFor = (paths: Paths, grants: Grants, prompter: Prompter) =>
     createHostDaemon({
       release: {
         version,
@@ -83,11 +85,12 @@ async function host() {
       paths,
       grants,
       keys: keychainHostKeys(KEYCHAIN_SERVICE),
+      trust: fileTrustStore(paths.trust),
       pool: createSessionPool(paths.sessions),
       proxy: createMcpProxy("parlor-host"),
       launcher: acpLauncher(),
-      prompter: terminalPrompter(),
-      policy: POLICY_UNTIL_DEVICE_TRUST,
+      prompter,
+      policy: DEFAULT_POLICY,
     });
   const ensureDaemon = async (paths: Paths) => {
     const running = await connectControl(paths.control);
@@ -131,15 +134,20 @@ async function host() {
     });
     await grants.remove(origin);
     await keys.remove(origin);
+    await fileTrustStore(paths.trust).forget(origin);
   };
   return {
+    changePolicy,
     connectControl,
+    DEFAULT_POLICY,
     daemonFor,
     disconnectFrom,
     ensureDaemon,
     fileGrantStore,
     hostPaths,
     keychainHostKeys,
+    loadPolicy,
+    macDialogPrompter,
     terminalPrompter,
   };
 }
@@ -258,11 +266,43 @@ const daemon = defineCommand({
     const kit = await host();
     const paths = kit.hostPaths();
     const shutdown = shutdownSignal();
-    const running = kit.daemonFor(paths, kit.fileGrantStore(paths.grants));
+    const running = kit.daemonFor(
+      paths,
+      kit.fileGrantStore(paths.grants),
+      process.platform === "darwin" ? kit.macDialogPrompter() : kit.terminalPrompter(),
+    );
     await running.start();
     await untilAborted(shutdown);
     await running.stop();
     process.exit(0);
+  },
+});
+
+const config = defineCommand({
+  meta: {
+    name: "config",
+    description: "Show or set what this computer enforces on remote turns",
+  },
+  args: {
+    answers: {
+      type: "string",
+      description:
+        "Where an agent's permission prompts are answered: presence or computer",
+    },
+  },
+  async run({ args }) {
+    const kit = await host();
+    const { policy } = kit.hostPaths();
+    const answers = args.answers;
+    if (answers !== undefined && answers !== "presence" && answers !== "computer") {
+      fail("--answers takes presence or computer.");
+      return;
+    }
+    const current =
+      answers === undefined
+        ? await kit.loadPolicy(policy, kit.DEFAULT_POLICY)
+        : await kit.changePolicy(policy, kit.DEFAULT_POLICY, { answers });
+    process.stdout.write(`${JSON.stringify(current)}\n`);
   },
 });
 
@@ -306,7 +346,7 @@ const dev = defineCommand({
       agents: home.agents,
       workspaces: home.workspaces,
     };
-    const own = kit.daemonFor(paths, memoryGrants());
+    const own = kit.daemonFor(paths, memoryGrants(), kit.terminalPrompter());
     await own.start();
     const client = await kit.connectControl(paths.control);
     const reply = await client!.send({ op: "dev_attach", appOrigin: origin, hostToken });
@@ -343,6 +383,14 @@ await runMain(
       name: "parlor-host",
       description: "Run your own agents for your Parlor apps",
     },
-    subCommands: { connect, disconnect, status, daemon, dev, "mcp-proxy": mcpProxy },
+    subCommands: {
+      connect,
+      disconnect,
+      status,
+      daemon,
+      config,
+      dev,
+      "mcp-proxy": mcpProxy,
+    },
   }),
 );

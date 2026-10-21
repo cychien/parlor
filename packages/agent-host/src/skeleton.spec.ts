@@ -19,6 +19,160 @@ function sources(dir: string): string[] {
   });
 }
 
+const OPENING = "([{";
+const CLOSING = ")]}";
+
+function statementsOf(text: string): string[] {
+  const statements: string[] = [];
+  let current = "";
+  let depth = 0;
+  const open: string[] = [];
+  for (let at = 0; at < text.length; at += 1) {
+    const char = text[at]!;
+    const next = text[at + 1];
+    if (char === "/" && next === "/") {
+      while (at < text.length && text[at] !== "\n") at += 1;
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      at = text.indexOf("*/", at + 2) + 1;
+      continue;
+    }
+    if (char === '"' || char === "'" || char === "`") {
+      let end = at + 1;
+      while (end < text.length && text[end] !== char) end += text[end] === "\\" ? 2 : 1;
+      current += text.slice(at, end + 1);
+      at = end;
+      continue;
+    }
+    if (CLOSING.includes(char) && depth === 0) {
+      current = "";
+      continue;
+    }
+    current += char;
+    if (OPENING.includes(char)) {
+      depth += 1;
+      open.push(CLOSING[OPENING.indexOf(char)]!);
+    } else if (CLOSING.includes(char)) {
+      depth -= 1;
+      open.pop();
+      const blockEnded = char === "}" && depth === 0;
+      const rest = text.slice(at + 1).match(/^\s*(\S)/)?.[1];
+      if (blockEnded && rest !== ";" && rest !== "," && rest !== "." && rest !== ")") {
+        const head = current.trim();
+        const isBlock = /^(export\s+)?(async\s+)?(function|interface|class|enum)\b/.test(
+          head,
+        );
+        const hasBody =
+          !/^(export\s+)?(async\s+)?function\b/.test(head) ||
+          endOfSignature(head) < head.length;
+        if (isBlock && hasBody) {
+          statements.push(current.trim());
+          current = "";
+        }
+      }
+    } else if (char === ";" && depth === 0) {
+      statements.push(current.trim());
+      current = "";
+    }
+  }
+  if (current.trim()) statements.push(`${current.trim()}${open.reverse().join("")}`);
+  return statements;
+}
+
+const compact = (text: string) =>
+  text
+    .replace(/\s+/g, " ")
+    .replace(/\s*([(){}[\],;:<>|&=?])\s*/g, "$1")
+    .replace(/[,;](?=[)\]}>])/g, "");
+
+function endOfSignature(statement: string): number {
+  let parens = 0;
+  let angles = 0;
+  let seenParams = false;
+  for (let at = 0; at < statement.length; at += 1) {
+    const char = statement[at]!;
+    if (char === "(") parens += 1;
+    else if (char === ")") {
+      parens -= 1;
+      if (parens === 0) seenParams = true;
+    } else if (parens === 0 && seenParams) {
+      if (char === "<") angles += 1;
+      else if (char === ">" && statement[at - 1] !== "=") angles -= 1;
+      else if (
+        char === "{" &&
+        angles === 0 &&
+        !/[:|&]\s*$/.test(statement.slice(0, at))
+      ) {
+        return at;
+      }
+    }
+  }
+  return statement.length;
+}
+
+function signaturesOf(text: string): Map<string, string> {
+  const signatures = new Map<string, string>();
+  const add = (name: string, signature: string) =>
+    signatures.set(
+      name,
+      [signatures.get(name), compact(signature)].filter(Boolean).join("\n"),
+    );
+  for (const statement of statementsOf(text)) {
+    if (!statement.startsWith("export")) continue;
+    const declaration = statement.replace(/^export\s+(default\s+)?/, "");
+    const named = /^(?:async\s+)?(function|interface|type|class|enum)\s+(\w+)/.exec(
+      declaration,
+    );
+    if (named) {
+      const [, kind, name] = named;
+      const keep =
+        kind === "function"
+          ? declaration.slice(0, endOfSignature(declaration)).replace(/^async\s+/, "")
+          : declaration;
+      add(name!, keep);
+    } else if (/^(const|let)\s/.test(declaration)) {
+      const name = /^(?:const|let)\s+(\w+)/.exec(declaration)![1]!;
+      const [head] = declaration.split(/(?<![=!<>])=(?![=>])/);
+      const annotated = /^(?:const|let)\s+\w+\s*:/.test(declaration);
+      const callee = /=\s*([\w.]+(?:<[^(]*>)?)\(/.exec(declaration)?.[1];
+      add(name, annotated ? head! : `${name} = ${callee ?? ""}`);
+    } else if (/^(type\s+)?\{/.test(declaration) || declaration.startsWith("*")) {
+      for (const [, name] of declaration.matchAll(/(?:\btype\s+)?(\w+)(?=\s*[,}])/g)) {
+        if (name !== "type") add(name!, "re-export");
+      }
+    }
+  }
+  return signatures;
+}
+
+interface Difference {
+  readonly file: string;
+  readonly symbol: string;
+  readonly kind: "changed" | "missing" | "added";
+}
+
+function differences(
+  file: string,
+  skeleton: string,
+  actual: string,
+  only?: readonly string[],
+): Difference[] {
+  const wanted = signaturesOf(skeleton);
+  const found = signaturesOf(actual);
+  const names = new Set([...wanted.keys(), ...found.keys()]);
+  const out: Difference[] = [];
+  for (const symbol of [...names].sort()) {
+    if (only && !only.includes(symbol)) continue;
+    const before = wanted.get(symbol);
+    const after = found.get(symbol);
+    if (before === undefined) out.push({ file, symbol, kind: "added" });
+    else if (after === undefined) out.push({ file, symbol, kind: "missing" });
+    else if (before !== after) out.push({ file, symbol, kind: "changed" });
+  }
+  return out;
+}
+
 describe("the phase 4 skeleton contract", () => {
   it("K4: acp.ts is the only file that imports the ACP SDK", () => {
     const importers = ["packages", "examples"]
@@ -35,6 +189,135 @@ describe("the phase 4 skeleton contract", () => {
         cwd: PACKAGE,
         stdio: "pipe",
       }),
+    ).not.toThrow();
+  }, 60_000);
+});
+
+const SKELETON: Readonly<Record<string, string>> = JSON.parse(
+  readFileSync(join(PACKAGE, "src", "testing", "skeleton-phase5.json"), "utf8"),
+);
+
+const skeleton = (file: string) => {
+  const text = SKELETON[file];
+  if (text === undefined) throw new Error(`The skeleton fixture has no ${file}.`);
+  return text;
+};
+
+const source = (file: string) => readFileSync(join(REPOSITORY, file), "utf8");
+
+function drift(file: string, only?: readonly string[]): Difference[] {
+  return differences(file, skeleton(file), source(file), only);
+}
+
+const DIFFERENCES: Readonly<
+  Record<string, { readonly agreed: boolean; readonly why: string }>
+> = {
+  "chat/src/model.ts TurnStatus changed": {
+    agreed: true,
+    why: "addendum D9: the failure the sidebar shows",
+  },
+  "auth/src/client/index.ts AuthClientOptions changed": {
+    agreed: true,
+    why: "`deviceKey` injects the keys, as `session` injects the session store",
+  },
+  "capabilities/src/device-key/index.ts CapacitorDeviceKeyModule missing": {
+    agreed: true,
+    why: "the native adapters report unavailable until phase 6, so they load nothing",
+  },
+  "capabilities/src/device-key/index.ts TauriInvoke missing": {
+    agreed: true,
+    why: "the native adapters report unavailable until phase 6, so they load nothing",
+  },
+  "capabilities/src/device-key/tauri.ts TauriInvoke missing": {
+    agreed: true,
+    why: "the native adapters report unavailable until phase 6, so they load nothing",
+  },
+  "capabilities/src/device-key/tauri.ts tauriDeviceKey changed": {
+    agreed: true,
+    why: "no `load` parameter: nothing to load while unavailable",
+  },
+  "capabilities/src/device-key/capacitor.ts CapacitorDeviceKeyModule missing": {
+    agreed: true,
+    why: "the native adapters report unavailable until phase 6, so they load nothing",
+  },
+  "capabilities/src/device-key/capacitor.ts capacitorDeviceKey changed": {
+    agreed: true,
+    why: "no `load` parameter: nothing to load while unavailable",
+  },
+  "agent-host/src/policy.ts changePolicy added": {
+    agreed: true,
+    why: "addendum D7: `parlor-host config` writes policy.json",
+  },
+  "agent-host/src/policy.ts loadPolicy added": {
+    agreed: true,
+    why: "addendum D7: the overlay read at the start of each turn",
+  },
+  "agent-host/src/prompter.ts LocalPrompter changed": {
+    agreed: true,
+    why: "addendum D8: `signal` closes a dialog whose turn ended",
+  },
+};
+
+describe("the phase 5 skeleton contract", () => {
+  it("K5: every file this phase implements keeps the skeleton's exported signatures, but for the differences listed here", () => {
+    const found = [
+      ...drift("packages/auth/src/statements.ts"),
+      ...drift("packages/auth/src/devices.ts"),
+      ...drift("packages/auth/src/client/index.ts", [
+        "DeviceHandle",
+        "AuthClient",
+        "AuthClientOptions",
+      ]),
+      ...drift("packages/capabilities/src/device-key/interface.ts"),
+      ...drift("packages/capabilities/src/device-key/index.ts"),
+      ...drift("packages/capabilities/src/device-key/web.ts"),
+      ...drift("packages/capabilities/src/device-key/tauri.ts"),
+      ...drift("packages/capabilities/src/device-key/capacitor.ts"),
+      ...drift("packages/server/src/auth.ts", [
+        "DeviceKeys",
+        "PresenceKey",
+        "AccountProfile",
+      ]),
+      ...drift("packages/client/src/session.ts", [
+        "SessionDevice",
+        "DeviceSource",
+        "HostAuthorizer",
+        "FrameworkAuth",
+      ]),
+      ...drift("packages/agent-host/src/trust.ts"),
+      ...drift("packages/agent-host/src/policy.ts"),
+      ...drift("packages/agent-host/src/prompter.ts", [
+        "LocalPrompter",
+        "terminalPrompter",
+        "macDialogPrompter",
+      ]),
+      ...drift("packages/agent-host/src/turn.ts", [
+        "PROMPT_MAX_AGE_MS",
+        "TurnDeps",
+        "runTurn",
+      ]),
+      ...drift("packages/agent-host/src/daemon.ts", ["DaemonDeps"]),
+      ...drift("packages/chat/src/model.ts", ["TurnStatus"]),
+    ].map(
+      ({ file, symbol, kind }) =>
+        `${file.split("/").slice(1).join("/")} ${symbol} ${kind}`,
+    );
+    expect(found.sort()).toEqual(Object.keys(DIFFERENCES).sort());
+  });
+
+  it("K5: device-key.spec-d.ts is the skeleton's, unchanged, and holds under the type checker", () => {
+    const file = "packages/capabilities/src/device-key/device-key.spec-d.ts";
+    expect(compact(source(file))).toBe(compact(skeleton(file)));
+    const capabilities = join(REPOSITORY, "packages", "capabilities");
+    expect(() =>
+      execFileSync(
+        join(capabilities, "node_modules", ".bin", "tsc"),
+        ["-p", "tsconfig.spec.json", "--noEmit"],
+        {
+          cwd: capabilities,
+          stdio: "pipe",
+        },
+      ),
     ).not.toThrow();
   }, 60_000);
 });

@@ -66,6 +66,7 @@ export interface Delegated {
 export interface TestAuth extends AuthProvider {
   readonly delegated: Delegated[];
   readonly revokedGrants: Set<string>;
+  readonly activeDevices: Set<string>;
 }
 
 export interface ProviderIo {
@@ -76,6 +77,7 @@ export interface ProviderIo {
 export function testAuth(enforcing = true, io?: ProviderIo): TestAuth {
   const delegated: Delegated[] = [];
   const revokedGrants = new Set<string>();
+  const activeDevices = new Set<string>();
   const touchDatabase = async () => {
     if (io) await (io.database.read() as ChatDb).execute(sql`select 1`);
   };
@@ -84,6 +86,7 @@ export function testAuth(enforcing = true, io?: ProviderIo): TestAuth {
     enforcing,
     delegated,
     revokedGrants,
+    activeDevices,
     async hostActive(grantId) {
       await touchDatabase();
       return !revokedGrants.has(grantId);
@@ -108,9 +111,15 @@ export function testAuth(enforcing = true, io?: ProviderIo): TestAuth {
       await touchDatabase();
       return { name: userId === alice ? "Alice" : "Bob" };
     },
-    async device() {
+    async device(userId, deviceId) {
       await touchDatabase();
-      return undefined;
+      if (userId !== alice || !activeDevices.has(deviceId)) return undefined;
+      return {
+        id: deviceId,
+        name: "Alice's Mac",
+        platform: "web",
+        signingKey: { kty: "EC", crv: "P-256", x: "x", y: "y" },
+      };
     },
   };
 }

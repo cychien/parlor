@@ -15,7 +15,7 @@ import {
 } from "./spec-kit.js";
 
 const HELLO = {
-  protocols: { min: 1, max: 1 },
+  protocols: { min: 2, max: 2 },
   hostVersion: "1.0.0",
   name: "Alice's Mac",
   platform: "darwin",
@@ -274,7 +274,6 @@ describe.each(drivers)("exactly-once turns on $name", (driver) => {
           body: {
             question: "Run it?",
             choices: [{ id: "yes", label: "Yes", effect: "allow_once" }],
-            approval: "presence",
           },
         },
       ],
@@ -301,6 +300,119 @@ describe.each(drivers)("exactly-once turns on $name", (driver) => {
       answer: { askId: "nope", choice: "yes" },
     });
     expect(ghost.status).toBe(404);
+  });
+
+  it("tells the sidebar why a turn failed", async () => {
+    await send("t1", "u1");
+    await claim();
+    await app.action("alice-host", "hostFinish", {
+      turnId: "u1",
+      outcome: { state: "failed", reason: "prompt_expired" },
+    });
+    const opened = data(await app.action("alice", "open", { threadId: "t1" })) as {
+      page: { turns: unknown[] };
+    };
+    expect(opened.page.turns).toEqual([
+      {
+        turnId: "u1",
+        state: "failed",
+        agent: agentRef,
+        failure: "prompt_expired",
+      },
+    ]);
+  });
+
+  describe("answers to a question the host asked", () => {
+    const ask = (approval?: "presence" | "computer") =>
+      app.action("alice-host", "hostAppend", {
+        turnId: "u1",
+        items: [
+          {
+            id: "u1.1",
+            kind: "ask",
+            body: {
+              question: "Run it?",
+              choices: [{ id: "yes", label: "Yes", effect: "allow_once" }],
+              ...(approval ? { approval } : {}),
+            },
+          },
+        ],
+      });
+    const answer = (itemId: string, signed?: unknown) =>
+      app.action("alice", "answer", {
+        threadId: "t1",
+        turnId: "u1",
+        itemId,
+        answer: { askId: "u1.1", choice: "yes", ...(signed ? { signed } : {}) },
+      });
+    const signature = (format: "es256-raw" | "webauthn", presence: "none" | "user") => ({
+      deviceId: "device-1",
+      at: 1,
+      signature: { keyId: "key-1", presence, format, signature: "c2ln" },
+    });
+    const answers = () =>
+      rows(handle, "select id from parlor_chat_items where kind = 'answer' order by seq");
+
+    beforeEach(async () => {
+      app.auth.activeDevices.add("device-1");
+      await send("t1", "u1");
+      await claim();
+    });
+
+    it("R5-03: refuses an answer signed by a device the account revoked, writing nothing", async () => {
+      await ask("presence");
+      app.auth.activeDevices.delete("device-1");
+      const refused = await answer("a1", signature("webauthn", "user"));
+      expect(refused.status).toBe(403);
+      expect(refused.body).toMatchObject({ error: { code: "forbidden" } });
+      expect(await answers()).toEqual([]);
+      app.auth.activeDevices.add("device-1");
+      expect((await answer("a2", signature("webauthn", "user"))).status).toBe(200);
+    });
+
+    it("takes another answer once the host rejected the one before it", async () => {
+      await ask();
+      expect((await answer("a1")).status).toBe(200);
+      expect((await answer("a2")).status).toBe(400);
+      await app.action("alice-host", "hostAppend", {
+        turnId: "u1",
+        items: [
+          {
+            id: "u1.2",
+            kind: "event",
+            body: { event: "answer_rejected", itemId: "a1" },
+          },
+        ],
+      });
+      expect((await answer("a2")).status).toBe(200);
+      expect((await answer("a3")).status).toBe(400);
+      expect(await answers()).toEqual([{ id: "a1" }, { id: "a2" }]);
+    });
+
+    it("refuses an answer to a question that is answered on the computer, writing nothing", async () => {
+      await ask("computer");
+      const refused = await answer("a1", signature("webauthn", "user"));
+      expect(refused.status).toBe(403);
+      expect(refused.body).toMatchObject({ error: { code: "forbidden" } });
+      expect(await answers()).toEqual([]);
+    });
+
+    it("refuses an answer to a presence question unless it carries a presence signature", async () => {
+      await ask("presence");
+      expect((await answer("a1")).status).toBe(403);
+      expect((await answer("a2", signature("es256-raw", "none"))).status).toBe(403);
+      expect((await answer("a3", signature("webauthn", "none"))).status).toBe(403);
+      expect(await answers()).toEqual([]);
+      expect((await answer("a4", signature("webauthn", "user"))).status).toBe(200);
+      expect(await answers()).toEqual([{ id: "a4" }]);
+    });
+
+    it("admits one of two answers sent at once", async () => {
+      await ask();
+      const replies = await Promise.all([answer("a1"), answer("a2")]);
+      expect(replies.map((answered) => answered.status).sort()).toEqual([200, 400]);
+      expect(await answers()).toHaveLength(1);
+    });
   });
 
   it("fails a turn whose host stopped renewing its lease and moves on", async () => {
@@ -344,37 +456,110 @@ describe.each(drivers)("exactly-once turns on $name", (driver) => {
   it("negotiates the host protocol and welcomes only a compatible computer", async () => {
     const tooNew = await app.action("alice-host-2", "hostHello", {
       ...HELLO,
-      protocols: { min: 2, max: 3 },
+      protocols: { min: 3, max: 4 },
     });
     expect(data(tooNew)).toEqual({
       id: "pc",
       accepted: false,
       reason: "app_too_old",
-      protocols: { min: 1, max: 1 },
+      protocols: { min: 2, max: 2 },
     });
     expect((await app.action("alice-host-2", "hostClaim", {})).status).toBe(403);
     const welcome = await app.action("alice-host-2", "hostHello", HELLO);
     expect(data(welcome)).toEqual({
       id: "pc",
       accepted: true,
-      protocol: 1,
+      protocol: 2,
       leaseMs: 60_000,
       heartbeatMs: 30_000,
     });
   });
 
-  it("sends only to a computer of the sender that is online", async () => {
-    await app.action("alice-host", "hostReport", { online: false, agents: [] });
-    const offline = await send("t1", "u1");
-    expect(offline.status).toBe(400);
-    expect(offline.body).toEqual({
-      error: { code: "invalid_input", message: "Alice's Mac is offline." },
+  it("R5-02: refuses a host that predates device trust, telling it to update, and welcomes a current one", async () => {
+    const outdated = await app.action("alice-host-2", "hostHello", {
+      ...HELLO,
+      protocols: { min: 1, max: 1 },
     });
-    expect(await rows(handle, "select 1 from parlor_chat_threads")).toEqual([]);
-    const hosts = data(await app.action("alice", "hosts", {}));
-    expect(hosts).toMatchObject([
+    expect(data(outdated)).toEqual({
+      id: "pc",
+      accepted: false,
+      reason: "host_too_old",
+      protocols: { min: 2, max: 2 },
+    });
+    expect((await app.action("alice-host-2", "hostClaim", {})).status).toBe(403);
+    const current = await app.action("alice-host-2", "hostHello", {
+      ...HELLO,
+      protocols: { min: 1, max: 2 },
+    });
+    expect(data(current)).toMatchObject({ accepted: true, protocol: 2 });
+  });
+
+  it("R5-08: ends the welcome of a computer whose later hello is refused", async () => {
+    const refused = await app.action("alice-host", "hostHello", {
+      ...HELLO,
+      protocols: { min: 1, max: 1 },
+    });
+    expect(data(refused)).toMatchObject({ accepted: false, reason: "host_too_old" });
+    const claimed = await app.action("alice-host", "hostClaim", {});
+    expect(claimed.status).toBe(403);
+    expect(claimed.body).toMatchObject({ error: { code: "forbidden" } });
+    const report = await app.action("alice-host", "hostReport", {
+      online: true,
+      agents: [],
+    });
+    expect(report.status).toBe(403);
+    expect(data(await app.action("alice-host", "hostHello", HELLO))).toMatchObject({
+      accepted: true,
+    });
+    expect((await app.action("alice-host", "hostClaim", {})).status).not.toBe(403);
+  });
+
+  it("R5-09: refuses and prunes a stored computer below the minimum protocol that skips hello after a restart", async () => {
+    await rows(handle, "update parlor_chat_hosts set protocol = 1");
+    await app.server.close();
+    app = serveChat(handle, { chat: { leaseMs: 60_000, maxQueued: 4 } });
+    const claimed = await claim();
+    expect(claimed.status).toBe(403);
+    expect(claimed.body).toMatchObject({ error: { code: "forbidden" } });
+    expect(await rows(handle, "select 1 from parlor_chat_hosts")).toHaveLength(0);
+    expect(data(await app.action("alice-host", "hostHello", HELLO))).toMatchObject({
+      accepted: true,
+    });
+    expect((await claim()).status).not.toBe(403);
+  });
+
+  it("queues a prompt for an offline computer whose grant holds, up to maxQueued, and hands it over when it returns", async () => {
+    await app.action("alice-host", "hostReport", { online: false, agents: [] });
+    for (const n of [1, 2, 3, 4]) expect((await send("t1", `u${n}`)).status).toBe(200);
+    const fifth = await send("t1", "u5");
+    expect(fifth.status).toBe(400);
+    expect(fifth.body).toMatchObject({ error: { code: "invalid_input" } });
+    expect(data(await app.action("alice", "hosts", {}))).toMatchObject([
       { id: "mac", name: "Alice's Mac", online: false, agents: [] },
     ]);
+    await app.action("alice-host", "hostReport", { online: true, agents: [] });
+    expect(data(await claim())).toMatchObject({ turnId: "u1" });
+  });
+
+  it("refuses a prompt for a computer whose grant is gone, online or not", async () => {
+    await app.action("alice-host", "hostReport", { online: false, agents: [] });
+    app.auth.revokedGrants.add("g-mac");
+    const refused = await send("t1", "u1");
+    expect(refused.status).toBe(404);
+    expect(refused.body).toMatchObject({ error: { code: "not_found" } });
+    expect(await rows(handle, "select 1 from parlor_chat_threads")).toEqual([]);
+  });
+
+  it("sends only to a computer of the sender", async () => {
+    const stranger = await app.action("bob", "send", {
+      threadId: "t1",
+      turnId: "u1",
+      itemId: "p1",
+      clientId: "tab-1",
+      prompt: { text: "hello", agent: agentRef },
+    });
+    expect(stranger.status).toBe(404);
+    expect(await rows(handle, "select 1 from parlor_chat_threads")).toEqual([]);
     void alice;
   });
 });

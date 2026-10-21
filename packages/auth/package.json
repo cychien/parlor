@@ -31,6 +31,7 @@
     "@better-auth/mcp": "1.7.7",
     "@better-auth/oauth-provider": "1.7.7",
     "@parlor/capabilities": "workspace:*",
+    "@parlor/chat": "workspace:*",
     "@parlor/client": "workspace:*",
     "@parlor/core": "workspace:*",
     "@parlor/server": "workspace:*",
@@ -41,7 +42,6 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "^2.3.1",
-    "@parlor/chat": "workspace:*",
     "@parlor/data": "workspace:*",
     "@types/node": "catalog:",
     "@types/pg": "^8.23.1",

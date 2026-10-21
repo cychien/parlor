@@ -57,7 +57,7 @@ describe.each(drivers)("cancelling a queued turn on $name", (driver) => {
     await resetDatabase(handle);
     app = serveChat(handle);
     await app.action("alice-host", "hostHello", {
-      protocols: { min: 1, max: 1 },
+      protocols: { min: 2, max: 2 },
       hostVersion: "1.0.0",
       name: "Alice's Mac",
       platform: "darwin",

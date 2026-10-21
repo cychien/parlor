@@ -83,9 +83,11 @@ export {
 export { type HostPaths, hostPaths } from "./paths.js";
 export {
   approvalFor,
+  changePolicy,
   DEFAULT_POLICY,
   DEV_POLICY,
   isAppTool,
+  loadPolicy,
   type RemotePolicy,
 } from "./policy.js";
 export {
@@ -94,6 +96,7 @@ export {
   type PooledGrant,
   type SessionPool,
 } from "./pool.js";
-export { type LocalPrompter, terminalPrompter } from "./prompter.js";
+export { type LocalPrompter, macDialogPrompter, terminalPrompter } from "./prompter.js";
 export { type HostRelease } from "./service.js";
-export { runTurn, type TurnDeps } from "./turn.js";
+export { fileTrustStore, type TrustedDevice, type TrustStore } from "./trust.js";
+export { PROMPT_MAX_AGE_MS, runTurn, type TurnDeps } from "./turn.js";

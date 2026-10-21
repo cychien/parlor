@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +16,12 @@ import {
 import { type FakeAgentScript, fakeAgentProfile } from "./testing/fake-agent.js";
 
 const ENTRY = fileURLToPath(new URL("../bin/fake-agent.mjs", import.meta.url));
+
+const FORM = {
+  type: "object",
+  properties: { name: { type: "string" }, age: { type: "integer" } },
+  required: ["name"],
+};
 
 const script: FakeAgentScript = {
   steps: {
@@ -51,6 +57,7 @@ const script: FakeAgentScript = {
         askTitle: "Run touch notes.txt",
       },
     ],
+    form: [{ kind: "question", message: "Tell me about you", schema: FORM }],
     cancel: [{ kind: "reply", chunks: ["partial"] }, { kind: "wait_for_cancel" }],
     exit: [
       { kind: "reply", chunks: ["bye"] },
@@ -74,10 +81,13 @@ afterAll(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-async function launch(): Promise<AgentConnection> {
-  const connection = await acpLauncher().launch(fakeAgentProfile(ENTRY, scriptFile), {
+async function launch(
+  env: Record<string, string> = {},
+  file = scriptFile,
+): Promise<AgentConnection> {
+  const connection = await acpLauncher().launch(fakeAgentProfile(ENTRY, file), {
     cwd: dir,
-    env: { PATH: process.env.PATH ?? "" },
+    env: { PATH: process.env.PATH ?? "", ...env },
     signal: new AbortController().signal,
   });
   launched.push(connection);
@@ -185,6 +195,37 @@ describe("acpLauncher against the fake agent over real stdio", () => {
     ]);
   });
 
+  it("asks a form through elicitation and hands the answer's values to the agent", async () => {
+    const log = join(dir, "form.log");
+    const connection = await launch({ FAKE_AGENT_LOG: log });
+    const session = await connection.openSession({
+      cwd: dir,
+      mcpServers: [],
+      pinAskMode: true,
+    });
+    const asks: AgentAsk[] = [];
+    const stop = await session.prompt(prompt("form"), {
+      update: () => {},
+      ask: async (ask) => {
+        asks.push(ask);
+        return { kind: "values", values: { name: "Ada", age: 36 } };
+      },
+    });
+    expect(stop).toBe("end_turn");
+    expect(asks).toEqual([
+      { kind: "question", message: "Tell me about you", schema: FORM },
+    ]);
+    const responses = readFileSync(log, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { method: string; result?: unknown })
+      .filter((entry) => entry.method === "response");
+    expect(responses.map((entry) => entry.result)).toContainEqual({
+      action: "accept",
+      content: { name: "Ada", age: 36 },
+    });
+  });
+
   it("stops the agent on cancel and keeps what it already said", async () => {
     const connection = await launch();
     const session = await connection.openSession({
@@ -218,6 +259,47 @@ describe("acpLauncher against the fake agent over real stdio", () => {
     });
     await expect(prompted).rejects.toThrow();
     expect(await connection.exited).toEqual({ kind: "exited", code: 3, stderrTail: "" });
+  });
+
+  describe("pinning the mode that asks", () => {
+    const codexLike: FakeAgentScript = {
+      fallback: "echo",
+      advertise: {
+        modes: {
+          current: "workspace-write",
+          available: ["read-only", "workspace-write"],
+        },
+      },
+      steps: {},
+    };
+
+    async function modesSet(input: { strictAsk?: boolean }): Promise<string[]> {
+      const log = join(dir, `modes-${Math.random().toString(36).slice(2)}.log`);
+      const file = join(dir, "codex-like.json");
+      await writeFile(file, JSON.stringify(codexLike));
+      const connection = await launch({ FAKE_AGENT_LOG: log }, file);
+      await connection.openSession({
+        cwd: dir,
+        mcpServers: [],
+        pinAskMode: true,
+        ...input,
+      });
+      return (existsSync(log) ? readFileSync(log, "utf8") : "")
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { method: string; modeId?: string })
+        .filter((entry) => entry.method === "session/set_mode")
+        .map((entry) => entry.modeId!);
+    }
+
+    it("keeps the agent's own asking mode when asked for no more", async () => {
+      expect(await modesSet({})).toEqual([]);
+    });
+
+    it("moves to the strictest asking mode, so every write asks", async () => {
+      expect(await modesSet({ strictAsk: true })).toEqual(["read-only"]);
+    });
   });
 
   it("kills the whole process group", async () => {

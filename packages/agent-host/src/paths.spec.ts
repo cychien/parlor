@@ -8,6 +8,7 @@ describe("hostPaths", () => {
       root: "/Users/alice/.parlor/host",
       grants: "/Users/alice/.parlor/host/grants.json",
       trust: "/Users/alice/.parlor/host/trust.json",
+      policy: "/Users/alice/.parlor/host/policy.json",
       sessions: "/Users/alice/.parlor/host/sessions.json",
       agents: "/Users/alice/.parlor/host/agents.json",
       control: "/Users/alice/.parlor/host/run/control.sock",

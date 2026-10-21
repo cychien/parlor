@@ -368,6 +368,7 @@ describe("a database from before host grants", () => {
         "auth/0001_revocations",
         "auth/0002_revocations_revoked_at",
         "auth/0003_hosts",
+        "auth/0004_devices",
         "auth/0005_turn_keys",
         "auth/0006_audit",
       ]);

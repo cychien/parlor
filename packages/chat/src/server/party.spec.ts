@@ -109,11 +109,11 @@ describe("who may call which chat action", () => {
     expect(signedOut.status).toBe(401);
   });
 
-  it("acts as the dev user for an anonymous caller when no provider enforces, who owns nothing of Alice", async () => {
+  it("acts as the dev user for an anonymous caller when no provider enforces, who owns nothing of Alice (regression-guard)", async () => {
     app = serveChat(handle, { enforcing: false });
     expect(data(await app.action(undefined, "hosts", {}))).toEqual([]);
     await app.action("alice-host", "hostHello", {
-      protocols: { min: 1, max: 1 },
+      protocols: { min: 2, max: 2 },
       hostVersion: "1",
       name: "Mac",
       platform: "darwin",

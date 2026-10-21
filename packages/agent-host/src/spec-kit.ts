@@ -1,11 +1,18 @@
 import { createHash } from "node:crypto";
 
-import { betterAuthProvider, parlorAuth } from "@parlor/auth";
+import {
+  answerStatement,
+  betterAuthProvider,
+  parlorAuth,
+  promptStatement,
+  statementBytes,
+} from "@parlor/auth";
+import type { AnswerToSign, ItemSignature, PromptToSign } from "@parlor/chat";
 import { chat } from "@parlor/chat/server";
-import { defineAction } from "@parlor/core";
+import { asId, defineAction } from "@parlor/core";
 import { createRegistry } from "@parlor/core/registry";
 import { createDatabase, type DatabaseHandle } from "@parlor/data";
-import { createServer, type FrameworkServer } from "@parlor/server";
+import { createServer, type DeviceKeys, type FrameworkServer } from "@parlor/server";
 import { betterAuth } from "better-auth";
 import { memoryAdapter } from "better-auth/adapters/memory";
 import { getAuthTables } from "better-auth/db";
@@ -14,6 +21,7 @@ import { z } from "zod";
 
 import { hostAssertion } from "./assertion.js";
 import type { HostKeys } from "./grants.js";
+import type { TrustedDevice, TrustStore } from "./trust.js";
 
 export const PASSWORD = "correct horse battery staple";
 
@@ -193,4 +201,113 @@ export function memoryHostKeys(): HostKeys & {
       kept.delete(appOrigin);
     },
   };
+}
+
+export function memoryTrust(): TrustStore & { readonly pins: () => TrustedDevice[] } {
+  const pinned = new Map<string, TrustedDevice>();
+  const keyOf = (appOrigin: string, deviceId: string) => `${appOrigin}\n${deviceId}`;
+  return {
+    pins: () => [...pinned.values()],
+    get: async (appOrigin, deviceId) => pinned.get(keyOf(appOrigin, deviceId)),
+    pin: async (appOrigin, device) =>
+      void pinned.set(keyOf(appOrigin, device.deviceId), device),
+    forget: async (appOrigin, deviceId) => {
+      for (const key of [...pinned.keys()]) {
+        if (
+          key.startsWith(`${appOrigin}\n`) &&
+          (deviceId === undefined || key.endsWith(`\n${deviceId}`))
+        ) {
+          pinned.delete(key);
+        }
+      }
+    },
+  };
+}
+
+const ES256 = { name: "ECDSA", hash: "SHA-256" } as const;
+
+export class TestDevice {
+  private constructor(
+    readonly keys: DeviceKeys,
+    private readonly signing: CryptoKey,
+    private readonly presence: CryptoKey,
+  ) {}
+
+  static async create(id = "device-1", name = "Chrome on macOS"): Promise<TestDevice> {
+    const make = async () => {
+      const pair = await crypto.subtle.generateKey(
+        { name: "ECDSA", namedCurve: "P-256" },
+        true,
+        ["sign", "verify"],
+      );
+      const { kty, crv, x, y } = await crypto.subtle.exportKey("jwk", pair.publicKey);
+      return {
+        privateKey: pair.privateKey,
+        publicKey: { kty: kty!, crv: crv!, x: x!, y: y! },
+      };
+    };
+    const [signing, presence] = [await make(), await make()];
+    return new TestDevice(
+      {
+        id: asId("device", id),
+        name,
+        platform: "web",
+        signingKey: signing.publicKey,
+        presenceKey: {
+          format: "es256-raw",
+          keyId: "presence",
+          publicKey: presence.publicKey,
+        },
+      },
+      signing.privateKey,
+      presence.privateKey,
+    );
+  }
+
+  get id() {
+    return this.keys.id;
+  }
+
+  private async sign(
+    key: CryptoKey,
+    bytes: Uint8Array,
+    presence: "none" | "user",
+    at: number,
+  ) {
+    const signature = await crypto.subtle.sign(ES256, key, new Uint8Array(bytes));
+    return {
+      deviceId: this.id,
+      at,
+      signature: {
+        keyId: "key",
+        presence,
+        format: "es256-raw",
+        signature: Buffer.from(signature).toString("base64url"),
+      },
+    } satisfies ItemSignature;
+  }
+
+  async signPrompt(
+    app: string,
+    prompt: PromptToSign,
+    at: number,
+  ): Promise<ItemSignature> {
+    const statement = await promptStatement(app, prompt, at);
+    return this.sign(this.signing, statementBytes(statement), "none", at);
+  }
+
+  async signAnswer(
+    app: string,
+    answer: AnswerToSign,
+    at: number,
+    presence: boolean,
+  ): Promise<ItemSignature> {
+    const statement = await answerStatement(app, answer, at);
+    return this.sign(
+      presence ? this.presence : this.signing,
+      statementBytes(statement),
+      presence ? "user" : "none",
+      at,
+    );
+  }
 }

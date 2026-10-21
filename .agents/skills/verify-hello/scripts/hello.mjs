@@ -101,7 +101,10 @@ const USAGE = `usage: hello.mjs <command> [args]
                           so plain parlor dev installs devAuth, and needs --home
   doctor ID               read-only health check; exit 1 when the instance is not worth driving
   seed ID DATASET         load a fixture straight into PGlite (stops and restarts a running instance)
-  sql ID QUERY            read-only SQL against the instance's PGlite (stops and restarts it)
+  sql ID QUERY            read-only SQL against the instance's PGlite (stops and restarts it, keeps
+                          its browsers and their profiles)
+  sql ID --write STATEMENT
+                          the same in one read-write transaction; prints {affectedRows, rows}
   stop ID | start ID      stop or start the processes, keeping the snapshot and its data
   sync ID                 copy the current checkout into a running instance (tsx and Vite reload)
   mcp ID tools | resources [--as USER]
@@ -122,6 +125,11 @@ const USAGE = `usage: hello.mjs <command> [args]
                           any other axi command (screenshot FILE, wait TEXT, eval JS, console) passes through
   browser ID focus on|off make the selected page report document.hasFocus() true or false, firing blur
                           or focus; open, click, fill undo off, and after a click or fill off needs a fresh tab
+  browser ID presence on|off
+                          a CDP virtual authenticator (ctap2, internal, resident key, user verification)
+                          on every tab of this browser, held for as long as the browser runs; on answers
+                          with user presence and verification, off fails user verification
+                          (HELLO_BROWSER_PROFILE picks the profile's browser)
   host ID pair --as USER --name NAME [--out DIR] [--no-approve] [--no-exchange]
                           pair a fake computer with the user's account (host-initiated, PKCE, ES256)
   host ID exchange|assert|call|request|play|hello|online|send|stream|seed-thread|list
@@ -522,7 +530,14 @@ function pickPort([from, to], reserved) {
 }
 
 function reservedPorts() {
-  return new Set(allStates().flatMap((s) => [s.ports.server, s.ports.web, s.cdpPort]));
+  return new Set(
+    allStates().flatMap((s) => [
+      s.ports.server,
+      s.ports.web,
+      s.cdpPort,
+      ...Object.values(s.profileCdpPorts ?? {}),
+    ]),
+  );
 }
 
 function allocateCdpPort() {
@@ -783,7 +798,49 @@ function describeProcess(p) {
   return `pid ${p.pid} ppid ${p.ppid} pgid ${p.pgid} elapsed ${p.elapsed} cwd ${p.cwd ?? "?"} ${command}`;
 }
 
-function instanceSurvivors(state) {
+function browserPorts(state, browsers) {
+  if (browsers === "none") return [];
+  const main = state.cdpPort ? [state.cdpPort] : [];
+  return browsers === "all"
+    ? [...main, ...Object.values(state.profileCdpPorts ?? {})]
+    : main;
+}
+
+const AGENT_HOMES_DIR = join(HOME, "h");
+
+function isolatedHomePids() {
+  const marker = new RegExp(`(^|\\s)HOME=${escapeRegExp(AGENT_HOMES_DIR)}/`);
+  return new Set(
+    run("ps", ["-axww", "-E", "-o", "pid=,command="], {
+      allowFailure: true,
+      env: { ...process.env, COLUMNS: "100000" },
+    })
+      .stdout.split("\n")
+      .map((line) => line.match(/^\s*(\d+)\s+(.*)$/))
+      .filter((match) => match && marker.test(match[2]))
+      .map((match) => Number(match[1])),
+  );
+}
+
+/** A real `parlor-host` an isolated HOME runs from the snapshot, with its agents and their children. */
+function hostProcesses(candidates, table) {
+  const parents = new Map(table.map((p) => [p.pid, p.ppid]));
+  const isolated = isolatedHomePids();
+  const roots = new Set(
+    candidates
+      .filter((p) => isolated.has(p.pid) || isUnder(p.cwd, AGENT_HOMES_DIR))
+      .map((p) => p.pid),
+  );
+  const fromHost = (pid) => {
+    for (let at = pid, hops = 0; at > 1 && hops < 64; at = parents.get(at), hops += 1) {
+      if (roots.has(at)) return true;
+    }
+    return false;
+  };
+  return new Set(candidates.filter((p) => fromHost(p.pid)).map((p) => p.pid));
+}
+
+function instanceSurvivors(state, { browsers = "main", hosts = "kill" } = {}) {
   const table = processTable();
   const found = new Map();
   const add = (p, reason) => {
@@ -792,9 +849,13 @@ function instanceSurvivors(state) {
     found.set(p.pid, entry);
   };
   for (const p of ownedProcesses(state, table)) add(p, "instance process");
-  for (const p of processesUnder(instanceDir(state.id), table))
-    add(p, "cwd or command under the instance dir");
-  const ports = [...Object.values(state.ports), state.cdpPort].filter(Boolean);
+  const under = processesUnder(instanceDir(state.id), table);
+  const kept = hosts === "keep" ? hostProcesses(under, table) : new Set();
+  for (const p of under)
+    if (!kept.has(p.pid)) add(p, "cwd or command under the instance dir");
+  const ports = [...Object.values(state.ports), ...browserPorts(state, browsers)].filter(
+    Boolean,
+  );
   for (const port of ports) {
     for (const pid of listenerPids(port)) {
       const p = table.find((row) => row.pid === pid);
@@ -810,20 +871,20 @@ async function waitUntil(done, ms) {
   return done();
 }
 
-async function killSurvivors(state) {
-  let survivors = instanceSurvivors(state);
+async function killSurvivors(state, options) {
+  let survivors = instanceSurvivors(state, options);
   for (let round = 0; survivors.length > 0 && round < 3; round += 1) {
     log(
       `killing leftovers of ${state.id}:\n  ${survivors.map(describeProcess).join("\n  ")}`,
     );
     for (const p of survivors) signal(p.pid, "SIGKILL");
-    await waitUntil(() => instanceSurvivors(state).length === 0, 3000);
-    survivors = instanceSurvivors(state);
+    await waitUntil(() => instanceSurvivors(state, options).length === 0, 3000);
+    survivors = instanceSurvivors(state, options);
   }
   return survivors;
 }
 
-async function stopProcesses(state) {
+async function stopProcesses(state, options = {}) {
   state.processes = ownedProcesses(state).map(({ pid, command }) => ({ pid, command }));
   writeState(state);
   let owned = ownedProcesses(state);
@@ -841,7 +902,7 @@ async function stopProcesses(state) {
       allowFailure: true,
     });
   }
-  const survivors = await killSurvivors(state);
+  const survivors = await killSurvivors(state, options);
   if (survivors.length > 0) {
     fail(
       `${state.id} still has ${survivors.length} process(es) after SIGKILL, so its state in ${instanceDir(state.id)} is kept:\n  ` +
@@ -905,11 +966,11 @@ async function loadDataset(state, name) {
   return summary;
 }
 
-async function withStopped(state, task) {
+async function withStopped(state, task, options) {
   const wasRunning = isRunning(state);
   if (wasRunning) {
     log(`stopping ${state.id} so PGlite can be opened directly`);
-    await stopProcesses(state);
+    await stopProcesses(state, options);
   }
   try {
     return await task();
@@ -1080,7 +1141,8 @@ function printInfo(state) {
         dataDir: join(appDir(state), ".parlor", "pglite"),
         log: logPath(state),
         browserSession: browserSession(state),
-        browserCdpPort: state.cdpPort ?? null,
+        browserCdpPort: recordedCdpPort(state) ?? null,
+        browserCdpPorts: { default: state.cdpPort ?? null, ...state.profileCdpPorts },
         noAuth: state.noAuth ?? false,
         home: state.home ?? null,
         simulator: state.simulator ?? null,
@@ -1444,10 +1506,26 @@ async function cmdScreenshot([id, file]) {
   process.stdout.write(`${path}\n`);
 }
 
+function recordedCdpPort(state, profile = browserProfile()) {
+  return profile ? state.profileCdpPorts?.[profile] : state.cdpPort;
+}
+
+/** A profile's browser gets its own CDP port the first time it is used. */
+function cdpPortFor(state) {
+  const profile = browserProfile();
+  const recorded = recordedCdpPort(state, profile);
+  if (recorded || !profile || !state.cdpPort) return recorded;
+  const port = allocateCdpPort();
+  state.profileCdpPorts = { ...state.profileCdpPorts, [profile]: port };
+  writeState(state);
+  return port;
+}
+
 function axiEnv(state) {
+  const port = cdpPortFor(state);
   const chromeArgs = [
     process.env.CHROME_DEVTOOLS_AXI_CHROME_ARGS,
-    state.cdpPort && !browserProfile() && `--remote-debugging-port=${state.cdpPort}`,
+    port && `--remote-debugging-port=${port}`,
   ].filter(Boolean);
   return {
     ...process.env,
@@ -1541,6 +1619,7 @@ async function cmdBrowser([id, action, ...args]) {
   if (action === "fill")
     return print(axiOnElement(state, "fill", args[0], args[1], args[2] ?? ""));
   if (action === "focus") return setBrowserFocus(state, args[0]);
+  if (action === "presence") return setBrowserPresence(state, args[0]);
   if (action === "snapshot") {
     const result = axi(state, ["snapshot", "--full"]);
     if (args[0]) writeFileSync(resolve(args[0]), result.stdout);
@@ -1548,7 +1627,7 @@ async function cmdBrowser([id, action, ...args]) {
   }
   if (!action)
     fail(
-      "usage: browser ID signin [USER] | open [PATH] | click ROLE NAME | fill ROLE NAME TEXT | snapshot [FILE] | focus on|off | <axi command>",
+      "usage: browser ID signin [USER] | open [PATH] | click ROLE NAME | fill ROLE NAME TEXT | snapshot [FILE] | focus on|off | presence on|off | <axi command>",
     );
   return print(axi(state, [action, ...args]));
 }
@@ -1596,16 +1675,21 @@ async function cdpConnect(url) {
   };
 }
 
+function requireCdpPort(state) {
+  const port = recordedCdpPort(state);
+  if (!port)
+    fail(`instance ${state.id} has no CDP port for this browser; recreate it with up`);
+  return port;
+}
+
 async function cdpPageTargets(state) {
-  if (!state.cdpPort) fail(`instance ${state.id} has no CDP port; recreate it with up`);
+  const port = requireCdpPort(state);
   try {
-    const targets = await (
-      await fetch(`http://127.0.0.1:${state.cdpPort}/json/list`)
-    ).json();
+    const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
     return targets.filter((target) => target.type === "page");
   } catch {
     return fail(
-      `no browser on CDP port ${state.cdpPort}; run: hello.mjs browser ${state.id} stop, then browser ${state.id} open /`,
+      `no browser on CDP port ${port}; run: hello.mjs browser ${state.id} stop, then browser ${state.id} open /`,
     );
   }
 }
@@ -1641,7 +1725,7 @@ async function setBrowserFocus(state, mode) {
   const page = await cdpConnect(target.webSocketDebuggerUrl);
   if ((await pageFocusReport(page)).hasFocus !== wanted) {
     const { webSocketDebuggerUrl } = await (
-      await fetch(`http://127.0.0.1:${state.cdpPort}/json/version`)
+      await fetch(`http://127.0.0.1:${requireCdpPort(state)}/json/version`)
     ).json();
     const browser = await cdpConnect(webSocketDebuggerUrl);
     let frontId = target.id;
@@ -1673,6 +1757,94 @@ async function setBrowserFocus(state, mode) {
     );
 }
 
+const HOLDER = join(SKILL_DIR, "scripts", "presence-holder.mjs");
+
+function profileKey() {
+  return browserProfile() ?? "default";
+}
+
+async function holderState(holder) {
+  if (!holder) return undefined;
+  try {
+    const response = await fetch(`http://127.0.0.1:${holder.port}/state`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    return response.ok ? await response.json() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function spawnHolder(state, port, mode) {
+  const logFile = join(instanceDir(state.id), `presence-${profileKey()}.log`);
+  const err = openSync(logFile, "a");
+  return new Promise((settle, abort) => {
+    const child = spawn(
+      process.execPath,
+      [HOLDER, "--cdp-port", String(port), "--presence", mode],
+      { cwd: HOME, detached: true, stdio: ["ignore", "pipe", err] },
+    );
+    closeSync(err);
+    let stdout = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      abort(new CliError(`the presence holder did not start in 15 s; see ${logFile}`));
+    }, 15_000);
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+      const line = stdout.split("\n").find((l) => l.includes('"ready"'));
+      if (!line) return;
+      clearTimeout(timer);
+      child.removeAllListeners("exit");
+      child.stdout.destroy();
+      child.unref();
+      const { port: controlPort, pid } = JSON.parse(line);
+      settle({ port: controlPort, pid, log: logFile });
+    });
+    child.on("exit", (code) => {
+      clearTimeout(timer);
+      abort(new CliError(`the presence holder exited ${code}; see ${logFile}`));
+    });
+  });
+}
+
+async function setBrowserPresence(state, mode) {
+  if (mode !== "on" && mode !== "off") fail("usage: browser ID presence on|off");
+  const port = requireCdpPort(state);
+  try {
+    await fetch(`http://127.0.0.1:${port}/json/version`, {
+      signal: AbortSignal.timeout(3000),
+    });
+  } catch {
+    fail(
+      `no browser on CDP port ${port}; start it first (browser ${state.id} open / or signin), then presence ${mode}`,
+    );
+  }
+  const key = profileKey();
+  let holder = state.presence?.[key];
+  const current = await holderState(holder);
+  if (!current || current.cdpPort !== port) {
+    holder = { ...(await spawnHolder(state, port, mode)), cdpPort: port };
+    state.presence = { ...state.presence, [key]: holder };
+    writeState(state);
+  }
+  const response = await fetch(`http://127.0.0.1:${holder.port}/presence/${mode}`, {
+    method: "POST",
+    signal: AbortSignal.timeout(10_000),
+  });
+  const report = await response.json();
+  process.stdout.write(`${JSON.stringify({ profile: key, ...report })}\n`);
+  if (!response.ok || !report.targets?.some((t) => t.authenticator))
+    fail(
+      `no tab of this browser holds a virtual authenticator: ${JSON.stringify(report)}`,
+    );
+}
+
+function stopHolders(state) {
+  for (const holder of Object.values(state.presence ?? {})) signal(holder.pid, "SIGTERM");
+  delete state.presence;
+}
+
 async function cmdToken(args) {
   const { values, positionals } = parseArgs({
     args,
@@ -1693,24 +1865,41 @@ async function cmdToken(args) {
 async function cmdSeed([id, name]) {
   const state = readState(id);
   fixturePath(name);
-  await withStopped(state, async () => {
-    const summary = await loadDataset(state, name);
-    process.stdout.write(`${JSON.stringify({ dataset: name, ...summary })}\n`);
-  });
+  await withStopped(
+    state,
+    async () => {
+      const summary = await loadDataset(state, name);
+      process.stdout.write(`${JSON.stringify({ dataset: name, ...summary })}\n`);
+    },
+    { hosts: "keep" },
+  );
 }
 
-async function cmdSql([id, query]) {
-  const state = readState(id);
-  if (!query) fail("usage: sql ID QUERY");
-  await withStopped(state, async () => {
-    const rows = await withDatabase(state, (client) =>
-      client.transaction(async (tx) => {
-        await tx.exec("set transaction read only");
-        return (await tx.query(query)).rows;
-      }),
-    );
-    process.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
+async function cmdSql(args) {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { write: { type: "boolean" } },
   });
+  const [id, query] = positionals;
+  const state = readState(id);
+  if (!query) fail("usage: sql ID QUERY | sql ID --write STATEMENT");
+  await withStopped(
+    state,
+    async () => {
+      const result = await withDatabase(state, (client) =>
+        client.transaction(async (tx) => {
+          if (!values.write) await tx.exec("set transaction read only");
+          return tx.query(query);
+        }),
+      );
+      const out = values.write
+        ? { affectedRows: result.affectedRows ?? 0, rows: result.rows }
+        : result.rows;
+      process.stdout.write(`${JSON.stringify(out, null, 2)}\n`);
+    },
+    { browsers: "none", hosts: "keep" },
+  );
 }
 
 async function cmdStop([id]) {
@@ -1735,9 +1924,24 @@ async function cmdSync([id]) {
   );
 }
 
+function stopBrowsers(state) {
+  const saved = process.env.HELLO_BROWSER_PROFILE;
+  try {
+    for (const profile of [undefined, ...Object.keys(state.profileCdpPorts ?? {})]) {
+      if (profile) process.env.HELLO_BROWSER_PROFILE = profile;
+      else delete process.env.HELLO_BROWSER_PROFILE;
+      axi(state, ["stop"], { allowFailure: true });
+    }
+  } finally {
+    if (saved === undefined) delete process.env.HELLO_BROWSER_PROFILE;
+    else process.env.HELLO_BROWSER_PROFILE = saved;
+  }
+}
+
 async function teardown(state, { saveLog }) {
-  axi(state, ["stop"], { allowFailure: true });
-  await stopProcesses(state);
+  stopBrowsers(state);
+  stopHolders(state);
+  await stopProcesses(state, { browsers: "all" });
   if (state.simulator && !state.simulator.bootedBefore) {
     xcrun(["simctl", "shutdown", state.simulator.udid], { allowFailure: true });
   }

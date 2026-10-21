@@ -749,9 +749,10 @@ export async function openAliceSidebar(check, browser, { signedIn = true } = {})
   return false;
 }
 
-export async function upInstance(check, { name, seed, noAuth, home } = {}) {
+export async function upInstance(check, { name, seed, noAuth, home, source } = {}) {
   const args = [HELLO, "up"];
   if (seed) args.push("--seed", seed);
+  if (source) args.push("--source", source);
   if (noAuth) args.push("--no-auth");
   if (home) args.push("--home", home);
   const { load1, cores } = load();
@@ -1020,22 +1021,38 @@ export async function connectHost(
 
 /**
  * An instance with Better Auth on, Alice signed in with her sidebar open, and a host that
- * is not yet connected; prints `verify: ready` once the page is usable.
+ * is not yet connected; prints `verify: ready` once the page is usable. `source` drives
+ * another checkout; `beforeSignin(browser, info)` runs once the browser is up, before sign-in;
+ * `announce: false` leaves `verify: ready` to a script that stands up more than one instance.
  */
 export async function standUp(
   check,
-  { tag, agentIds, seed = "baseline", extraEnv = {}, home: given, binInfo },
+  {
+    tag,
+    agentIds,
+    seed = "baseline",
+    extraEnv = {},
+    home: given,
+    binInfo,
+    source,
+    beforeSignin,
+    announce = true,
+  },
 ) {
   const home = given ?? makeHome(check, tag).home;
   if (agentIds.length) requireLogins(check, home, agentIds);
-  const info = await upInstance(check, { name: tag, seed });
+  const info = await upInstance(check, { name: tag, seed, source });
   const browser = new Browser(check, info);
+  if (beforeSignin) {
+    await browser.open("/sign-in");
+    await beforeSignin(browser, info);
+  }
   await browser.signin("alice");
   const open = await openAliceSidebar(check, browser);
   check.expect(`${tag}: Alice's sidebar opens`, open === true, open);
   const appTab = (await browser.pages()).find((page) => page.selected)?.id;
   const host = new MacHost(check, { home, info, extraEnv, binInfo });
-  check.ready();
+  if (announce) check.ready();
   return { home, info, browser, host, appTab };
 }
 
@@ -1077,7 +1094,7 @@ export async function forEachAgent(check, body, agents = selectedAgents()) {
  */
 export async function forEachAgentOnOneHost(
   check,
-  { tag, agents = selectedAgents(), fake, seed, extraEnv },
+  { tag, agents = selectedAgents(), fake, seed, extraEnv, source, beforeSignin },
   body,
 ) {
   const session = await connectedSession(check, {
@@ -1086,6 +1103,8 @@ export async function forEachAgentOnOneHost(
     seed,
     extraEnv,
     fake,
+    source,
+    beforeSignin,
   });
   let inconclusive;
   for (const [index, agent] of (fake ? [session.fake] : agents).entries()) {
@@ -1180,9 +1199,18 @@ export function addFakeAgent(
  */
 export async function connectedSession(
   check,
-  { tag, agentIds, extraEnv, seed, profiles, fake },
+  { tag, agentIds, extraEnv, seed, profiles, fake, source, beforeSignin, home, announce },
 ) {
-  const session = await standUp(check, { tag, agentIds, seed, extraEnv });
+  const session = await standUp(check, {
+    tag,
+    agentIds,
+    seed,
+    extraEnv,
+    source,
+    beforeSignin,
+    home,
+    announce,
+  });
   const extra = typeof profiles === "function" ? profiles(session) : profiles;
   if (extra?.length) writeAgentProfiles(session.home, extra);
   const fakeAgent = fake ? addFakeAgent(check, session, { tag, ...fake }) : undefined;

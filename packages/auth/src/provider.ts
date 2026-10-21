@@ -3,6 +3,7 @@ import {
   ANONYMOUS,
   asId,
   type AuthenticatedPrincipal,
+  type DeviceId,
   type GrantId,
   type HostPrincipal,
   type Principal,
@@ -15,6 +16,7 @@ import {
   AuthFailure,
   type AuthProvider,
   type Delegation,
+  type DeviceKeys,
   type PluginHost,
   REVOCATION_HORIZON_MS,
   type TurnDelegation,
@@ -37,6 +39,12 @@ import {
   MCP_SCOPE,
   type ParlorAuthSettings,
 } from "./better-auth.js";
+import {
+  createDeviceRegistry,
+  type DeviceRegistry,
+  deviceAccountActions,
+  DEVICES_MIGRATION,
+} from "./devices.js";
 import { grantIdOf } from "./grants.js";
 import {
   createGrantKeys,
@@ -135,12 +143,15 @@ export function betterAuthProvider({
   let keys: ReturnType<typeof createLocalJWKSet> | undefined;
   let grantKeys: GrantKeys | undefined;
   let turnKeys: TurnKeyStore | undefined;
+  let devices: DeviceRegistry | undefined;
   const clientNames = new Map<string, Promise<string>>();
   const authenticatedAt = new WeakMap<object, number>();
 
   const installed = () => {
-    if (!grantKeys || !turnKeys) throw new Error("The auth provider is not installed.");
-    return { grantKeys, turnKeys };
+    if (!grantKeys || !turnKeys || !devices) {
+      throw new Error("The auth provider is not installed.");
+    }
+    return { grantKeys, turnKeys, devices };
   };
 
   const started = () => {
@@ -310,6 +321,7 @@ export function betterAuthProvider({
     migrations: [
       ...AUTH_MIGRATIONS,
       HOSTS_MIGRATION,
+      DEVICES_MIGRATION,
       TURN_KEYS_MIGRATION,
       AUDIT_MIGRATION,
     ],
@@ -326,6 +338,7 @@ export function betterAuthProvider({
       bridge.revoke = (notice) =>
         database.transaction((tx) => RevocationSet.revoke(tx, notice));
       grantKeys = createGrantKeys(database);
+      devices = createDeviceRegistry(database);
       turnKeys = createTurnKeyStore({
         database,
         issuer: settings.baseURL,
@@ -339,6 +352,7 @@ export function betterAuthProvider({
         actions: createRegistry({
           ...accountActions({ instance, host, revoke: bridge.revoke }).actions,
           ...hostAccountActions(hostDeps).actions,
+          ...deviceAccountActions({ host, registry: devices }).actions,
         }),
         routes: [...authRoutes({ instance, settings, host }), ...hostRoutes(hostDeps)],
         audit: (record) => auditLog.record(record),
@@ -372,6 +386,12 @@ export function betterAuthProvider({
     async hostActive(grantId: GrantId): Promise<boolean> {
       const revoked = await started().isRevoked({ kind: "grant", id: grantId });
       return !revoked && (await installed().grantKeys.get(grantId)) !== undefined;
+    },
+    async device(userId: UserId, deviceId: DeviceId): Promise<DeviceKeys | undefined> {
+      const registered = await installed().devices.get(userId, deviceId);
+      if (!registered) return undefined;
+      const { id, name, platform, signingKey, presenceKey } = registered;
+      return { id, name, platform, signingKey, presenceKey };
     },
     async account(userId: UserId): Promise<AccountProfile | undefined> {
       const { adapter } = await instance.$context;

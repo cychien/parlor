@@ -76,7 +76,7 @@ export function Stop({
 }: ComponentProps<"button">): ReactNode {
   const runtime = useChatRuntime("Chat.Stop");
   const state = useChatState("Chat.Stop");
-  if (state.status !== "running") return null;
+  if (state.status !== "running" && state.status !== "waiting") return null;
   return (
     <button
       type="button"

@@ -92,6 +92,8 @@ export const chatItemBodies = {
     body: z.object({
       event: z.enum(CHAT_EVENTS),
       detail: z.string().max(500).optional(),
+      itemId: idSchema("item").optional(),
+      choice: z.string().min(1).optional(),
     }),
   },
 } as const;

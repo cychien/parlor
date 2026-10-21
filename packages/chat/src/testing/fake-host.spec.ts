@@ -70,7 +70,7 @@ describe("createFakeHost over real HTTP", () => {
     expect(await host.hello()).toEqual({
       id: "mac",
       accepted: true,
-      protocol: 1,
+      protocol: 2,
       leaseMs: 60_000,
       heartbeatMs: 30_000,
     });
@@ -152,7 +152,7 @@ describe("createFakeHost over real HTTP", () => {
     ]);
   });
 
-  it("waits for the answer to an ask it appended", async () => {
+  it("waits for the answer to an ask it appended (regression-guard)", async () => {
     await host.hello();
     await send("u1");
     const running = host.run([
@@ -165,7 +165,6 @@ describe("createFakeHost over real HTTP", () => {
             body: {
               question: "Run it?",
               choices: [{ id: "yes", label: "Yes", effect: "allow_once" }],
-              approval: "presence",
             },
           },
         ],

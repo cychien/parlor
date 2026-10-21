@@ -55,6 +55,11 @@ export type FakeStep =
   /** Calls an app tool through the MCP server the host passed in `session/new`. */
   | { readonly kind: "call_app"; readonly tool: string; readonly input: unknown }
   | { readonly kind: "plan"; readonly entries: readonly string[] }
+  | {
+      readonly kind: "question";
+      readonly message: string;
+      readonly schema: Readonly<Record<string, unknown>>;
+    }
   | { readonly kind: "wait_for_cancel" }
   | { readonly kind: "exit"; readonly code: number }
   | { readonly kind: "stop"; readonly reason: Exclude<StopReason, "cancelled"> };
@@ -269,6 +274,9 @@ export function serveFakeAgent(script: FakeAgentScript, io: AcpStdio): Promise<v
           kind: "plan",
           entries: step.entries.map((content) => ({ content, status: "pending" })),
         });
+        return undefined;
+      case "question":
+        await peer.ask({ kind: "question", message: step.message, schema: step.schema });
         return undefined;
       case "wait_for_cancel":
         await new Promise<void>((resolve) => {
