@@ -53,18 +53,37 @@ describe("withFileLock", () => {
     expect(Date.now() - started).toBeLessThan(1_000);
   });
 
-  it("never takes over a lock whose live owner has held it for hours", async () => {
+  it("takes over a lock whose pid now belongs to a process that started after the lock was written", async () => {
+    const path = join(dir, "reused.lock");
+    const owner = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"]);
+    try {
+      await writeFile(path, `${owner.pid}\n`);
+      const written = new Date(Date.now() - 60 * 60_000);
+      await utimes(path, written, written);
+      const started = Date.now();
+      await withFileLock(path, async () => undefined);
+      expect(Date.now() - started).toBeLessThan(2_000);
+    } finally {
+      owner.kill();
+    }
+  });
+
+  it("never takes over a lock whose live owner started before it was written", async () => {
     const path = join(dir, "old.lock");
-    await writeFile(path, `${process.pid}\n`);
-    const old = new Date(Date.now() - 3 * 60 * 60_000);
-    await utimes(path, old, old);
-    let entered = false;
-    const waiting = withFileLock(path, async () => void (entered = true));
-    await sleep(150);
-    expect(entered).toBe(false);
-    await rm(path);
-    await waiting;
-    expect(entered).toBe(true);
+    const owner = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"]);
+    try {
+      await sleep(1_100);
+      await writeFile(path, `${owner.pid}\n`);
+      let entered = false;
+      const waiting = withFileLock(path, async () => void (entered = true));
+      await sleep(300);
+      expect(entered).toBe(false);
+      await rm(path);
+      await waiting;
+      expect(entered).toBe(true);
+    } finally {
+      owner.kill();
+    }
   });
 
   it("waits for a live owner", async () => {
