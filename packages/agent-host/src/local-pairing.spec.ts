@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -69,7 +69,7 @@ async function started(name: string) {
   await daemon.start();
   const control = (await connectControl(paths.control))!;
   clients.push(control);
-  return { control, grants, trust, keys };
+  return { control, grants, trust, keys, paths };
 }
 
 const authorize = async (browser: Browser, pairing: unknown) => {
@@ -148,6 +148,26 @@ describe("the daemon pairing a desktop app over its control socket", () => {
       status: { state: "running", apps: [app.origin] },
       grants: [{ appOrigin: app.origin, appName: "Hello", grantId: grant!.grantId }],
     });
+  }, 60_000);
+
+  it("logs local_pairing_begun with the origin and the matching code shown to the app", async () => {
+    const { control, paths } = await started("logged");
+    const begun = await control.send({
+      op: "begin_local_pairing",
+      appOrigin: app.origin,
+    });
+    if (!begun.ok) throw new Error(begun.error);
+    const events = (await readFile(join(paths.root, "logs", "daemon.log"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        event: "local_pairing_begun",
+        appOrigin: app.origin,
+        matchingCode: begun.pairing.matchingCode,
+      }),
+    );
   }, 60_000);
 
   it("refuses to pair an app this computer is already connected to, and touches nothing", async () => {

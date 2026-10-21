@@ -515,7 +515,12 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
           workspaceRoot: paths.workspaces,
         });
         pairings.set(origin, pairing);
-        return { ok: true, pairing: await pairing.pairing };
+        const begun = await pairing.pairing;
+        logEvent("local_pairing_begun", {
+          appOrigin: origin,
+          matchingCode: begun.matchingCode,
+        });
+        return { ok: true, pairing: begun };
       }
       case "finish_local_pairing": {
         const { pairing } = pendingPairing(request.appOrigin);
