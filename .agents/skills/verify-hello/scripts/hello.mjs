@@ -111,8 +111,9 @@ const USAGE = `usage: hello.mjs <command> [args]
                           the .app with parlor build --target mac, copies it into the instance (appBundle in
                           info) and launches it with open -n next to a web dev server; --no-launch only builds
                           --shared-origin (mac, ios) makes server.url the web origin, whose Vite proxies
-                          /_parlor to the server, so a browser tab and the shell are one app to the backend;
-                          --release always does, as a deployed app has one origin
+                          /_parlor to the server, so a browser tab and the shell are one app to the backend
+                          --release makes the server URL the server's own origin (PARLOR_ORIGIN), the one
+                          origin a release app and the host it pairs talk to, as on a deployed app
   doctor ID               read-only health check; exit 1 when the instance is not worth driving
   seed ID DATASET         load a fixture straight into PGlite (stops and restarts a running instance)
   sql ID QUERY            read-only SQL against the instance's PGlite (stops and restarts it, keeps
@@ -292,7 +293,7 @@ ON CONFLICT (id) DO NOTHING;`;
 
 async function signIn(state, name) {
   const user = userOf(name);
-  const web = urls(state).web;
+  const web = state.release ? urls(state).server : urls(state).web;
   const response = await fetch(`${web}/_parlor/auth/sign-in/email`, {
     method: "POST",
     headers: { "content-type": "application/json", origin: web },
@@ -658,6 +659,7 @@ function snapshot(state) {
 function devEnv(state) {
   const env = { ...process.env, FORCE_COLOR: "0", BROWSER: "none" };
   if (state.home) Object.assign(env, hostEnv(state.home, env));
+  if (state.release && state.ports) env.PARLOR_ORIGIN = urls(state).server;
   if (state.target === "mac") {
     env.CARGO_TARGET_DIR = CARGO_TARGET_DIR;
     env.RUSTUP_HOME ??= join(homedir(), ".rustup");
@@ -1379,7 +1381,7 @@ async function cmdUp(args) {
           : undefined,
       autoHome: !values.home && values.target === "mac" ? true : undefined,
       release: values.release ? true : undefined,
-      sharedOrigin: values["shared-origin"] || values.release ? true : undefined,
+      sharedOrigin: values["shared-origin"] ? true : undefined,
       simulator: sim ? { ...sim, bootedBefore: sim.booted } : undefined,
       createdAt: new Date().toISOString(),
     };
