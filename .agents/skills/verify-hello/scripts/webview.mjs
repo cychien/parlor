@@ -8,17 +8,24 @@
 //
 // ios: everything goes through the WebKit remote inspector of the simulator (the protocol
 // Safari's Develop menu uses), so snapshot, click and fill run in the page with a user gesture.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createConnection } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-import { openInspector } from "./webkit-inspector.mjs";
-
-const NATIVE_DIR = join(dirname(fileURLToPath(import.meta.url)), "native");
+const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url));
+const NATIVE_DIR = join(SCRIPTS_DIR, "native");
 
 /** Compiles `native/<name>.m` once per source hash into `<toolsDir>`; returns the path. */
 export function nativeTool(toolsDir, name, { dylib = false } = {}) {
@@ -241,6 +248,7 @@ export function createWebview({
   readState,
   appProcess,
   webviewSocket,
+  inspectorSocket,
   toolsDir,
   bundleId,
 }) {
@@ -318,31 +326,60 @@ export function createWebview({
       socket.write(`${JSON.stringify({ js: evalBody(js) })}\n`);
     });
 
-  // webinspectord_sim now and then answers a fresh connection with no applications; a new connection gets them.
-  const iosInspector = async (state) => {
-    let last;
-    for (let attempt = 0; attempt < 4; attempt++) {
-      try {
-        return await openInspector(state.simulator.udid, bundleId, {
-          pickUrl: (url) => /^(https?|capacitor):/.test(url),
-          timeout: 8000,
-        });
-      } catch (error) {
-        last = error;
-        await sleep(750);
-      }
+  const relayRequest = (path, expression) =>
+    new Promise((settle, reject) => {
+      const socket = createConnection(path);
+      let data = "";
+      socket.on("data", (chunk) => (data += chunk));
+      socket.on("error", reject);
+      socket.on("end", () => {
+        try {
+          settle(JSON.parse(data.trim()));
+        } catch (error) {
+          reject(error);
+        }
+      });
+      socket.write(`${JSON.stringify({ expression })}\n`);
+    });
+
+  /** The instance's inspector relay (one long-lived inspector session), started on first use. */
+  const iosRelay = async (state) => {
+    const path = inspectorSocket(state);
+    if (existsSync(path)) return path;
+    const log = openSync(join(dirname(path), "inspector-relay.log"), "a");
+    const child = spawn(
+      process.execPath,
+      [join(SCRIPTS_DIR, "inspector-relay.mjs"), state.simulator.udid, bundleId, path],
+      { detached: true, stdio: ["ignore", log, log] },
+    );
+    child.unref();
+    closeSync(log);
+    const deadline = Date.now() + 60_000;
+    while (Date.now() < deadline) {
+      if (existsSync(path)) return path;
+      if (child.exitCode !== null) break;
+      await sleep(200);
     }
-    return fail(`webview ${state.id}: ${last.message}`);
+    return fail(
+      `webview ${state.id}: the inspector relay did not start; see ${join(dirname(path), "inspector-relay.log")}`,
+    );
   };
 
   const iosEval = async (state, js) => {
-    const inspector = await iosInspector(state);
-    try {
-      const value = await inspector.evaluate(`(async () => { ${evalBody(js)} })()`);
-      return decodeResult(value);
-    } finally {
-      await inspector.close();
+    const expression = `(async () => { ${evalBody(js)} })()`;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const path = await iosRelay(state);
+      let answer;
+      try {
+        answer = await relayRequest(path, expression);
+      } catch {
+        rmSync(path, { force: true });
+        continue;
+      }
+      if (answer.ok) return decodeResult(answer.value);
+      throw new Error(answer.error);
     }
+    return fail(`webview ${state.id}: the inspector relay does not answer`);
   };
 
   const domCall = (state, call) =>

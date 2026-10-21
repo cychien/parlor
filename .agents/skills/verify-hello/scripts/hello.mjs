@@ -195,7 +195,11 @@ function sleep(ms) {
 }
 
 function run(command, args, options = {}) {
-  const result = spawnSync(command, args, { encoding: "utf8", ...options });
+  const result = spawnSync(command, args, {
+    encoding: "utf8",
+    maxBuffer: 256 * 1024 * 1024,
+    ...options,
+  });
   if (result.error) fail(`${command} failed: ${result.error.message}`);
   if (result.status !== 0 && !options.allowFailure) {
     fail(
@@ -2381,6 +2385,7 @@ const webview = createWebview({
   readState,
   appProcess,
   webviewSocket,
+  inspectorSocket: (state) => join(instanceDir(state.id), "wi.sock"),
   toolsDir: TOOLS_DIR,
   bundleId: BUNDLE_ID,
 });
