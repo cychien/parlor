@@ -23,12 +23,15 @@ import { parseArgs } from "node:util";
 
 import {
   agentLoginStatus,
+  HOMES_ROOT,
   hostBin,
   hostEnv,
   prepareHome,
+  removeHome,
   withoutAuth,
 } from "./agent-home.mjs";
 import { createHostCommand } from "./host.mjs";
+import { createWebview, nativeTool } from "./webview.mjs";
 
 function canonicalPath(path) {
   try {
@@ -48,6 +51,10 @@ const HOME = canonicalPath(
 const INSTANCES_DIR = join(HOME, "instances");
 const CARGO_TARGET_DIR = join(HOME, "cargo-target");
 const LOCK_DIR = join(HOME, ".lock");
+const RELEASE_LOCK_DIR = join(HOME, ".release-build.lock");
+const TOOLS_DIR = join(HOME, "tools");
+const SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
+const RELEASE_BUILD_TIMEOUT_MS = 2_400_000;
 const XCODE_DEVELOPER_DIR = "/Applications/Xcode.app/Contents/Developer";
 const DEFAULT_DEVICE = "iPhone 17 Pro";
 const TARGETS = ["web", "mac", "ios"];
@@ -89,7 +96,7 @@ const HARNESS_REDIRECT = "http://127.0.0.1:47001/callback";
 const USAGE = `usage: hello.mjs <command> [args]
 
   up [--id ID] [--target web|mac|ios] [--seed DATASET] [--device NAME] [--source DIR]
-     [--no-auth --home HOME] [--home HOME] [--keep-on-failure] [--force]
+     [--no-auth --home HOME] [--home HOME] [--release [--no-launch]] [--keep-on-failure] [--force]
                           snapshot the checkout, pick free ports, launch, wait until usable;
                           refused when the 1-minute load is at or above 0.7 x cores (HELLO_MAX_LOAD
                           overrides), when a mac or ios target is asked while another native
@@ -99,6 +106,14 @@ const USAGE = `usage: hello.mjs <command> [args]
                           isolated home whose agent logins are linked (see agent-home); --no-auth also
                           snapshots hello with the auth option and its imports removed from server.ts,
                           so plain parlor dev installs devAuth, and needs --home
+                          mac: the app always runs with an isolated HOME (--home, or one made under
+                          ${HOMES_ROOT} and removed by down) and PATH=${SYSTEM_PATH}; --release builds
+                          the .app with parlor build --target mac, copies it into the instance (appBundle in
+                          info) and launches it with open -n next to a web dev server; --no-launch only builds
+                          --shared-origin (mac, ios) makes server.url the web origin, whose Vite proxies
+                          /_parlor to the server, so a browser tab and the shell are one app to the backend
+                          --release makes the server URL the server's own origin (PARLOR_ORIGIN), the one
+                          origin a release app and the host it pairs talk to, as on a deployed app
   doctor ID               read-only health check; exit 1 when the instance is not worth driving
   seed ID DATASET         load a fixture straight into PGlite (stops and restarts a running instance)
   sql ID QUERY            read-only SQL against the instance's PGlite (stops and restarts it, keeps
@@ -136,6 +151,11 @@ const USAGE = `usage: hello.mjs <command> [args]
                           drive that computer over the real wire; host selfcheck verifies the
                           signing helpers; see SKILL.md, "Fake host"
   screenshot ID FILE      capture the mac window or the iOS simulator screen
+  webview ID snapshot [FILE] [--json] | click ROLE NAME | fill ROLE NAME TEXT | eval JS
+                          drive the mac or iOS webview: mac through Accessibility (eval through a library
+                          loaded into the app), iOS through the simulator's WebKit remote inspector
+  launch ID | quit ID     open -n the release app of a --release instance, or quit it
+  relaunch ID             quit and start the shell app again (mac dev: stop and start; iOS: the app only)
   info ID | list          print one instance's state, or every instance plus stray processes
                           under the home that belong to no instance
   reap [--kill]           list processes whose cwd or command is under the home (deleted cwds
@@ -177,7 +197,11 @@ function sleep(ms) {
 }
 
 function run(command, args, options = {}) {
-  const result = spawnSync(command, args, { encoding: "utf8", ...options });
+  const result = spawnSync(command, args, {
+    encoding: "utf8",
+    maxBuffer: 256 * 1024 * 1024,
+    ...options,
+  });
   if (result.error) fail(`${command} failed: ${result.error.message}`);
   if (result.status !== 0 && !options.allowFailure) {
     fail(
@@ -269,7 +293,7 @@ ON CONFLICT (id) DO NOTHING;`;
 
 async function signIn(state, name) {
   const user = userOf(name);
-  const web = urls(state).web;
+  const web = state.release ? urls(state).server : urls(state).web;
   const response = await fetch(`${web}/_parlor/auth/sign-in/email`, {
     method: "POST",
     headers: { "content-type": "application/json", origin: web },
@@ -586,12 +610,13 @@ function logPath(state) {
   return join(instanceDir(state.id), "dev.log");
 }
 
-function configOverlay(ports) {
+function configOverlay(ports, { sharedOrigin = false } = {}) {
+  const url = `http://localhost:${sharedOrigin ? ports.web : ports.server}`;
   return `import source from "./parlor.config.source.ts";
 
 export default {
   ...source,
-  server: { ...source.server, port: ${ports.server}, url: "http://localhost:${ports.server}" },
+  server: { ...source.server, port: ${ports.server}, url: "${url}" },
   web: { ...source.web, port: ${ports.web} },
 };
 `;
@@ -611,7 +636,10 @@ function snapshot(state) {
     join(state.source, APP_PATH, "parlor.config.ts"),
     join(appDir(state), "parlor.config.source.ts"),
   );
-  writeFileSync(join(appDir(state), "parlor.config.ts"), configOverlay(state.ports));
+  writeFileSync(
+    join(appDir(state), "parlor.config.ts"),
+    configOverlay(state.ports, { sharedOrigin: state.sharedOrigin }),
+  );
   if (state.noAuth) {
     const server = join(appDir(state), "server.ts");
     writeFileSync(server, withoutAuth(readFileSync(server, "utf8")));
@@ -631,11 +659,51 @@ function snapshot(state) {
 function devEnv(state) {
   const env = { ...process.env, FORCE_COLOR: "0", BROWSER: "none" };
   if (state.home) Object.assign(env, hostEnv(state.home, env));
-  if (state.target === "mac") env.CARGO_TARGET_DIR = CARGO_TARGET_DIR;
+  if (state.release && state.ports) env.PARLOR_ORIGIN = urls(state).server;
+  if (state.target === "mac") {
+    env.CARGO_TARGET_DIR = CARGO_TARGET_DIR;
+    env.RUSTUP_HOME ??= join(homedir(), ".rustup");
+    env.CARGO_HOME ??= join(homedir(), ".cargo");
+    if (!state.release && state.id) env[RUNNER_VAR] = appRunner(state);
+  }
   if (state.target === "ios" && !env.DEVELOPER_DIR && existsSync(XCODE_DEVELOPER_DIR)) {
     env.DEVELOPER_DIR = XCODE_DEVELOPER_DIR;
   }
   return env;
+}
+
+const RUNNER_VAR = `CARGO_TARGET_${process.arch === "arm64" ? "AARCH64" : "X86_64"}_APPLE_DARWIN_RUNNER`;
+
+function webviewSocket(state) {
+  return join(instanceDir(state.id), "wv.sock");
+}
+
+/** The environment a user's Mac app gets from LaunchServices, with HOME the instance's isolated one. */
+function appEnv(state) {
+  return {
+    HOME: state.home,
+    PATH: SYSTEM_PATH,
+    USER: process.env.USER ?? "",
+    LOGNAME: process.env.LOGNAME ?? process.env.USER ?? "",
+    SHELL: "/bin/zsh",
+    TMPDIR: process.env.TMPDIR ?? "/tmp/",
+    __CF_USER_TEXT_ENCODING: process.env.__CF_USER_TEXT_ENCODING ?? "0x1F5:0x0:0x0",
+    DYLD_INSERT_LIBRARIES: nativeTool(TOOLS_DIR, "webview-eval", { dylib: true }),
+    PARLOR_VERIFY_WEBVIEW_SOCKET: webviewSocket(state),
+  };
+}
+
+/** cargo runs the dev app through this, so the app starts with appEnv and nothing of the dev tree. */
+function appRunner(state) {
+  const file = join(instanceDir(state.id), "app-runner.sh");
+  const quote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
+  const assignments = Object.entries(appEnv(state))
+    .map(([key, value]) => `${key}=${quote(value)}`)
+    .join(" ");
+  writeFileSync(file, `#!/bin/sh\nexec /usr/bin/env -i ${assignments} "$@"\n`, {
+    mode: 0o755,
+  });
+  return file;
 }
 
 function xcrun(args, options = {}) {
@@ -690,6 +758,33 @@ function postJson(url, body) {
   });
 }
 
+function bundleExecutable(state) {
+  return join(state.appBundle, "Contents", "MacOS", state.appExecutable);
+}
+
+/** The release app's own process (never its parlor-host sidecar), launched by LaunchServices. */
+function releaseAppProcess(state, table = processTable()) {
+  if (!state.appBundle) return undefined;
+  const exe = bundleExecutable(state);
+  return table
+    .filter((p) => p.command === exe || p.command.startsWith(`${exe} `))
+    .sort((a, b) => a.pid - b.pid)[0];
+}
+
+function appProcess(state, table = processTable()) {
+  if (state.target !== "mac") return undefined;
+  return state.release ? releaseAppProcess(state, table) : shellProcess(state, table);
+}
+
+function isShellApp(state, p) {
+  if (state.target !== "mac") return false;
+  if (state.release) {
+    const exe = state.appBundle ? bundleExecutable(state) : undefined;
+    return Boolean(exe) && (p.command === exe || p.command.startsWith(`${exe} `));
+  }
+  return /\/parlor_app(\s|$)/.test(p.command);
+}
+
 function shellProcess(state, table) {
   if (state.target !== "mac") return undefined;
   return ownedProcesses(state, table).find((p) => /\/parlor_app(\s|$)/.test(p.command));
@@ -697,7 +792,7 @@ function shellProcess(state, table) {
 
 function externalClients(state, table) {
   const owned = new Set(ownedProcesses(state, table).map((p) => p.pid));
-  return serverClients(state.ports.server).filter(
+  return serverClients(state.sharedOrigin ? state.ports.web : state.ports.server).filter(
     (client) => !owned.has(client.pid) && client.pid !== process.pid,
   );
 }
@@ -718,6 +813,7 @@ async function readiness(state) {
   if (!list.ok || !Array.isArray(list.json?.data))
     return "listTasks through the Vite proxy not answering yet";
   const table = processTable();
+  if (state.release) return undefined;
   if (state.target === "mac" && !shellProcess(state, table))
     return "parlor_app not running yet (cargo build)";
   if (state.target === "ios" && !iosAppRunning(state.simulator.udid))
@@ -761,7 +857,7 @@ async function start(state) {
   if (isRunning(state)) fail(`instance ${state.id} is already running`);
   const logOffset = existsSync(logPath(state)) ? statSync(logPath(state)).size : 0;
   const out = openSync(logPath(state), "a");
-  const args = ["dev", "--target", state.target];
+  const args = ["dev", "--target", state.release ? "web" : state.target];
   if (state.target === "ios") args.push("--device", state.simulator.udid);
   const child = spawn(join(appDir(state), "node_modules", ".bin", "parlor"), args, {
     cwd: appDir(state),
@@ -775,13 +871,183 @@ async function start(state) {
   state.processes = [];
   delete state.readyAt;
   writeState(state);
-  log(
-    `started parlor dev --target ${state.target} (pid ${child.pid}), log ${logPath(state)}`,
-  );
+  log(`started parlor ${args.join(" ")} (pid ${child.pid}), log ${logPath(state)}`);
   await waitReady(state, logOffset);
   state.processes = ownedProcesses(state).map(({ pid, command }) => ({ pid, command }));
   state.readyAt = new Date().toISOString();
   writeState(state);
+}
+
+async function withReleaseLock(task) {
+  const deadline = Date.now() + RELEASE_BUILD_TIMEOUT_MS;
+  for (;;) {
+    try {
+      mkdirSync(RELEASE_LOCK_DIR);
+      writeFileSync(join(RELEASE_LOCK_DIR, "pid"), String(process.pid));
+      break;
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      const holder = Number(
+        readFileSync(join(RELEASE_LOCK_DIR, "pid"), "utf8").trim() || 0,
+      );
+      if (holder && !signal(holder, 0))
+        rmSync(RELEASE_LOCK_DIR, { recursive: true, force: true });
+      if (Date.now() > deadline) fail(`could not take ${RELEASE_LOCK_DIR}`);
+      await sleep(2000);
+    }
+  }
+  try {
+    return await task();
+  } finally {
+    rmSync(RELEASE_LOCK_DIR, { recursive: true, force: true });
+  }
+}
+
+function plistValue(file, key) {
+  const result = run("plutil", ["-extract", key, "raw", "-o", "-", file], {
+    allowFailure: true,
+  });
+  return result.status === 0 ? result.stdout.trim() : undefined;
+}
+
+/** `parlor build --target mac` in the snapshot, then the .app copied into the instance. */
+async function buildRelease(state) {
+  await withReleaseLock(async () => {
+    const bundles = join(CARGO_TARGET_DIR, "release", "bundle", "macos");
+    const startedAt = Date.now();
+    log(`building the release app of ${state.id} (parlor build --target mac)`);
+    const out = openSync(logPath(state), "a");
+    const env = { ...process.env, FORCE_COLOR: "0", CARGO_TARGET_DIR };
+    env.RUSTUP_HOME ??= join(homedir(), ".rustup");
+    env.CARGO_HOME ??= join(homedir(), ".cargo");
+    const built = await new Promise((settle) => {
+      const child = spawn(
+        join(appDir(state), "node_modules", ".bin", "parlor"),
+        ["build", "--target", "mac"],
+        { cwd: appDir(state), env, stdio: ["ignore", out, out], detached: true },
+      );
+      const timer = setTimeout(
+        () => signal(-child.pid, "SIGKILL"),
+        RELEASE_BUILD_TIMEOUT_MS,
+      );
+      child.on("close", (code) => {
+        clearTimeout(timer);
+        settle(code);
+      });
+    });
+    closeSync(out);
+    const fresh = existsSync(bundles)
+      ? readdirSync(bundles)
+          .filter((name) => name.endsWith(".app"))
+          .map((name) => join(bundles, name))
+          .filter(
+            (app) =>
+              statSync(join(app, "Contents", "Info.plist")).mtimeMs >= startedAt - 1000,
+          )
+          .sort(
+            (a, b) =>
+              statSync(join(b, "Contents", "Info.plist")).mtimeMs -
+              statSync(join(a, "Contents", "Info.plist")).mtimeMs,
+          )
+      : [];
+    if (fresh.length === 0)
+      fail(
+        `parlor build --target mac exited ${built} and wrote no .app under ${bundles}\n${tail(state)}`,
+      );
+    if (built !== 0)
+      log(
+        `parlor build exited ${built} after writing ${fresh[0]} (a later bundle step failed); using the .app`,
+      );
+    const target = join(instanceDir(state.id), "app", basename(fresh[0]));
+    rmSync(dirname(target), { recursive: true, force: true });
+    mkdirSync(dirname(target), { recursive: true });
+    run("ditto", [fresh[0], target]);
+    const info = join(target, "Contents", "Info.plist");
+    state.appBundle = target;
+    state.appExecutable = plistValue(info, "CFBundleExecutable");
+    state.appBundleId = plistValue(info, "CFBundleIdentifier");
+    writeState(state);
+    log(
+      `release app ${target} (${state.appBundleId}) built in ${Math.round((Date.now() - startedAt) / 1000)}s`,
+    );
+  });
+}
+
+/** `open -n` the release app with appEnv, as a user double-clicking it would get. */
+async function launchApp(state) {
+  if (!state.release || !state.appBundle)
+    fail(`${state.id} is not a --release mac instance`);
+  if (releaseAppProcess(state)) fail(`the ${state.id} app is already running`);
+  rmSync(webviewSocket(state), { force: true });
+  const env = appEnv(state);
+  run("open", [
+    "-n",
+    ...Object.entries(env).flatMap(([key, value]) => ["--env", `${key}=${value}`]),
+    state.appBundle,
+  ]);
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    const app = releaseAppProcess(state);
+    if (app) {
+      state.appLaunchedAt = new Date().toISOString();
+      writeState(state);
+      log(`launched ${state.appBundle} (pid ${app.pid})`);
+      return app;
+    }
+    await sleep(100);
+  }
+  fail(`${state.appBundle} did not start within 60 s`);
+}
+
+async function quitApp(state) {
+  const exe = state.appBundle ? bundleExecutable(state) : undefined;
+  const mine = () =>
+    exe
+      ? processTable().filter((p) => p.command === exe || p.command.startsWith(`${exe} `))
+      : [];
+  for (const p of mine()) signal(p.pid, "SIGTERM");
+  if (!(await waitUntil(() => mine().length === 0, 8000)))
+    for (const p of mine()) signal(p.pid, "SIGKILL");
+  await waitUntil(() => mine().length === 0, 3000);
+  if (mine().length) fail(`the ${state.id} app survived SIGKILL`);
+}
+
+async function cmdRelaunch([id]) {
+  const state = readState(id);
+  if (state.target === "ios") {
+    xcrun(["simctl", "terminate", state.simulator.udid, BUNDLE_ID], {
+      allowFailure: true,
+    });
+    xcrun(["simctl", "launch", state.simulator.udid, BUNDLE_ID]);
+  } else if (state.release) {
+    await quitApp(state);
+    await launchApp(state);
+  } else if (state.target === "mac") {
+    await stopProcesses(state, { hosts: "keep" });
+    await start(state);
+  } else {
+    fail("relaunch is for the mac and ios targets");
+  }
+  printInfo(state);
+}
+
+function homeProcessPids(home) {
+  const marker = new RegExp(`(^|\\s)HOME=${escapeRegExp(home)}(\\s|$)`);
+  return run("ps", ["-axww", "-E", "-o", "pid=,command="], {
+    allowFailure: true,
+    env: { ...process.env, COLUMNS: "100000" },
+  })
+    .stdout.split("\n")
+    .map((line) => line.match(/^\s*(\d+)\s+(.*)$/))
+    .filter((match) => match && marker.test(match[2]) && Number(match[1]) !== process.pid)
+    .map((match) => Number(match[1]));
+}
+
+async function killHomeProcesses(home) {
+  for (const pid of homeProcessPids(home)) signal(pid, "SIGTERM");
+  if (!(await waitUntil(() => homeProcessPids(home).length === 0, 5000)))
+    for (const pid of homeProcessPids(home)) signal(pid, "SIGKILL");
+  await waitUntil(() => homeProcessPids(home).length === 0, 3000);
 }
 
 function signal(pid, name) {
@@ -806,10 +1072,12 @@ function browserPorts(state, browsers) {
     : main;
 }
 
-const AGENT_HOMES_DIR = join(HOME, "h");
+const AGENT_HOMES_DIRS = [...new Set([HOMES_ROOT, join(HOME, "h")])];
 
 function isolatedHomePids() {
-  const marker = new RegExp(`(^|\\s)HOME=${escapeRegExp(AGENT_HOMES_DIR)}/`);
+  const marker = new RegExp(
+    `(^|\\s)HOME=(${AGENT_HOMES_DIRS.map(escapeRegExp).join("|")})/`,
+  );
   return new Set(
     run("ps", ["-axww", "-E", "-o", "pid=,command="], {
       allowFailure: true,
@@ -828,7 +1096,9 @@ function hostProcesses(candidates, table) {
   const isolated = isolatedHomePids();
   const roots = new Set(
     candidates
-      .filter((p) => isolated.has(p.pid) || isUnder(p.cwd, AGENT_HOMES_DIR))
+      .filter(
+        (p) => isolated.has(p.pid) || AGENT_HOMES_DIRS.some((dir) => isUnder(p.cwd, dir)),
+      )
       .map((p) => p.pid),
   );
   const fromHost = (pid) => {
@@ -850,7 +1120,13 @@ function instanceSurvivors(state, { browsers = "main", hosts = "kill" } = {}) {
   };
   for (const p of ownedProcesses(state, table)) add(p, "instance process");
   const under = processesUnder(instanceDir(state.id), table);
-  const kept = hosts === "keep" ? hostProcesses(under, table) : new Set();
+  const kept =
+    hosts === "keep"
+      ? hostProcesses(
+          under.filter((p) => !isShellApp(state, p)),
+          table,
+        )
+      : new Set();
   for (const p of under)
     if (!kept.has(p.pid)) add(p, "cwd or command under the instance dir");
   const ports = [...Object.values(state.ports), ...browserPorts(state, browsers)].filter(
@@ -968,6 +1244,7 @@ async function loadDataset(state, name) {
 
 async function withStopped(state, task, options) {
   const wasRunning = isRunning(state);
+  const appWasUp = state.release && Boolean(releaseAppProcess(state));
   if (wasRunning) {
     log(`stopping ${state.id} so PGlite can be opened directly`);
     await stopProcesses(state, options);
@@ -976,6 +1253,7 @@ async function withStopped(state, task, options) {
     return await task();
   } finally {
     if (wasRunning) await start(state);
+    if (appWasUp) await launchApp(state);
   }
 }
 
@@ -1019,7 +1297,9 @@ function checkCapacity(target) {
     reasons.push(
       `load rule: 1-minute load is at or above the limit of ${maxLoad.toFixed(2)}`,
     );
-  const startingNative = active.filter((s) => s.target !== "web" && !s.readyAt);
+  const startingNative = active.filter(
+    (s) => s.target !== "web" && (!s.readyAt || s.building),
+  );
   if (target !== "web" && startingNative.length > 0)
     reasons.push(
       `native rule: ${startingNative.map((s) => s.id).join(", ")} is still starting, one native build at a time`,
@@ -1052,13 +1332,21 @@ async function cmdUp(args) {
       force: { type: "boolean" },
       "no-auth": { type: "boolean" },
       home: { type: "string" },
+      release: { type: "boolean" },
+      "no-launch": { type: "boolean" },
+      "shared-origin": { type: "boolean" },
     },
   });
   if (values["no-auth"] && !values.home)
     fail(
       "--no-auth needs --home: the dev host it spawns must not touch the developer's ~/.parlor",
     );
-  if (values.home && values.target !== "web") fail("--home is for the web target");
+  if (values.home && values.target === "ios")
+    fail("--home is for the web and mac targets");
+  if (values.release && values.target !== "mac") fail("--release is for the mac target");
+  if (values["no-launch"] && !values.release) fail("--no-launch goes with --release");
+  if (values.home && resolve(values.home) === resolve(homedir()))
+    fail("--home must be an isolated HOME, never the real one");
   if (!TARGETS.includes(values.target))
     fail(`--target must be one of ${TARGETS.join(", ")}`);
   if (values.seed) fixturePath(values.seed);
@@ -1086,7 +1374,14 @@ async function cmdUp(args) {
       ports: allocatePorts(),
       cdpPort: allocateCdpPort(),
       noAuth: values["no-auth"] ? true : undefined,
-      home: values.home ? resolve(values.home) : undefined,
+      home: values.home
+        ? resolve(values.home)
+        : values.target === "mac"
+          ? join(HOMES_ROOT, id)
+          : undefined,
+      autoHome: !values.home && values.target === "mac" ? true : undefined,
+      release: values.release ? true : undefined,
+      sharedOrigin: values["shared-origin"] ? true : undefined,
       simulator: sim ? { ...sim, bootedBefore: sim.booted } : undefined,
       createdAt: new Date().toISOString(),
     };
@@ -1109,6 +1404,14 @@ async function cmdUp(args) {
     if (!state.noAuth)
       log(`seeded users ${Object.keys(USERS).join(", ")} (password ${PASSWORD})`);
     await start(state);
+    if (state.release) {
+      state.building = true;
+      writeState(state);
+      await buildRelease(state);
+      if (!values["no-launch"]) await launchApp(state);
+      delete state.building;
+      writeState(state);
+    }
   } catch (error) {
     log(error instanceof CliError ? error.message : String(error?.stack ?? error));
     if (values["keep-on-failure"]) {
@@ -1146,6 +1449,13 @@ function printInfo(state) {
         noAuth: state.noAuth ?? false,
         home: state.home ?? null,
         simulator: state.simulator ?? null,
+        release: state.release ?? false,
+        appBundle: state.appBundle ?? null,
+        appBundleId: state.appBundleId ?? null,
+        appPid: appProcess(state)?.pid ?? null,
+        devPid: state.pid ?? null,
+        webviewSocket: state.target === "mac" ? webviewSocket(state) : null,
+        launchEnv: state.release ? appEnv(state) : null,
       },
       null,
       2,
@@ -1237,7 +1547,7 @@ async function cmdDoctor([id]) {
     );
   }
   if (state.target === "mac") {
-    const app = shellProcess(state, table);
+    const app = appProcess(state, table);
     check(
       "desktop app",
       Boolean(app),
@@ -1495,7 +1805,7 @@ async function cmdScreenshot([id, file]) {
   if (state.target === "ios") {
     xcrun(["simctl", "io", state.simulator.udid, "screenshot", path]);
   } else if (state.target === "mac") {
-    const app = shellProcess(state, processTable());
+    const app = appProcess(state, processTable());
     if (!app) fail("parlor_app is not running");
     const window = macWindowId(app.pid) || (await revealMacApp(app.pid));
     if (!window) fail(`no on-screen window for parlor_app pid ${app.pid}`);
@@ -1942,6 +2252,10 @@ async function teardown(state, { saveLog }) {
   stopBrowsers(state);
   stopHolders(state);
   await stopProcesses(state, { browsers: "all" });
+  if (state.autoHome && state.home) {
+    await killHomeProcesses(state.home);
+    removeHome(state.home);
+  }
   if (state.simulator && !state.simulator.bootedBefore) {
     xcrun(["simctl", "shutdown", state.simulator.udid], { allowFailure: true });
   }
@@ -2070,6 +2384,16 @@ const cmdHost = createHostCommand({
   signInBrowser,
 });
 
+const webview = createWebview({
+  fail,
+  readState,
+  appProcess,
+  webviewSocket,
+  inspectorSocket: (state) => join(instanceDir(state.id), "wi.sock"),
+  toolsDir: TOOLS_DIR,
+  bundleId: BUNDLE_ID,
+});
+
 function cmdAgentHome([home]) {
   if (!home) fail("usage: agent-home HOME");
   process.stdout.write(`${JSON.stringify(prepareHome(home), null, 2)}\n`);
@@ -2108,6 +2432,16 @@ const COMMANDS = {
   browser: cmdBrowser,
   host: cmdHost,
   screenshot: cmdScreenshot,
+  webview: (args) => webview.command(args),
+  launch: async ([id]) => {
+    const state = readState(id);
+    await launchApp(state);
+    printInfo(state);
+  },
+  quit: async ([id]) => {
+    await quitApp(readState(id));
+  },
+  relaunch: cmdRelaunch,
   info: ([id]) => printInfo(readState(id)),
   list: cmdList,
   reap: cmdReap,

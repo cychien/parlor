@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   capacitorConfig,
   capacitorProjectFiles,
+  DEVICE_KEY_PLUGIN,
   ensureCapacitorProject,
 } from "./project.js";
 
@@ -45,6 +46,7 @@ describe("ensureCapacitorProject", () => {
         "@capacitor/core",
         "@capacitor/ios",
         "@capacitor/local-notifications",
+        "@parlor/capacitor-device-key",
       ]),
     );
     expect((await lstat(join(projectDir, "node_modules"))).isSymbolicLink()).toBe(true);
@@ -54,5 +56,17 @@ describe("ensureCapacitorProject", () => {
       nodeModules,
     );
     expect(Object.keys(capacitorProjectFiles(config))).toContain("capacitor.config.json");
+  });
+});
+
+describe("DEVICE_KEY_PLUGIN", () => {
+  it("K6: DEVICE_KEY_PLUGIN names ParlorDeviceKey and its package, and the generated project depends on it", () => {
+    expect(DEVICE_KEY_PLUGIN).toEqual({
+      name: "ParlorDeviceKey",
+      package: "@parlor/capacitor-device-key",
+    });
+    const files = capacitorProjectFiles(config);
+    const pkg = JSON.parse(files["package.json"]!);
+    expect(pkg.dependencies[DEVICE_KEY_PLUGIN.package]).toBe("*");
   });
 });

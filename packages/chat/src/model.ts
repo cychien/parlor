@@ -121,6 +121,8 @@ export interface ClaimedTurn {
 export interface TurnSignals {
   readonly turnId: TurnId;
   readonly items: readonly LoggedItem<Exclude<UserItemKind, "prompt">>[];
+  /** The keys of each device that answered, as the account lists them; revoked ones are left out. */
+  readonly devices?: readonly DeviceKeys[];
 }
 
 /** What a device signs for a prompt; the host rebuilds the same statement from the item. */

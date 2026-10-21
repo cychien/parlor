@@ -2,7 +2,8 @@ import type { LoadedConfig } from "@parlor/config";
 import { startWebDev } from "@parlor/shell-web";
 
 import { assertRustToolchain } from "./prerequisites.js";
-import { ensureTauriProject } from "./project.js";
+import { prepareTauriProject } from "./project.js";
+import { hostTargetTriple } from "./target-triple.js";
 import { runTauri } from "./tauri-cli.js";
 
 export const TAURI_CONDITION = "parlor-tauri";
@@ -16,7 +17,9 @@ export async function startDesktopDev(
   options: DesktopDevOptions = {},
 ): Promise<void> {
   assertRustToolchain();
-  const projectDir = await ensureTauriProject(loaded);
+  const projectDir = await prepareTauriProject(loaded, hostTargetTriple(), {
+    onMissingHost: "warn",
+  });
   const web = await startWebDev(loaded, {
     conditions: [TAURI_CONDITION],
     serverUrl: loaded.config.server.url,

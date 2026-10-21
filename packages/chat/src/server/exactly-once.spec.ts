@@ -407,6 +407,41 @@ describe.each(drivers)("exactly-once turns on $name", (driver) => {
       expect(await answers()).toEqual([{ id: "a4" }]);
     });
 
+    it("T6-06: admits a native presence signature, which carries es256-raw", async () => {
+      await ask("presence");
+      expect((await answer("a1", signature("es256-raw", "none"))).status).toBe(403);
+      expect((await answer("a2", signature("es256-raw", "user"))).status).toBe(200);
+      expect(await answers()).toEqual([{ id: "a2" }]);
+    });
+
+    it("T6-06: shows the host the keys of the device that answered, and none of a revoked one", async () => {
+      await ask("presence");
+      expect((await answer("a1", signature("es256-raw", "user"))).status).toBe(200);
+      const signals = async () =>
+        data(
+          await app.action("alice-host", "hostSignals", {
+            turns: [{ turnId: "u1", afterSeq: 0 }],
+          }),
+        );
+      expect(await signals()).toMatchObject([
+        {
+          turnId: "u1",
+          items: [{ id: "a1", kind: "answer" }],
+          devices: [
+            {
+              id: "device-1",
+              name: "Alice's Mac",
+              platform: "web",
+              signingKey: { kty: "EC", crv: "P-256" },
+            },
+          ],
+        },
+      ]);
+      app.auth.activeDevices.delete("device-1");
+      const [revoked] = (await signals()) as { devices?: unknown }[];
+      expect(revoked).not.toHaveProperty("devices");
+    });
+
     it("admits one of two answers sent at once", async () => {
       await ask();
       const replies = await Promise.all([answer("a1"), answer("a2")]);

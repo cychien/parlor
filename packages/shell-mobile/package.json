@@ -28,6 +28,7 @@
     "@capacitor/core": "^8.5.2",
     "@capacitor/ios": "^8.5.2",
     "@capacitor/local-notifications": "^8.0.0",
+    "@parlor/capacitor-device-key": "workspace:*",
     "@parlor/config": "workspace:*",
     "@parlor/shell-web": "workspace:*"
   },

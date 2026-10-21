@@ -1,7 +1,13 @@
 export { buildDesktop } from "./build.js";
 export { type DesktopDevOptions, startDesktopDev, TAURI_CONDITION } from "./dev.js";
 export {
+  AGENT_HOST_SIDECAR,
   ensureTauriProject,
+  libRs,
+  type PrepareTauriProjectOptions,
+  prepareTauriProject,
+  stageAgentHost,
+  stageAgentHostFrom,
   tauriConfig,
   tauriProjectDir,
   tauriProjectFiles,

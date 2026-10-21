@@ -27,6 +27,7 @@ import {
   type ToolKind as AcpToolKind,
 } from "@agentclientprotocol/sdk";
 
+import { commandOf, launchEnvironment } from "./adapter-launch.js";
 import type { AgentProfile } from "./agents.js";
 import { logEvent } from "./log.js";
 
@@ -543,22 +544,6 @@ function tapSends(stream: Stream): Stream {
   };
 }
 
-function commandOf(profile: AgentProfile): {
-  readonly command: string;
-  readonly args: readonly string[];
-} {
-  return profile.launch.kind === "adapter"
-    ? {
-        command: "npx",
-        args: [
-          "--yes",
-          `${profile.launch.package}@${profile.launch.version}`,
-          ...(profile.launch.args ?? []),
-        ],
-      }
-    : { command: profile.launch.command, args: profile.launch.args };
-}
-
 interface LiveState {
   handlers: TurnHandlers | undefined;
   readonly calls: Map<string, KnownCall>;
@@ -600,7 +585,7 @@ export function acpLauncher(): AgentLauncher {
       const { command, args } = commandOf(profile);
       const child = spawn(command, [...args], {
         cwd: options.cwd,
-        env: { ...options.env },
+        env: await launchEnvironment(profile, options.env),
         detached: true,
         shell: false,
         stdio: ["pipe", "pipe", "pipe"],

@@ -46,13 +46,22 @@ export interface AppLinkDeps {
   ) => void;
 }
 
+/**
+ * `idle` until started; `serving` wakes the host for turns; `draining` stays up for the
+ * turns it runs but wakes nobody (a newer service took over the claiming); `closed` is final.
+ */
+export type LinkMode = "idle" | "serving" | "draining" | "closed";
+
 /** The host's whole conversation with one app, each request carrying a fresh assertion. */
 export interface AppLink {
   readonly grant: AppGrant;
   readonly api: HostApi;
   /** Set once `hostHello` was welcomed; every other call waits for it. */
   readonly protocol: number | undefined;
+  readonly mode: LinkMode;
   start(): void;
+  /** Stops waking the host and keeps everything else, so running turns finish on this link. */
+  drain(): void;
   /** With `revoke`, a refused revoke throws and leaves the link running. */
   stop(options?: { readonly revoke?: boolean | undefined }): Promise<void>;
 }
@@ -112,8 +121,8 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
   const origin = grant.appOrigin.replace(/\/+$/, "");
   let welcome: Accepted | undefined;
-  let running = false;
-  let down = false;
+  let mode: LinkMode = "idle";
+  const modeNow = (): LinkMode => mode;
   let revoked = false;
   let sync: SyncClient | undefined;
   let heartbeat: NodeJS.Timeout | undefined;
@@ -128,7 +137,7 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
   welcomed.catch(() => undefined);
 
   const signedFetch: typeof fetch = async (input, init) => {
-    if (down) throw new LinkDown("This app's link is closed.");
+    if (mode === "closed") throw new LinkDown("This app's link is closed.");
     const request = new Request(input, init);
     const method = request.method === "GET" ? "GET" : "POST";
     const assertion = await deps.keys.assert(origin, { method, url: request.url });
@@ -140,7 +149,7 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
       path: new URL(request.url).pathname,
       status: response.status,
     });
-    if (response.status === 401 && !revoked && !down) {
+    if (response.status === 401 && !revoked && modeNow() !== "closed") {
       revoked = true;
       queueMicrotask(() => deps.onRevoked(grant));
     }
@@ -186,7 +195,7 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
 
   const flush = async (turnId: TurnId, stream: TurnStream) => {
     while (stream.pending.length > 0) {
-      if (down) break;
+      if (mode === "closed") break;
       const frames = coalesce(stream.pending);
       stream.pending = [];
       for (const chunk of batches(frames)) {
@@ -200,7 +209,7 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
   const api: HostApi = {
     calls,
     stream(batch) {
-      if (down || batch.frames.length === 0) return;
+      if (mode === "closed" || batch.frames.length === 0) return;
       let stream = streams.get(batch.turnId);
       if (!stream) {
         stream = { pending: [], posting: undefined };
@@ -216,7 +225,7 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
   };
 
   const close = () => {
-    down = true;
+    mode = "closed";
     sync?.stop();
     sync = undefined;
     if (heartbeat) clearInterval(heartbeat);
@@ -226,7 +235,7 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
 
   const hello = async (): Promise<HostWelcome | undefined> => {
     for (let attempt = 0; ; attempt += 1) {
-      if (!running || down) return undefined;
+      if (mode !== "serving" && mode !== "draining") return undefined;
       try {
         return await plugin.call("hostHello", {
           protocols: { min: 1, max: HOST_PROTOCOL },
@@ -236,7 +245,7 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
           agents: [],
         });
       } catch {
-        if (revoked || down) return undefined;
+        if (revoked || modeNow() === "closed") return undefined;
         await sleep(Math.min(RETRY_BASE_MS * 2 ** attempt, RECONNECT_MAX_MS));
       }
     }
@@ -248,11 +257,14 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
     get protocol() {
       return welcome?.protocol;
     },
+    get mode() {
+      return mode;
+    },
     start() {
-      if (running) return;
-      running = true;
+      if (mode !== "idle") return;
+      mode = "serving";
       void hello().then((answer) => {
-        if (!answer || down) return;
+        if (!answer || modeNow() === "closed") return;
         if (!answer.accepted) {
           close();
           logEvent("link_closed", { appOrigin: origin, reason: "incompatible" });
@@ -266,7 +278,10 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
           coalesceMs: 0,
           reconnectMaxMs: RECONNECT_MAX_MS,
           onEvents: (events) => {
-            if (events.some((event) => event.tags.some((tag) => tag[0] === CHAT_TAG))) {
+            if (
+              modeNow() === "serving" &&
+              events.some((event) => event.tags.some((tag) => tag[0] === CHAT_TAG))
+            ) {
               deps.onWake(link);
             }
           },
@@ -279,8 +294,11 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
           answer.heartbeatMs,
         );
         heartbeat.unref();
-        deps.onWake(link);
+        if (modeNow() === "serving") deps.onWake(link);
       });
+    },
+    drain() {
+      if (mode === "serving") mode = "draining";
     },
     async stop(options = {}) {
       if (options.revoke && !grant.dev) {
@@ -291,7 +309,6 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
           fetch: deps.fetch,
         });
       }
-      running = false;
       close();
     },
   };

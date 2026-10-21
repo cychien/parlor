@@ -43,6 +43,7 @@
   "devDependencies": {
     "@capacitor/app": "^8.1.2",
     "@capacitor/local-notifications": "^8.3.1",
+    "@parlor/capacitor-device-key": "workspace:*",
     "@tauri-apps/api": "^2.12.1",
     "@tauri-apps/plugin-deep-link": "^2.6.1",
     "@tauri-apps/plugin-notification": "^2.5.1",
@@ -54,6 +55,7 @@
   "peerDependencies": {
     "@capacitor/app": ">=8",
     "@capacitor/local-notifications": ">=8",
+    "@parlor/capacitor-device-key": ">=0",
     "@tauri-apps/api": ">=2",
     "@tauri-apps/plugin-deep-link": ">=2",
     "@tauri-apps/plugin-notification": ">=2"
@@ -72,6 +74,9 @@
       "optional": true
     },
     "@capacitor/local-notifications": {
+      "optional": true
+    },
+    "@parlor/capacitor-device-key": {
       "optional": true
     }
   }

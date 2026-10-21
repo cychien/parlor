@@ -1,13 +1,6 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
-import {
-  createServer,
-  type IncomingMessage,
-  type Server,
-  type ServerResponse,
-} from "node:http";
-import type { AddressInfo } from "node:net";
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,179 +10,26 @@ import { asId } from "@parlor/core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { acpLauncher } from "./acp.js";
+import { connectControl } from "./control.js";
 import { createHostDaemon } from "./daemon.js";
 import { type AppGrant, fileGrantStore, keychainHostKeys } from "./grants.js";
 import { createMcpProxy } from "./mcp-proxy.js";
 import { hostPaths } from "./paths.js";
 import { DEFAULT_POLICY, DEV_POLICY } from "./policy.js";
 import { createSessionPool } from "./pool.js";
-import { memoryHostKeys } from "./spec-kit.js";
+import {
+  claimedTurn,
+  grantFor,
+  hostRoutes,
+  json,
+  memoryHostKeys,
+  type StubApp,
+  stubApp,
+} from "./spec-kit.js";
 import { fileTrustStore } from "./trust.js";
 
 const BIN = fileURLToPath(new URL("../bin/parlor-host-dev.mjs", import.meta.url));
 const FAKE = fileURLToPath(new URL("../bin/fake-agent.mjs", import.meta.url));
-
-interface StubApp {
-  readonly origin: string;
-  readonly seen: {
-    readonly method: string;
-    readonly path: string;
-    readonly body: string;
-  }[];
-  close(): Promise<void>;
-}
-
-type Route = (
-  request: IncomingMessage,
-  body: string,
-  response: ServerResponse,
-) => boolean;
-
-async function stubApp(route: Route): Promise<StubApp> {
-  const seen: StubApp["seen"][number][] = [];
-  const server: Server = createServer((request, response) => {
-    let body = "";
-    request.setEncoding("utf8");
-    request.on("data", (chunk: string) => (body += chunk));
-    request.on("end", () => {
-      const path = new URL(request.url ?? "/", "http://stub").pathname;
-      seen.push({ method: request.method ?? "GET", path, body });
-      if (!route(request, body, response)) response.writeHead(404).end();
-    });
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return {
-    origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
-    seen,
-    close: () =>
-      new Promise((resolve) => {
-        server.closeAllConnections();
-        server.close(() => resolve());
-      }),
-  };
-}
-
-const json = (response: ServerResponse, value: unknown, status = 200) =>
-  response
-    .writeHead(status, { "content-type": "application/json" })
-    .end(JSON.stringify(value));
-
-const welcome = {
-  id: "h",
-  accepted: true,
-  protocol: HOST_PROTOCOL,
-  leaseMs: 60_000,
-  heartbeatMs: 30_000,
-};
-
-function hostRoutes(options: {
-  readonly wake: boolean;
-  readonly turn?: () => unknown;
-}): Route {
-  let claimed = false;
-  return (request, body, response) => {
-    const path = new URL(request.url ?? "/", "http://stub").pathname;
-    const action = path.startsWith("/_parlor/chat/actions/")
-      ? path.split("/").at(-1)
-      : undefined;
-    if (action === "hostHello")
-      return (json(response, { data: welcome, tags: [] }), true);
-    if (action === "hostClaim") {
-      if (options.turn && !claimed) {
-        claimed = true;
-        return (json(response, { data: options.turn(), tags: [] }), true);
-      }
-      return (
-        json(response, { error: { code: "not_found", message: "No turn." } }, 404), true
-      );
-    }
-    if (action === "hostSignals") return (json(response, { data: [], tags: [] }), true);
-    if (action) {
-      return (
-        json(response, {
-          data: {
-            id: "t1",
-            leaseUntil: Date.now() + 60_000,
-            token: { token: "turn-2", expiresAt: Date.now() + 60_000 },
-          },
-          tags: [],
-        }),
-        true
-      );
-    }
-    if (path === "/_parlor/sync/token") {
-      return (
-        json(response, {
-          protocol: 1,
-          transport: "sse",
-          endpoint: "/_parlor/sync/stream",
-          pollIntervalMs: 2_000,
-        }),
-        true
-      );
-    }
-    if (path === "/_parlor/sync/stream") {
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      response.write(
-        `event: handshake\ndata: ${JSON.stringify({ capabilities: [], keepAliveMs: 10_000 })}\n\n`,
-      );
-      if (options.wake) {
-        const events = [{ version: 1, id: "e1", tags: [["parlor_chat", "t1"]] }];
-        response.write(
-          `event: message\ndata: ${JSON.stringify({ events, cursor: "1.e1" })}\n\n`,
-        );
-      }
-      return true;
-    }
-    if (path === "/_parlor/mcp") {
-      const message = JSON.parse(body) as { id?: number; method: string };
-      if (message.id === undefined) return (response.writeHead(202).end(), true);
-      const result =
-        message.method === "initialize"
-          ? {
-              protocolVersion: "2025-06-18",
-              capabilities: { tools: {} },
-              serverInfo: { name: "stub", version: "1" },
-            }
-          : message.method === "tools/list"
-            ? { tools: [] }
-            : { content: [{ type: "text", text: "[]" }] };
-      return (json(response, { jsonrpc: "2.0", id: message.id, result }), true);
-    }
-    return false;
-  };
-}
-
-const claimedTurn = (turnId: string, agentId: string, context: string, text: string) => ({
-  id: "t1",
-  turnId,
-  agent: { hostId: "h-A", agentId },
-  clientId: "tab",
-  prompt: {
-    id: `p-${turnId}`,
-    threadId: "t1",
-    turnId,
-    seq: 1,
-    at: Date.now(),
-    author: "user",
-    kind: "prompt",
-    body: { text, agent: { hostId: "h-A", agentId } },
-  },
-  device: undefined,
-  context,
-  token: { token: "turn-1", expiresAt: Date.now() + 60_000 },
-  leaseUntil: Date.now() + 60_000,
-});
-
-const grantFor = (origin: string, name: string, workspace: string): AppGrant => ({
-  appOrigin: origin,
-  appName: name,
-  grantId: asId("grant", `host:${name}`),
-  hostId: asId("host", `h-${name}`),
-  account: { userId: asId("user", "alice"), name: "Alice", email: "alice@example.com" },
-  workspace,
-  createdAt: 1,
-});
 
 describe("the host daemon", () => {
   let home: string;
@@ -628,7 +468,7 @@ describe("what the daemon enforces on a grant's turns", () => {
       await host.start();
       await vi.waitFor(() => expect(outcomeOf(first)).toBeDefined(), { timeout: 15_000 });
       await vi.waitFor(() => expect(outcomeOf(dev)).toBeDefined(), { timeout: 15_000 });
-      expect(outcomeOf(first)).toEqual({ state: "failed", reason: "signature_invalid" });
+      expect(outcomeOf(first)).toEqual({ state: "failed", reason: "device_rejected" });
       expect(outcomeOf(dev)).toEqual({ state: "failed", reason: "agent_unavailable" });
 
       await writeFile(paths.policy, JSON.stringify({ deviceApproval: "off" }));
@@ -665,4 +505,106 @@ describe("what the daemon enforces on a grant's turns", () => {
       await rm(root, { recursive: true, force: true });
     }
   }, 60_000);
+});
+
+describe("a daemon that is slow to detect its agents", () => {
+  async function slowHost() {
+    const root = await mkdtemp(join(tmpdir(), "ps-"));
+    const paths = hostPaths(join(root, ".parlor", "host"));
+    mkdirSync(paths.root, { recursive: true });
+    const binary = join(root, "slow-agent");
+    await writeFile(binary, "#!/bin/sh\nsleep 1.5\necho 1.2.3\n");
+    await chmod(binary, 0o755);
+    await writeFile(
+      paths.agents,
+      JSON.stringify([
+        {
+          id: "slow",
+          name: "Slow agent",
+          launch: { kind: "native", command: binary, args: [] },
+          binary,
+        },
+      ]),
+    );
+    const keys = memoryHostKeys();
+    const grants = fileGrantStore(paths.grants);
+    const host = createHostDaemon({
+      release: {
+        version: "0.0.0",
+        protocols: { min: 1, max: HOST_PROTOCOL },
+        control: 1,
+      },
+      paths,
+      grants,
+      keys,
+      trust: fileTrustStore(paths.trust),
+      pool: createSessionPool(paths.sessions),
+      proxy: createMcpProxy("parlor-host"),
+      launcher: acpLauncher(),
+      prompter: {
+        confirmPairing: async () => false,
+        approveDevice: async () => false,
+        answerHere: async () => undefined,
+        turnStarted: () => undefined,
+      },
+      policy: DEV_POLICY,
+    });
+    return { root, paths, keys, grants, host };
+  }
+
+  it("binds the control socket and frees the lock before detecting agents", async () => {
+    const { root, paths, host } = await slowHost();
+    let started = false;
+    const starting = host.start().then(() => void (started = true));
+    try {
+      const control = await vi.waitFor(
+        async () => {
+          const client = await connectControl(paths.control);
+          if (!client) throw new Error("not bound");
+          return client;
+        },
+        { timeout: 1_000, interval: 20 },
+      );
+      expect((await control.send({ op: "hello", client: undefined as never })).ok).toBe(
+        true,
+      );
+      control.close();
+      expect(started).toBe(false);
+      expect(await readFile(paths.lock, "utf8").catch(() => "gone")).toBe("gone");
+      await starting;
+    } finally {
+      await starting.catch(() => undefined);
+      await host.stop();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("answers a connect that arrives mid-startup only once the agents are known", async () => {
+    const { root, paths, keys, grants, host } = await slowHost();
+    const app = await stubApp(hostRoutes({ wake: false }));
+    await (await keys.create(app.origin)).keep(asId("grant", "host:S"));
+    await grants.save(grantFor(app.origin, "Slow", join(root, "Parlor", "slow")));
+    const starting = host.start();
+    try {
+      const control = await vi.waitFor(
+        async () => {
+          const client = await connectControl(paths.control);
+          if (!client) throw new Error("not bound");
+          return client;
+        },
+        { timeout: 1_000, interval: 20 },
+      );
+      const reply = await control.send({ op: "connect", appOrigin: app.origin });
+      control.close();
+      expect(reply.ok).toBe(true);
+      const report = app.seen.find((seen) => seen.path.endsWith("/hostReport"));
+      expect(report?.body).toContain('"id":"slow"');
+      await starting;
+    } finally {
+      await starting.catch(() => undefined);
+      await host.stop();
+      await app.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

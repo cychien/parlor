@@ -1,0 +1,1367 @@
+// Shared code of the phase 6 check scripts (the Mac and iOS shells, the shared Parlor Host
+// service and its releases), on top of the phase 5 kit: native instances, the webviews of
+// both shells, the app's native pairing dialog, the installed service in an isolated HOME,
+// source copies that act as a second app or bundle another host release, and release fixtures.
+import { generateKeyPairSync, randomBytes } from "node:crypto";
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { createConnection } from "node:net";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+
+import { HOMES_ROOT } from "./agent-home.mjs";
+import {
+  Inconclusive,
+  PAGE_LIB,
+  postJson,
+  processesWithHome,
+  token,
+  REAL_HOME,
+  ROOT,
+  helloCli,
+  killHome,
+  load,
+  makeHome,
+  parseEval,
+  readJsonLines,
+  runAsync,
+  runSync,
+  sleep,
+  writeAgentProfiles,
+} from "./phase4-kit.mjs";
+import { evalBody, nativeTool } from "./webview.mjs";
+
+export * from "./phase5-kit.mjs";
+
+export const SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
+export const HARNESS_HOME =
+  process.env.PARLOR_VERIFY_HOME ?? join(homedir(), ".cache", "parlor-verify-hello");
+const TOOLS_DIR = join(HARNESS_HOME, "tools");
+export const HELLO_APP_ID = "dev.parlor.hello";
+export const SECOND_APP = { id: "dev.parlor.hellotwo", name: "Hello Two" };
+export const SESSION_ACCOUNT = "parlor.session";
+
+/** A short, unique instance id; chosen before `up` so a check knows the snapshot path in advance. */
+export function instanceId(tag) {
+  return `${tag}-${randomBytes(2).toString("hex")}`;
+}
+
+export function snapshotRepo(id) {
+  return join(HARNESS_HOME, "instances", id, "repo");
+}
+
+/** `$H up` for any target; `release`/`noLaunch`/`sharedOrigin`/`home`/`source`/`id` map to the driver flags. */
+export async function upNative(
+  check,
+  {
+    name,
+    target = "mac",
+    seed = "baseline",
+    home,
+    release,
+    noLaunch,
+    source,
+    id,
+    sharedOrigin,
+  },
+) {
+  const args = ["up", "--target", target];
+  if (id) args.push("--id", id);
+  if (seed) args.push("--seed", seed);
+  if (home) args.push("--home", home);
+  if (release) args.push("--release");
+  if (noLaunch) args.push("--no-launch");
+  if (sharedOrigin) args.push("--shared-origin");
+  if (source) args.push("--source", source);
+  const { load1, cores } = load();
+  check.log(`load ${load1} on ${cores} cores before up ${args.slice(1).join(" ")}`);
+  const result = await helloCli(args, { timeout: 2_700_000 });
+  check.save(`${name}.up.log`, result.stderr);
+  if (result.status !== 0) {
+    if (/refusing to start/.test(result.stderr))
+      throw new Inconclusive(
+        `hello up refused to start: ${result.stderr.split("\n").find((l) => l.includes("refusing"))}`,
+      );
+    throw new Error(
+      `hello up ${args.join(" ")} failed (${result.status})\n${result.stderr.slice(-2500)}`,
+    );
+  }
+  const up = JSON.parse(result.stdout);
+  for (const origin of [
+    up.urls.web,
+    `${up.urls.web}/`,
+    up.urls.server,
+    `${up.urls.server}/`,
+  ])
+    check.origins.add(origin);
+  check.onCleanup(async () => {
+    const down = await helloCli(
+      ["down", up.id, "--save-log", join(check.dir, `${name}.dev.log`)],
+      { timeout: 180_000 },
+    );
+    if (down.status !== 0) check.log(`down ${up.id} failed: ${down.stderr.slice(-600)}`);
+  });
+  check.log(
+    `${name}: ${up.id} up (${target}${release ? ", release" : ""}) at ${up.urls.web}`,
+  );
+  return up;
+}
+
+export async function instanceInfo(id) {
+  const result = await helloCli(["info", id]);
+  return JSON.parse(result.stdout);
+}
+
+/** A mac or iOS app's webview, driven through `$H webview` and `$H screenshot`. */
+export class Webview {
+  constructor(check, instance) {
+    this.check = check;
+    this.info = instance;
+    this.id = instance.id;
+  }
+
+  async cli(args, { timeout = 120_000 } = {}) {
+    const result = await helloCli(["webview", this.id, ...args], { timeout });
+    if (result.status !== 0)
+      throw new Error(
+        `webview ${args.slice(0, 3).join(" ")} exited ${result.status}: ${result.stderr.trim().slice(-800)}`,
+      );
+    return result.stdout;
+  }
+
+  async eval(js) {
+    const out = (await this.cli(["eval", js])).trim();
+    return out === "undefined" ? undefined : JSON.parse(out);
+  }
+
+  /** `body` is a function of the phase 4 page helpers (sidebar, log, items, agents). */
+  page(body) {
+    return this.eval(
+      `async () => { const L = (${PAGE_LIB})(); return await (${body})(L); }`,
+    );
+  }
+
+  click(role, name) {
+    return this.cli(["click", role, name]);
+  }
+
+  fill(role, name, text) {
+    return this.cli(["fill", role, name, text]);
+  }
+
+  async snapshot(name) {
+    const file = join(this.check.dir, name);
+    await this.cli(["snapshot", file]);
+    return readFileSync(file, "utf8");
+  }
+
+  async nodes() {
+    const file = join(this.check.dir, `.${this.id}.nodes.json`);
+    await this.cli(["snapshot", file, "--json"]);
+    const json = JSON.parse(readFileSync(file, "utf8"));
+    rmSync(file, { force: true });
+    return json.nodes;
+  }
+
+  async has(role, name) {
+    return (await this.nodes()).some((n) => n.role === role && n.name === name);
+  }
+
+  async waitFor(role, name, ms) {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      if (await this.has(role, name).catch(() => false)) return true;
+      await sleep(300);
+    }
+    return false;
+  }
+
+  async screenshot(name) {
+    const file = join(this.check.dir, name);
+    const result = await helloCli(["screenshot", this.id, file], { timeout: 60_000 });
+    if (result.status !== 0)
+      this.check.log(`screenshot ${name} failed: ${result.stderr.trim()}`);
+    return file;
+  }
+
+  async path() {
+    return this.eval("location.pathname").catch(() => undefined);
+  }
+
+  /** Signs in through the app's own sign-in page; resolves once the app left `/sign-in`. */
+  async signin(user = "alice", ms = 60_000) {
+    if (!(await this.waitFor("button", "Sign in", ms)))
+      throw new Error(`${this.id}: the sign-in page never showed button "Sign in"`);
+    await this.fill("textbox", "Email", `${user}@example.com`);
+    await this.fill("textbox", "Password", "parlor-verify-hello");
+    await this.click("button", "Sign in");
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      if (await this.signedIn()) return true;
+      await sleep(400);
+    }
+    throw new Error(`${this.id}: still not signed in ${ms} ms after Sign in`);
+  }
+
+  /** On an app page, not the sign-in page. */
+  async signedIn() {
+    const path = await this.path();
+    return (
+      typeof path === "string" &&
+      !path.startsWith("/sign-in") &&
+      !(await this.has("button", "Sign in"))
+    );
+  }
+
+  async sidebarOpen() {
+    return (await this.nodes()).some((n) => n.role === "textbox" && n.name === "Message");
+  }
+
+  async openSidebar(ms = 20_000) {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      if (await this.sidebarOpen()) return true;
+      const agent = (await this.nodes()).find(
+        (n) => n.role === "button" && /^Agent(,.*)?$/.test(n.name),
+      );
+      if (agent) await this.click("button", agent.name).catch(() => {});
+      await sleep(500);
+    }
+    return false;
+  }
+
+  /** The options of `combobox "Agent"`, read from the page. */
+  agents() {
+    return this.page(`(L) => L.agents().map((o) => o.text)`);
+  }
+
+  async waitAgents(texts, ms) {
+    const deadline = Date.now() + ms;
+    let listed = [];
+    while (Date.now() < deadline) {
+      listed = await this.agents().catch(() => []);
+      if (texts.every((t) => listed.includes(t))) return { ok: true, listed };
+      await sleep(400);
+    }
+    return { ok: false, listed };
+  }
+
+  async selectAgent(text) {
+    await this.fill("combobox", "Agent", text);
+    return this.page(`(L) => L.agents().filter((o) => o.selected).map((o) => o.text)`);
+  }
+
+  items() {
+    return this.page(`(L) => L.items()`);
+  }
+
+  async send(text) {
+    await this.fill("textbox", "Message", text);
+    await this.click("button", "Send");
+    return Date.now();
+  }
+
+  async newChat() {
+    if (await this.has("button", "New chat")) await this.click("button", "New chat");
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      if ((await this.items()).length === 0) return true;
+      await sleep(300);
+    }
+    return false;
+  }
+
+  /** Same rule as the browser's: `prompts` prompts, something after them, no turn running, twice in a row. */
+  async waitSettled({ prompts, ms, label = "turn", onPoll }) {
+    const deadline = Date.now() + ms;
+    let stable = 0;
+    let last;
+    while (Date.now() < deadline) {
+      last = await this.page(
+        `(L) => ({ items: L.items(), stop: L.stopVisible() })`,
+      ).catch(() => undefined);
+      if (last) {
+        if (onPoll) await onPoll(last);
+        const promptCount = last.items.filter((i) => i.kind === "prompt").length;
+        const rest = last.items.filter((i) => i.kind !== "prompt");
+        const busy =
+          last.stop ||
+          last.items.some((i) => i.streaming === "true") ||
+          last.items.some((i) => i.kind === "ask" && i.ask?.state === "open");
+        stable = promptCount >= prompts && rest.length > 0 && !busy ? stable + 1 : 0;
+        if (stable >= 2) return { settled: true, last };
+      }
+      await sleep(700);
+    }
+    this.check.log(`${label} not settled after ${ms} ms`);
+    return { settled: false, last };
+  }
+}
+
+function axTool() {
+  return nativeTool(TOOLS_DIR, "webview-ax");
+}
+
+/** The accessibility tree of a process's windows (sheets and dialogs included). */
+export function axTree(pid) {
+  const result = runSync(axTool(), ["tree", String(pid)]);
+  if (result.status !== 0)
+    throw new Error(`webview-ax tree ${pid}: ${result.stderr.trim()}`);
+  return JSON.parse(result.stdout);
+}
+
+export function axPress(pid, path) {
+  const result = runSync(axTool(), ["press", String(pid), path]);
+  if (result.status !== 0)
+    throw new Error(`webview-ax press ${pid} ${path}: ${result.stderr.trim()}`);
+  return Date.now();
+}
+
+/** The app's native dialog: the window or sheet holding the static text `title`, with its texts and buttons. */
+/**
+ * The pids that can own an app's native alert: the app itself, and UserNotificationCenter, which
+ * draws an alert the app raises through CFUserNotification (as tauri-plugin-dialog does off the
+ * main thread).
+ */
+export function dialogOwners(ownerPid) {
+  const center = runSync("pgrep", ["-x", "UserNotificationCenter"])
+    .stdout.split("\n")
+    .filter(Boolean)
+    .map(Number);
+  return [ownerPid, ...center];
+}
+
+function scanDialog(node) {
+  const texts = [];
+  const buttons = [];
+  const collect = (n) => {
+    if (n.role === "AXStaticText" && (n.value ?? n.title)) texts.push(n.value ?? n.title);
+    if (n.role === "AXTextArea" && n.value) texts.push(n.value);
+    if (n.role === "AXButton" && (n.title ?? n.desc))
+      buttons.push({ name: n.title ?? n.desc, path: n.path });
+    for (const c of n.children ?? []) collect(c);
+  };
+  collect(node);
+  return { texts, buttons };
+}
+
+/** The window or sheet titled `title` or holding a static text `title` among the windows of `pid`. */
+function dialogIn(pid, title) {
+  const tree = axTree(pid);
+  const containers = [];
+  const walk = (node) => {
+    if (["AXWindow", "AXSheet"].includes(node.role)) containers.push(node);
+    for (const child of node.children ?? []) if (child.role === "AXSheet") walk(child);
+  };
+  for (const window of tree.windows) walk(window);
+  for (const node of containers.reverse()) {
+    const { texts, buttons } = scanDialog(node);
+    const titled = node.role === "AXWindow" && node.title === title;
+    if (titled || texts.some((t) => t.trim() === title))
+      return {
+        texts,
+        buttons,
+        title,
+        frame: node.frame,
+        role: node.role,
+        subrole: node.subrole,
+        pid,
+      };
+  }
+  return undefined;
+}
+
+/** The app's native dialog, in the app's own windows or the alert UserNotificationCenter draws for it. */
+export function findNativeDialog(ownerPid, title) {
+  for (const pid of dialogOwners(ownerPid)) {
+    try {
+      const found = dialogIn(pid, title);
+      if (found)
+        return { ...found, owner: pid === ownerPid ? "app" : "UserNotificationCenter" };
+    } catch {
+      /* no access to that process's windows right now */
+    }
+  }
+  return undefined;
+}
+
+export async function waitNativeDialog(pid, title, ms) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    const dialog = findNativeDialog(pid, title);
+    if (dialog) return dialog;
+    await sleep(250);
+  }
+  return undefined;
+}
+
+/**
+ * A machine-wide lock, held by one script at a time for `fn` (a dead holder is taken over).
+ * `ms` bounds the wait.
+ */
+export async function withMachineLock(name, fn, { ms = 3 * 60 * 60_000, onWait } = {}) {
+  const lock = join(HARNESS_HOME, `.${name}.lock`);
+  const deadline = Date.now() + ms;
+  let announced = false;
+  for (;;) {
+    try {
+      mkdirSync(lock, { recursive: false });
+      writeFileSync(join(lock, "pid"), String(process.pid));
+      break;
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      let holder = 0;
+      try {
+        holder = Number(readFileSync(join(lock, "pid"), "utf8"));
+      } catch {
+        /* being written */
+      }
+      if (holder === process.pid) return fn();
+      if (holder && runSync("kill", ["-0", String(holder)]).status !== 0)
+        rmSync(lock, { recursive: true, force: true });
+      if (!announced && onWait) onWait(holder);
+      announced = true;
+      if (Date.now() > deadline)
+        throw new Inconclusive(
+          `could not take ${lock} (held by pid ${holder}) within ${ms} ms`,
+        );
+      await sleep(1000);
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    rmSync(lock, { recursive: true, force: true });
+  }
+}
+
+const SECURITY_PROMPT = /parlor|Hello/;
+
+/** Every SecurityAgent (Keychain access) prompt on screen whose text names one of the apps under test. */
+export function securityPrompts() {
+  const pids = runSync("pgrep", ["-x", "SecurityAgent"])
+    .stdout.split("\n")
+    .filter(Boolean)
+    .map(Number);
+  const found = [];
+  for (const pid of pids) {
+    let tree;
+    try {
+      tree = axTree(pid);
+    } catch {
+      continue;
+    }
+    for (const window of tree.windows) {
+      const { texts, buttons } = scanDialog(window);
+      if (texts.some((t) => SECURITY_PROMPT.test(t)))
+        found.push({ pid, texts, buttons, frame: window.frame });
+    }
+    if (tree.windows.length === 0) {
+      for (const frame of securityAgentWindows(pid))
+        found.push({
+          pid,
+          texts: [
+            "a SecurityAgent prompt is on screen (Accessibility shows no text; see the screenshot)",
+          ],
+          buttons: [],
+          frame,
+        });
+    }
+  }
+  return found;
+}
+
+const SECURITY_WINDOWS = `ObjC.import("CoreGraphics");
+function run(argv) {
+  const all = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, 0)));
+  return JSON.stringify(all.filter((w) => w.kCGWindowOwnerPID === Number(argv[0]) && w.kCGWindowBounds.Width > 200)
+    .map((w) => ({ x: w.kCGWindowBounds.X, y: w.kCGWindowBounds.Y, w: w.kCGWindowBounds.Width, h: w.kCGWindowBounds.Height })));
+}`;
+
+/** SecurityAgent's on-screen prompt windows, which Accessibility does not always expose. */
+function securityAgentWindows(pid) {
+  const out = runSync("osascript", [
+    "-l",
+    "JavaScript",
+    "-e",
+    SECURITY_WINDOWS,
+    String(pid),
+  ]);
+  try {
+    return JSON.parse(out.stdout.trim());
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Runs a Mac check's `body` alone on the machine (the app's session item and the host's items
+ * live in the one login Keychain, and an ad-hoc build reading an item another build wrote makes
+ * macOS ask for the login password) and watches for such Keychain prompts. A prompt that names
+ * the apps under test is saved, denied so nothing waits on it, and makes the check INCONCLUSIVE:
+ * no script can type the user's password.
+ */
+export async function macCheck(check, body) {
+  return withMachineLock(
+    "mac-check",
+    async () => {
+      const inherited = securityPrompts();
+      for (const prompt of inherited)
+        runSync(axTool(), ["type", String(prompt.pid), "\u001b", "10"]);
+      if (inherited.length) {
+        check.save(`${check.id}.keychain-prompts-inherited.json`, inherited);
+        await sleep(1500);
+      }
+      const prompts = [];
+      const run = { stopped: false };
+      const watcher = (async () => {
+        while (!run.stopped) {
+          for (const prompt of securityPrompts()) {
+            prompts.push({ at: Date.now(), ...prompt });
+            await screenshotRegion(
+              check,
+              prompt.frame,
+              `${check.id}.keychain-prompt-${prompts.length}.png`,
+            );
+            const deny = prompt.buttons.find((b) =>
+              ["拒絕", "Deny", "Cancel", "取消"].includes(b.name),
+            );
+            if (deny) runSync(axTool(), ["press", String(prompt.pid), deny.path]);
+            else runSync(axTool(), ["type", String(prompt.pid), "\u001b", "10"]);
+          }
+          await sleep(1000);
+        }
+      })();
+      let failure;
+      try {
+        await body();
+      } catch (error) {
+        failure = error;
+      }
+      run.stopped = true;
+      await watcher;
+      if (prompts.length) {
+        check.save(`${check.id}.keychain-prompts.json`, prompts);
+        throw new Inconclusive(
+          `macOS asked for the login Keychain password (${prompts[0].texts[0]}; screenshots ${check.id}.keychain-prompt-*.png); no script can type the password`,
+        );
+      }
+      if (failure) throw failure;
+    },
+    {
+      onWait: (holder) =>
+        check.log(`waiting for the mac-check lock held by pid ${holder}`),
+    },
+  );
+}
+
+export async function screenshotRegion(check, frame, name) {
+  if (!frame) return undefined;
+  const file = join(check.dir, name);
+  const region = [frame.x, frame.y, frame.w, frame.h].map((v) => Math.round(v)).join(",");
+  await runAsync("screencapture", ["-x", `-R${region}`, file], { timeout: 15_000 });
+  return file;
+}
+
+export function pressDialogButton(dialog, name) {
+  const button = dialog.buttons.find((b) => b.name === name);
+  if (!button)
+    throw new Error(
+      `the dialog has no button "${name}": ${JSON.stringify(dialog.buttons.map((b) => b.name))}`,
+    );
+  return axPress(dialog.pid, button.path);
+}
+
+export function appPid(instance) {
+  return instance.appPid;
+}
+
+/** The installed service of an isolated HOME. */
+export class Service {
+  constructor(home) {
+    this.home = home;
+    this.root = join(home, ".parlor", "host");
+    this.current = join(this.root, "current");
+    this.versions = join(this.root, "versions");
+    this.control = join(this.root, "run", "control.sock");
+    this.daemonLog = join(this.root, "logs", "daemon.log");
+    this.loginItem = join(home, "Library", "LaunchAgents", "dev.parlor.host.plist");
+  }
+
+  env() {
+    return {
+      HOME: this.home,
+      PATH: SYSTEM_PATH,
+      USER: process.env.USER ?? "",
+      TMPDIR: process.env.TMPDIR ?? "/tmp/",
+    };
+  }
+
+  bin() {
+    return join(this.current, "parlor-host");
+  }
+
+  /** `parlor-host status --json` of the installed release, run as the user would from a terminal. */
+  async status() {
+    if (!existsSync(this.bin())) return { error: `${this.bin()} does not exist` };
+    const result = await runAsync(this.bin(), ["status", "--json"], {
+      env: this.env(),
+      timeout: 30_000,
+    });
+    try {
+      return {
+        ...JSON.parse(result.stdout.trim().split("\n").pop()),
+        exit: result.status,
+      };
+    } catch {
+      return {
+        error: `${result.stdout}${result.stderr}`.slice(0, 600),
+        exit: result.status,
+      };
+    }
+  }
+
+  /** The daemon: the pids `lsof -t` reports on the control socket. */
+  daemonPids() {
+    if (!existsSync(this.control)) return [];
+    return runSync("lsof", ["-t", this.control])
+      .stdout.split("\n")
+      .filter(Boolean)
+      .map(Number)
+      .sort((a, b) => a - b);
+  }
+
+  /** Every process of this HOME whose command runs a parlor-host binary. */
+  hostProcesses() {
+    const out = runSync("ps", ["-axww", "-E", "-o", "pid=,ppid=,lstart=,command="], {
+      env: { ...process.env, COLUMNS: "100000" },
+    }).stdout;
+    const marker = new RegExp(
+      `(^|\\s)HOME=${this.home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\s|$)`,
+    );
+    return out
+      .split("\n")
+      .map((line) =>
+        line.match(/^\s*(\d+)\s+(\d+)\s+(\w{3} \w{3}\s+\d+ [\d:]+ \d{4})\s+(.*)$/),
+      )
+      .filter(
+        (m) =>
+          m && marker.test(m[4]) && /parlor-host(\s|$)/.test(m[4].split(/\s[A-Z_]+=/)[0]),
+      )
+      .map((m) => ({
+        pid: Number(m[1]),
+        ppid: Number(m[2]),
+        started: m[3],
+        command: m[4].split(/\s[A-Z_][A-Z0-9_]*=/)[0],
+      }));
+  }
+
+  /** `ls -l` of `current` and where it resolves. */
+  currentLink() {
+    let link;
+    let real;
+    try {
+      link = readlinkSync(this.current);
+      real = realpathSync(this.current);
+    } catch {
+      /* missing */
+    }
+    return {
+      exists: existsSync(this.current),
+      isLink: (() => {
+        try {
+          return lstatSync(this.current).isSymbolicLink();
+        } catch {
+          return false;
+        }
+      })(),
+      link,
+      real,
+      ls:
+        runSync("ls", ["-l", this.current]).stdout +
+        runSync("ls", ["-lR", this.versions]).stdout,
+    };
+  }
+
+  loginItemPlist() {
+    if (!existsSync(this.loginItem)) return undefined;
+    const result = runSync("plutil", ["-convert", "json", "-o", "-", this.loginItem]);
+    try {
+      return JSON.parse(result.stdout);
+    } catch {
+      return { raw: readFileSync(this.loginItem, "utf8") };
+    }
+  }
+
+  logEvents() {
+    return readJsonLines(this.daemonLog);
+  }
+
+  /** The `{"event":"ensure",...}` lines an app appended to its log, newest last. */
+  ensureLines(appId) {
+    return readJsonLines(
+      join(this.home, "Library", "Logs", appId, "parlor-host.log"),
+    ).filter((line) => line.event === "ensure");
+  }
+
+  ensureLogFile(appId) {
+    return join(this.home, "Library", "Logs", appId, "parlor-host.log");
+  }
+}
+
+/** The app's session item in the login Keychain, by attributes only (no secret is read). */
+export function sessionItem(appId) {
+  const result = runSync("security", [
+    "find-generic-password",
+    "-s",
+    appId,
+    "-a",
+    SESSION_ACCOUNT,
+  ]);
+  return {
+    exists: result.status === 0,
+    status: result.status,
+    output: `${result.stdout}${result.stderr}`,
+  };
+}
+
+export function deleteSessionItem(appId) {
+  for (let i = 0; i < 5; i++) {
+    if (
+      runSync("security", ["delete-generic-password", "-s", appId, "-a", SESSION_ACCOUNT])
+        .status !== 0
+    )
+      break;
+  }
+}
+
+export class KeychainBlocked extends Error {}
+
+/** The Mac app's device keys as the Drive contract names them (SecKey items, class key, P-256). */
+export function deviceKeyNames(appId) {
+  return [
+    { label: `${appId} device signing key`, tag: `${appId}.device-key.signing` },
+    { label: `${appId} device presence key`, tag: `${appId}.device-key.presence` },
+  ];
+}
+
+/**
+ * Deletes exactly the contract's device keys of `appId` (by class key, label and application tag;
+ * the Keychain is never listed). Throws KeychainBlocked when the deletion is refused or does not
+ * answer within 20 s (a password prompt), with what macOS said.
+ */
+export async function deleteDeviceKeys(appId) {
+  const tool = nativeTool(TOOLS_DIR, "delete-device-key");
+  const results = [];
+  for (const { label, tag } of deviceKeyNames(appId)) {
+    const result = await runAsync(tool, [label, tag], { timeout: 20_000 });
+    let parsed;
+    try {
+      parsed = JSON.parse(result.stdout.trim());
+    } catch {
+      parsed = undefined;
+    }
+    if (result.timedOut || result.status !== 0 || !parsed) {
+      const prompts = securityPrompts();
+      throw new KeychainBlocked(
+        `deleting the Keychain key "${label}" (tag ${tag}) ${result.timedOut ? "did not return within 20 s" : `failed: ${(parsed?.message ?? result.stderr) || result.stdout}`}${prompts.length ? `; SecurityAgent shows: ${prompts.map((p) => p.texts.join(" / ")).join(" | ")}` : ""}`,
+      );
+    }
+    results.push(parsed);
+  }
+  return results;
+}
+
+/**
+ * Deletes the generic password(s) with exactly `label` (the contract's WebKit item, for example
+ * `parlor_app WebCrypto Master Key`), never listing the Keychain. Throws KeychainBlocked when a
+ * deletion is refused or does not return within 20 s (a password prompt).
+ */
+export async function deleteLabeledPassword(label) {
+  let deleted = 0;
+  for (let round = 0; round < 20; round++) {
+    const result = await runAsync("security", ["delete-generic-password", "-l", label], {
+      timeout: 20_000,
+    });
+    if (result.timedOut) {
+      const prompts = securityPrompts();
+      throw new KeychainBlocked(
+        `deleting the Keychain item "${label}" did not return within 20 s${prompts.length ? `; SecurityAgent shows: ${prompts.map((p) => p.texts.join(" / ")).join(" | ")}` : ""}`,
+      );
+    }
+    if (result.status === 44) return { label, deleted };
+    if (result.status !== 0)
+      throw new KeychainBlocked(
+        `deleting the Keychain item "${label}" failed (${result.status}): ${result.stderr.trim()}`,
+      );
+    deleted++;
+  }
+  return { label, deleted };
+}
+
+/** The webview's WebKit item the contract names, deleted now and when the check ends. */
+export async function ownWebKitItem(check, label) {
+  check.log(`deleted ${JSON.stringify(await deleteLabeledPassword(label))}`);
+  check.onCleanup(async () => {
+    try {
+      await deleteLabeledPassword(label);
+    } catch (error) {
+      check.log(`cleanup: ${error.message}`);
+    }
+  });
+}
+
+/** The app's Keychain items the contract names: its `parlor.session` item and both device keys. */
+export async function clearAppKeychain(check, appId) {
+  deleteSessionItem(appId);
+  const keys = await deleteDeviceKeys(appId);
+  check.log(
+    `cleared ${appId} keychain: ${keys.map((k) => `${k.label} deleted ${k.deleted}`).join(", ")}`,
+  );
+  return keys;
+}
+
+/** Clears the Keychain items of `appIds` before the check launches anything and again when it ends. */
+export async function ownAppKeychain(check, appIds) {
+  for (const appId of appIds) await clearAppKeychain(check, appId);
+  check.onCleanup(async () => {
+    for (const appId of appIds) {
+      deleteSessionItem(appId);
+      try {
+        await deleteDeviceKeys(appId);
+      } catch (error) {
+        check.log(`cleanup: ${error.message}`);
+      }
+    }
+  });
+}
+
+/** Deletes the session items of `appIds` now and when the check ends. */
+export function ownSessionItems(check, appIds) {
+  for (const appId of appIds) deleteSessionItem(appId);
+  check.onCleanup(() => {
+    for (const appId of appIds) deleteSessionItem(appId);
+  });
+}
+
+/** Fails the check when it touched the developer's own `~/.parlor` or LaunchAgents. */
+export function guardRealHome(check) {
+  const paths = [
+    join(REAL_HOME, ".parlor"),
+    join(REAL_HOME, "Library", "LaunchAgents", "dev.parlor.host.plist"),
+  ];
+  const before = Object.fromEntries(
+    paths.map((p) => [p, existsSync(p) ? statSync(p).mtimeMs : null]),
+  );
+  check.onCleanup(() => {
+    const after = Object.fromEntries(
+      paths.map((p) => [p, existsSync(p) ? statSync(p).mtimeMs : null]),
+    );
+    const changed = paths.filter((p) => before[p] !== after[p]);
+    if (changed.length) {
+      check.expect(
+        "the developer's own ~/.parlor and LaunchAgents are untouched",
+        false,
+        { before, after },
+      );
+    }
+  });
+}
+
+/**
+ * An isolated HOME under the short homes root, removed when the check ends, after every process
+ * still running with it (the installed daemon outlives the apps and `down`) is killed.
+ */
+export function shortHome(check, tag) {
+  const made = makeHome(check, tag);
+  check.onCleanup(() => killHome(check, made.home));
+  if (Buffer.byteLength(made.home) >= 40)
+    throw new Error(
+      `the isolated HOME ${made.home} is ${Buffer.byteLength(made.home)} bytes; keep it under 40 (${HOMES_ROOT})`,
+    );
+  return made.home;
+}
+
+/**
+ * Registers the fake agent before the app starts the service: its profile in the HOME's
+ * agents.json points at the snapshot of instance `id` (created by `up --id id`), through a
+ * wrapper that sets FAKE_AGENT_LOG, because the app, not the check, starts the daemon.
+ */
+export function registerFakeAgent(check, { home, id, script, tag = check.id }) {
+  const scriptFile = check.save(`${tag}.fake-script.json`, script);
+  const logFile = join(check.dir, `${tag}.fake-agent.log`);
+  const entry = join(snapshotRepo(id), "packages", "agent-host", "bin", "fake-agent.mjs");
+  const wrapper = join(home, "bin", `${tag}.fake-agent.sh`);
+  const q = (v) => `'${String(v).replaceAll("'", "'\\''")}'`;
+  writeFileSync(
+    wrapper,
+    `#!/bin/sh\nFAKE_AGENT_LOG=${q(logFile)} exec ${q(process.execPath)} ${q(entry)} ${q(scriptFile)} "$@"\n`,
+  );
+  chmodSync(wrapper, 0o755);
+  const profile = {
+    id: "fake",
+    name: "Fake agent",
+    launch: { kind: "native", command: wrapper, args: [] },
+    binary: process.execPath,
+  };
+  writeAgentProfiles(home, [profile]);
+  return {
+    id: "fake",
+    name: "Fake agent",
+    profile,
+    scriptFile,
+    logFile,
+    messages: () => readJsonLines(logFile),
+  };
+}
+
+/**
+ * A copy of this checkout acting as another app (`appId`, `appName`) and/or bundling another
+ * host release (`release`: a dir with `parlor-host` and `parlor-host.sig`), committed so the
+ * driver can snapshot it; removed when the check ends.
+ */
+export async function sourceCopy(check, { tag, appId, appName, release }) {
+  const dir = join(HARNESS_HOME, "sources", `${tag}-${randomBytes(2).toString("hex")}`);
+  mkdirSync(dir, { recursive: true });
+  check.onCleanup(() => rmSync(dir, { recursive: true, force: true }));
+  const rsync = await runAsync(
+    "rsync",
+    [
+      "-a",
+      "--delete",
+      "--exclude=/.git",
+      "--exclude=node_modules",
+      "--exclude=.parlor",
+      "--exclude=/docs",
+      "--exclude=dist",
+      "--exclude=target",
+      `${ROOT}/`,
+      `${dir}/`,
+    ],
+    { timeout: 300_000 },
+  );
+  if (rsync.status !== 0) throw new Error(`rsync into ${dir} failed: ${rsync.stderr}`);
+  const config = join(dir, "examples", "hello", "parlor.config.ts");
+  let text = readFileSync(config, "utf8");
+  if (appId) {
+    if (!text.includes(`id: "${HELLO_APP_ID}"`))
+      throw new Error(`${config} has no id: "${HELLO_APP_ID}"`);
+    text = text.replace(`id: "${HELLO_APP_ID}"`, `id: "${appId}"`);
+  }
+  if (appName) {
+    if (!/name: "Hello"/.test(text)) throw new Error(`${config} has no name: "Hello"`);
+    text = text.replace(/name: "Hello"/, `name: "${appName}"`);
+  }
+  writeFileSync(config, text);
+  if (release) {
+    const bin = join(dir, "packages", "agent-host-darwin-arm64", "bin");
+    if (!existsSync(dirname(bin)))
+      throw new Error(
+        `this checkout has no packages/agent-host-darwin-arm64 to bundle another host release into`,
+      );
+    mkdirSync(bin, { recursive: true });
+    cpSync(join(release, "parlor-host"), join(bin, "parlor-host"));
+    cpSync(join(release, "parlor-host.sig"), join(bin, "parlor-host.sig"));
+    chmodSync(join(bin, "parlor-host"), 0o755);
+  }
+  const git = (args) =>
+    runSync(
+      "git",
+      ["-c", "user.name=verify", "-c", "user.email=verify@example.com", ...args],
+      { cwd: dir },
+    );
+  git(["init", "-q"]);
+  git(["add", "-A", "-f", "."]);
+  const commit = git(["commit", "-q", "--no-verify", "-m", `verify source copy ${tag}`]);
+  if (commit.status !== 0) throw new Error(`committing ${dir} failed: ${commit.stderr}`);
+  check.log(
+    `source copy ${dir} (${appId ?? HELLO_APP_ID}${release ? `, release from ${release}` : ""})`,
+  );
+  return dir;
+}
+
+export class ProvisionError extends Error {}
+
+/** A release key pair under the check dir: Ed25519, private in PKCS8 PEM, public in SPKI PEM. */
+export function releaseKeys(check, name) {
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const key = check.save(
+    `${name}.key.pem`,
+    privateKey.export({ type: "pkcs8", format: "pem" }),
+  );
+  const pub = check.save(
+    `${name}.pub.pem`,
+    publicKey.export({ type: "spki", format: "pem" }),
+  );
+  return { name, key, pub };
+}
+
+/**
+ * `node packages/agent-host/scripts/release.mjs --version V --key PEM --out DIR` with the trusted
+ * public key fixed at build time through PARLOR_HOST_RELEASE_KEY_FILE.
+ */
+export async function buildHostRelease(check, { version, signWith, trusted, label }) {
+  const script = join(ROOT, "packages", "agent-host", "scripts", "release.mjs");
+  if (!existsSync(script))
+    throw new ProvisionError(
+      `this checkout has no packages/agent-host/scripts/release.mjs, so no host release can be built`,
+    );
+  if (!existsSync(join(ROOT, "node_modules"))) {
+    const install = await runAsync(
+      "pnpm",
+      ["install", "--offline", "--frozen-lockfile"],
+      { cwd: ROOT, timeout: 600_000 },
+    );
+    if (install.status !== 0)
+      throw new ProvisionError(
+        `pnpm install --offline in ${ROOT} failed: ${install.stderr.slice(-800)}`,
+      );
+  }
+  const out = join(check.dir, `${label}.release`);
+  rmSync(out, { recursive: true, force: true });
+  mkdirSync(out, { recursive: true });
+  const result = await withMachineLock("host-release", () =>
+    runAsync(
+      process.execPath,
+      [script, "--version", version, "--key", signWith.key, "--out", out],
+      {
+        cwd: ROOT,
+        env: { ...process.env, PARLOR_HOST_RELEASE_KEY_FILE: trusted.pub },
+        timeout: 900_000,
+      },
+    ),
+  );
+  check.save(`${label}.release.log`, `${result.stdout}\n${result.stderr}`);
+  if (
+    result.status !== 0 ||
+    !existsSync(join(out, "parlor-host")) ||
+    !existsSync(join(out, "parlor-host.sig"))
+  )
+    throw new ProvisionError(
+      `release.mjs --version ${version} exited ${result.status}: ${result.stderr.slice(-800)}`,
+    );
+  return out;
+}
+
+/** Release fixtures signed with one trusted Ed25519 key; a spec with `otherKey` signs with a second key. */
+export async function hostReleases(check, specs) {
+  const trusted = releaseKeys(check, "trusted");
+  const other = releaseKeys(check, "other");
+  const built = {};
+  for (const spec of specs) {
+    built[spec.label] = await buildHostRelease(check, {
+      version: spec.version,
+      label: spec.label,
+      trusted,
+      signWith: spec.otherKey ? other : trusted,
+    });
+  }
+  check.log(
+    `host releases built: ${specs.map((s) => `${s.label}=${s.version}`).join(", ")}`,
+  );
+  return { trusted, other, built };
+}
+
+/**
+ * Setup for a Mac check whose app bundles the checkout's own host: when
+ * packages/agent-host-darwin-arm64/bin/parlor-host is missing, builds a signed one with release.mjs
+ * and a test Ed25519 key pair under the check dir and places it (with its .sig) there. Builds
+ * at most once at a time machine-wide; a script that finds it already placed uses it.
+ */
+export async function ensureBundledHost(check, { version = "0.0.1" } = {}) {
+  const bin = join(ROOT, "packages", "agent-host-darwin-arm64", "bin");
+  const placed = () =>
+    existsSync(join(bin, "parlor-host")) && existsSync(join(bin, "parlor-host.sig"));
+  if (placed()) return bin;
+  const lock = join(HARNESS_HOME, ".bundled-host.lock");
+  const deadline = Date.now() + 20 * 60_000;
+  for (;;) {
+    try {
+      mkdirSync(lock, { recursive: false });
+      writeFileSync(join(lock, "pid"), String(process.pid));
+      break;
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      let holder = 0;
+      try {
+        holder = Number(readFileSync(join(lock, "pid"), "utf8"));
+      } catch {
+        /* being written */
+      }
+      if (holder && runSync("kill", ["-0", String(holder)]).status !== 0)
+        rmSync(lock, { recursive: true, force: true });
+      if (Date.now() > deadline) throw new ProvisionError(`could not take ${lock}`);
+      await sleep(1000);
+    }
+  }
+  try {
+    if (placed()) return bin;
+    const trusted = releaseKeys(check, "bundled-host");
+    const out = await buildHostRelease(check, {
+      version,
+      label: "bundled-host",
+      trusted,
+      signWith: trusted,
+    });
+    mkdirSync(bin, { recursive: true });
+    cpSync(join(out, "parlor-host"), join(bin, "parlor-host"));
+    cpSync(join(out, "parlor-host.sig"), join(bin, "parlor-host.sig"));
+    chmodSync(join(bin, "parlor-host"), 0o755);
+    check.log(`placed a signed host ${version} (test key) in ${bin}`);
+    return bin;
+  } finally {
+    rmSync(lock, { recursive: true, force: true });
+  }
+}
+
+/** Launches a release app with `open -n` and the driver's launch environment; resolves with the launch time. */
+export async function openApp(instance) {
+  const env = Object.entries(instance.launchEnv ?? {}).flatMap(([k, v]) => [
+    "--env",
+    `${k}=${v}`,
+  ]);
+  const at = Date.now();
+  const result = await runAsync("open", ["-n", ...env, instance.appBundle], {
+    timeout: 30_000,
+  });
+  if (result.status !== 0)
+    throw new Error(`open -n ${instance.appBundle} failed: ${result.stderr}`);
+  return at;
+}
+
+export async function quitApp(instance) {
+  const result = await helloCli(["quit", instance.id], { timeout: 60_000 });
+  if (result.status !== 0)
+    throw new Error(`quit ${instance.id} failed: ${result.stderr}`);
+}
+
+export async function launchApp(instance) {
+  const result = await helloCli(["launch", instance.id], { timeout: 90_000 });
+  if (result.status !== 0)
+    throw new Error(`launch ${instance.id} failed: ${result.stderr}`);
+  return JSON.parse(result.stdout);
+}
+
+export async function waitAppPid(id, ms = 60_000) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    const now = await instanceInfo(id);
+    if (now.appPid) return now;
+    await sleep(100);
+  }
+  return undefined;
+}
+
+/**
+ * Alice connects this Mac from the app the way a user does: `button "Use agents on this
+ * computer"` in the sidebar, then `Connect` in the native dialog. Returns what the dialog showed.
+ */
+export async function connectHere(
+  check,
+  webview,
+  { appName, label, answer = "Connect", ms = 60_000 },
+) {
+  await webview.snapshot(`${label}.sidebar-before.aria.txt`);
+  await webview.screenshot(`${label}.sidebar-before.png`);
+  const here = await webview.waitFor("button", "Use agents on this computer", 15_000);
+  if (
+    !check.expect(
+      `${label}: the sidebar offers button "Use agents on this computer"`,
+      here,
+      here,
+    )
+  )
+    return undefined;
+  const clickedAt = Date.now();
+  await webview.click("button", "Use agents on this computer");
+  const current = await instanceInfo(webview.id);
+  const title = `Connect this Mac to ${appName}`;
+  const dialog = await waitNativeDialog(current.appPid, title, ms);
+  if (
+    !check.expect(
+      `${label}: the app shows the native dialog "${title}"`,
+      Boolean(dialog),
+      dialog ?? null,
+    )
+  ) {
+    await webview.screenshot(`${label}.no-dialog.png`);
+    return undefined;
+  }
+  await screenshotRegion(check, dialog.frame, `${label}.dialog.png`);
+  await webview.screenshot(`${label}.dialog-window.png`);
+  check.save(`${label}.dialog.json`, dialog);
+  const answeredAt = pressDialogButton(dialog, answer);
+  return { dialog, clickedAt, answeredAt };
+}
+
+/** `listTasks` as `user` over HTTP: the second view of a task mutation that must not restart the instance. */
+export async function listTasks(instance, user = "alice") {
+  const session = await token(instance, "session", user);
+  const response = await postJson(
+    `${instance.urls.server}/_parlor/actions/listTasks`,
+    {},
+    {
+      authorization: `Bearer ${session}`,
+    },
+  );
+  if (!Array.isArray(response.json?.data))
+    throw new Error(
+      `listTasks answered ${response.status}: ${response.text.slice(0, 300)}`,
+    );
+  return response.json.data;
+}
+
+/**
+ * Samples every process of `home` (the app, the service, its agents) every `everyMs`, keeping
+ * each pid's first and last sighting with its parent and command, and every process on the machine
+ * (`commands`, `parents`) as first seen, so ancestry still resolves after a process exited. `onTick(at)`
+ * runs on every sample (for example to record the daemon's pid).
+ */
+export function homeSampler(home, everyMs = 400, { onTick } = {}) {
+  const seen = new Map();
+  const parents = new Map();
+  const commands = new Map();
+  const ticks = [];
+  const run = { stopped: false };
+  const loop = (async () => {
+    while (!run.stopped) {
+      const at = Date.now();
+      for (const line of runSync("ps", [
+        "-axww",
+        "-o",
+        "pid=,ppid=,command=",
+      ]).stdout.split("\n")) {
+        const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);
+        if (!m) continue;
+        const pid = Number(m[1]);
+        if (!parents.has(pid)) parents.set(pid, Number(m[2]));
+        const entry = commands.get(pid) ?? {
+          pid,
+          ppid: Number(m[2]),
+          command: m[3],
+          first: at,
+        };
+        entry.last = at;
+        commands.set(pid, entry);
+      }
+      const now = processesWithHome(home);
+      ticks.push({ at, pids: now.map((p) => p.pid) });
+      for (const p of now) {
+        const command = p.line.split(/\s[A-Z_][A-Z0-9_]*=/)[0];
+        const entry = seen.get(p.pid) ?? { pid: p.pid, ppid: p.ppid, command, first: at };
+        entry.last = at;
+        seen.set(p.pid, entry);
+      }
+      if (onTick) await onTick(at);
+      await sleep(everyMs);
+    }
+  })();
+  return {
+    processes: () => [...seen.values()],
+    ticks: () => ticks,
+    parents,
+    commands,
+    async stop() {
+      run.stopped = true;
+      await loop;
+      return { processes: [...seen.values()], ticks, parents, commands };
+    },
+  };
+}
+
+/** True when `pid` is `ancestor` or descends from it, through sampled parents (`processes` or a parent map). */
+export function descendsFrom(processes, pid, ancestor) {
+  const parents =
+    processes instanceof Map
+      ? new Map(processes)
+      : new Map(processes.map((p) => [p.pid, p.ppid]));
+  for (let at = pid, hops = 0; at > 1 && hops < 64; at = parents.get(at), hops++) {
+    if (at === ancestor) return true;
+    if (!parents.has(at)) {
+      const ppid = Number(runSync("ps", ["-o", "ppid=", "-p", String(at)]).stdout.trim());
+      if (!ppid) return false;
+      parents.set(at, ppid);
+    }
+  }
+  return false;
+}
+
+/**
+ * One JavaScript call into a Mac app's page straight over its eval socket (`webviewSocket` in
+ * `$H info`), without a driver process per call, for polling in timed loops. Rejects while the
+ * app's eval channel is not up yet.
+ */
+export function pageEvalDirect(socketPath, js, ms = 5000) {
+  return new Promise((settle, reject) => {
+    const socket = createConnection(socketPath);
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error(`no answer on ${socketPath} within ${ms} ms`));
+    }, ms);
+    let data = "";
+    socket.on("data", (chunk) => (data += chunk));
+    socket.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    socket.on("end", () => {
+      clearTimeout(timer);
+      try {
+        const answer = JSON.parse(data.trim());
+        if (!answer.ok) return reject(new Error(answer.error));
+        const parsed = JSON.parse(answer.result);
+        settle(parsed.undefined ? undefined : parsed.value);
+      } catch (error) {
+        reject(error);
+      }
+    });
+    socket.write(`${JSON.stringify({ js: evalBody(js) })}\n`);
+  });
+}
+
+/** `body` (a function of the phase 4 page helpers) as one expression for `pageEvalDirect`. */
+export function withPageLib(body) {
+  return `async () => { const L = (${PAGE_LIB})(); return await (${body})(L); }`;
+}
+
+/** Everything the page keeps in web storage, CryptoKeys and binary values made printable. */
+export const STORAGE_DUMP = `async () => {
+  const printable = (v, depth = 0) => {
+    if (depth > 8) return '[deep]';
+    if (v === null || v === undefined || typeof v !== 'object') return v;
+    if (typeof CryptoKey !== 'undefined' && v instanceof CryptoKey) return { CryptoKey: { type: v.type, extractable: v.extractable, algorithm: v.algorithm, usages: v.usages } };
+    if (v instanceof ArrayBuffer || ArrayBuffer.isView(v)) { const b = new Uint8Array(v.buffer ?? v); let s = ''; for (const x of b) s += String.fromCharCode(x); return { bytes: btoa(s) }; }
+    if (v instanceof Date) return { date: v.toISOString() };
+    if (Array.isArray(v)) return v.map((x) => printable(x, depth + 1));
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, printable(x, depth + 1)]));
+  };
+  const area = (s) => { const out = {}; for (let i = 0; i < s.length; i++) { const k = s.key(i); out[k] = s.getItem(k); } return out; };
+  const req = (r) => new Promise((ok, no) => { r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); });
+  const indexed = {};
+  const names = indexedDB.databases ? (await indexedDB.databases()).map((d) => d.name) : [];
+  for (const name of names) {
+    const db = await req(indexedDB.open(name));
+    indexed[name] = {};
+    for (const store of db.objectStoreNames) {
+      const tx = db.transaction(store);
+      const keys = await req(tx.objectStore(store).getAllKeys());
+      const values = await req(tx.objectStore(store).getAll());
+      indexed[name][store] = keys.map((k, i) => ({ key: printable(k), value: printable(values[i]) }));
+    }
+    db.close();
+  }
+  return { origin: location.origin, href: location.href, localStorage: area(localStorage), sessionStorage: area(sessionStorage), indexedDB: indexed, cookie: document.cookie };
+}`;
+
+export { parseEval, sleep };

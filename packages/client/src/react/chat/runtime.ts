@@ -636,9 +636,11 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       connect = {
         kind: "here",
         start: async () => {
+          const own = await deps.auth?.device?.();
           const outcome = await handle.api.connect({
             appOrigin: deps.appOrigin,
             authorize: authorizeHost,
+            ...(own ? { device: own.keys } : {}),
           });
           if (!outcome.connected) throw new Error(`Connecting failed: ${outcome.reason}`);
           await refreshHosts();

@@ -1,6 +1,7 @@
 import { createHash, generateKeyPairSync, sign as nodeSign } from "node:crypto";
 
-import { encodeBase64url } from "./encoding.js";
+import { decodeBase64url, encodeBase64url, enrollmentBytes } from "./encoding.js";
+import type { NativeKeystore } from "./native.js";
 import type { WebDeviceKeyApis } from "./web.js";
 
 type Listener = (() => void) | null;
@@ -152,4 +153,62 @@ export function fakeApis(input: {
     indexedDB: input.indexedDB,
     credentials: input.credentials,
   });
+}
+
+export interface FakeKeystore extends NativeKeystore {
+  readonly presenceSigned: string[];
+  withPresence: boolean;
+}
+
+const rawSignature = (key: ReturnType<typeof generateKeyPairSync<"ec">>, bytes: Buffer) =>
+  encodeBase64url(
+    nodeSign("sha256", bytes, { key: key.privateKey, dsaEncoding: "ieee-p1363" }),
+  );
+
+const pointOf = (key: ReturnType<typeof generateKeyPairSync<"ec">>): JsonWebKey => {
+  const { kty, crv, x, y } = key.publicKey.export({ format: "jwk" });
+  return { kty: kty!, crv: crv!, x: x!, y: y! };
+};
+
+const thumbprint = (point: JsonWebKey) =>
+  encodeBase64url(
+    createHash("sha256")
+      .update(JSON.stringify({ crv: point.crv, kty: point.kty, x: point.x, y: point.y }))
+      .digest(),
+  );
+
+export function fakeKeystore(): FakeKeystore {
+  const signing = generateKeyPairSync("ec", { namedCurve: "P-256" });
+  const presence = generateKeyPairSync("ec", { namedCurve: "P-256" });
+  const signingPoint = pointOf(signing);
+  const presencePoint = pointOf(presence);
+  const state: FakeKeystore = {
+    presenceSigned: [],
+    withPresence: true,
+    async publicKeys({ challenge }) {
+      const presenceKey = state.withPresence
+        ? { keyId: thumbprint(presencePoint), publicKey: presencePoint }
+        : undefined;
+      const bytes = enrollmentBytes({
+        challenge: decodeBase64url(challenge),
+        signing: signingPoint,
+        presence: presenceKey && { format: "es256-raw", ...presenceKey },
+      });
+      return {
+        signing: { keyId: thumbprint(signingPoint), publicKey: signingPoint },
+        ...(presenceKey ? { presence: presenceKey } : {}),
+        proof: { signature: rawSignature(signing, Buffer.from(bytes)) },
+      };
+    },
+    async sign({ keyId, payload }) {
+      const bytes = Buffer.from(decodeBase64url(payload));
+      if (keyId === thumbprint(presencePoint)) {
+        state.presenceSigned.push(payload);
+        return { signature: rawSignature(presence, bytes) };
+      }
+      if (keyId !== thumbprint(signingPoint)) throw new Error("No such key.");
+      return { signature: rawSignature(signing, bytes) };
+    },
+  };
+  return state;
 }

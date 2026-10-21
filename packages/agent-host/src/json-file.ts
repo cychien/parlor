@@ -1,6 +1,8 @@
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
+import { withFileLock } from "./lock.js";
+
 export interface JsonFile<T extends object> {
   read(): Promise<T>;
   change(edit: (value: T) => void): Promise<void>;
@@ -20,13 +22,15 @@ export function jsonFile<T extends object>(file: string): JsonFile<T> {
     read,
     change(edit) {
       const next = writing.then(async () => {
-        const value = await read();
-        edit(value);
         await mkdir(dirname(file), { recursive: true, mode: 0o700 });
-        const staged = `${file}.${process.pid}.tmp`;
-        await writeFile(staged, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-        await chmod(staged, 0o600);
-        await rename(staged, file);
+        await withFileLock(`${file}.lock`, async () => {
+          const value = await read();
+          edit(value);
+          const staged = `${file}.${process.pid}.tmp`;
+          await writeFile(staged, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+          await chmod(staged, 0o600);
+          await rename(staged, file);
+        });
       });
       writing = next.catch(() => undefined);
       return next;

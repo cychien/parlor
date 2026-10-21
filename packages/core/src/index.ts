@@ -56,4 +56,5 @@ export {
   type UserPrincipal,
   userOf,
 } from "./principal.js";
+export { SHELL_ORIGINS } from "./shell-origins.js";
 export { readTagsFor, tableName, tagsOverlap, writeTagsFor } from "./tags.js";

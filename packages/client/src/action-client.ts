@@ -3,6 +3,7 @@ import {
   type ActionInput,
   type ActionMap,
   type ActionOutput,
+  SHELL_ORIGINS,
   type Tag,
 } from "@parlor/core";
 
@@ -103,6 +104,21 @@ export async function invokeAt<T extends ActionMap, K extends keyof T & string>(
 
 export function resolveServerOrigin(): string {
   return injectedServerUrl() || globalThis.location?.origin || "";
+}
+
+/**
+ * The one name of this app's backend on every surface: the page's own origin when it is
+ * served over http(s) and is not a shell's webview origin, else the shell's `server.url`.
+ * Statements are signed for it and the host is paired with it.
+ */
+export function appOrigin(serverUrl: string = resolveServerOrigin()): string {
+  const page = globalThis.location?.origin ?? "";
+  if (/^https?:\/\//.test(page) && !SHELL_ORIGINS.includes(page)) return page;
+  try {
+    return new URL(serverUrl).origin;
+  } catch {
+    return serverUrl;
+  }
 }
 
 export function createActionClient<T extends ActionMap>(

@@ -5,12 +5,13 @@ import { buildWeb } from "@parlor/shell-web";
 
 import { TAURI_CONDITION } from "./dev.js";
 import { assertRustToolchain } from "./prerequisites.js";
-import { ensureTauriProject } from "./project.js";
+import { prepareTauriProject } from "./project.js";
+import { hostTargetTriple } from "./target-triple.js";
 import { runTauri } from "./tauri-cli.js";
 
 export async function buildDesktop(loaded: LoadedConfig): Promise<string> {
   assertRustToolchain();
-  const projectDir = await ensureTauriProject(loaded);
+  const projectDir = await prepareTauriProject(loaded, hostTargetTriple());
   await buildWeb(loaded, {
     conditions: [TAURI_CONDITION],
     serverUrl: loaded.config.server.url,

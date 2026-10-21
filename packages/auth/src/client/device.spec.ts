@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 
+import type { AgentUiClient } from "@parlor/agent-ui/client";
 import type { SessionSnapshot } from "@parlor/client";
-import { asId } from "@parlor/core";
+import { asId, type Tag } from "@parlor/core";
 import { createDatabase, type DatabaseHandle } from "@parlor/data";
 import type { FrameworkServer } from "@parlor/server";
 import {
@@ -15,6 +16,8 @@ import {
   vi,
 } from "vitest";
 
+// Relative: `createChatRuntime` is internal to `@parlor/client`, and a dependency back would cycle.
+import { createChatRuntime } from "../../../client/src/react/chat/runtime.js";
 import {
   promptStatement,
   signedPrompt,
@@ -60,7 +63,20 @@ afterEach(async () => {
   await server.close();
 });
 
-function client(deviceKey?: TestDeviceKey) {
+const DEVICE_ACTIONS = ["deviceChallenge", "enrollDevice"];
+
+const withoutDeviceActions = (request: Request): Response | undefined =>
+  DEVICE_ACTIONS.some((name) => request.url.endsWith(`/actions/${name}`))
+    ? Response.json(
+        { error: { code: "not_found", message: "Unknown action" } },
+        { status: 404 },
+      )
+    : undefined;
+
+function client(
+  deviceKey?: TestDeviceKey,
+  answer: (request: Request) => Response | undefined = () => undefined,
+) {
   const calls: string[] = [];
   let token: string | undefined;
   const store: SessionStore = {
@@ -78,7 +94,7 @@ function client(deviceKey?: TestDeviceKey) {
       const request = new Request(input, init);
       calls.push(new URL(request.url).pathname.replace("/_parlor/auth/", ""));
       if (request.method === "POST") request.headers.set("origin", "tauri://localhost");
-      return server.fetch(request);
+      return Promise.resolve(answer(request) ?? server.fetch(request));
     },
   });
   return { auth, calls };
@@ -97,8 +113,11 @@ function settled(auth: AuthClient): Promise<SessionSnapshot> {
   });
 }
 
-async function signedIn(deviceKey?: TestDeviceKey) {
-  const { auth, calls } = client(deviceKey);
+async function signedIn(
+  deviceKey?: TestDeviceKey,
+  answer?: (request: Request) => Response | undefined,
+) {
+  const { auth, calls } = client(deviceKey, answer);
   await auth.signUp({ name: "Alice", email: "alice@example.com", password: PASSWORD });
   await settled(auth);
   return { auth, calls };
@@ -245,5 +264,116 @@ describe("the auth client's device", () => {
     expect(info).toHaveBeenCalledWith(
       `[parlor] signed prompt sha256=${createHash("sha256").update(statementBytes(statement)).digest("hex")}`,
     );
+  });
+  it("T6-07: resolves nothing, and tries again next time, against a backend without device actions", async () => {
+    let older = true;
+    const { auth, calls } = await signedIn(new TestDeviceKey(), (request) =>
+      older ? withoutDeviceActions(request) : undefined,
+    );
+    expect(await auth.device()).toBeUndefined();
+    expect(calls.filter((call) => call.startsWith("actions/"))).toEqual([
+      "actions/deviceChallenge",
+    ]);
+    older = false;
+    expect(await auth.device()).toMatchObject({ id: expect.any(String) });
+  });
+
+  it("T6-07: lets the chat send one unsigned prompt without an error against a backend without device actions", async () => {
+    const { auth } = await signedIn(new TestDeviceKey(), withoutDeviceActions);
+    const sent: { name: string; input: Record<string, unknown> }[] = [];
+    const host = {
+      id: asId("host", "mac"),
+      name: "Alice's Mac",
+      platform: "macos",
+      online: true,
+      agents: [{ id: "claude", name: "Claude Code", ready: true }],
+    };
+    const thread = { id: asId("thread", "t1"), title: "t1", updatedAt: 1, lastSeq: 1 };
+    const snapshot = {
+      threads: [thread],
+      hosts: [host],
+      page: { thread, items: [], open: [], turns: [], hasMore: false },
+    };
+    const runtime = createChatRuntime({
+      calls: {
+        call: async (name: string, input: Record<string, unknown>) => {
+          sent.push({ name, input });
+          return name === "open" ? snapshot : name === "send" ? { id: "t1" } : [];
+        },
+        invoke: vi.fn(),
+      } as never,
+      clientId: "tab-1",
+      appOrigin: PAGE,
+      agentUi: {
+        watch: () => () => undefined,
+        confirmations: { get: () => [], subscribe: () => () => undefined },
+      } as unknown as AgentUiClient,
+      addChannel: () => () => undefined,
+      onSyncTags: (_listener: (tags: readonly Tag[]) => void) => () => undefined,
+      auth,
+      localHost: Promise.resolve({ available: false, reason: "no host" }),
+      threadId: undefined,
+    });
+    runtime.start();
+    await vi.waitFor(() => expect(runtime.get().status).toBe("idle"));
+    await runtime.send("hello");
+    const sends = sent.filter((call) => call.name === "send");
+    expect(sends).toHaveLength(1);
+    expect(sends[0]!.input.prompt).toEqual({
+      text: "hello",
+      agent: { hostId: "mac", agentId: "claude" },
+    });
+    expect(runtime.get().error).toBeUndefined();
+  });
+
+  it("still rejects a device action that fails for any other reason", async () => {
+    const { auth } = await signedIn(new TestDeviceKey(), (request) =>
+      request.url.endsWith("/actions/deviceChallenge")
+        ? Response.json({ error: { code: "internal", message: "boom" } }, { status: 500 })
+        : undefined,
+    );
+    await expect(auth.device()).rejects.toMatchObject({ code: "internal" });
+  });
+
+  describe("the origin a statement names", () => {
+    afterEach(() => {
+      page.location = new URL(PAGE);
+    });
+
+    it("T6-05: is the page's origin in a browser, whatever server the page talks to", async () => {
+      const { auth } = await signedIn(new TestDeviceKey());
+      const device = (await auth.device())!;
+      const signed = await device.signPrompt(prompt);
+      const statement = await promptStatement(PAGE, prompt, signed.at);
+      const pinned = await pinnedFor(auth, device.id);
+      expect(
+        await verifyStatement(
+          { statement, deviceId: signed.deviceId, signature: signed.signature },
+          pinned,
+          { ...maxAge, now: signed.at },
+        ),
+      ).toBe("valid");
+    });
+
+    it("is the backend's origin in a shell, and its passkey is made for that site", async () => {
+      page.location = new URL("tauri://app.local");
+      const key = new TestDeviceKey();
+      const enrolled = vi.spyOn(key, "publicKeys");
+      const { auth } = await signedIn(key);
+      const device = (await auth.device())!;
+      expect(enrolled).toHaveBeenCalledWith(
+        expect.objectContaining({ rpId: new URL(ORIGIN).hostname }),
+      );
+      const signed = await device.signPrompt(prompt);
+      const statement = await promptStatement(ORIGIN, prompt, signed.at);
+      const pinned = await pinnedFor(auth, device.id);
+      expect(
+        await verifyStatement(
+          { statement, deviceId: signed.deviceId, signature: signed.signature },
+          pinned,
+          { ...maxAge, now: signed.at },
+        ),
+      ).toBe("valid");
+    });
   });
 });
