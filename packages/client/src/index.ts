@@ -1,5 +1,6 @@
 export {
   type ActionClient,
+  appOrigin,
   type ActionClientOptions,
   type ActionEnvelope,
   type CallOptions,

@@ -68,6 +68,10 @@ const DIFFERENCES: Readonly<
     agreed: true,
     why: "`deviceKey` injects the keys, as `session` injects the session store",
   },
+  "client/src/session.ts SessionDevice changed": {
+    agreed: false,
+    why: "phase 6: `keys` hands the app's own public keys to the host at pairing, which no skeleton member exposed",
+  },
   "agent-host/src/policy.ts changePolicy added": {
     agreed: true,
     why: "addendum D7: `parlor-host config` writes policy.json",

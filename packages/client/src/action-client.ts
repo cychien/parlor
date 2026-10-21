@@ -105,6 +105,21 @@ export function resolveServerOrigin(): string {
   return injectedServerUrl() || globalThis.location?.origin || "";
 }
 
+/**
+ * The one name of this app's backend on every surface: the page's own origin when it is
+ * served over http(s), else the shell's `server.url`. Statements are signed for it and the
+ * host is paired with it.
+ */
+export function appOrigin(serverUrl: string = resolveServerOrigin()): string {
+  const page = globalThis.location?.origin ?? "";
+  if (/^https?:\/\//.test(page)) return page;
+  try {
+    return new URL(serverUrl).origin;
+  } catch {
+    return serverUrl;
+  }
+}
+
 export function createActionClient<T extends ActionMap>(
   options: ActionClientOptions = {},
 ): ActionClient<T> {

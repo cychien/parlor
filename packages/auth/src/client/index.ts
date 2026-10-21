@@ -3,6 +3,8 @@ import {
   detectPlatform,
   type DeviceKey,
   deviceKey,
+  type PairingPresenceKey,
+  type PresencePublicKey,
   resolveCapability,
   type SessionStore,
   sessionStore,
@@ -10,6 +12,7 @@ import {
 import { decodeBase64url } from "@parlor/capabilities/encoding";
 import {
   type ActionClient,
+  appOrigin,
   createActionClient,
   type DeviceSource,
   type HostAuthorizer,
@@ -18,6 +21,7 @@ import {
   type SessionSource,
   type SessionUser,
 } from "@parlor/client";
+import { ActionError } from "@parlor/core";
 import { createAuthClient as createBetterAuthClient } from "better-auth/client";
 
 import type { AccountActions } from "../account.js";
@@ -146,6 +150,39 @@ async function logSigned(statement: Statement): Promise<void> {
 
 const serverHasNoAuth = (error: { readonly status?: unknown }) => error.status === 404;
 
+function enrollmentPresence(presence: PresencePublicKey | undefined, rpId: string) {
+  if (!presence) return undefined;
+  return presence.format === "webauthn"
+    ? {
+        format: "webauthn" as const,
+        credentialId: presence.credentialId,
+        rpId,
+        publicKey: { ...presence.publicKey },
+        attestation: presence.attestation,
+      }
+    : {
+        format: "es256-raw" as const,
+        keyId: presence.keyId,
+        publicKey: { ...presence.publicKey },
+      };
+}
+
+function registered(
+  presence: ReturnType<typeof enrollmentPresence>,
+): PairingPresenceKey | undefined {
+  if (presence?.format !== "webauthn") return presence;
+  const { attestation: _attestation, ...key } = presence;
+  return key;
+}
+
+function hostnameOf(origin: string): string {
+  try {
+    return new URL(origin).hostname;
+  } catch {
+    return globalThis.location.hostname;
+  }
+}
+
 export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
   const baseUrl = options.baseUrl ?? injectedServerUrl();
   const basePath = options.basePath ?? DEFAULT_BASE_PATH;
@@ -242,7 +279,8 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
   const enroll = async (user: SessionUser): Promise<DeviceHandle | undefined> => {
     const key = options.deviceKey ?? (await keysOfThisPlatform());
     if (!key) return undefined;
-    const rpId = globalThis.location.hostname;
+    const app = appOrigin(baseUrl || undefined);
+    const rpId = hostnameOf(app);
     const { challenge } = await account.call("deviceChallenge", {});
     const keys = await key.publicKeys({
       rpId,
@@ -250,44 +288,37 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
       userName: user.email,
       challenge: decodeBase64url(challenge),
     });
+    const presence = enrollmentPresence(keys.presence, rpId);
+    const name = deviceName();
+    const platform = detectPlatform();
+    const signingKey = { ...keys.signing.publicKey };
     const { id } = await account.call("enrollDevice", {
-      name: deviceName(),
-      platform: detectPlatform(),
+      name,
+      platform,
       challenge,
-      signing: { keyId: keys.signing.keyId, publicKey: { ...keys.signing.publicKey } },
-      ...(keys.presence
-        ? {
-            presence:
-              keys.presence.format === "webauthn"
-                ? {
-                    format: "webauthn" as const,
-                    credentialId: keys.presence.credentialId,
-                    rpId,
-                    publicKey: { ...keys.presence.publicKey },
-                    attestation: keys.presence.attestation,
-                  }
-                : {
-                    format: "es256-raw" as const,
-                    keyId: keys.presence.keyId,
-                    publicKey: { ...keys.presence.publicKey },
-                  },
-          }
-        : {}),
+      signing: { keyId: keys.signing.keyId, publicKey: signingKey },
+      ...(presence ? { presence } : {}),
       proof: keys.proof,
     });
-    const origin = () => globalThis.location.origin;
     return {
       id,
+      keys: {
+        deviceId: id,
+        name,
+        platform,
+        signingKey,
+        presenceKey: registered(presence),
+      },
       signPrompt: async (prompt) => {
         const at = Date.now();
-        const statement = await promptStatement(origin(), prompt, at);
+        const statement = await promptStatement(app, prompt, at);
         const signature = await key.sign(statementBytes(statement), { presence: false });
         await logSigned(statement);
         return { deviceId: id, at, signature };
       },
       signAnswer: async (answer, { presence }) => {
         const at = Date.now();
-        const statement = await answerStatement(origin(), answer, at);
+        const statement = await answerStatement(app, answer, at);
         const bytes = statementBytes(statement);
         const signature = presence
           ? await key.sign(bytes, { presence: true })
@@ -330,7 +361,10 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
       if (session.status !== "signed-in") return undefined;
       const known = devices.get(session.user.id);
       if (known) return known;
-      const enrolling = enroll(session.user);
+      const enrolling = enroll(session.user).catch((error: unknown) => {
+        if (error instanceof ActionError && error.code === "not_found") return undefined;
+        throw error;
+      });
       devices.set(session.user.id, enrolling);
       enrolling.then(
         (device) => {
