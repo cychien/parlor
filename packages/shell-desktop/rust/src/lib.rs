@@ -1,14 +1,16 @@
 #[cfg(unix)]
 mod control;
-#[cfg(all(target_os = "macos", debug_assertions))]
-mod dev_vault;
 mod device_key;
 #[cfg(unix)]
 mod dialog;
 #[cfg(unix)]
 mod host;
 mod keystore;
+#[cfg(target_os = "macos")]
+mod secret_store;
 mod session;
+#[cfg(target_os = "macos")]
+mod vault;
 
 pub use device_key::{parlor_device_key_public, parlor_device_key_sign};
 #[cfg(unix)]

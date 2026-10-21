@@ -27,10 +27,7 @@ mod apple {
     use super::PublicPoint;
     use crate::device_key::{der_to_raw, report_of};
 
-    #[cfg(not(debug_assertions))]
-    use keychain::{create, stored};
-    #[cfg(debug_assertions)]
-    use vault::{create, stored};
+    use crate::secret_store::{Backend, backend};
 
     const SIGNING: &str = "signing";
     const PRESENCE: &str = "presence";
@@ -51,7 +48,6 @@ mod apple {
         dictionary.to_immutable()
     }
 
-    #[cfg(not(debug_assertions))]
     mod keychain {
         use core_foundation::base::{TCFType, ToVoid};
         use core_foundation::boolean::CFBoolean;
@@ -187,9 +183,42 @@ mod apple {
                 Err(_) => generate(&tag, false, presence, &label).map(Some),
             }
         }
+
+        #[cfg(test)]
+        mod tests {
+            use core_foundation::base::{TCFType, ToVoid};
+            use core_foundation::data::CFData;
+            use security_framework_sys::item::{kSecClass, kSecClassKey};
+            use security_framework_sys::keychain_item::SecItemDelete;
+
+            use super::super::dictionary;
+            use super::{create, kSecAttrApplicationTag, stored, tag};
+
+            #[test]
+            fn the_keychain_finds_the_key_it_created_by_its_tag() {
+                let identifier = format!("dev.parlor.test.keystore.{}", std::process::id());
+                assert!(stored(&identifier, "signing").unwrap().is_none());
+                let created = create(&identifier, "signing", false).unwrap().unwrap();
+                let found = stored(&identifier, "signing").unwrap().unwrap();
+                let public = |key: &security_framework::key::SecKey| {
+                    key.public_key()
+                        .and_then(|public| public.external_representation())
+                        .map(|data| data.bytes().to_vec())
+                };
+                assert_eq!(public(&found), public(&created));
+                let tag = CFData::from_buffer(&tag(&identifier, "signing"));
+                let query = unsafe {
+                    dictionary(vec![
+                        (kSecClass.to_void(), kSecClassKey.to_void()),
+                        (kSecAttrApplicationTag.to_void(), tag.to_void()),
+                    ])
+                };
+                assert_eq!(unsafe { SecItemDelete(query.as_concrete_TypeRef()) }, 0);
+                assert!(stored(&identifier, "signing").unwrap().is_none());
+            }
+        }
     }
 
-    #[cfg(debug_assertions)]
     mod vault {
         use base64::Engine;
         use base64::engine::general_purpose::STANDARD;
@@ -205,7 +234,7 @@ mod apple {
         use security_framework_sys::key::SecKeyCreateWithData;
 
         use super::{can_evaluate, dictionary};
-        use crate::dev_vault;
+        use crate::vault as dev_vault;
 
         fn entry(name: &str) -> String {
             format!("device-key.{name}")
@@ -301,6 +330,20 @@ mod apple {
         key.attributes()
             .find(unsafe { kSecAttrTokenID }.to_void())
             .is_some()
+    }
+
+    fn stored(identifier: &str, name: &str) -> Result<Option<SecKey>, String> {
+        match backend() {
+            Backend::Keychain => keychain::stored(identifier, name),
+            Backend::Vault => vault::stored(identifier, name),
+        }
+    }
+
+    fn create(identifier: &str, name: &str, presence: bool) -> Result<Option<SecKey>, String> {
+        match backend() {
+            Backend::Keychain => keychain::create(identifier, name, presence),
+            Backend::Vault => vault::create(identifier, name, presence),
+        }
     }
 
     fn open(identifier: &str, name: &str) -> Result<Option<Key>, String> {

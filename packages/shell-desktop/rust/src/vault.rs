@@ -1,6 +1,6 @@
-//! Debug builds keep the device keys and the session in a 0600 file instead of the
-//! Keychain: an ad hoc build's Keychain ACL is bound to its cdhash, so every rebuild
-//! would ask for the login password.
+//! A build without an Apple Team ID (ad hoc or self-signed) keeps the device keys and the session in this 0600 file:
+//! the Keychain partitions such a build's items by its cdhash, which every rebuild changes, so each rebuild would ask
+//! for the login password.
 
 use std::collections::BTreeMap;
 use std::fs::{self, DirBuilder, OpenOptions};
@@ -9,7 +9,7 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-const FILE: &str = "parlor-dev-vault.json";
+const FILE: &str = "parlor-vault.json";
 
 static WRITING: Mutex<()> = Mutex::new(());
 
@@ -82,7 +82,7 @@ mod tests {
 
     fn scratch() -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "parlor-dev-vault-{}-{}",
+            "parlor-vault-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -126,7 +126,7 @@ mod tests {
         assert_eq!(
             file_in(Path::new("/Users/alice"), "dev.parlor.hello"),
             PathBuf::from(
-                "/Users/alice/Library/Application Support/dev.parlor.hello/parlor-dev-vault.json"
+                "/Users/alice/Library/Application Support/dev.parlor.hello/parlor-vault.json"
             )
         );
     }
