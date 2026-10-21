@@ -50,6 +50,7 @@ export function capacitorProjectFiles(
         "@capacitor/ios",
         "@capacitor/android",
         ...CAPACITOR_PLUGINS,
+        DEVICE_KEY_PLUGIN.package,
       ].map((name) => [name, "*"]),
     ),
   };
