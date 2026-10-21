@@ -31,5 +31,8 @@
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "optionalDependencies": {
+    "@parlor/agent-host-darwin-arm64": "workspace:*"
   }
 }

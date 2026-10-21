@@ -45,9 +45,13 @@
     "tsx": "^4.23.15"
   },
   "devDependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.93.0",
+    "@agentclientprotocol/codex-acp": "2.2.2",
     "@parlor/data": "workspace:*",
     "@types/node": "catalog:",
     "better-auth": "1.7.7",
+    "esbuild": "^0.28.2",
+    "postject": "1.0.0-alpha.6",
     "srvx": "^1.0.5",
     "typescript": "catalog:",
     "vitest": "catalog:",
