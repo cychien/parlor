@@ -101,7 +101,10 @@ describe("the daemon pairing a desktop app over its control socket", () => {
   it("C8: pairs on the user's confirmation, serves the app, and pins the app's own device at pairing", async () => {
     const alice = await app.signUp("Mia");
     const { control, grants, trust, keys } = await started("confirm");
-    const begun = await control.send({ op: "begin_local_pairing", appOrigin: app.origin });
+    const begun = await control.send({
+      op: "begin_local_pairing",
+      appOrigin: app.origin,
+    });
     if (!begun.ok) throw new Error(begun.error);
     const finished = await control.send({
       op: "finish_local_pairing",
@@ -125,7 +128,10 @@ describe("the daemon pairing a desktop app over its control socket", () => {
       }),
     ).toEqual({ ok: true });
     const grant = await grants.get(app.origin);
-    expect(grant).toMatchObject({ appName: "Hello", account: { email: "mia@example.com" } });
+    expect(grant).toMatchObject({
+      appName: "Hello",
+      account: { email: "mia@example.com" },
+    });
     expect(keys.origins()).toEqual([app.origin]);
     expect(await trust.get(app.origin, "device-app")).toMatchObject({
       deviceId: "device-app",
@@ -147,7 +153,10 @@ describe("the daemon pairing a desktop app over its control socket", () => {
   it("pins nothing when the app's device is not whole, and still pairs", async () => {
     const alice = await app.signUp("Noa");
     const { control, trust } = await started("half");
-    const begun = await control.send({ op: "begin_local_pairing", appOrigin: app.origin });
+    const begun = await control.send({
+      op: "begin_local_pairing",
+      appOrigin: app.origin,
+    });
     if (!begun.ok) throw new Error(begun.error);
     await control.send({
       op: "finish_local_pairing",
@@ -168,7 +177,10 @@ describe("the daemon pairing a desktop app over its control socket", () => {
   it("keeps nothing and revokes the grant when the user cancels the native dialog", async () => {
     const alice = await app.signUp("Ola");
     const { control, grants, trust, keys } = await started("cancel");
-    const begun = await control.send({ op: "begin_local_pairing", appOrigin: app.origin });
+    const begun = await control.send({
+      op: "begin_local_pairing",
+      appOrigin: app.origin,
+    });
     if (!begun.ok) throw new Error(begun.error);
     await control.send({
       op: "finish_local_pairing",
@@ -197,7 +209,11 @@ describe("the daemon pairing a desktop app over its control socket", () => {
   it("answers a finish or confirm with no pairing begun, and a finish with a bad code", async () => {
     const { control } = await started("none");
     expect(
-      await control.send({ op: "finish_local_pairing", appOrigin: app.origin, code: "x" }),
+      await control.send({
+        op: "finish_local_pairing",
+        appOrigin: app.origin,
+        code: "x",
+      }),
     ).toMatchObject({ ok: false });
     expect(
       await control.send({
@@ -206,7 +222,10 @@ describe("the daemon pairing a desktop app over its control socket", () => {
         connect: true,
       }),
     ).toMatchObject({ ok: false });
-    const begun = await control.send({ op: "begin_local_pairing", appOrigin: app.origin });
+    const begun = await control.send({
+      op: "begin_local_pairing",
+      appOrigin: app.origin,
+    });
     expect(begun).toMatchObject({ ok: true });
     expect(
       await control.send({
