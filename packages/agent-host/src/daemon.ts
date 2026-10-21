@@ -99,6 +99,7 @@ interface LinkState {
   claiming: Promise<void> | undefined;
   again: boolean;
   incompatible: string | undefined;
+  turns: number;
 }
 
 /** The daemon a service runs: once it handed over, `drained` settles after its last turn. */
@@ -145,8 +146,10 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
   let finishHandover: () => void = () => undefined;
   const drained = new Promise<void>((resolve) => (finishHandover = resolve));
 
-  const run = (link: AppLink, claimed: ClaimedTurn) => {
+  const run = (state: LinkState, claimed: ClaimedTurn) => {
+    const { link } = state;
     logEvent("turn_claimed", { appOrigin: link.grant.appOrigin, turnId: claimed.turnId });
+    state.turns += 1;
     const turn = (
       link.grant.dev ? Promise.resolve(DEV_POLICY) : loadPolicy(paths.policy, deps.policy)
     )
@@ -169,6 +172,7 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
           logEvent("turn_finished", { turnId: claimed.turnId, error: String(error) }),
       )
       .finally(() => {
+        state.turns -= 1;
         running.delete(turn);
         settleHandover();
       });
@@ -183,7 +187,7 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
         claimed;
         claimed = state.link.mode === "serving" ? await claim(state.link) : undefined
       ) {
-        run(state.link, claimed);
+        run(state, claimed);
       }
     } while (state.again && state.link.mode === "serving");
   };
@@ -225,6 +229,7 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
       platform,
       fetch: (input, init) => fetch(input, init),
       onWake: () => wake(state),
+      busy: () => state.turns > 0,
       onRevoked: () => {
         if (links.get(origin) !== state) return;
         if (grant.dev) void reattach(grant);
@@ -235,7 +240,14 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
         process.stderr.write(`${printable(state.incompatible)}\n`);
       },
     });
-    state = { link, keys, claiming: undefined, again: false, incompatible: undefined };
+    state = {
+      link,
+      keys,
+      claiming: undefined,
+      again: false,
+      incompatible: undefined,
+      turns: 0,
+    };
     links.set(origin, state);
     link.start();
     return state;
