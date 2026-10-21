@@ -257,25 +257,32 @@ export async function ensureTauriProject(
 }
 
 export interface PrepareTauriProjectOptions {
+  /** What a missing prebuilt host does: `fail` the build, or `warn` and go on without the sidecar. */
+  readonly onMissingHost?: "fail" | "warn";
   readonly stage?: typeof stageAgentHost;
   readonly warn?: (message: string) => void;
 }
 
 /**
  * Generates the Tauri project, bundling the Parlor Host sidecar when `desktop.agentHost` is
- * set and a prebuilt host exists for the target; otherwise warns once and generates the
- * project as if `agentHost` were off, so the app builds and the sidebar offers the install command.
+ * set. With no prebuilt host for the target it throws the staging error, or with
+ * `onMissingHost: "warn"` warns once and generates the project as if `agentHost` were off,
+ * so the app runs and the sidebar offers the install command.
  */
 export async function prepareTauriProject(
   loaded: LoadedConfig,
   targetTriple: string,
-  { stage = stageAgentHost, warn = console.warn }: PrepareTauriProjectOptions = {},
+  {
+    onMissingHost = "fail",
+    stage = stageAgentHost,
+    warn = console.warn,
+  }: PrepareTauriProjectOptions = {},
 ): Promise<string> {
   if (!loaded.config.desktop.agentHost) return ensureTauriProject(loaded);
   try {
     await stage(tauriProjectDir(loaded.rootDir), targetTriple);
   } catch (error) {
-    if (!(error instanceof AgentHostStageError)) throw error;
+    if (!(error instanceof AgentHostStageError) || onMissingHost === "fail") throw error;
     warn(
       `Building without the bundled Parlor Host, so the sidebar will show the install command: ${error.message}`,
     );

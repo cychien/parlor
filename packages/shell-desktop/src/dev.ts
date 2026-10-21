@@ -17,7 +17,9 @@ export async function startDesktopDev(
   options: DesktopDevOptions = {},
 ): Promise<void> {
   assertRustToolchain();
-  const projectDir = await prepareTauriProject(loaded, hostTargetTriple());
+  const projectDir = await prepareTauriProject(loaded, hostTargetTriple(), {
+    onMissingHost: "warn",
+  });
   const web = await startWebDev(loaded, {
     conditions: [TAURI_CONDITION],
     serverUrl: loaded.config.server.url,

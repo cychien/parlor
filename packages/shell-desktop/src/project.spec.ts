@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   AGENT_HOST_SIDECAR,
+  AgentHostStageError,
   ensureTauriProject,
   libRs,
   prepareTauriProject,
@@ -183,6 +184,7 @@ describe("prepareTauriProject", () => {
     const loaded = await loadedWithHost();
     const warnings: string[] = [];
     const projectDir = await prepareTauriProject(loaded, "x86_64-unknown-linux-gnu", {
+      onMissingHost: "warn",
       warn: (message) => warnings.push(message),
     });
     expect(warnings).toHaveLength(1);
@@ -194,10 +196,24 @@ describe("prepareTauriProject", () => {
     expect(lib).toContain("parlor_shell::parlor_session_get,");
   });
 
-  it("warns and builds without the sidecar when the prebuilt bin is missing", async () => {
+  it("fails with the staging error when the prebuilt bin is missing", async () => {
+    const loaded = await loadedWithHost();
+    const warnings: string[] = [];
+    await expect(
+      prepareTauriProject(loaded, "aarch64-apple-darwin", {
+        stage: (dir, triple) =>
+          stageAgentHostFrom(join(loaded.rootDir, "no-package"), dir, triple),
+        warn: (message) => warnings.push(message),
+      }),
+    ).rejects.toBeInstanceOf(AgentHostStageError);
+    expect(warnings).toEqual([]);
+  });
+
+  it("warns and goes on without the sidecar when asked to and the prebuilt bin is missing", async () => {
     const loaded = await loadedWithHost();
     const warnings: string[] = [];
     const projectDir = await prepareTauriProject(loaded, "aarch64-apple-darwin", {
+      onMissingHost: "warn",
       stage: (dir, triple) =>
         stageAgentHostFrom(join(loaded.rootDir, "no-package"), dir, triple),
       warn: (message) => warnings.push(message),
