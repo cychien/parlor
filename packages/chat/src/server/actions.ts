@@ -20,14 +20,14 @@ import type {
   TurnSignals,
 } from "../model.js";
 import { HOST_PROTOCOL, type HostWelcome } from "../protocol.js";
-import { CHAT_TAG, HOSTS_TAG } from "../tags.js";
+import { CHAT_ACTIVITY_TAG, CHAT_TAG, HOSTS_TAG } from "../tags.js";
 import { turnContext } from "./context.js";
 import type { LiveRelay } from "./live.js";
 import { type ChatHost, chatAction } from "./party.js";
 import { agentInfoSchema, TURN_FAILURES } from "./rows.js";
 import type { ChatDb, ChatStore, StoredHost } from "./store.js";
 
-export { CHAT_TAG, HOSTS_TAG, HOST_GRANTS_TAG };
+export { CHAT_ACTIVITY_TAG, CHAT_TAG, HOSTS_TAG, HOST_GRANTS_TAG };
 
 export interface Written<T> {
   readonly result: T;
@@ -222,6 +222,13 @@ export function userChatActions(deps: ChatActionDeps) {
         return { id: input.threadId };
       },
     }),
+    userActive: chatAction("user", enforcing, {
+      description:
+        "Tell the user's computers a tab is in use, so a polling computer speeds up; carries no content and writes no table.",
+      input: z.object({}),
+      writes: [CHAT_ACTIVITY_TAG],
+      run: (): { readonly ok: true } => ({ ok: true }),
+    }),
   };
 }
 
@@ -314,6 +321,7 @@ export function hostChatActions(deps: ChatActionDeps) {
           protocol,
           leaseMs: deps.leaseMs,
           heartbeatMs: deps.heartbeatMs,
+          userActivity: true,
         };
       },
     }),
