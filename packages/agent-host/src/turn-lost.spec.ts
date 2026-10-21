@@ -144,20 +144,35 @@ function fakeAgent() {
 }
 
 function fakeProxy() {
-  const sessions: { begun: number; ended: number }[] = [];
+  const sessions: {
+    begun: number;
+    ended: number;
+    forwards: () => "forwarded" | "refused";
+  }[] = [];
   const proxy: McpProxy = {
     listen: async () => undefined,
     stopListening: async () => undefined,
     close: async () => undefined,
     open: () => {
-      const counts = { begun: 0, ended: 0 };
+      let forwarding = false;
+      const counts = {
+        begun: 0,
+        ended: 0,
+        forwards: () => (forwarding ? ("forwarded" as const) : ("refused" as const)),
+      };
       sessions.push(counts);
       return {
         nonce: "n",
         server: { name: "hello", command: "x", args: [], env: {} },
-        begin: () => void (counts.begun += 1),
+        begin: () => {
+          counts.begun += 1;
+          forwarding = true;
+        },
         renew: () => undefined,
-        end: () => void (counts.ended += 1),
+        end: () => {
+          counts.ended += 1;
+          forwarding = false;
+        },
         dispose: () => undefined,
       } satisfies ProxySession;
     },
@@ -331,7 +346,8 @@ describe("a turn whose appends keep failing", () => {
       expect(Date.now() - callAt).toBeLessThan(LEASE_MS + 2 * SECOND);
       expect(a.link.appendAt.every((at) => at - callAt < LEASE_MS)).toBe(true);
       expect(a.session.cancels).toBe(1);
-      expect(sessions[0]!.ended).toBe(1);
+      expect(sessions[0]!.ended).toBeGreaterThanOrEqual(1);
+      expect(sessions[0]!.forwards()).toBe("refused");
       expect(a.link.finished).toEqual([]);
 
       const attempts = a.link.appendAt.length;
@@ -438,6 +454,31 @@ describe("a lost turn whose agent is slow to cancel", () => {
     expect(agent.kills()).toBe(0);
     first.session.end();
     expect(await later).toEqual({ state: "done", stopReason: "end_turn" });
+  }, 60_000);
+
+  it("T7-04 (k) stops forwarding tool calls and polling signals the moment the turn is lost, not after the cancel settles", async () => {
+    const agent = fakeAgent();
+    const { proxy, sessions } = fakeProxy();
+    const run = await started("thread-a", agent, proxy);
+    run.session.cancelDelayMs = 3 * SECOND;
+    run.link.setMode("fail");
+    run.session.say("thinking");
+    expect(sessions[0]!.forwards()).toBe("forwarded");
+
+    let ended: TurnOutcome | undefined;
+    void run.outcome.then((value) => (ended = value));
+    for (let step = 0; step < 100 && run.session.cancels === 0; step += 1) {
+      await vi.advanceTimersByTimeAsync(SECOND);
+    }
+    expect(run.session.cancels).toBe(1);
+    const signals = run.link.signals();
+
+    await vi.advanceTimersByTimeAsync(SECOND);
+    expect(ended).toBeUndefined();
+    expect(sessions[0]!.forwards()).toBe("refused");
+    await vi.advanceTimersByTimeAsync(3 * SECOND);
+    expect(run.link.signals()).toBe(signals);
+    expect(ended).toEqual({ state: "failed", reason: "host_lost" });
   }, 60_000);
 
   it("T7-04 (g) treats an agent that never stops as one to drop, after a bounded wait", async () => {

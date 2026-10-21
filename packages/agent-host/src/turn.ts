@@ -778,6 +778,8 @@ export async function runTurn(
     try {
       stop = await Promise.race([prompted, exited, lostPromise]);
       if (stop === "lost") {
+        signalsOver.abort();
+        proxy?.end();
         const settled = await settlesWithin(
           Promise.allSettled([session.cancel(), prompted]),
           CANCEL_SETTLE_MS,
