@@ -108,6 +108,35 @@ describe("tauriSessionStore", () => {
     expect(storage.items.has(SESSION_STORAGE_KEY)).toBe(false);
   });
 
+  it("retries a migration that failed instead of failing every later call", async () => {
+    globals.__TAURI_INTERNALS__ = {};
+    const storage = memoryStorage();
+    storage.setItem(SESSION_STORAGE_KEY, "old-token");
+    const native = keychain();
+    let locked = false;
+    const store = await tauriSessionStore(
+      () => storage,
+      async () =>
+        ({
+          invoke: async (command: string, args?: Record<string, unknown>) => {
+            if (locked && command === "parlor_session_get") {
+              throw "The keychain is locked";
+            }
+            return native.invoke(command, args);
+          },
+        }) as never,
+    ).create();
+    locked = true;
+    await expect(store.get()).rejects.toBe("The keychain is locked");
+    expect(storage.items.get(SESSION_STORAGE_KEY)).toBe("old-token");
+    locked = false;
+    expect(await store.get()).toBe("old-token");
+    expect(native.value()).toBe("old-token");
+    expect(storage.items.has(SESSION_STORAGE_KEY)).toBe(false);
+    await store.set("next");
+    expect(await store.get()).toBe("next");
+  });
+
   it.each(["Command parlor_session_get not found", "unsupported"])(
     "stores the token in the webview in a shell whose session command is unavailable (%s)",
     async (failure) => {
