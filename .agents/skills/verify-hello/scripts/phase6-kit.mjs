@@ -516,6 +516,13 @@ export async function macCheck(check, body) {
   return withMachineLock(
     "mac-check",
     async () => {
+      const inherited = securityPrompts();
+      for (const prompt of inherited)
+        runSync(axTool(), ["type", String(prompt.pid), "\u001b", "10"]);
+      if (inherited.length) {
+        check.save(`${check.id}.keychain-prompts-inherited.json`, inherited);
+        await sleep(1500);
+      }
       const prompts = [];
       const run = { stopped: false };
       const watcher = (async () => {

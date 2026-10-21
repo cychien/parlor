@@ -111,7 +111,8 @@ const USAGE = `usage: hello.mjs <command> [args]
                           the .app with parlor build --target mac, copies it into the instance (appBundle in
                           info) and launches it with open -n next to a web dev server; --no-launch only builds
                           --shared-origin (mac, ios) makes server.url the web origin, whose Vite proxies
-                          /_parlor to the server, so a browser tab and the shell are one app to the backend
+                          /_parlor to the server, so a browser tab and the shell are one app to the backend;
+                          --release always does, as a deployed app has one origin
   doctor ID               read-only health check; exit 1 when the instance is not worth driving
   seed ID DATASET         load a fixture straight into PGlite (stops and restarts a running instance)
   sql ID QUERY            read-only SQL against the instance's PGlite (stops and restarts it, keeps
@@ -1378,7 +1379,7 @@ async function cmdUp(args) {
           : undefined,
       autoHome: !values.home && values.target === "mac" ? true : undefined,
       release: values.release ? true : undefined,
-      sharedOrigin: values["shared-origin"] ? true : undefined,
+      sharedOrigin: values["shared-origin"] || values.release ? true : undefined,
       simulator: sim ? { ...sim, bootedBefore: sim.booted } : undefined,
       createdAt: new Date().toISOString(),
     };
