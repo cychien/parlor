@@ -10,6 +10,7 @@ import {
   lstatSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   readlinkSync,
   realpathSync,
   rmSync,
@@ -47,6 +48,12 @@ import {
   sleep,
   writeAgentProfiles,
 } from "./phase4-kit.mjs";
+import {
+  blockedMessage,
+  dismissPrompt,
+  unexpectedPrompts,
+  withExpectedPrompt,
+} from "./system-prompts.mjs";
 import { evalBody, nativeTool } from "./webview.mjs";
 
 export * from "./phase5-kit.mjs";
@@ -83,7 +90,7 @@ export async function upNative(
     sharedOrigin,
   },
 ) {
-  const args = ["up", "--target", target];
+  const args = ["up", "--target", target, "--evidence", check.dir];
   if (id) args.push("--id", id);
   if (seed) args.push("--seed", seed);
   if (home) args.push("--home", home);
@@ -453,117 +460,39 @@ export async function withMachineLock(name, fn, { ms = 3 * 60 * 60_000, onWait }
   }
 }
 
-const SECURITY_PROMPT = /parlor|Hello/;
-
-/** Every SecurityAgent (Keychain access) prompt on screen whose text names one of the apps under test. */
-export function securityPrompts() {
-  const pids = runSync("pgrep", ["-x", "SecurityAgent"])
-    .stdout.split("\n")
-    .filter(Boolean)
-    .map(Number);
-  const found = [];
-  for (const pid of pids) {
-    let tree;
-    try {
-      tree = axTree(pid);
-    } catch {
-      continue;
-    }
-    for (const window of tree.windows) {
-      const { texts, buttons } = scanDialog(window);
-      if (texts.some((t) => SECURITY_PROMPT.test(t)))
-        found.push({ pid, texts, buttons, frame: window.frame });
-    }
-    if (tree.windows.length === 0) {
-      for (const frame of securityAgentWindows(pid))
-        found.push({
-          pid,
-          texts: [
-            "a SecurityAgent prompt is on screen (Accessibility shows no text; see the screenshot)",
-          ],
-          buttons: [],
-          frame,
-        });
-    }
-  }
-  return found;
-}
-
-const SECURITY_WINDOWS = `ObjC.import("CoreGraphics");
-function run(argv) {
-  const all = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, 0)));
-  return JSON.stringify(all.filter((w) => w.kCGWindowOwnerPID === Number(argv[0]) && w.kCGWindowBounds.Width > 200)
-    .map((w) => ({ x: w.kCGWindowBounds.X, y: w.kCGWindowBounds.Y, w: w.kCGWindowBounds.Width, h: w.kCGWindowBounds.Height })));
-}`;
-
-/** SecurityAgent's on-screen prompt windows, which Accessibility does not always expose. */
-function securityAgentWindows(pid) {
-  const out = runSync("osascript", [
-    "-l",
-    "JavaScript",
-    "-e",
-    SECURITY_WINDOWS,
-    String(pid),
-  ]);
-  try {
-    return JSON.parse(out.stdout.trim());
-  } catch {
-    return [];
-  }
-}
-
 /**
  * Runs a Mac check's `body` alone on the machine (the app's session item and the host's items
- * live in the one login Keychain, and an ad-hoc build reading an item another build wrote makes
- * macOS ask for the login password) and watches for such Keychain prompts. A prompt that names
- * the apps under test is saved, denied so nothing waits on it, and makes the check INCONCLUSIVE:
- * no script can type the user's password.
+ * live in the one login Keychain). Prompts of the apps under test left on screen from before are
+ * dismissed first; during the body each native instance's prompt watcher fails the driver call in
+ * flight when a prompt that needs a human appears. Any such prompt makes the check INCONCLUSIVE;
+ * the apps' own are dismissed when the body ends, and the record and screenshots stay in the check
+ * dir.
  */
 export async function macCheck(check, body) {
   return withMachineLock(
     "mac-check",
     async () => {
-      const inherited = securityPrompts();
-      for (const prompt of inherited)
-        runSync(axTool(), ["type", String(prompt.pid), "\u001b", "10"]);
+      const inherited = unexpectedPrompts(HARNESS_HOME).filter(namesAppUnderTest);
       if (inherited.length) {
-        check.save(`${check.id}.keychain-prompts-inherited.json`, inherited);
+        check.save(`${check.id}.prompts-inherited.json`, inherited);
+        for (const prompt of inherited) dismissPrompt(HARNESS_HOME, prompt);
         await sleep(1500);
       }
-      const prompts = [];
-      const run = { stopped: false };
-      const watcher = (async () => {
-        while (!run.stopped) {
-          for (const prompt of securityPrompts()) {
-            prompts.push({ at: Date.now(), ...prompt });
-            await screenshotRegion(
-              check,
-              prompt.frame,
-              `${check.id}.keychain-prompt-${prompts.length}.png`,
-            );
-            const deny = prompt.buttons.find((b) =>
-              ["拒絕", "Deny", "Cancel", "取消"].includes(b.name),
-            );
-            if (deny) runSync(axTool(), ["press", String(prompt.pid), deny.path]);
-            else runSync(axTool(), ["type", String(prompt.pid), "\u001b", "10"]);
-          }
-          await sleep(1000);
-        }
-      })();
+      const startedAt = Date.now();
       let failure;
       try {
         await body();
       } catch (error) {
         failure = error;
       }
-      run.stopped = true;
-      await watcher;
-      if (prompts.length) {
-        check.save(`${check.id}.keychain-prompts.json`, prompts);
+      for (const prompt of unexpectedPrompts(HARNESS_HOME).filter(namesAppUnderTest))
+        dismissPrompt(HARNESS_HOME, prompt);
+      const seen = promptsSeen(check, startedAt);
+      const blocked = String(failure?.message ?? "").match(BLOCKED)?.[0];
+      if (seen.length || blocked)
         throw new Inconclusive(
-          `macOS asked for the login Keychain password (${prompts[0].texts[0]}; screenshots ${check.id}.keychain-prompt-*.png); no script can type the password`,
+          `${blocked ?? blockedMessage(seen[0])}; no script can answer it`,
         );
-      }
       if (failure) throw failure;
     },
     {
@@ -571,6 +500,27 @@ export async function macCheck(check, body) {
         check.log(`waiting for the mac-check lock held by pid ${holder}`),
     },
   );
+}
+
+const BLOCKED = /blocked by a system prompt: [^\n]*/;
+const APP_UNDER_TEST = /parlor|Hello/;
+
+function namesAppUnderTest(prompt) {
+  return prompt.texts.some((text) => APP_UNDER_TEST.test(text));
+}
+
+/** The prompts the instances' watchers recorded into the check dir since `since`. */
+function promptsSeen(check, since) {
+  return readdirSync(check.dir)
+    .filter((name) => name.endsWith(".prompts.json"))
+    .flatMap((name) => {
+      try {
+        return JSON.parse(readFileSync(join(check.dir, name), "utf8"));
+      } catch {
+        return [];
+      }
+    })
+    .filter((prompt) => prompt.at >= since);
 }
 
 export async function screenshotRegion(check, frame, name) {
@@ -1104,26 +1054,35 @@ export async function connectHere(
     )
   )
     return undefined;
-  const clickedAt = Date.now();
-  await webview.click("button", "Use agents on this computer");
-  const current = await instanceInfo(webview.id);
   const title = `Connect this Mac to ${appName}`;
-  const dialog = await waitNativeDialog(current.appPid, title, ms);
-  if (
-    !check.expect(
-      `${label}: the app shows the native dialog "${title}"`,
-      Boolean(dialog),
-      dialog ?? null,
-    )
-  ) {
-    await webview.screenshot(`${label}.no-dialog.png`);
-    return undefined;
-  }
-  await screenshotRegion(check, dialog.frame, `${label}.dialog.png`);
-  await webview.screenshot(`${label}.dialog-window.png`);
-  check.save(`${label}.dialog.json`, dialog);
-  const answeredAt = pressDialogButton(dialog, answer);
-  return { dialog, clickedAt, answeredAt };
+  return withExpectedPrompt(
+    HARNESS_HOME,
+    { owner: "UserNotificationCenter", text: title },
+    async () => {
+      const clickedAt = Date.now();
+      await webview.click("button", "Use agents on this computer");
+      const current = await instanceInfo(webview.id);
+      const dialog = await waitNativeDialog(current.appPid, title, ms);
+      if (
+        !check.expect(
+          `${label}: the app shows the native dialog "${title}"`,
+          Boolean(dialog),
+          dialog ?? null,
+        )
+      ) {
+        await webview.screenshot(`${label}.no-dialog.png`);
+        return undefined;
+      }
+      await screenshotRegion(check, dialog.frame, `${label}.dialog.png`);
+      await webview.screenshot(`${label}.dialog-window.png`);
+      check.save(`${label}.dialog.json`, dialog);
+      const answeredAt = pressDialogButton(dialog, answer);
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline && findNativeDialog(current.appPid, title))
+        await sleep(200);
+      return { dialog, clickedAt, answeredAt };
+    },
+  );
 }
 
 /** `listTasks` as `user` over HTTP: the second view of a task mutation that must not restart the instance. */

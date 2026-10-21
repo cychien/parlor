@@ -32,10 +32,22 @@ import {
 } from "./agent-home.mjs";
 import { createHostCommand } from "./host.mjs";
 import {
+  appKeychainItems,
   deleteAppKeychain,
+  describeItem,
+  HELLO_APP_IDS,
+  keychainItemExists,
   summarizeDeletions,
   TAURI_CARGO_PACKAGE,
 } from "./keychain.mjs";
+import {
+  activePrompt,
+  blockedMessage,
+  promptTools,
+  promptText,
+  unexpectedPrompts,
+  watcherPid,
+} from "./system-prompts.mjs";
 import { createWebview, nativeTool } from "./webview.mjs";
 
 function canonicalPath(path) {
@@ -101,7 +113,8 @@ const HARNESS_REDIRECT = "http://127.0.0.1:47001/callback";
 const USAGE = `usage: hello.mjs <command> [args]
 
   up [--id ID] [--target web|mac|ios] [--seed DATASET] [--device NAME] [--source DIR]
-     [--no-auth --home HOME] [--home HOME] [--release [--no-launch]] [--keep-on-failure] [--force]
+     [--no-auth --home HOME] [--home HOME] [--release [--no-launch]] [--evidence DIR]
+     [--keep-on-failure] [--force]
                           snapshot the checkout, pick free ports, launch, wait until usable;
                           refused when the 1-minute load is at or above 0.7 x cores (HELLO_MAX_LOAD
                           overrides), when a mac or ios target is asked while another native
@@ -121,7 +134,11 @@ const USAGE = `usage: hello.mjs <command> [args]
                           origin a release app and the host it pairs talk to, as on a deployed app
                           mac: deletes the app's own Keychain items (device keys, parlor.session, WebKit's
                           master key) before the app launches; down deletes them again
-  doctor ID               read-only health check; exit 1 when the instance is not worth driving
+                          mac, ios: a watcher fails the instance's calls while a system prompt that needs
+                          a human is on screen, with a screenshot in --evidence DIR (default the instance)
+  doctor [ID]             read-only health check of an instance, exit 1 when it is not worth driving;
+                          without ID a preflight of this terminal's Accessibility, Automation and Screen
+                          Recording permissions, prompts on screen, and the hello apps' Keychain items
   seed ID DATASET         load a fixture straight into PGlite (stops and restarts a running instance)
   sql ID QUERY            read-only SQL against the instance's PGlite (stops and restarts it, keeps
                           its browsers and their profiles)
@@ -195,6 +212,8 @@ function positiveNumber(name, fallback) {
 function fail(message) {
   throw new CliError(message);
 }
+
+class PromptBlocked extends CliError {}
 
 function log(message) {
   process.stderr.write(`${message}\n`);
@@ -784,10 +803,78 @@ async function clearAppKeychain(state, reason) {
     log(
       `${others.map((s) => s.id).join(", ")} also run ${state.app.appId}; its Keychain items go too`,
     );
-  const results = await deleteAppKeychain(state.app, keychainOptions());
+  const results = await withPromptGuard(state, () =>
+    deleteAppKeychain(state.app, keychainOptions()),
+  );
   log(
     `${reason}: deleted the Keychain items of ${state.app.appId}: ${summarizeDeletions(results)}`,
   );
+}
+
+function promptEvidenceDir(state) {
+  return state.evidence ?? join(instanceDir(state.id), "prompts");
+}
+
+function promptWatcherRunning(state) {
+  return Boolean(watcherPid(instanceDir(state.id)));
+}
+
+async function startPromptWatcher(state) {
+  if (state.target === "web" || promptWatcherRunning(state)) return;
+  const dir = instanceDir(state.id);
+  const out = openSync(join(dir, "prompt-watcher.log"), "a");
+  const child = spawn(
+    process.execPath,
+    [
+      join(SKILL_DIR, "scripts", "prompt-watcher.mjs"),
+      HOME,
+      dir,
+      promptEvidenceDir(state),
+      state.id,
+    ],
+    { detached: true, stdio: ["ignore", out, out] },
+  );
+  child.unref();
+  closeSync(out);
+  if (!(await waitUntil(() => watcherPid(dir) === child.pid, 10_000)))
+    fail(`the prompt watcher did not start; see ${join(dir, "prompt-watcher.log")}`);
+  log(
+    `watching for system prompts (pid ${child.pid}), screenshots into ${promptEvidenceDir(state)}`,
+  );
+}
+
+async function stopPromptWatcher(state) {
+  const pid = watcherPid(instanceDir(state.id));
+  if (!pid) return;
+  signal(pid, "SIGTERM");
+  if (!(await waitUntil(() => !signal(pid, 0), 3000))) signal(pid, "SIGKILL");
+}
+
+function assertNoPrompt(state) {
+  if (state.target === "web") return;
+  const prompt = activePrompt(instanceDir(state.id));
+  if (prompt) throw new PromptBlocked(blockedMessage(prompt));
+}
+
+/** Runs `task`, failing as soon as the instance's watcher sees a system prompt on screen. */
+async function withPromptGuard(state, task) {
+  if (state.target === "web") return task();
+  assertNoPrompt(state);
+  let timer;
+  const blocked = new Promise((_, reject) => {
+    timer = setInterval(() => {
+      try {
+        assertNoPrompt(state);
+      } catch (error) {
+        reject(error);
+      }
+    }, 500);
+  });
+  try {
+    return await Promise.race([task(), blocked]);
+  } finally {
+    clearInterval(timer);
+  }
 }
 
 function xcrun(args, options = {}) {
@@ -922,6 +1009,7 @@ async function waitReady(state, logOffset) {
     if (/^Node\.js v\d+/m.test(logSince(state, logOffset))) {
       fail(`a dev process crashed during launch\n${tail(state)}`);
     }
+    assertNoPrompt(state);
     const pending = await readiness(state);
     if (!pending) return;
     if (pending !== last) log(`waiting: ${pending}`);
@@ -941,6 +1029,7 @@ function tail(state, lines = 40) {
 
 async function start(state) {
   if (isRunning(state)) fail(`instance ${state.id} is already running`);
+  await startPromptWatcher(state);
   const logOffset = existsSync(logPath(state)) ? statSync(logPath(state)).size : 0;
   const out = openSync(logPath(state), "a");
   const args = ["dev", "--target", state.release ? "web" : state.target];
@@ -1073,6 +1162,7 @@ async function launchApp(state) {
   ]);
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
+    assertNoPrompt(state);
     const app = releaseAppProcess(state);
     if (app) {
       state.appLaunchedAt = new Date().toISOString();
@@ -1132,6 +1222,7 @@ async function relaunchDevApp(state) {
     signal(before.pid, "SIGKILL");
   const deadline = Date.now() + 120_000;
   while (Date.now() < deadline) {
+    assertNoPrompt(state);
     const table = processTable();
     const app = shellProcess(state, table);
     const clients = externalClients(state, table);
@@ -1239,7 +1330,10 @@ function instanceSurvivors(state, { browsers = "main", hosts = "kill" } = {}) {
     found.set(p.pid, entry);
   };
   for (const p of ownedProcesses(state, table)) add(p, "instance process");
-  const under = processesUnder(instanceDir(state.id), table);
+  const watcher = watcherPid(instanceDir(state.id));
+  const under = processesUnder(instanceDir(state.id), table).filter(
+    (p) => p.pid !== watcher,
+  );
   const kept =
     hosts === "keep"
       ? hostProcesses(
@@ -1455,6 +1549,7 @@ async function cmdUp(args) {
       release: { type: "boolean" },
       "no-launch": { type: "boolean" },
       "shared-origin": { type: "boolean" },
+      evidence: { type: "string" },
     },
   });
   if (values["no-auth"] && !values.home)
@@ -1503,6 +1598,7 @@ async function cmdUp(args) {
       release: values.release ? true : undefined,
       sharedOrigin: values["shared-origin"] ? true : undefined,
       simulator: sim ? { ...sim, bootedBefore: sim.booted } : undefined,
+      evidence: values.evidence ? resolve(values.evidence) : undefined,
       createdAt: new Date().toISOString(),
     };
     mkdirSync(instanceDir(id), { recursive: true });
@@ -1523,6 +1619,7 @@ async function cmdUp(args) {
     else if (!state.noAuth) await seedAccounts(state);
     if (!state.noAuth)
       log(`seeded users ${Object.keys(USERS).join(", ")} (password ${PASSWORD})`);
+    await startPromptWatcher(state);
     if (state.target === "mac") {
       state.app = await appIdentity(state);
       writeState(state);
@@ -1588,7 +1685,75 @@ function printInfo(state) {
   );
 }
 
+function nativeStatus(args) {
+  const result = run(promptTools(HOME), args, { allowFailure: true });
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    return { error: (result.stderr || result.stdout).trim() };
+  }
+}
+
+/** What the mac target needs from this terminal and this login Keychain, before anything starts. */
+async function cmdPreflight() {
+  const results = [];
+  const report = (status, name, detail) => results.push({ status, name, detail });
+  const trusted = nativeStatus(["trusted"]);
+  report(
+    trusted.trusted ? "ok" : "FAIL",
+    "accessibility",
+    trusted.trusted
+      ? "this terminal may drive other apps through Accessibility"
+      : "grant this terminal Accessibility in System Settings > Privacy & Security",
+  );
+  const events = nativeStatus(["automation", "com.apple.systemevents"]);
+  report(
+    events.state === "granted" ? "ok" : "FAIL",
+    "automation (System Events)",
+    events.state === "granted"
+      ? "this terminal may send Apple Events to System Events"
+      : `${events.state ?? events.error} (status ${events.status}); allow this terminal to control System Events in System Settings > Privacy & Security > Automation`,
+  );
+  const capture = nativeStatus(["screen-capture"]);
+  report(
+    capture.granted ? "ok" : "FAIL",
+    "screen recording",
+    capture.granted
+      ? "screenshots of app windows and prompts work"
+      : "grant this terminal Screen Recording, or every screenshot shows only the desktop",
+  );
+  if (trusted.trusted) {
+    const prompts = unexpectedPrompts(HOME);
+    report(
+      prompts.length ? "FAIL" : "ok",
+      "system prompts",
+      prompts.length
+        ? prompts.map((p) => `${p.owner} "${promptText(p)}"`).join("; ")
+        : "none on screen",
+    );
+  }
+  const items = new Map(
+    HELLO_APP_IDS.flatMap((appId) =>
+      appKeychainItems({ appId, cargoPackage: TAURI_CARGO_PACKAGE }),
+    ).map((item) => [describeItem(item), item]),
+  );
+  for (const [name, item] of items) {
+    const exists = await keychainItemExists(item, keychainOptions()).catch(
+      (error) => error.message,
+    );
+    report(
+      "--",
+      `keychain ${name}`,
+      typeof exists === "boolean" ? (exists ? "yes" : "no") : exists,
+    );
+  }
+  for (const r of results)
+    process.stdout.write(`${r.status.padEnd(4)} ${r.name}: ${r.detail}\n`);
+  if (results.some((r) => r.status === "FAIL")) process.exitCode = 1;
+}
+
 async function cmdDoctor([id]) {
+  if (!id) return cmdPreflight();
   const state = readState(id);
   const u = urls(state);
   const results = [];
@@ -1694,6 +1859,18 @@ async function cmdDoctor([id]) {
       clients.length
         ? clients.map((c) => `${c.command}(${c.pid})`).join(" ")
         : "no connection from outside the dev tree",
+    );
+  }
+  if (state.target !== "web") {
+    const prompt = activePrompt(instanceDir(state.id));
+    check(
+      "system prompts",
+      promptWatcherRunning(state) && !prompt,
+      !promptWatcherRunning(state)
+        ? "no prompt watcher runs for this instance"
+        : prompt
+          ? blockedMessage(prompt)
+          : "none on screen",
     );
   }
   const anonymous = await postJson(`${u.web}/_parlor/actions/listTasks`, {});
@@ -2378,6 +2555,7 @@ async function teardown(state, { saveLog }) {
   stopBrowsers(state);
   stopHolders(state);
   await stopProcesses(state, { browsers: "all" });
+  await stopPromptWatcher(state);
   if (state.autoHome && state.home) {
     await killHomeProcesses(state.home);
     removeHome(state.home);
@@ -2435,7 +2613,10 @@ async function cmdDown(args) {
 function strayProcesses() {
   const table = processTable();
   const tracked = new Set(
-    allStates().flatMap((state) => ownedProcesses(state, table).map((p) => p.pid)),
+    allStates().flatMap((state) => [
+      ...ownedProcesses(state, table).map((p) => p.pid),
+      watcherPid(instanceDir(state.id)),
+    ]),
   );
   return processesUnder(INSTANCES_DIR, table).filter((p) => !tracked.has(p.pid));
 }
@@ -2597,10 +2778,18 @@ if (!handler) {
   process.stdout.write(`${USAGE}\n`);
   process.exit(command && command !== "help" && command !== "--help" ? 1 : 0);
 }
+const PROMPT_GUARDED = new Set(["mcp", "agent", "browser", "host", "webview"]);
+
 try {
-  await handler(rest);
+  const id = rest.find((arg) => !arg.startsWith("-"));
+  const guarded =
+    PROMPT_GUARDED.has(command) && id && existsSync(statePath(id))
+      ? readState(id)
+      : undefined;
+  await (guarded ? withPromptGuard(guarded, () => handler(rest)) : handler(rest));
 } catch (error) {
   if (!(error instanceof CliError)) throw error;
   log(error.message);
+  if (error instanceof PromptBlocked) process.exit(1);
   process.exitCode = 1;
 }
