@@ -69,7 +69,7 @@ const DIFFERENCES: Readonly<
     why: "`deviceKey` injects the keys, as `session` injects the session store",
   },
   "client/src/session.ts SessionDevice changed": {
-    agreed: false,
+    agreed: true,
     why: "phase 6: `keys` hands the app's own public keys to the host at pairing, which no skeleton member exposed",
   },
   "agent-host/src/policy.ts changePolicy added": {
@@ -81,7 +81,7 @@ const DIFFERENCES: Readonly<
     why: "addendum D7: the overlay read at the start of each turn",
   },
   "agent-host/src/daemon.ts DaemonDeps changed": {
-    agreed: false,
+    agreed: true,
     why: "review of phase 6: `lockToken` names the service.lock the spawning ensureService holds, so the daemon's probe-through-bind takes the lock otherwise",
   },
   "agent-host/src/prompter.ts LocalPrompter changed": {
@@ -170,11 +170,11 @@ const DIFFERENCES_6: Readonly<
     why: "spec 8.6: a signature mismatch, a downgrade and a daemon without `hello` are outcomes, not throws",
   },
   "agent-host/src/service.ts ServiceClient changed": {
-    agreed: false,
+    agreed: true,
     why: "the `.sig` of a bundled binary lives in the app's resources, not beside it, so the client carries its path",
   },
   "agent-host/src/daemon.ts DaemonDeps changed": {
-    agreed: false,
+    agreed: true,
     why: "review of phase 6: `lockToken` names the service.lock the spawning ensureService holds, so the daemon's probe-through-bind takes the lock otherwise",
   },
   "agent-host/src/control.ts ControlRequest changed": {
@@ -182,7 +182,7 @@ const DIFFERENCES_6: Readonly<
     why: "spec 8.6: `handover` carries the binary and signature, `confirm_local_pairing` is new",
   },
   "capabilities/src/device-key/capacitor.ts capacitorDeviceKey changed": {
-    agreed: false,
+    agreed: true,
     why: "the skeleton's default loader is a placeholder that rejects; this one loads `@parlor/capacitor-device-key`",
   },
   "capabilities/src/local-agent-host/interface.ts LocalConnectInput changed": {
