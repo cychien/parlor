@@ -22,6 +22,13 @@ import { dirname, join } from "node:path";
 
 import { HOMES_ROOT } from "./agent-home.mjs";
 import {
+  deleteAppKeychain,
+  deleteKeychainItems,
+  SESSION_ACCOUNT,
+  summarizeDeletions,
+  TAURI_CARGO_PACKAGE,
+} from "./keychain.mjs";
+import {
   Inconclusive,
   PAGE_LIB,
   postJson,
@@ -50,7 +57,7 @@ export const HARNESS_HOME =
 const TOOLS_DIR = join(HARNESS_HOME, "tools");
 export const HELLO_APP_ID = "dev.parlor.hello";
 export const SECOND_APP = { id: "dev.parlor.hellotwo", name: "Hello Two" };
-export const SESSION_ACCOUNT = "parlor.session";
+export { SESSION_ACCOUNT };
 
 /** A short, unique instance id; chosen before `up` so a check knows the snapshot path in advance. */
 export function instanceId(tag) {
@@ -736,123 +743,37 @@ export function sessionItem(appId) {
   };
 }
 
-export function deleteSessionItem(appId) {
-  for (let i = 0; i < 5; i++) {
-    if (
-      runSync("security", ["delete-generic-password", "-s", appId, "-a", SESSION_ACCOUNT])
-        .status !== 0
-    )
-      break;
-  }
-}
+export { deviceKeyNames, KeychainBlocked } from "./keychain.mjs";
 
-export class KeychainBlocked extends Error {}
-
-/** The Mac app's device keys as the Drive contract names them (SecKey items, class key, P-256). */
-export function deviceKeyNames(appId) {
-  return [
-    { label: `${appId} device signing key`, tag: `${appId}.device-key.signing` },
-    { label: `${appId} device presence key`, tag: `${appId}.device-key.presence` },
-  ];
-}
-
-/**
- * Deletes exactly the contract's device keys of `appId` (by class key, label and application tag;
- * the Keychain is never listed). Throws KeychainBlocked when the deletion is refused or does not
- * answer within 20 s (a password prompt), with what macOS said.
- */
-export async function deleteDeviceKeys(appId) {
-  const tool = nativeTool(TOOLS_DIR, "delete-device-key");
-  const results = [];
-  for (const { label, tag } of deviceKeyNames(appId)) {
-    const result = await runAsync(tool, [label, tag], { timeout: 20_000 });
-    let parsed;
-    try {
-      parsed = JSON.parse(result.stdout.trim());
-    } catch {
-      parsed = undefined;
-    }
-    if (result.timedOut || result.status !== 0 || !parsed) {
-      const prompts = securityPrompts();
-      throw new KeychainBlocked(
-        `deleting the Keychain key "${label}" (tag ${tag}) ${result.timedOut ? "did not return within 20 s" : `failed: ${(parsed?.message ?? result.stderr) || result.stdout}`}${prompts.length ? `; SecurityAgent shows: ${prompts.map((p) => p.texts.join(" / ")).join(" | ")}` : ""}`,
-      );
-    }
-    results.push(parsed);
-  }
-  return results;
-}
-
-/**
- * Deletes the generic password(s) with exactly `label` (the contract's WebKit item, for example
- * `parlor_app WebCrypto Master Key`), never listing the Keychain. Throws KeychainBlocked when a
- * deletion is refused or does not return within 20 s (a password prompt).
- */
-export async function deleteLabeledPassword(label) {
-  let deleted = 0;
-  for (let round = 0; round < 20; round++) {
-    const result = await runAsync("security", ["delete-generic-password", "-l", label], {
-      timeout: 20_000,
-    });
-    if (result.timedOut) {
-      const prompts = securityPrompts();
-      throw new KeychainBlocked(
-        `deleting the Keychain item "${label}" did not return within 20 s${prompts.length ? `; SecurityAgent shows: ${prompts.map((p) => p.texts.join(" / ")).join(" | ")}` : ""}`,
-      );
-    }
-    if (result.status === 44) return { label, deleted };
-    if (result.status !== 0)
-      throw new KeychainBlocked(
-        `deleting the Keychain item "${label}" failed (${result.status}): ${result.stderr.trim()}`,
-      );
-    deleted++;
-  }
-  return { label, deleted };
-}
-
-/** The webview's WebKit item the contract names, deleted now and when the check ends. */
-export async function ownWebKitItem(check, label) {
-  check.log(`deleted ${JSON.stringify(await deleteLabeledPassword(label))}`);
-  check.onCleanup(async () => {
-    try {
-      await deleteLabeledPassword(label);
-    } catch (error) {
-      check.log(`cleanup: ${error.message}`);
-    }
-  });
-}
-
-/** The app's Keychain items the contract names: its `parlor.session` item and both device keys. */
+/** Deletes every Keychain item the app `appId` owns, with the driver's own implementation. */
 export async function clearAppKeychain(check, appId) {
-  deleteSessionItem(appId);
-  const keys = await deleteDeviceKeys(appId);
-  check.log(
-    `cleared ${appId} keychain: ${keys.map((k) => `${k.label} deleted ${k.deleted}`).join(", ")}`,
+  const results = await deleteAppKeychain(
+    { appId, cargoPackage: TAURI_CARGO_PACKAGE },
+    { toolsDir: TOOLS_DIR },
   );
-  return keys;
+  check.log(`cleared ${appId} keychain: ${summarizeDeletions(results)}`);
+  return results;
 }
 
 /** Clears the Keychain items of `appIds` before the check launches anything and again when it ends. */
 export async function ownAppKeychain(check, appIds) {
   for (const appId of appIds) await clearAppKeychain(check, appId);
   check.onCleanup(async () => {
-    for (const appId of appIds) {
-      deleteSessionItem(appId);
-      try {
-        await deleteDeviceKeys(appId);
-      } catch (error) {
-        check.log(`cleanup: ${error.message}`);
-      }
-    }
+    for (const appId of appIds)
+      await clearAppKeychain(check, appId).catch((error) =>
+        check.log(`cleanup: ${error.message}`),
+      );
   });
 }
 
-/** Deletes the session items of `appIds` now and when the check ends. */
-export function ownSessionItems(check, appIds) {
-  for (const appId of appIds) deleteSessionItem(appId);
-  check.onCleanup(() => {
-    for (const appId of appIds) deleteSessionItem(appId);
-  });
+/** The generic password labeled exactly `label`, deleted now and when the check ends. */
+export async function ownWebKitItem(check, label) {
+  const remove = () =>
+    deleteKeychainItems([{ kind: "password", label }], { toolsDir: TOOLS_DIR });
+  check.log(`deleted ${summarizeDeletions(await remove())}`);
+  check.onCleanup(() =>
+    remove().catch((error) => check.log(`cleanup: ${error.message}`)),
+  );
 }
 
 /** Fails the check when it touched the developer's own `~/.parlor` or LaunchAgents. */

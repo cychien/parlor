@@ -31,6 +31,11 @@ import {
   withoutAuth,
 } from "./agent-home.mjs";
 import { createHostCommand } from "./host.mjs";
+import {
+  deleteAppKeychain,
+  summarizeDeletions,
+  TAURI_CARGO_PACKAGE,
+} from "./keychain.mjs";
 import { createWebview, nativeTool } from "./webview.mjs";
 
 function canonicalPath(path) {
@@ -114,6 +119,8 @@ const USAGE = `usage: hello.mjs <command> [args]
                           /_parlor to the server, so a browser tab and the shell are one app to the backend
                           --release makes the server URL the server's own origin (PARLOR_ORIGIN), the one
                           origin a release app and the host it pairs talk to, as on a deployed app
+                          mac: deletes the app's own Keychain items (device keys, parlor.session, WebKit's
+                          master key) before the app launches; down deletes them again
   doctor ID               read-only health check; exit 1 when the instance is not worth driving
   seed ID DATASET         load a fixture straight into PGlite (stops and restarts a running instance)
   sql ID QUERY            read-only SQL against the instance's PGlite (stops and restarts it, keeps
@@ -155,7 +162,8 @@ const USAGE = `usage: hello.mjs <command> [args]
                           drive the mac or iOS webview: mac through Accessibility (eval through a library
                           loaded into the app), iOS through the simulator's WebKit remote inspector
   launch ID | quit ID     open -n the release app of a --release instance, or quit it
-  relaunch ID             quit and start the shell app again (mac dev: stop and start; iOS: the app only)
+  relaunch ID             quit and start the same built shell app again, never rebuilding (mac dev: the
+                          instance's pinned debug binary; mac release: the copied .app; iOS: simctl)
   info ID | list          print one instance's state, or every instance plus stray processes
                           under the home that belong to no instance
   reap [--kill]           list processes whose cwd or command is under the home (deleted cwds
@@ -693,17 +701,93 @@ function appEnv(state) {
   };
 }
 
-/** cargo runs the dev app through this, so the app starts with appEnv and nothing of the dev tree. */
+function pinnedAppDir(state) {
+  return join(instanceDir(state.id), "app-bin");
+}
+
+function repinMarker(state) {
+  return join(instanceDir(state.id), "app-bin.stale");
+}
+
+function relaunchMarker(state) {
+  return join(instanceDir(state.id), "relaunch");
+}
+
+/**
+ * cargo runs the dev app through this, so the app starts with appEnv and nothing of the dev tree.
+ * The first launch copies the debug binary and its sidecars into the instance, and every later
+ * launch of the instance runs that copy, so its signature (and its Keychain items' ACLs) never
+ * changes; `sync` marks the copy stale. When `relaunch` asks, it starts the same copy again.
+ */
 function appRunner(state) {
   const file = join(instanceDir(state.id), "app-runner.sh");
   const quote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
   const assignments = Object.entries(appEnv(state))
     .map(([key, value]) => `${key}=${quote(value)}`)
     .join(" ");
-  writeFileSync(file, `#!/bin/sh\nexec /usr/bin/env -i ${assignments} "$@"\n`, {
-    mode: 0o755,
-  });
+  const pin = quote(pinnedAppDir(state));
+  const stale = quote(repinMarker(state));
+  const again = quote(relaunchMarker(state));
+  const script = `#!/bin/sh
+exe="$1"
+shift
+if [ -e ${stale} ] || [ ! -x ${pin}/"\${exe##*/}" ]; then
+  /bin/rm -rf ${pin} ${stale}
+  /bin/mkdir -p ${pin}
+  for f in "\${exe%/*}"/*; do
+    [ -f "$f" ] || continue
+    case "\${f##*/}" in lib*|*.d) continue ;; esac
+    /bin/cp -c "$f" ${pin}/ 2>/dev/null || /bin/cp "$f" ${pin}/
+  done
+fi
+while :; do
+  /bin/rm -f ${again}
+  /usr/bin/env -i ${assignments} ${pin}/"\${exe##*/}" "$@"
+  code=$?
+  [ -e ${again} ] || exit $code
+done
+`;
+  writeFileSync(file, script, { mode: 0o755 });
   return file;
+}
+
+/** The app id and cargo package of the instance's app, read from its snapshot. */
+async function appIdentity(state) {
+  const repo = join(instanceDir(state.id), "repo");
+  const requireFromCli = createRequire(join(repo, "packages", "cli", "package.json"));
+  const { tsImport } = await import(requireFromCli.resolve("tsx/esm/api"));
+  const { loadParlorConfig } = await tsImport(
+    join(repo, "packages", "config", "src", "index.ts"),
+    import.meta.url,
+  );
+  const project = await tsImport(
+    join(repo, "packages", "shell-desktop", "src", "project.ts"),
+    import.meta.url,
+  );
+  const { config } = await loadParlorConfig(appDir(state));
+  return {
+    appId: config.app.id,
+    cargoPackage: project.TAURI_CARGO_PACKAGE ?? TAURI_CARGO_PACKAGE,
+  };
+}
+
+function keychainOptions() {
+  return { toolsDir: TOOLS_DIR };
+}
+
+/** Deletes every Keychain item the instance's app owns (see keychain.mjs). */
+async function clearAppKeychain(state, reason) {
+  const others = allStates().filter(
+    (s) => s.id !== state.id && s.target === "mac" && s.app?.appId === state.app.appId,
+  );
+  if (others.length)
+    log(
+      `${others.map((s) => s.id).join(", ")} also run ${state.app.appId}; its Keychain items go too`,
+    );
+  const results = await deleteAppKeychain(state.app, keychainOptions());
+  log(
+    `${reason}: deleted the Keychain items of ${state.app.appId}: ${summarizeDeletions(results)}`,
+  );
 }
 
 function xcrun(args, options = {}) {
@@ -776,18 +860,20 @@ function appProcess(state, table = processTable()) {
   return state.release ? releaseAppProcess(state, table) : shellProcess(state, table);
 }
 
+const DEV_APP = /^\S*\/parlor_app(\s|$)/;
+
 function isShellApp(state, p) {
   if (state.target !== "mac") return false;
   if (state.release) {
     const exe = state.appBundle ? bundleExecutable(state) : undefined;
     return Boolean(exe) && (p.command === exe || p.command.startsWith(`${exe} `));
   }
-  return /\/parlor_app(\s|$)/.test(p.command);
+  return DEV_APP.test(p.command);
 }
 
 function shellProcess(state, table) {
   if (state.target !== "mac") return undefined;
-  return ownedProcesses(state, table).find((p) => /\/parlor_app(\s|$)/.test(p.command));
+  return ownedProcesses(state, table).find((p) => DEV_APP.test(p.command));
 }
 
 function externalClients(state, table) {
@@ -1023,12 +1109,46 @@ async function cmdRelaunch([id]) {
     await quitApp(state);
     await launchApp(state);
   } else if (state.target === "mac") {
-    await stopProcesses(state, { hosts: "keep" });
-    await start(state);
+    await relaunchDevApp(state);
   } else {
     fail("relaunch is for the mac and ios targets");
   }
   printInfo(state);
+}
+
+/** Quits the dev app and has its runner start the same pinned binary again; nothing is rebuilt. */
+async function relaunchDevApp(state) {
+  const before = shellProcess(state, processTable());
+  if (!before)
+    fail(`the ${state.id} app is not running; start it with start ${state.id}`);
+  if (!before.command.startsWith(`${pinnedAppDir(state)}/`))
+    fail(
+      `${state.id} runs ${before.command.split(" ")[0]}, not a pinned copy; down it and up it again`,
+    );
+  const oldClients = new Set(externalClients(state, processTable()).map((c) => c.pid));
+  writeFileSync(relaunchMarker(state), "");
+  signal(before.pid, "SIGTERM");
+  if (!(await waitUntil(() => !signal(before.pid, 0), 8000)))
+    signal(before.pid, "SIGKILL");
+  const deadline = Date.now() + 120_000;
+  while (Date.now() < deadline) {
+    const table = processTable();
+    const app = shellProcess(state, table);
+    const clients = externalClients(state, table);
+    if (
+      app &&
+      app.pid !== before.pid &&
+      clients.length > 0 &&
+      clients.every((c) => !oldClients.has(c.pid))
+    ) {
+      log(`relaunched ${app.command.split(" ")[0]} (pid ${before.pid} -> ${app.pid})`);
+      return;
+    }
+    if (!isRunning(state))
+      fail(`${state.id} stopped instead of relaunching\n${tail(state)}`);
+    await sleep(250);
+  }
+  fail(`the ${state.id} app did not come back within 120 s\n${tail(state)}`);
 }
 
 function homeProcessPids(home) {
@@ -1403,6 +1523,11 @@ async function cmdUp(args) {
     else if (!state.noAuth) await seedAccounts(state);
     if (!state.noAuth)
       log(`seeded users ${Object.keys(USERS).join(", ")} (password ${PASSWORD})`);
+    if (state.target === "mac") {
+      state.app = await appIdentity(state);
+      writeState(state);
+      await clearAppKeychain(state, "up");
+    }
     await start(state);
     if (state.release) {
       state.building = true;
@@ -2229,6 +2354,7 @@ async function cmdSync([id]) {
   Object.assign(state, sourceRevision(state.source));
   snapshot(state);
   writeState(state);
+  if (state.target === "mac" && !state.release) writeFileSync(repinMarker(state), "");
   log(
     `synced ${state.source} (${state.head.slice(0, 12)}, fingerprint ${state.fingerprint}); tsx restarts the server, Vite reloads the page`,
   );
@@ -2256,6 +2382,20 @@ async function teardown(state, { saveLog }) {
     await killHomeProcesses(state.home);
     removeHome(state.home);
   }
+  let keychainError;
+  if (state.app) {
+    const sharing = allStates().filter(
+      (s) => s.id !== state.id && s.app?.appId === state.app.appId && isRunning(s),
+    );
+    if (sharing.length)
+      log(
+        `kept the Keychain items of ${state.app.appId}: ${sharing.map((s) => s.id).join(", ")} still runs it`,
+      );
+    else
+      await clearAppKeychain(state, "down").catch((error) => {
+        keychainError = error;
+      });
+  }
   if (state.simulator && !state.simulator.bootedBefore) {
     xcrun(["simctl", "shutdown", state.simulator.udid], { allowFailure: true });
   }
@@ -2266,6 +2406,8 @@ async function teardown(state, { saveLog }) {
   }
   rmSync(instanceDir(state.id), { recursive: true, force: true });
   log(`removed ${state.id}`);
+  if (keychainError)
+    fail(`${state.id} is down, but its Keychain items are not: ${keychainError.message}`);
 }
 
 async function cmdDown(args) {
