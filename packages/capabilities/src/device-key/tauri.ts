@@ -1,6 +1,6 @@
 import type { CapabilityAdapter } from "../capability.js";
-import { detectPlatform } from "../runtime.js";
 import type { DeviceKey } from "./interface.js";
+import { hasNativeCommands, nativeDeviceKey, type NativePublicKeys } from "./native.js";
 
 export interface TauriInvoke {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
@@ -12,12 +12,15 @@ export function tauriDeviceKey(
 ): CapabilityAdapter<DeviceKey> {
   return {
     platform: "tauri",
-    available: () => detectPlatform() === "tauri",
+    available: () => hasNativeCommands(load),
     create: async () => {
-      // TODO: Keychain and Secure Enclave keys; the presence key uses LAContext with
-      //   .userPresence, so macOS shows Touch ID.
-      void (await load());
-      throw new Error("not implemented");
+      const { invoke } = await load();
+      return nativeDeviceKey({
+        publicKeys: (options) =>
+          invoke<NativePublicKeys>("parlor_device_key_public", { ...options }),
+        sign: (options) =>
+          invoke<{ signature: string }>("parlor_device_key_sign", { ...options }),
+      });
     },
   };
 }

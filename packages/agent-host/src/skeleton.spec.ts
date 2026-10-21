@@ -95,8 +95,6 @@ describe("the phase 5 skeleton contract", () => {
       ...drift("packages/capabilities/src/device-key/interface.ts"),
       ...drift("packages/capabilities/src/device-key/index.ts"),
       ...drift("packages/capabilities/src/device-key/web.ts"),
-      ...drift("packages/capabilities/src/device-key/tauri.ts"),
-      ...drift("packages/capabilities/src/device-key/capacitor.ts"),
       ...drift("packages/server/src/auth.ts", [
         "DeviceKeys",
         "PresenceKey",
@@ -166,6 +164,10 @@ const DIFFERENCES_6: Readonly<
   "agent-host/src/control.ts ControlRequest changed": {
     agreed: true,
     why: "spec 8.6: `handover` carries the binary and signature, `confirm_local_pairing` is new",
+  },
+  "capabilities/src/device-key/capacitor.ts capacitorDeviceKey changed": {
+    agreed: false,
+    why: "the skeleton's default loader is a placeholder that rejects; this one loads `@parlor/capacitor-device-key`",
   },
   "capabilities/src/local-agent-host/interface.ts LocalConnectInput changed": {
     agreed: true,

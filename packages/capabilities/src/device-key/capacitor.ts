@@ -1,8 +1,8 @@
 import type { CapabilityAdapter } from "../capability.js";
-import { detectPlatform } from "../runtime.js";
 import type { DeviceKey } from "./interface.js";
+import { hasIosPlugin, nativeDeviceKey } from "./native.js";
 
-/** The `ParlorDeviceKey` native plugin: Secure Enclave on iOS, StrongBox or TEE on Android. */
+/** The `ParlorDeviceKey` native plugin: the Secure Enclave, or a Keychain key, on iOS. */
 export interface CapacitorDeviceKeyModule {
   ParlorDeviceKey: {
     publicKeys(options: { presence: boolean; challenge: string }): Promise<{
@@ -17,14 +17,11 @@ export interface CapacitorDeviceKeyModule {
 
 export function capacitorDeviceKey(
   load: () => Promise<CapacitorDeviceKeyModule> = () =>
-    Promise.reject(new Error("not implemented")),
+    import("@parlor/capacitor-device-key"),
 ): CapabilityAdapter<DeviceKey> {
   return {
     platform: "capacitor",
-    available: () => detectPlatform() === "capacitor",
-    create: async () => {
-      void (await load());
-      throw new Error("not implemented");
-    },
+    available: hasIosPlugin,
+    create: async () => nativeDeviceKey((await load()).ParlorDeviceKey),
   };
 }

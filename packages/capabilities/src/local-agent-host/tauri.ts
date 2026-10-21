@@ -1,7 +1,12 @@
 import type { CapabilityAdapter } from "../capability.js";
+import { hasNativeCommands } from "../device-key/native.js";
 import type { TauriInvoke } from "../device-key/tauri.js";
-import { detectPlatform } from "../runtime.js";
-import type { LocalAgentHost } from "./interface.js";
+import type {
+  HostPairing,
+  LocalAgentHost,
+  LocalConnectResult,
+  LocalHostStatus,
+} from "./interface.js";
 
 /**
  * The generated `parlor_host_*` commands, which reach the shared daemon on its control
@@ -13,18 +18,21 @@ export function tauriLocalAgentHost(
 ): CapabilityAdapter<LocalAgentHost> {
   return {
     platform: "tauri",
-    available: async () => {
-      if (detectPlatform() !== "tauri") return false;
-      // TODO: invoke<boolean>("parlor_host_bundled"), false on any error.
-      void load;
-      throw new Error("not implemented");
-    },
+    available: () => hasNativeCommands(load),
     create: async () => {
-      // TODO: status -> invoke("parlor_host_status"); connect -> invoke("parlor_host_begin",
-      //   { appOrigin }) gives a HostPairing, await input.authorize(pairing), then
-      //   invoke("parlor_host_finish", { code }), which resolves after the native dialog.
-      void (await load());
-      throw new Error("not implemented");
+      const { invoke } = await load();
+      return {
+        status: () => invoke<LocalHostStatus>("parlor_host_status"),
+        connect: async ({ appOrigin, authorize, device }) => {
+          const pairing = await invoke<HostPairing>("parlor_host_begin", { appOrigin });
+          const code = await authorize(pairing);
+          return invoke<LocalConnectResult>("parlor_host_finish", {
+            appOrigin,
+            code,
+            device: device ?? null,
+          });
+        },
+      };
     },
   };
 }
