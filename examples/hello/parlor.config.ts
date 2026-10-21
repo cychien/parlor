@@ -8,4 +8,5 @@ export default defineConfig({
     scheme: "hello",
   },
   server: { url: "http://localhost:3000" },
+  desktop: { agentHost: true },
 });
