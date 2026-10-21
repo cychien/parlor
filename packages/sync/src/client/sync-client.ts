@@ -217,7 +217,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
 
   const since = () => (cursor === INITIAL_CURSOR ? "" : encodeCursor(cursor));
 
-  const poll = async () => {
+  const poll = async (mine: number) => {
     const batch = await withTimeout(async (signal) => {
       const response = await options.request(
         `${basePath}/sync?since=${encodeURIComponent(since())}`,
@@ -227,6 +227,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
       if (!response.ok) throw new Error(`sync poll failed with HTTP ${response.status}`);
       return (await response.json()) as SyncBatch;
     });
+    if (mine !== epoch) throw new StaleRequest();
     accept(batch.events);
     if (running && negotiated === "poll") resumed();
   };
@@ -237,9 +238,10 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     pollTimer = schedule(() => {
       pollTimer = undefined;
       let halted = false;
-      void poll()
+      const mine = epoch;
+      void poll(mine)
         .catch((error: unknown) => {
-          if (error instanceof StaleRequest) {
+          if (error instanceof StaleRequest || mine !== epoch) {
             halted = true;
             return;
           }

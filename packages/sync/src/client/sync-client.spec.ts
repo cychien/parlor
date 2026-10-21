@@ -1238,6 +1238,109 @@ describe("createSyncClient stop", () => {
     expect(held.request).toHaveBeenCalledTimes(2);
   });
 
+  describe("a stop between a request settling and its result being delivered", () => {
+    function stoppedWhenSettled(held = heldPoll()) {
+      let stopOnSettle = false;
+      let stopClient: () => void = () => undefined;
+      const onEvents = vi.fn();
+      const onError = vi.fn();
+      const onUnauthorized = vi.fn();
+      const onResume = vi.fn();
+      const client = createSyncClient({
+        request: held.request,
+        onEvents,
+        onError,
+        onUnauthorized,
+        onResume,
+        coalesceMs: 10,
+        clearTimeout: (id) => {
+          globalThis.clearTimeout(id);
+          if (!stopOnSettle) return;
+          stopOnSettle = false;
+          stopClient();
+        },
+      });
+      stopClient = () => client.stop();
+      return {
+        held,
+        client,
+        onEvents,
+        onError,
+        onUnauthorized,
+        onResume,
+        answerThenStop: async (response: Response) => {
+          stopOnSettle = true;
+          held.answer(response);
+          await vi.advanceTimersByTimeAsync(0);
+          expect(stopOnSettle).toBe(false);
+        },
+      };
+    }
+
+    it("delivers no events and moves no cursor from a poll that settled before the stop", async () => {
+      const run = stoppedWhenSettled();
+      run.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      await run.answerThenStop(Response.json({ events: [event(1, "a")], cursor: "1.a" }));
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(run.client.cursor).toBe("");
+      expect(run.onEvents).not.toHaveBeenCalled();
+      expect(run.onResume).not.toHaveBeenCalled();
+      expect(run.onError).not.toHaveBeenCalled();
+      expect(run.held.request).toHaveBeenCalledTimes(2);
+    });
+
+    it("reports no 401 from a poll that settled before the stop", async () => {
+      const run = stoppedWhenSettled();
+      run.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      await run.answerThenStop(new Response("no", { status: 401 }));
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(run.onUnauthorized).not.toHaveBeenCalled();
+      expect(run.onError).not.toHaveBeenCalled();
+      expect(run.held.request).toHaveBeenCalledTimes(2);
+    });
+
+    it("acts on no negotiation that settled before the stop", async () => {
+      let answer!: (response: Response) => void;
+      const request = vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            answer = resolve;
+          }),
+      );
+      const onNegotiated = vi.fn();
+      const onUnauthorized = vi.fn();
+      let stopOnSettle = false;
+      let stopClient: () => void = () => undefined;
+      const client = createSyncClient({
+        request,
+        onEvents: vi.fn(),
+        onError: vi.fn(),
+        onNegotiated,
+        onUnauthorized,
+        clearTimeout: (id) => {
+          globalThis.clearTimeout(id);
+          if (!stopOnSettle) return;
+          stopOnSettle = false;
+          stopClient();
+        },
+      });
+      stopClient = () => client.stop();
+      client.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      stopOnSettle = true;
+      answer(negotiated());
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(onNegotiated).not.toHaveBeenCalled();
+      expect(client.transport).toBeUndefined();
+      expect(request).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("stop aborts an in-flight negotiation and ignores its late answer", async () => {
     let signal: AbortSignal | undefined;
     let answer!: (response: Response) => void;
