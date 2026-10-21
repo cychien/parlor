@@ -783,6 +783,45 @@ export async function deleteDeviceKeys(appId) {
   return results;
 }
 
+/**
+ * Deletes the generic password(s) with exactly `label` (the contract's WebKit item, for example
+ * `parlor_app WebCrypto Master Key`), never listing the Keychain. Throws KeychainBlocked when a
+ * deletion is refused or does not return within 20 s (a password prompt).
+ */
+export async function deleteLabeledPassword(label) {
+  let deleted = 0;
+  for (let round = 0; round < 20; round++) {
+    const result = await runAsync("security", ["delete-generic-password", "-l", label], {
+      timeout: 20_000,
+    });
+    if (result.timedOut) {
+      const prompts = securityPrompts();
+      throw new KeychainBlocked(
+        `deleting the Keychain item "${label}" did not return within 20 s${prompts.length ? `; SecurityAgent shows: ${prompts.map((p) => p.texts.join(" / ")).join(" | ")}` : ""}`,
+      );
+    }
+    if (result.status === 44) return { label, deleted };
+    if (result.status !== 0)
+      throw new KeychainBlocked(
+        `deleting the Keychain item "${label}" failed (${result.status}): ${result.stderr.trim()}`,
+      );
+    deleted++;
+  }
+  return { label, deleted };
+}
+
+/** The webview's WebKit item the contract names, deleted now and when the check ends. */
+export async function ownWebKitItem(check, label) {
+  check.log(`deleted ${JSON.stringify(await deleteLabeledPassword(label))}`);
+  check.onCleanup(async () => {
+    try {
+      await deleteLabeledPassword(label);
+    } catch (error) {
+      check.log(`cleanup: ${error.message}`);
+    }
+  });
+}
+
 /** The app's Keychain items the contract names: its `parlor.session` item and both device keys. */
 export async function clearAppKeychain(check, appId) {
   deleteSessionItem(appId);
