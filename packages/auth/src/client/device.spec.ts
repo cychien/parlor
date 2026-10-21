@@ -278,7 +278,7 @@ describe("the auth client's device", () => {
     expect(await auth.device()).toMatchObject({ id: expect.any(String) });
   });
 
-  it("T6-07: lets the chat send one unsigned prompt without an error against a backend without device actions", async () => {
+  it("T6-07: lets the chat send one unsigned prompt without an error against a backend without device actions (regression-guard)", async () => {
     const { auth } = await signedIn(new TestDeviceKey(), withoutDeviceActions);
     const sent: { name: string; input: Record<string, unknown> }[] = [];
     const host = {
