@@ -709,12 +709,9 @@ export async function sourceCopy(check, { tag, appId, appName, release }) {
 
 export class ProvisionError extends Error {}
 
-/** A release key pair under the check dir: PEM private (pkcs8) and public (spki). */
-export function releaseKeys(check, name, type = "ed25519") {
-  const { privateKey, publicKey } =
-    type === "ec"
-      ? generateKeyPairSync("ec", { namedCurve: "P-256" })
-      : generateKeyPairSync("ed25519");
+/** A release key pair under the check dir: Ed25519, private in PKCS8 PEM, public in SPKI PEM. */
+export function releaseKeys(check, name) {
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   const key = check.save(
     `${name}.key.pem`,
     privateKey.export({ type: "pkcs8", format: "pem" }),
@@ -723,7 +720,7 @@ export function releaseKeys(check, name, type = "ed25519") {
     `${name}.pub.pem`,
     publicKey.export({ type: "spki", format: "pem" }),
   );
-  return { name, type, key, pub };
+  return { name, key, pub };
 }
 
 /**
@@ -771,41 +768,23 @@ export async function buildHostRelease(check, { version, signWith, trusted, labe
   return out;
 }
 
-/**
- * Release fixtures signed with one trusted key; `extra` releases may sign with another key.
- * Tries an Ed25519 key pair first and a P-256 one when release.mjs refuses it.
- */
+/** Release fixtures signed with one trusted Ed25519 key; a spec with `otherKey` signs with a second key. */
 export async function hostReleases(check, specs) {
-  for (const type of ["ed25519", "ec"]) {
-    const trusted = releaseKeys(check, "trusted", type);
-    const other = releaseKeys(check, "other", type);
-    try {
-      const built = {};
-      for (const spec of specs) {
-        built[spec.label] = await buildHostRelease(check, {
-          version: spec.version,
-          label: spec.label,
-          trusted,
-          signWith: spec.otherKey ? other : trusted,
-        });
-      }
-      check.log(
-        `host releases built with ${type} keys: ${specs.map((s) => `${s.label}=${s.version}`).join(", ")}`,
-      );
-      return { trusted, other, built, keyType: type };
-    } catch (error) {
-      if (
-        !(error instanceof ProvisionError) ||
-        /no packages\/agent-host\/scripts\/release\.mjs/.test(error.message) ||
-        type === "ec"
-      )
-        throw error;
-      check.log(
-        `release.mjs refused ${type} keys (${error.message.split("\n")[0]}); trying P-256`,
-      );
-    }
+  const trusted = releaseKeys(check, "trusted");
+  const other = releaseKeys(check, "other");
+  const built = {};
+  for (const spec of specs) {
+    built[spec.label] = await buildHostRelease(check, {
+      version: spec.version,
+      label: spec.label,
+      trusted,
+      signWith: spec.otherKey ? other : trusted,
+    });
   }
-  throw new ProvisionError("no key type accepted");
+  check.log(
+    `host releases built: ${specs.map((s) => `${s.label}=${s.version}`).join(", ")}`,
+  );
+  return { trusted, other, built };
 }
 
 /** Launches a release app with `open -n` and the driver's launch environment; resolves with the launch time. */
