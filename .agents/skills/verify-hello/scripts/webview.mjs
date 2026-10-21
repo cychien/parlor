@@ -299,7 +299,14 @@ export function createWebview({
     );
   };
 
-  const macEval = (state, js) =>
+  // WebKit suspends the page of an occluded window, so a page call brings the app forward first.
+  const reveal = (state) =>
+    spawnSync("osascript", [
+      "-e",
+      `tell application "System Events" to tell (first process whose unix id is ${macPid(state)}) to set {visible, frontmost} to {true, true}`,
+    ]);
+
+  const macEval = (state, js, ms = 90_000) =>
     new Promise((settle, reject) => {
       const path = webviewSocket(state);
       if (!existsSync(path)) {
@@ -310,11 +317,20 @@ export function createWebview({
         );
         return;
       }
+      reveal(state);
       const socket = createConnection(path);
+      const timer = setTimeout(() => {
+        socket.destroy();
+        reject(new Error(`no answer from the ${state.id} page within ${ms} ms`));
+      }, ms);
       let data = "";
       socket.on("data", (chunk) => (data += chunk));
-      socket.on("error", reject);
+      socket.on("error", (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
       socket.on("end", () => {
+        clearTimeout(timer);
         try {
           const answer = JSON.parse(data.trim());
           if (!answer.ok) reject(new Error(answer.error));
