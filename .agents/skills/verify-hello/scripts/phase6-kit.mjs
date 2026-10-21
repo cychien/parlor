@@ -16,6 +16,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { createConnection } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -38,7 +39,7 @@ import {
   sleep,
   writeAgentProfiles,
 } from "./phase4-kit.mjs";
-import { nativeTool } from "./webview.mjs";
+import { evalBody, nativeTool } from "./webview.mjs";
 
 export * from "./phase5-kit.mjs";
 
@@ -886,15 +887,37 @@ export async function listTasks(instance, user = "alice") {
 
 /**
  * Samples every process of `home` (the app, the service, its agents) every `everyMs`, keeping
- * each pid's first and last sighting with its parent and command.
+ * each pid's first and last sighting with its parent and command, and every process on the machine
+ * (`commands`, `parents`) as first seen, so ancestry still resolves after a process exited. `onTick(at)`
+ * runs on every sample (for example to record the daemon's pid).
  */
-export function homeSampler(home, everyMs = 400) {
+export function homeSampler(home, everyMs = 400, { onTick } = {}) {
   const seen = new Map();
+  const parents = new Map();
+  const commands = new Map();
   const ticks = [];
   const run = { stopped: false };
   const loop = (async () => {
     while (!run.stopped) {
       const at = Date.now();
+      for (const line of runSync("ps", [
+        "-axww",
+        "-o",
+        "pid=,ppid=,command=",
+      ]).stdout.split("\n")) {
+        const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);
+        if (!m) continue;
+        const pid = Number(m[1]);
+        if (!parents.has(pid)) parents.set(pid, Number(m[2]));
+        const entry = commands.get(pid) ?? {
+          pid,
+          ppid: Number(m[2]),
+          command: m[3],
+          first: at,
+        };
+        entry.last = at;
+        commands.set(pid, entry);
+      }
       const now = processesWithHome(home);
       ticks.push({ at, pids: now.map((p) => p.pid) });
       for (const p of now) {
@@ -903,23 +926,29 @@ export function homeSampler(home, everyMs = 400) {
         entry.last = at;
         seen.set(p.pid, entry);
       }
+      if (onTick) await onTick(at);
       await sleep(everyMs);
     }
   })();
   return {
     processes: () => [...seen.values()],
     ticks: () => ticks,
+    parents,
+    commands,
     async stop() {
       run.stopped = true;
       await loop;
-      return { processes: [...seen.values()], ticks };
+      return { processes: [...seen.values()], ticks, parents, commands };
     },
   };
 }
 
-/** True when `pid` descends from `ancestor` in the sampled parent links. */
+/** True when `pid` is `ancestor` or descends from it, through sampled parents (`processes` or a parent map). */
 export function descendsFrom(processes, pid, ancestor) {
-  const parents = new Map(processes.map((p) => [p.pid, p.ppid]));
+  const parents =
+    processes instanceof Map
+      ? new Map(processes)
+      : new Map(processes.map((p) => [p.pid, p.ppid]));
   for (let at = pid, hops = 0; at > 1 && hops < 64; at = parents.get(at), hops++) {
     if (at === ancestor) return true;
     if (!parents.has(at)) {
@@ -929,6 +958,44 @@ export function descendsFrom(processes, pid, ancestor) {
     }
   }
   return false;
+}
+
+/**
+ * One JavaScript call into a Mac app's page straight over its eval socket (`webviewSocket` in
+ * `$H info`), without a driver process per call, for polling in timed loops. Rejects while the
+ * app's eval channel is not up yet.
+ */
+export function pageEvalDirect(socketPath, js, ms = 5000) {
+  return new Promise((settle, reject) => {
+    const socket = createConnection(socketPath);
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error(`no answer on ${socketPath} within ${ms} ms`));
+    }, ms);
+    let data = "";
+    socket.on("data", (chunk) => (data += chunk));
+    socket.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    socket.on("end", () => {
+      clearTimeout(timer);
+      try {
+        const answer = JSON.parse(data.trim());
+        if (!answer.ok) return reject(new Error(answer.error));
+        const parsed = JSON.parse(answer.result);
+        settle(parsed.undefined ? undefined : parsed.value);
+      } catch (error) {
+        reject(error);
+      }
+    });
+    socket.write(`${JSON.stringify({ js: evalBody(js) })}\n`);
+  });
+}
+
+/** `body` (a function of the phase 4 page helpers) as one expression for `pageEvalDirect`. */
+export function withPageLib(body) {
+  return `async () => { const L = (${PAGE_LIB})(); return await (${body})(L); }`;
 }
 
 /** Everything the page keeps in web storage, CryptoKeys and binary values made printable. */

@@ -1450,6 +1450,7 @@ function printInfo(state) {
         appBundle: state.appBundle ?? null,
         appBundleId: state.appBundleId ?? null,
         appPid: appProcess(state)?.pid ?? null,
+        devPid: state.pid ?? null,
         webviewSocket: state.target === "mac" ? webviewSocket(state) : null,
         launchEnv: state.release ? appEnv(state) : null,
       },
