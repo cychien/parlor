@@ -66,28 +66,17 @@ describe("tauriProjectFiles", () => {
   });
 });
 
+const SHELL_COMMANDS = [
+  "parlor_shell::parlor_device_key_public,",
+  "parlor_shell::parlor_device_key_sign,",
+  "parlor_shell::parlor_session_get,",
+  "parlor_shell::parlor_session_set,",
+];
+
 const withHost = parseConfig({
   app: { id: "dev.parlor.hello", name: "Hello", scheme: "hello", version: "1.2.3" },
   desktop: { width: 900, height: 700, agentHost: true },
 });
-
-const PLAIN_LIB_RS = `#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_deep_link::init())
-        .plugin(tauri_plugin_notification::init())
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
-}
-`;
-
-const PLAIN_CARGO_DEPENDENCIES = `[dependencies]
-tauri = { version = "2", features = [] }
-tauri-plugin-deep-link = "2"
-tauri-plugin-notification = "2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-`;
 
 describe("desktop.agentHost", () => {
   it("K6: tauriConfig lists the sidecar as externalBin only with desktop.agentHost", () => {
@@ -101,17 +90,24 @@ describe("desktop.agentHost", () => {
     });
   });
 
-  it("leaves the generated project byte-identical when it is unset", () => {
+  it("registers the Keychain session and device key commands in every app, with no sidecar or dialog without it", () => {
     const files = tauriProjectFiles(config);
-    expect(libRs(config)).toBe(PLAIN_LIB_RS);
-    expect(files["src-tauri/src/lib.rs"]).toBe(PLAIN_LIB_RS);
-    expect(files["src-tauri/Cargo.toml"]).toContain(PLAIN_CARGO_DEPENDENCIES);
+    const cargo = files["src-tauri/Cargo.toml"]!;
+    expect(cargo).toMatch(/parlor-shell = \{ path = ".*shell-desktop\/rust" \}/);
+    expect(cargo).not.toContain("tauri-plugin-dialog");
+    const lib = files["src-tauri/src/lib.rs"]!;
+    expect(libRs(config)).toBe(lib);
+    expect(lib.match(/parlor_shell::parlor_\w+,/g)).toEqual(SHELL_COMMANDS);
+    expect(lib).not.toContain("tauri_plugin_dialog");
+    expect(lib).not.toContain("parlor_shell::setup");
+    expect(lib).not.toContain("parlor_host_");
     expect(JSON.parse(files["src-tauri/capabilities/default.json"]!).permissions).toEqual(
       ["core:default", "notification:default", "deep-link:default"],
     );
+    expect(JSON.stringify(tauriConfig(config))).not.toMatch(/parlor-host|externalBin/);
   });
 
-  it("adds the dialog plugin, the shell crate, the sidecar launch and the eight commands", () => {
+  it("adds the dialog plugin, the sidecar launch and the host commands on top", () => {
     const files = tauriProjectFiles(withHost);
     const cargo = files["src-tauri/Cargo.toml"]!;
     expect(cargo).toContain('tauri-plugin-dialog = "2"');
@@ -127,10 +123,7 @@ describe("desktop.agentHost", () => {
       "parlor_shell::parlor_host_status,",
       "parlor_shell::parlor_host_begin,",
       "parlor_shell::parlor_host_finish,",
-      "parlor_shell::parlor_device_key_public,",
-      "parlor_shell::parlor_device_key_sign,",
-      "parlor_shell::parlor_session_get,",
-      "parlor_shell::parlor_session_set,",
+      ...SHELL_COMMANDS,
     ]);
   });
 });

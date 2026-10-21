@@ -53,7 +53,6 @@ function keychain(initial?: string) {
     value: () => value,
     invoke: async (command: string, args?: Record<string, unknown>) => {
       calls.push([command, args]);
-      if (command === "parlor_host_bundled") return true;
       if (command === "parlor_session_get") return value ?? null;
       if (command === "parlor_session_set") {
         value = (args?.token as string | null) ?? undefined;
@@ -109,21 +108,34 @@ describe("tauriSessionStore", () => {
     expect(storage.items.has(SESSION_STORAGE_KEY)).toBe(false);
   });
 
-  it("stores the token in the webview in a shell built without the host commands", async () => {
+  it.each(["Command parlor_session_get not found", "unsupported"])(
+    "stores the token in the webview in a shell whose session command is unavailable (%s)",
+    async (failure) => {
+      globals.__TAURI_INTERNALS__ = {};
+      const storage = memoryStorage();
+      const adapter = tauriSessionStore(
+        () => storage,
+        async () =>
+          ({
+            invoke: async () => {
+              throw failure;
+            },
+          }) as never,
+      );
+      expect(adapter.available()).toBe(true);
+      await (await adapter.create()).set("tauri-token");
+      expect(storage.items.get(SESSION_STORAGE_KEY)).toBe("tauri-token");
+    },
+  );
+
+  it("never asks whether a host is bundled", async () => {
     globals.__TAURI_INTERNALS__ = {};
-    const storage = memoryStorage();
-    const adapter = tauriSessionStore(
-      () => storage,
-      async () =>
-        ({
-          invoke: async () => {
-            throw new Error("Command parlor_host_bundled not found");
-          },
-        }) as never,
-    );
-    expect(adapter.available()).toBe(true);
-    await (await adapter.create()).set("tauri-token");
-    expect(storage.items.get(SESSION_STORAGE_KEY)).toBe("tauri-token");
+    const native = keychain();
+    await tauriSessionStore(
+      () => memoryStorage(),
+      async () => ({ invoke: native.invoke }) as never,
+    ).create();
+    expect(native.calls.map(([command]) => command)).not.toContain("parlor_host_bundled");
   });
 
   it("is available inside a Tauri shell only", () => {

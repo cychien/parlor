@@ -1,12 +1,21 @@
 import type { CapabilityAdapter } from "../capability.js";
-import { hasNativeCommands } from "../device-key/native.js";
 import type { TauriInvoke } from "../device-key/tauri.js";
+import { detectPlatform } from "../runtime.js";
 import type {
   HostPairing,
   LocalAgentHost,
   LocalConnectResult,
   LocalHostStatus,
 } from "./interface.js";
+
+async function hasBundledHost(load: () => Promise<TauriInvoke>): Promise<boolean> {
+  if (detectPlatform() !== "tauri") return false;
+  try {
+    return (await (await load()).invoke<boolean>("parlor_host_bundled")) === true;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * The generated `parlor_host_*` commands, which reach the shared daemon on its control
@@ -18,7 +27,7 @@ export function tauriLocalAgentHost(
 ): CapabilityAdapter<LocalAgentHost> {
   return {
     platform: "tauri",
-    available: () => hasNativeCommands(load),
+    available: () => hasBundledHost(load),
     create: async () => {
       const { invoke } = await load();
       return {

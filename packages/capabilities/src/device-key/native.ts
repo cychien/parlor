@@ -86,13 +86,23 @@ interface Invoker {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
 }
 
-/** The generated native commands exist only in a shell built with `desktop.agentHost`, which `parlor_host_bundled` reports. */
-export async function hasNativeCommands(load: () => Promise<Invoker>): Promise<boolean> {
+const UNAVAILABLE = /not found|unsupported/i;
+
+/**
+ * Whether the shell carries a working native command: one an older generated project lacks
+ * ("not found") or a platform without a keystore refuses ("unsupported") is unavailable.
+ */
+export async function hasNativeCommand(
+  load: () => Promise<Invoker>,
+  command: string,
+  args?: Record<string, unknown>,
+): Promise<boolean> {
   if (detectPlatform() !== "tauri") return false;
   try {
-    return (await (await load()).invoke<boolean>("parlor_host_bundled")) === true;
-  } catch {
-    return false;
+    await (await load()).invoke(command, args);
+    return true;
+  } catch (error) {
+    return !UNAVAILABLE.test(error instanceof Error ? error.message : String(error));
   }
 }
 

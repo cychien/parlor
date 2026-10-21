@@ -62,10 +62,7 @@ export function tauriConfig(config: ParlorConfig): Record<string, unknown> {
 }
 
 function agentHostDependencies(config: ParlorConfig): string {
-  if (!config.desktop.agentHost) return "";
-  return `tauri-plugin-dialog = "2"
-parlor-shell = { path = ${JSON.stringify(SHELL_CRATE_DIR)} }
-`;
+  return config.desktop.agentHost ? 'tauri-plugin-dialog = "2"\n' : "";
 }
 
 export function cargoToml(config: ParlorConfig): string {
@@ -86,56 +83,49 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-deep-link = "2"
 tauri-plugin-notification = "2"
-${agentHostDependencies(config)}serde = { version = "1", features = ["derive"] }
+${agentHostDependencies(config)}parlor-shell = { path = ${JSON.stringify(SHELL_CRATE_DIR)} }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 `;
 }
 
-export const LIB_RS = `#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_deep_link::init())
-        .plugin(tauri_plugin_notification::init())
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
-}
-`;
-
 export const AGENT_HOST_SIDECAR = "binaries/parlor-host";
 
-const AGENT_HOST_COMMANDS = [
-  "parlor_host_bundled",
-  "parlor_host_status",
-  "parlor_host_begin",
-  "parlor_host_finish",
+const SHELL_COMMANDS = [
   "parlor_device_key_public",
   "parlor_device_key_sign",
   "parlor_session_get",
   "parlor_session_set",
 ];
 
-const AGENT_HOST_LIB_RS = `#[cfg_attr(mobile, tauri::mobile_entry_point)]
+const AGENT_HOST_COMMANDS = [
+  "parlor_host_bundled",
+  "parlor_host_status",
+  "parlor_host_begin",
+  "parlor_host_finish",
+];
+
+/**
+ * Every app registers the Keychain `parlor_session_*` and `parlor_device_key_*` commands.
+ * With `desktop.agentHost`, `setup()` also runs the bundled `parlor-host daemon --ensure`
+ * (adopt, install or upgrade the per-user service) and the `parlor_host_*` commands
+ * and the dialog plugin join them.
+ */
+export function libRs(config: ParlorConfig): string {
+  const agentHost = Boolean(config.desktop.agentHost);
+  const commands = [...(agentHost ? AGENT_HOST_COMMANDS : []), ...SHELL_COMMANDS];
+  return `#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_dialog::init())
-        .setup(|app| parlor_shell::setup(app))
-        .invoke_handler(tauri::generate_handler![
-${AGENT_HOST_COMMANDS.map((command) => `            parlor_shell::${command},`).join("\n")}
+${agentHost ? "        .plugin(tauri_plugin_dialog::init())\n        .setup(|app| parlor_shell::setup(app))\n" : ""}        .invoke_handler(tauri::generate_handler![
+${commands.map((command) => `            parlor_shell::${command},`).join("\n")}
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
 `;
-
-/**
- * With `desktop.agentHost`, `setup()` runs the bundled `parlor-host daemon --ensure`
- * (adopt, install or upgrade the per-user service) and registers the `parlor_host_*`,
- * `parlor_device_key_*` and `parlor_session_*` commands the capabilities call.
- */
-export function libRs(config: ParlorConfig): string {
-  return config.desktop.agentHost ? AGENT_HOST_LIB_RS : LIB_RS;
 }
 
 const PREBUILT_HOST_PACKAGES: Readonly<Record<string, string>> = {
