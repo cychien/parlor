@@ -46,6 +46,8 @@ export function nativeTool(toolsDir, name, { dylib = false } = {}) {
         "ApplicationServices",
         "-framework",
         "Foundation",
+        "-framework",
+        "Security",
       ];
   const result = spawnSync(
     "/usr/bin/clang",

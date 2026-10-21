@@ -467,8 +467,42 @@ export function securityPrompts() {
       if (texts.some((t) => SECURITY_PROMPT.test(t)))
         found.push({ pid, texts, buttons, frame: window.frame });
     }
+    if (tree.windows.length === 0) {
+      for (const frame of securityAgentWindows(pid))
+        found.push({
+          pid,
+          texts: [
+            "a SecurityAgent prompt is on screen (Accessibility shows no text; see the screenshot)",
+          ],
+          buttons: [],
+          frame,
+        });
+    }
   }
   return found;
+}
+
+const SECURITY_WINDOWS = `ObjC.import("CoreGraphics");
+function run(argv) {
+  const all = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, 0)));
+  return JSON.stringify(all.filter((w) => w.kCGWindowOwnerPID === Number(argv[0]) && w.kCGWindowBounds.Width > 200)
+    .map((w) => ({ x: w.kCGWindowBounds.X, y: w.kCGWindowBounds.Y, w: w.kCGWindowBounds.Width, h: w.kCGWindowBounds.Height })));
+}`;
+
+/** SecurityAgent's on-screen prompt windows, which Accessibility does not always expose. */
+function securityAgentWindows(pid) {
+  const out = runSync("osascript", [
+    "-l",
+    "JavaScript",
+    "-e",
+    SECURITY_WINDOWS,
+    String(pid),
+  ]);
+  try {
+    return JSON.parse(out.stdout.trim());
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -497,6 +531,7 @@ export async function macCheck(check, body) {
               ["拒絕", "Deny", "Cancel", "取消"].includes(b.name),
             );
             if (deny) runSync(axTool(), ["press", String(prompt.pid), deny.path]);
+            else runSync(axTool(), ["type", String(prompt.pid), "\u001b", "10"]);
           }
           await sleep(1000);
         }
@@ -512,7 +547,7 @@ export async function macCheck(check, body) {
       if (prompts.length) {
         check.save(`${check.id}.keychain-prompts.json`, prompts);
         throw new Inconclusive(
-          `macOS asked for the login Keychain password (${prompts[0].texts.find((t) => SECURITY_PROMPT.test(t))}); an ad-hoc signed build read a Keychain item another build wrote, and no script can type the password`,
+          `macOS asked for the login Keychain password (${prompts[0].texts[0]}; screenshots ${check.id}.keychain-prompt-*.png); no script can type the password`,
         );
       }
       if (failure) throw failure;
@@ -702,6 +737,68 @@ export function deleteSessionItem(appId) {
     )
       break;
   }
+}
+
+export class KeychainBlocked extends Error {}
+
+/** The Mac app's device keys as the Drive contract names them (SecKey items, class key, P-256). */
+export function deviceKeyNames(appId) {
+  return [
+    { label: `${appId} device signing key`, tag: `${appId}.device-key.signing` },
+    { label: `${appId} device presence key`, tag: `${appId}.device-key.presence` },
+  ];
+}
+
+/**
+ * Deletes exactly the contract's device keys of `appId` (by class key, label and application tag;
+ * the Keychain is never listed). Throws KeychainBlocked when the deletion is refused or does not
+ * answer within 20 s (a password prompt), with what macOS said.
+ */
+export async function deleteDeviceKeys(appId) {
+  const tool = nativeTool(TOOLS_DIR, "delete-device-key");
+  const results = [];
+  for (const { label, tag } of deviceKeyNames(appId)) {
+    const result = await runAsync(tool, [label, tag], { timeout: 20_000 });
+    let parsed;
+    try {
+      parsed = JSON.parse(result.stdout.trim());
+    } catch {
+      parsed = undefined;
+    }
+    if (result.timedOut || result.status !== 0 || !parsed) {
+      const prompts = securityPrompts();
+      throw new KeychainBlocked(
+        `deleting the Keychain key "${label}" (tag ${tag}) ${result.timedOut ? "did not return within 20 s" : `failed: ${(parsed?.message ?? result.stderr) || result.stdout}`}${prompts.length ? `; SecurityAgent shows: ${prompts.map((p) => p.texts.join(" / ")).join(" | ")}` : ""}`,
+      );
+    }
+    results.push(parsed);
+  }
+  return results;
+}
+
+/** The app's Keychain items the contract names: its `parlor.session` item and both device keys. */
+export async function clearAppKeychain(check, appId) {
+  deleteSessionItem(appId);
+  const keys = await deleteDeviceKeys(appId);
+  check.log(
+    `cleared ${appId} keychain: ${keys.map((k) => `${k.label} deleted ${k.deleted}`).join(", ")}`,
+  );
+  return keys;
+}
+
+/** Clears the Keychain items of `appIds` before the check launches anything and again when it ends. */
+export async function ownAppKeychain(check, appIds) {
+  for (const appId of appIds) await clearAppKeychain(check, appId);
+  check.onCleanup(async () => {
+    for (const appId of appIds) {
+      deleteSessionItem(appId);
+      try {
+        await deleteDeviceKeys(appId);
+      } catch (error) {
+        check.log(`cleanup: ${error.message}`);
+      }
+    }
+  });
 }
 
 /** Deletes the session items of `appIds` now and when the check ends. */
