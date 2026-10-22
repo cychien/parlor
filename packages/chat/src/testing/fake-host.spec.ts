@@ -73,6 +73,7 @@ describe("createFakeHost over real HTTP", () => {
       protocol: 2,
       leaseMs: 60_000,
       heartbeatMs: 30_000,
+      userActivity: true,
     });
     expect(await host.claim()).toBeUndefined();
     expect((await host.heartbeat()).status).toBe(204);

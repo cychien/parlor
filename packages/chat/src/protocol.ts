@@ -75,6 +75,7 @@ export type HostWelcome =
       readonly protocol: number;
       readonly leaseMs: number;
       readonly heartbeatMs: number;
+      readonly userActivity?: true;
     }
   | {
       readonly accepted: false;

@@ -18,6 +18,7 @@ export type {
   ChatCommands,
   ChatState,
   ChatStatus,
+  ChatWait,
   ConnectOption,
 } from "./chat/runtime.js";
 export { useChat } from "./chat/use-chat.js";

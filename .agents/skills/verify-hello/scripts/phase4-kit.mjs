@@ -739,12 +739,16 @@ export async function openAliceSidebar(check, browser, { signedIn = true } = {})
   return false;
 }
 
-export async function upInstance(check, { name, seed, noAuth, home, source } = {}) {
+export async function upInstance(
+  check,
+  { name, seed, noAuth, home, source, serverless } = {},
+) {
   const args = [HELLO, "up"];
   if (seed) args.push("--seed", seed);
   if (source) args.push("--source", source);
   if (noAuth) args.push("--no-auth");
   if (home) args.push("--home", home);
+  if (serverless) args.push("--serverless");
   const { load1, cores } = load();
   check.log(`load ${load1} on ${cores} cores before starting ${name ?? "an instance"}`);
   const result = await runAsync(process.execPath, args.slice(0), { timeout: 360_000 });
@@ -780,6 +784,28 @@ export async function upInstance(check, { name, seed, noAuth, home, source } = {
 
 export function helloCli(args, { timeout = 180_000, env } = {}) {
   return runAsync(process.execPath, [HELLO, ...args], { timeout, env });
+}
+
+/**
+ * One `netcut`: resolves at the restore with `{side, cutAt, restoredAt}` and, from the command's
+ * stderr, `openAtCut`, `heldNew` and `closedDuringCut` (lists of `conn` ids, see `requestLog`).
+ */
+export async function netcut(info, side, seconds) {
+  const result = await helloCli(["netcut", info.id, side, "--seconds", String(seconds)], {
+    timeout: (seconds + 60) * 1000,
+  });
+  if (result.status !== 0) throw new Error(`netcut failed: ${result.stderr.slice(-800)}`);
+  const detail = result.stderr
+    .split("\n")
+    .filter((line) => line.startsWith("{"))
+    .map((line) => JSON.parse(line))
+    .at(-1);
+  return { ...detail, ...JSON.parse(result.stdout) };
+}
+
+/** Every request the instance's forwarder logged so far, with `respondedAt` and `conn`, in log order. */
+export function requestLog(info) {
+  return readJsonLines(info.requestLog);
 }
 
 export async function sqlRows(check, info, query) {
@@ -1025,13 +1051,14 @@ export async function standUp(
     home: given,
     binInfo,
     source,
+    serverless,
     beforeSignin,
     announce = true,
   },
 ) {
   const home = given ?? makeHome(check, tag).home;
   if (agentIds.length) requireLogins(check, home, agentIds);
-  const info = await upInstance(check, { name: tag, seed, source });
+  const info = await upInstance(check, { name: tag, seed, source, serverless });
   const browser = new Browser(check, info);
   if (beforeSignin) {
     await browser.open("/sign-in");
@@ -1084,7 +1111,16 @@ export async function forEachAgent(check, body, agents = selectedAgents()) {
  */
 export async function forEachAgentOnOneHost(
   check,
-  { tag, agents = selectedAgents(), fake, seed, extraEnv, source, beforeSignin },
+  {
+    tag,
+    agents = selectedAgents(),
+    fake,
+    seed,
+    extraEnv,
+    source,
+    serverless,
+    beforeSignin,
+  },
   body,
 ) {
   const session = await connectedSession(check, {
@@ -1094,6 +1130,7 @@ export async function forEachAgentOnOneHost(
     extraEnv,
     fake,
     source,
+    serverless,
     beforeSignin,
   });
   let inconclusive;
@@ -1189,7 +1226,19 @@ export function addFakeAgent(
  */
 export async function connectedSession(
   check,
-  { tag, agentIds, extraEnv, seed, profiles, fake, source, beforeSignin, home, announce },
+  {
+    tag,
+    agentIds,
+    extraEnv,
+    seed,
+    profiles,
+    fake,
+    source,
+    serverless,
+    beforeSignin,
+    home,
+    announce,
+  },
 ) {
   const session = await standUp(check, {
     tag,
@@ -1197,6 +1246,7 @@ export async function connectedSession(
     seed,
     extraEnv,
     source,
+    serverless,
     beforeSignin,
     home,
     announce,

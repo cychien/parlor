@@ -1,4 +1,5 @@
 import {
+  CHAT_ACTIVITY_TAG,
   CHAT_TAG,
   HOST_PROTOCOL,
   type HostFrame,
@@ -22,6 +23,9 @@ export const RECONNECT_MAX_MS = 4_000;
 export const ACTIVE_POLL_MS = 2_000;
 export const IDLE_POLL_MS = 15_000;
 
+const USER_ACTIVE_WINDOW_MS = 2 * 60_000;
+const REQUEST_TIMEOUT_MS = 10_000;
+
 export interface HostApi {
   readonly calls: PluginClient<ChatHostActionMap>;
   /** At most one post in flight per turn; frames produced meanwhile coalesce into the next. */
@@ -37,6 +41,8 @@ export interface AppLinkDeps {
   readonly fetch: typeof fetch;
   /** A turn may be waiting: claim until not_found, then ask for running turns' signals. */
   readonly onWake: (link: AppLink) => void;
+  /** Whether a turn runs on this link, which keeps a poll deployment's `/sync` at the active interval. */
+  readonly busy?: (() => boolean) | undefined;
   /** Any 401, or the stream closed for revocation. */
   readonly onRevoked: (grant: AppGrant) => void;
   /** No shared protocol: shown locally ("update Parlor Host"); the link stays down. */
@@ -118,6 +124,39 @@ function batches(frames: readonly HostFrame[]): HostFrame[][] {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+class RequestTimeout extends Error {
+  override readonly name = "RequestTimeout";
+  constructor(ms: number) {
+    super(`The app did not answer within ${ms} ms.`);
+  }
+}
+
+function untilHeaders(inner: typeof fetch, ms: number): typeof fetch {
+  return async (input, init) => {
+    const own = new AbortController();
+    const timer = setTimeout(() => own.abort(new RequestTimeout(ms)), ms);
+    const signal = init?.signal ? AbortSignal.any([init.signal, own.signal]) : own.signal;
+    try {
+      return await inner(input, { ...init, signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+}
+
+function adaptivePoll(advertised: boolean, busy: () => boolean) {
+  let activeUntil = 0;
+  const idle = () => advertised && !busy() && Date.now() >= activeUntil;
+  return {
+    pollEveryMs: () => (idle() ? IDLE_POLL_MS : ACTIVE_POLL_MS),
+    touch: () => {
+      const wasIdle = idle();
+      activeUntil = Date.now() + USER_ACTIVE_WINDOW_MS;
+      return wasIdle;
+    },
+  };
+}
+
 export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
   const origin = grant.appOrigin.replace(/\/+$/, "");
   let welcome: Accepted | undefined;
@@ -156,8 +195,10 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
     return response;
   };
 
+  const timedFetch = untilHeaders(signedFetch, REQUEST_TIMEOUT_MS);
+
   const plugin = createPluginClient<ChatHostActionMap>(
-    createActionClient({ baseUrl: origin, fetch: signedFetch }),
+    createActionClient({ baseUrl: origin, fetch: timedFetch }),
     "chat",
   );
 
@@ -187,7 +228,7 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
   };
 
   const post = (path: string, body: unknown) =>
-    signedFetch(`${origin}/_parlor/chat/${path}`, {
+    timedFetch(`${origin}/_parlor/chat/${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -273,17 +314,21 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
         }
         welcome = answer;
         admit();
+        const polling = adaptivePoll(
+          answer.userActivity === true,
+          () => deps.busy?.() ?? false,
+        );
         sync = createSyncClient({
           request: (path, init) => signedFetch(`${origin}${path}`, init),
           coalesceMs: 0,
           reconnectMaxMs: RECONNECT_MAX_MS,
+          pollEveryMs: polling.pollEveryMs,
           onEvents: (events) => {
-            if (
-              modeNow() === "serving" &&
-              events.some((event) => event.tags.some((tag) => tag[0] === CHAT_TAG))
-            ) {
-              deps.onWake(link);
+            const heads = events.flatMap((event) => event.tags.map((tag) => tag[0]));
+            if (heads.some((head) => head === CHAT_TAG || head === CHAT_ACTIVITY_TAG)) {
+              if (polling.touch()) sync?.reconnectNow();
             }
+            if (modeNow() === "serving" && heads.includes(CHAT_TAG)) deps.onWake(link);
           },
           onUnauthorized: () => undefined,
           onError: () => undefined,

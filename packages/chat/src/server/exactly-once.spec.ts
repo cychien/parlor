@@ -507,6 +507,7 @@ describe.each(drivers)("exactly-once turns on $name", (driver) => {
       protocol: 2,
       leaseMs: 60_000,
       heartbeatMs: 30_000,
+      userActivity: true,
     });
   });
 

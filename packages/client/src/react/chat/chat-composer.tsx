@@ -1,6 +1,7 @@
 import type { ComponentProps, KeyboardEvent, ReactNode } from "react";
 
 import { canSend, useChatRuntime, useChatState } from "./context.js";
+import type { ChatState } from "./runtime.js";
 
 const report = (error: unknown) =>
   console.error("[parlor] The chat could not do that:", error);
@@ -88,5 +89,29 @@ export function Stop({
     >
       {children ?? "Stop"}
     </button>
+  );
+}
+
+function statusText({ status, wait }: ChatState): string {
+  if (wait) {
+    return wait.reason === "offline"
+      ? `Waiting for ${wait.hostName} to come online`
+      : `Waiting for ${wait.hostName} to approve this device`;
+  }
+  if (status === "sending") return "Sending...";
+  if (status === "running") return "Working...";
+  return "";
+}
+
+/**
+ * The chat's state in words, for a live region: a `p[role=status]` that is empty when
+ * there is nothing to say, so a wait never shows without text. `children` replaces the text.
+ */
+export function Status({ children, ...props }: ComponentProps<"p">): ReactNode {
+  const state = useChatState("Chat.Status");
+  return (
+    <p role="status" {...props} data-status={state.status} data-wait={state.wait?.reason}>
+      {children ?? statusText(state)}
+    </p>
   );
 }

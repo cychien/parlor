@@ -76,6 +76,7 @@ describe("chat() setup", () => {
       "send",
       "answer",
       "cancel",
+      "userActive",
       "hostHello",
       "hostReport",
       "hostClaim",

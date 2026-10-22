@@ -32,6 +32,24 @@ export interface SyncClientOptions {
   readonly clearTimeout?: typeof globalThis.clearTimeout | undefined;
   readonly channels?: readonly ClientChannel[] | undefined;
   /**
+   * Read each time the next poll is scheduled; the interval is the larger of this and the
+   * negotiated one, so a caller can only slow polling down.
+   */
+  readonly pollEveryMs?: (() => number) | undefined;
+  /** Bounds a negotiation or a poll, not the SSE stream. Defaults to 10 s. */
+  readonly requestTimeoutMs?: number | undefined;
+  /**
+   * What the server negotiated, each time it does; `SyncClient.transport` reads `poll`
+   * during the fallback poll of a failed negotiation, this never does.
+   */
+  readonly onNegotiated?: ((transport: "sse" | "poll") => void) | undefined;
+  /**
+   * The negotiated transport's connection came back after a failure: a stream reopened
+   * after it dropped, or a poll succeeded after a failed one. A fallback poll on an SSE
+   * deployment does not count.
+   */
+  readonly onResume?: (() => void) | undefined;
+  /**
    * The server refused the credential (401 or 403). The client never degrades to polling
    * on it; it keeps retrying the negotiation with backoff. Defaults to `onError`.
    */
@@ -45,6 +63,17 @@ export class SyncUnauthorized extends Error {
   }
 }
 
+export class SyncRequestTimeout extends Error {
+  override readonly name = "SyncRequestTimeout";
+  constructor(readonly ms: number) {
+    super(`sync request timed out after ${ms} ms`);
+  }
+}
+
+class StaleRequest extends Error {
+  override readonly name = "StaleRequest";
+}
+
 const refused = (response: Response) =>
   response.status === 401 || response.status === 403;
 
@@ -56,6 +85,11 @@ export interface SyncClient {
    * the live stream's handshake lists it, else on the next stream. Returns the detach.
    */
   addChannel(channel: ClientChannel): () => void;
+  /**
+   * Skips the remaining reconnect backoff, for `online` and visibility events. While
+   * polling it polls at once; with a stream open or a request in flight it does nothing.
+   */
+  reconnectNow(): void;
   readonly cursor: string;
   readonly transport: "sse" | "poll" | undefined;
 }
@@ -66,6 +100,7 @@ const DEFAULTS = {
   hiddenPollMs: 10_000,
   reconnectBaseMs: 1000,
   reconnectMaxMs: 30_000,
+  requestTimeoutMs: 10_000,
 };
 
 interface Handshake {
@@ -99,6 +134,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     hiddenPollMs: options.hiddenPollMs ?? DEFAULTS.hiddenPollMs,
     reconnectBaseMs: options.reconnectBaseMs ?? DEFAULTS.reconnectBaseMs,
     reconnectMaxMs: options.reconnectMaxMs ?? DEFAULTS.reconnectMaxMs,
+    requestTimeoutMs: options.requestTimeoutMs ?? DEFAULTS.requestTimeoutMs,
     clientId: options.clientId,
     onError: options.onError,
   };
@@ -118,12 +154,48 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
 
   let cursor: SyncCursor = INITIAL_CURSOR;
   let transport: "sse" | "poll" | undefined;
+  let negotiated: "sse" | "poll" | undefined;
+  let interrupted = false;
   let running = false;
   let controller: AbortController | undefined;
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
   let flushTimer: ReturnType<typeof setTimeout> | undefined;
   let pending: SyncEvent[] = [];
   let reconnectDelay = settings.reconnectBaseMs;
+  let endReconnectWait: (() => void) | undefined;
+  let connectTimer: ReturnType<typeof setTimeout> | undefined;
+  let epoch = 0;
+  const inflight = new Set<AbortController>();
+
+  const withTimeout = async <T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+    const mine = epoch;
+    const own = new AbortController();
+    inflight.add(own);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<never>((_, reject) => {
+      timer = schedule(() => {
+        own.abort();
+        reject(new SyncRequestTimeout(settings.requestTimeoutMs));
+      }, settings.requestTimeoutMs);
+    });
+    try {
+      const result = await Promise.race([run(own.signal), expired]);
+      if (mine !== epoch) throw new StaleRequest();
+      return result;
+    } catch (error) {
+      if (mine !== epoch) throw new StaleRequest();
+      throw error;
+    } finally {
+      inflight.delete(own);
+      if (timer !== undefined) cancel(timer);
+    }
+  };
+
+  const resumed = () => {
+    if (!interrupted) return;
+    interrupted = false;
+    guarded(() => options.onResume?.());
+  };
 
   const accept = (events: readonly SyncEvent[]) => {
     for (const event of events) {
@@ -145,14 +217,19 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
 
   const since = () => (cursor === INITIAL_CURSOR ? "" : encodeCursor(cursor));
 
-  const poll = async () => {
-    const response = await options.request(
-      `${basePath}/sync?since=${encodeURIComponent(since())}`,
-    );
-    if (refused(response)) throw new SyncUnauthorized(response.status);
-    if (!response.ok) throw new Error(`sync poll failed with HTTP ${response.status}`);
-    const batch = (await response.json()) as SyncBatch;
+  const poll = async (mine: number) => {
+    const batch = await withTimeout(async (signal) => {
+      const response = await options.request(
+        `${basePath}/sync?since=${encodeURIComponent(since())}`,
+        { signal },
+      );
+      if (refused(response)) throw new SyncUnauthorized(response.status);
+      if (!response.ok) throw new Error(`sync poll failed with HTTP ${response.status}`);
+      return (await response.json()) as SyncBatch;
+    });
+    if (mine !== epoch) throw new StaleRequest();
     accept(batch.events);
+    if (running && negotiated === "poll") resumed();
   };
 
   const schedulePoll = (ms: number) => {
@@ -161,14 +238,23 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     pollTimer = schedule(() => {
       pollTimer = undefined;
       let halted = false;
-      void poll()
+      const mine = epoch;
+      void poll(mine)
         .catch((error: unknown) => {
+          if (error instanceof StaleRequest || mine !== epoch) {
+            halted = true;
+            return;
+          }
+          if (negotiated === "poll") interrupted = true;
           if (error instanceof SyncUnauthorized) {
             halted = true;
             unauthorized(error);
             if (transport === "poll") {
               transport = undefined;
-              schedule(() => void connect(), backoff());
+              connectTimer = schedule(() => {
+                connectTimer = undefined;
+                void connect();
+              }, backoff());
             }
             return;
           }
@@ -182,17 +268,22 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
 
   const nextPollDelay = () => {
     if (transport === "sse") return settings.safetyPollMs;
-    const base = negotiatedPollMs;
+    const base = Math.max(negotiatedPollMs, options.pollEveryMs?.() ?? 0);
     return isHidden() ? Math.max(base, settings.hiddenPollMs) : base;
   };
   let negotiatedPollMs = 2000;
 
   const negotiate = async (): Promise<SyncNegotiation> => {
-    const response = await options.request(`${basePath}/sync/token`, { method: "POST" });
-    if (refused(response)) throw new SyncUnauthorized(response.status);
-    if (!response.ok)
-      throw new Error(`sync negotiation failed with HTTP ${response.status}`);
-    return (await response.json()) as SyncNegotiation;
+    return withTimeout(async (signal) => {
+      const response = await options.request(`${basePath}/sync/token`, {
+        method: "POST",
+        signal,
+      });
+      if (refused(response)) throw new SyncUnauthorized(response.status);
+      if (!response.ok)
+        throw new Error(`sync negotiation failed with HTTP ${response.status}`);
+      return (await response.json()) as SyncNegotiation;
+    });
   };
 
   interface LiveStream {
@@ -231,6 +322,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
         throw new Error(`sync stream failed with HTTP ${response.status}`);
       }
       reconnectDelay = settings.reconnectBaseMs;
+      resumed();
       await readSse(
         response.body,
         (frame) => {
@@ -285,21 +377,25 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
   const connect = async () => {
     if (connecting) return;
     connecting = true;
+    const mine = epoch;
     try {
-      await connectLoop();
+      await connectLoop(mine);
     } finally {
-      connecting = false;
+      if (mine === epoch) connecting = false;
     }
   };
 
-  const connectLoop = async () => {
+  const connectLoop = async (mine: number) => {
+    const active = () => running && mine === epoch;
     for (;;) {
-      if (!running) return;
+      if (!active()) return;
       let endpoint: string | undefined;
       try {
         const negotiation = await negotiate();
-        if (!running) return;
+        if (!active()) return;
         negotiatedPollMs = negotiation.pollIntervalMs;
+        negotiated = negotiation.transport;
+        guarded(() => options.onNegotiated?.(negotiation.transport));
         if (negotiation.transport === "poll") {
           transport = "poll";
           schedulePoll(0);
@@ -307,7 +403,8 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
         }
         endpoint = negotiation.endpoint;
       } catch (error) {
-        if (!running) return;
+        if (!active()) return;
+        interrupted = true;
         if (error instanceof SyncUnauthorized) {
           transport = undefined;
           unauthorized(error);
@@ -325,14 +422,25 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
         try {
           await stream(endpoint);
         } catch (error) {
-          if (!running) return;
+          if (!active()) return;
           if (error instanceof SyncUnauthorized) unauthorized(error);
           else settings.onError?.(error);
         }
+        interrupted = true;
       }
-      if (!running) return;
+      if (!active()) return;
       const delay = backoff();
-      await new Promise<void>((resolve) => schedule(() => resolve(), delay));
+      await new Promise<void>((resolve) => {
+        const timer = schedule(() => {
+          endReconnectWait = undefined;
+          resolve();
+        }, delay);
+        endReconnectWait = () => {
+          cancel(timer);
+          endReconnectWait = undefined;
+          resolve();
+        };
+      });
     }
   };
 
@@ -348,13 +456,33 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     void connect();
   };
 
+  const reconnectNow = () => {
+    if (!running) return;
+    if (endReconnectWait) {
+      reconnectDelay = settings.reconnectBaseMs;
+      endReconnectWait();
+    } else if (connectTimer !== undefined) {
+      cancel(connectTimer);
+      connectTimer = undefined;
+      reconnectDelay = settings.reconnectBaseMs;
+      void connect();
+    }
+    if (transport === "poll" && pollTimer !== undefined) schedulePoll(0);
+  };
+
   const stop = () => {
     running = false;
+    epoch += 1;
+    for (const request of inflight) request.abort();
+    inflight.clear();
     controller?.abort();
     controller = undefined;
+    connecting = false;
+    endReconnectWait?.();
     if (pollTimer !== undefined) cancel(pollTimer);
     if (flushTimer !== undefined) cancel(flushTimer);
-    pollTimer = flushTimer = undefined;
+    if (connectTimer !== undefined) cancel(connectTimer);
+    pollTimer = flushTimer = connectTimer = undefined;
     pending = [];
   };
 
@@ -372,6 +500,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
       }
       return () => detachChannel(channel);
     },
+    reconnectNow,
     get cursor() {
       return since();
     },

@@ -31,6 +31,7 @@ import {
   withoutAuth,
 } from "./agent-home.mjs";
 import { createHostCommand } from "./host.mjs";
+import { selfCheck as httpLogSelfCheck } from "./http-log.mjs";
 import {
   appKeychainItems,
   deleteAppKeychain,
@@ -40,6 +41,7 @@ import {
   summarizeDeletions,
   TAURI_CARGO_PACKAGE,
 } from "./keychain.mjs";
+import { requestCut, SIDES } from "./netproxy.mjs";
 import {
   activePrompt,
   blockedMessage,
@@ -75,6 +77,10 @@ const RELEASE_BUILD_TIMEOUT_MS = 2_400_000;
 const XCODE_DEVELOPER_DIR = "/Applications/Xcode.app/Contents/Developer";
 const DEFAULT_DEVICE = "iPhone 17 Pro";
 const TARGETS = ["web", "mac", "ios"];
+const SERVERLESS_PRESET = "vercel";
+const FRONT = join(SKILL_DIR, "scripts", "front.mjs");
+const PUBLIC_ORIGIN_PRELOAD = join(SKILL_DIR, "scripts", "public-origin.mjs");
+const UNIX_SOCKET_MAX_BYTES = 100;
 const PORT_RANGES = { server: [3300, 3399], web: [5300, 5399], cdp: [9300, 9399] };
 const MCP_CALL_TIMEOUT_MS = 180_000;
 const MCP_CALL_MAX_TOTAL_MS = 300_000;
@@ -114,7 +120,7 @@ const USAGE = `usage: hello.mjs <command> [args]
 
   up [--id ID] [--target web|mac|ios] [--seed DATASET] [--device NAME] [--source DIR]
      [--no-auth --home HOME] [--home HOME] [--release [--no-launch]] [--evidence DIR]
-     [--keep-on-failure] [--force]
+     [--serverless] [--keep-on-failure] [--force]
                           snapshot the checkout, pick free ports, launch, wait until usable;
                           refused when the 1-minute load is at or above 0.7 x cores (HELLO_MAX_LOAD
                           overrides), when a mac or ios target is asked while another native
@@ -132,6 +138,10 @@ const USAGE = `usage: hello.mjs <command> [args]
                           /_parlor to the server, so a browser tab and the shell are one app to the backend
                           --release makes the server URL the server's own origin (PARLOR_ORIGIN), the one
                           origin a release app and the host it pairs talk to, as on a deployed app
+                          web instances sit behind a harness forwarder on the web port, which logs every
+                          request (requests) and can cut a side (netcut)
+                          --serverless builds hello with parlor build --preset vercel, a serverless build
+                          with no SSE (sync negotiates poll), and serves it with srvx behind the forwarder
                           mac: deletes the app's own Keychain items (device keys, parlor.session, WebKit's
                           master key) before the app launches; down deletes them again
                           mac, ios: a watcher fails the instance's calls while a system prompt that needs
@@ -145,7 +155,17 @@ const USAGE = `usage: hello.mjs <command> [args]
   sql ID --write STATEMENT
                           the same in one read-write transaction; prints {affectedRows, rows}
   stop ID | start ID      stop or start the processes, keeping the snapshot and its data
-  sync ID                 copy the current checkout into a running instance (tsx and Vite reload)
+  sync ID                 copy the current checkout into a running instance (tsx and Vite reload; a
+                          --serverless instance is rebuilt and restarted)
+  netcut ID browser|host --seconds S
+                          drop all traffic between that side and the instance's server for S seconds
+                          without closing a socket, then restore; prints one JSON line
+                          {side, cutAt, restoredAt} (epoch ms); the counts go to stderr; web instances
+  requests ID [--since MS] [--all]
+                          the instance server's request log as JSON lines {at, side, method, path, status}
+                          (browser and host requests, oldest first, at >= MS); --all adds the harness's
+                          own requests (side other) and respondedAt and conn; web instances
+  netcut selfcheck        verify the request log's HTTP parser without an instance
   mcp ID tools | resources [--as USER]
                           raw MCP tools/list or resources/list against the instance, as alice
                           unless --as names another seeded user
@@ -185,7 +205,7 @@ const USAGE = `usage: hello.mjs <command> [args]
                           under the home that belong to no instance
   reap [--kill]           list processes whose cwd or command is under the home (deleted cwds
                           included); exit 1 while any remain; --kill sends SIGTERM then SIGKILL
-  down ID... | --all [--save-log FILE]
+  down ID... | --all [--save-log FILE] [--save-requests FILE]
                           stop what this skill started and delete the snapshot, never evidence;
                           exit 1 and keep the instance when any process or listener survives SIGKILL
   evidence                print and create this branch's verification directory
@@ -281,7 +301,7 @@ function urls(state) {
   const web = `http://localhost:${state.ports.web}`;
   return {
     web,
-    server: `http://localhost:${state.ports.server}`,
+    server: state.serverless ? web : `http://localhost:${state.ports.server}`,
     mcp: `${web}/_parlor/mcp`,
   };
 }
@@ -583,8 +603,7 @@ function pickPort([from, to], reserved) {
 function reservedPorts() {
   return new Set(
     allStates().flatMap((s) => [
-      s.ports.server,
-      s.ports.web,
+      ...Object.values(s.ports),
       s.cdpPort,
       ...Object.values(s.profileCdpPorts ?? {}),
     ]),
@@ -595,11 +614,15 @@ function allocateCdpPort() {
   return pickPort(PORT_RANGES.cdp, reservedPorts());
 }
 
-function allocatePorts() {
+/** `web` is the public port: the forwarder's, or Vite's when nothing sits in front of it. */
+function allocatePorts({ forwarded = false, serverless = false } = {}) {
   const reserved = reservedPorts();
   const server = pickPort(PORT_RANGES.server, reserved);
   reserved.add(server);
-  return { server, web: pickPort(PORT_RANGES.web, reserved) };
+  const web = pickPort(PORT_RANGES.web, reserved);
+  if (!forwarded || serverless) return { server, web };
+  reserved.add(web);
+  return { server, web, vite: pickPort(PORT_RANGES.web, reserved) };
 }
 
 function sourceRoot(option) {
@@ -637,6 +660,14 @@ function logPath(state) {
   return join(instanceDir(state.id), "dev.log");
 }
 
+function requestLogPath(state) {
+  return join(instanceDir(state.id), "requests.jsonl");
+}
+
+function netproxySocket(state) {
+  return join(instanceDir(state.id), "netproxy.sock");
+}
+
 function configOverlay(ports, { sharedOrigin = false } = {}) {
   const url = `http://localhost:${sharedOrigin ? ports.web : ports.server}`;
   return `import source from "./parlor.config.source.ts";
@@ -644,7 +675,7 @@ function configOverlay(ports, { sharedOrigin = false } = {}) {
 export default {
   ...source,
   server: { ...source.server, port: ${ports.server}, url: "${url}" },
-  web: { ...source.web, port: ${ports.web} },
+  web: { ...source.web, port: ${ports.vite ?? ports.web} },
 };
 `;
 }
@@ -687,6 +718,13 @@ function devEnv(state) {
   const env = { ...process.env, FORCE_COLOR: "0", BROWSER: "none" };
   if (state.home) Object.assign(env, hostEnv(state.home, env));
   if (state.release && state.ports) env.PARLOR_ORIGIN = urls(state).server;
+  if (state.forwarded) env.PARLOR_ORIGIN = urls(state).web;
+  if (state.serverless) env.BETTER_AUTH_SECRET = state.secret;
+  if (state.forwarded && !state.serverless) {
+    env.HELLO_PUBLIC_ORIGIN = urls(state).web;
+    env.NODE_OPTIONS =
+      `${env.NODE_OPTIONS ?? ""} --import ${PUBLIC_ORIGIN_PRELOAD}`.trim();
+  }
   if (state.target === "mac") {
     env.CARGO_TARGET_DIR = CARGO_TARGET_DIR;
     env.RUSTUP_HOME ??= join(homedir(), ".rustup");
@@ -735,8 +773,8 @@ function relaunchMarker(state) {
 /**
  * cargo runs the dev app through this, so the app starts with appEnv and nothing of the dev tree.
  * The first launch copies the debug binary and its sidecars into the instance, and every later
- * launch of the instance runs that copy, so its signature (and its Keychain items' ACLs) never
- * changes; `sync` marks the copy stale. When `relaunch` asks, it starts the same copy again.
+ * launch of the instance runs that copy, so its signature never changes;
+ * `sync` marks the copy stale. When `relaunch` asks, it starts the same copy again.
  */
 function appRunner(state) {
   const file = join(instanceDir(state.id), "app-runner.sh");
@@ -1027,14 +1065,99 @@ function tail(state, lines = 40) {
   return `--- last ${lines} lines of ${logPath(state)} ---\n${text.slice(-lines).join("\n")}`;
 }
 
+function serverlessOutput(state) {
+  return join(appDir(state), ".parlor", "nitro", ".vercel", "output");
+}
+
+function srvxBin(state) {
+  const requireFromCli = createRequire(
+    join(instanceDir(state.id), "repo", "packages", "cli", "package.json"),
+  );
+  for (
+    let dir = dirname(requireFromCli.resolve("srvx"));
+    dir !== dirname(dir);
+    dir = dirname(dir)
+  ) {
+    const manifest = join(dir, "package.json");
+    if (
+      existsSync(manifest) &&
+      JSON.parse(readFileSync(manifest, "utf8")).name === "srvx"
+    )
+      return join(dir, "bin", "srvx.mjs");
+  }
+  return fail(`no srvx package above ${requireFromCli.resolve("srvx")}`);
+}
+
+/** `parlor build --preset vercel` in the snapshot, once per snapshot revision. */
+function buildServerless(state) {
+  if (state.builtFingerprint === state.fingerprint) return;
+  log(`building the serverless server (parlor build --preset ${SERVERLESS_PRESET})`);
+  const out = openSync(logPath(state), "a");
+  try {
+    run(
+      join(appDir(state), "node_modules", ".bin", "parlor"),
+      ["build", "--preset", SERVERLESS_PRESET],
+      { cwd: appDir(state), env: devEnv(state), stdio: ["ignore", out, out] },
+    );
+  } finally {
+    closeSync(out);
+  }
+  state.builtFingerprint = state.fingerprint;
+  writeState(state);
+}
+
+function serverCommand(state) {
+  const parlor = join(appDir(state), "node_modules", ".bin", "parlor");
+  if (!state.forwarded) {
+    const args = ["dev", "--target", state.release ? "web" : state.target];
+    if (state.target === "ios") args.push("--device", state.simulator.udid);
+    return { executable: parlor, args };
+  }
+  const served = state.serverless
+    ? [
+        process.execPath,
+        srvxBin(state),
+        "serve",
+        "--prod",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        String(state.ports.server),
+        "--entry",
+        join(serverlessOutput(state), "functions", "__server.func", "index.mjs"),
+        "--static",
+        join(serverlessOutput(state), "static"),
+      ]
+    : [parlor, "dev", "--target", "web"];
+  return {
+    executable: process.execPath,
+    args: [
+      FRONT,
+      "--port",
+      String(state.ports.web),
+      "--backend",
+      String(state.ports.vite ?? state.ports.server),
+      ...(state.serverless ? ["--backend-host", "127.0.0.1"] : []),
+      "--requests",
+      requestLogPath(state),
+      "--control",
+      netproxySocket(state),
+      "--host-homes",
+      AGENT_HOMES_DIRS.join(","),
+      "--",
+      ...served,
+    ],
+  };
+}
+
 async function start(state) {
   if (isRunning(state)) fail(`instance ${state.id} is already running`);
   await startPromptWatcher(state);
+  if (state.serverless) buildServerless(state);
   const logOffset = existsSync(logPath(state)) ? statSync(logPath(state)).size : 0;
   const out = openSync(logPath(state), "a");
-  const args = ["dev", "--target", state.release ? "web" : state.target];
-  if (state.target === "ios") args.push("--device", state.simulator.udid);
-  const child = spawn(join(appDir(state), "node_modules", ".bin", "parlor"), args, {
+  const { executable, args } = serverCommand(state);
+  const child = spawn(executable, args, {
     cwd: appDir(state),
     detached: true,
     stdio: ["ignore", out, out],
@@ -1046,7 +1169,9 @@ async function start(state) {
   state.processes = [];
   delete state.readyAt;
   writeState(state);
-  log(`started parlor ${args.join(" ")} (pid ${child.pid}), log ${logPath(state)}`);
+  log(
+    `started ${state.forwarded ? `${state.serverless ? "serverless build" : "parlor dev"} behind the forwarder` : `parlor ${args.join(" ")}`} (pid ${child.pid}), log ${logPath(state)}`,
+  );
   await waitReady(state, logOffset);
   state.processes = ownedProcesses(state).map(({ pid, command }) => ({ pid, command }));
   state.readyAt = new Date().toISOString();
@@ -1550,8 +1675,14 @@ async function cmdUp(args) {
       "no-launch": { type: "boolean" },
       "shared-origin": { type: "boolean" },
       evidence: { type: "string" },
+      serverless: { type: "boolean" },
     },
   });
+  if (values.serverless) {
+    if (values.target !== "web") fail("--serverless is for the web target");
+    if (values["no-auth"])
+      fail("--serverless serves the app with its auth; drop --no-auth");
+  }
   if (values["no-auth"] && !values.home)
     fail(
       "--no-auth needs --home: the dev host it spawns must not touch the developer's ~/.parlor",
@@ -1570,6 +1701,13 @@ async function cmdUp(args) {
     fail("--id must be lowercase letters, digits, and dashes");
   const source = sourceRoot(values.source);
   const sim = values.target === "ios" ? simulator(values.device) : undefined;
+  if (
+    values.target === "web" &&
+    Buffer.byteLength(join(instanceDir(id), "netproxy.sock")) > UNIX_SOCKET_MAX_BYTES
+  )
+    fail(
+      `${join(instanceDir(id), "netproxy.sock")} is too long for a unix socket; use a shorter PARLOR_VERIFY_HOME or --id`,
+    );
 
   const state = await withLock(() => {
     if (existsSync(instanceDir(id))) fail(`instance "${id}" already exists`);
@@ -1586,7 +1724,10 @@ async function cmdUp(args) {
       target: values.target,
       source,
       ...sourceRevision(source),
-      ports: allocatePorts(),
+      ports: allocatePorts({
+        forwarded: values.target === "web",
+        serverless: values.serverless,
+      }),
       cdpPort: allocateCdpPort(),
       noAuth: values["no-auth"] ? true : undefined,
       home: values.home
@@ -1596,7 +1737,10 @@ async function cmdUp(args) {
           : undefined,
       autoHome: !values.home && values.target === "mac" ? true : undefined,
       release: values.release ? true : undefined,
-      sharedOrigin: values["shared-origin"] ? true : undefined,
+      sharedOrigin: values["shared-origin"] || values.serverless ? true : undefined,
+      forwarded: values.target === "web" ? true : undefined,
+      serverless: values.serverless ? true : undefined,
+      secret: values.serverless ? randomBytes(32).toString("hex") : undefined,
       simulator: sim ? { ...sim, bootedBefore: sim.booted } : undefined,
       evidence: values.evidence ? resolve(values.evidence) : undefined,
       createdAt: new Date().toISOString(),
@@ -1672,6 +1816,9 @@ function printInfo(state) {
         home: state.home ?? null,
         simulator: state.simulator ?? null,
         release: state.release ?? false,
+        serverless: state.serverless ?? false,
+        backend: state.serverless ? `http://localhost:${state.ports.server}` : null,
+        requestLog: state.forwarded ? requestLogPath(state) : null,
         appBundle: state.appBundle ?? null,
         appBundleId: state.appBundleId ?? null,
         appPid: appProcess(state)?.pid ?? null,
@@ -1798,6 +1945,14 @@ async function cmdDoctor([id]) {
     (error) => ({ ok: false, json: undefined, text: String(error?.message ?? error) }),
   );
   check("sync", negotiation.ok, `transport ${negotiation.json?.transport}`);
+  if (state.serverless) {
+    check(
+      "serverless build",
+      state.builtFingerprint === state.fingerprint &&
+        negotiation.json?.transport === "poll",
+      `${SERVERLESS_PRESET} build of ${state.builtFingerprint ?? "nothing"}, transport ${negotiation.json?.transport}, pollIntervalMs ${negotiation.json?.pollIntervalMs}; requests in ${requestLogPath(state)}`,
+    );
+  }
   const list = await authedPost(state, `${u.web}/_parlor/actions/listTasks`, {}).catch(
     (error) => ({ ok: false, json: undefined, text: String(error?.message ?? error) }),
   );
@@ -2532,6 +2687,13 @@ async function cmdSync([id]) {
   snapshot(state);
   writeState(state);
   if (state.target === "mac" && !state.release) writeFileSync(repinMarker(state), "");
+  if (state.serverless) {
+    log(
+      `synced ${state.source} (${state.head.slice(0, 12)}, fingerprint ${state.fingerprint}); rebuilding and restarting the serverless server`,
+    );
+    await withStopped(state, async () => {}, { browsers: "none", hosts: "keep" });
+    return;
+  }
   log(
     `synced ${state.source} (${state.head.slice(0, 12)}, fingerprint ${state.fingerprint}); tsx restarts the server, Vite reloads the page`,
   );
@@ -2551,7 +2713,7 @@ function stopBrowsers(state) {
   }
 }
 
-async function teardown(state, { saveLog }) {
+async function teardown(state, { saveLog, saveRequests }) {
   stopBrowsers(state);
   stopHolders(state);
   await stopProcesses(state, { browsers: "all" });
@@ -2582,6 +2744,11 @@ async function teardown(state, { saveLog }) {
     copyFileSync(logPath(state), resolve(saveLog));
     log(`saved log to ${resolve(saveLog)}`);
   }
+  if (saveRequests && existsSync(requestLogPath(state))) {
+    mkdirSync(dirname(resolve(saveRequests)), { recursive: true });
+    copyFileSync(requestLogPath(state), resolve(saveRequests));
+    log(`saved the request log to ${resolve(saveRequests)}`);
+  }
   rmSync(instanceDir(state.id), { recursive: true, force: true });
   log(`removed ${state.id}`);
   if (keychainError)
@@ -2592,15 +2759,23 @@ async function cmdDown(args) {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
-    options: { all: { type: "boolean" }, "save-log": { type: "string" } },
+    options: {
+      all: { type: "boolean" },
+      "save-log": { type: "string" },
+      "save-requests": { type: "string" },
+    },
   });
   const states = values.all ? allStates() : positionals.map(readState);
   if (states.length === 0) fail("usage: down ID... | --all");
-  if (values["save-log"] && states.length > 1) fail("--save-log takes one instance");
+  if ((values["save-log"] || values["save-requests"]) && states.length > 1)
+    fail("--save-log and --save-requests take one instance");
   const failed = [];
   for (const state of states) {
     try {
-      await teardown(state, { saveLog: values["save-log"] });
+      await teardown(state, {
+        saveLog: values["save-log"],
+        saveRequests: values["save-requests"],
+      });
     } catch (error) {
       if (!(error instanceof CliError)) throw error;
       log(error.message);
@@ -2717,6 +2892,88 @@ const webview = createWebview({
   bundleId: BUNDLE_ID,
 });
 
+function requireForwarder(state, what) {
+  if (!state.forwarded)
+    fail(`${what}: ${state.id} is not behind the forwarder; it is for web instances`);
+}
+
+async function cmdNetcut(args) {
+  if (args[0] === "selfcheck") {
+    const results = httpLogSelfCheck();
+    for (const r of results)
+      process.stdout.write(`${r.ok ? "ok  " : "FAIL"} ${r.name}: ${r.detail}\n`);
+    if (results.some((r) => !r.ok)) process.exitCode = 1;
+    return;
+  }
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { seconds: { type: "string" } },
+  });
+  const [id, side] = positionals;
+  const usage = `usage: netcut ID ${SIDES.join("|")} --seconds S`;
+  if (!id || !SIDES.includes(side) || values.seconds === undefined) fail(usage);
+  const seconds = Number(values.seconds);
+  if (!(seconds > 0))
+    fail(`--seconds must be a positive number, got "${values.seconds}"`);
+  const state = readState(id);
+  requireForwarder(state, "netcut");
+  if (!existsSync(netproxySocket(state)) || !isRunning(state))
+    fail(`${id} is not running; start it with start ${id}`);
+  const result = await requestCut(netproxySocket(state), side, seconds * 1000).catch(
+    (error) => fail(`netcut ${side} failed: ${error.message}`),
+  );
+  if (result.error) fail(`netcut ${side} failed: ${result.error}`);
+  log(
+    JSON.stringify({
+      id,
+      side,
+      seconds,
+      openAtCut: result.open,
+      heldNew: result.held,
+      closedDuringCut: result.closed,
+    }),
+  );
+  process.stdout.write(
+    `${JSON.stringify({ side, cutAt: result.cutAt, restoredAt: result.restoredAt })}\n`,
+  );
+}
+
+function cmdRequests(args) {
+  process.stdout.on("error", (error) => {
+    if (error.code === "EPIPE") process.exit(0);
+    throw error;
+  });
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { since: { type: "string" }, all: { type: "boolean" } },
+  });
+  const state = readState(positionals[0]);
+  requireForwarder(state, "requests");
+  const since = values.since === undefined ? 0 : Number(values.since);
+  if (!(since >= 0)) fail(`--since must be epoch milliseconds, got "${values.since}"`);
+  const file = requestLogPath(state);
+  const rows = (existsSync(file) ? readFileSync(file, "utf8") : "")
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+    .filter((row) => row.at >= since && (values.all || SIDES.includes(row.side)))
+    .sort((a, b) => a.at - b.at || a.conn - b.conn);
+  for (const row of rows) {
+    const out = values.all
+      ? row
+      : {
+          at: row.at,
+          side: row.side,
+          method: row.method,
+          path: row.path,
+          status: row.status,
+        };
+    process.stdout.write(`${JSON.stringify(out)}\n`);
+  }
+}
+
 function cmdAgentHome([home]) {
   if (!home) fail("usage: agent-home HOME");
   process.stdout.write(`${JSON.stringify(prepareHome(home), null, 2)}\n`);
@@ -2749,6 +3006,8 @@ const COMMANDS = {
   stop: cmdStop,
   start: cmdStart,
   sync: cmdSync,
+  netcut: cmdNetcut,
+  requests: cmdRequests,
   mcp: cmdMcp,
   agent: cmdAgent,
   token: cmdToken,

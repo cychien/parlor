@@ -44,7 +44,7 @@ export {
   type ProtocolRange,
   type StreamingKind,
 } from "./protocol.js";
-export { CHAT_TAG, HOSTS_TAG } from "./tags.js";
+export { CHAT_ACTIVITY_TAG, CHAT_TAG, HOSTS_TAG } from "./tags.js";
 export {
   type AskState,
   type ChatItem,

@@ -27,6 +27,10 @@ export function createRootRuntime(input: RootRuntimeInput): ChatRuntime {
     addChannel: (channel) => sync.addChannel(channel),
     onSyncTags: (listener) =>
       sync.onEvents((events) => listener(events.flatMap((event) => event.tags))),
+    onResume: (listener) => sync.onResume(listener),
+    transport: () => sync.transport(),
+    onNegotiated: (listener) => sync.onNegotiated(listener),
+    isHidden: () => globalThis.document?.visibilityState === "hidden",
     auth,
     localHost: resolveCapability(localAgentHost),
     threadId,

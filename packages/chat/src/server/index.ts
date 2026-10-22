@@ -9,6 +9,7 @@ import { chatRoutes } from "./routes.js";
 import { type ChatDb, sqlChatStore } from "./store.js";
 
 export {
+  CHAT_ACTIVITY_TAG,
   CHAT_TAG,
   type ChatActionDeps,
   type ChatActionMap,

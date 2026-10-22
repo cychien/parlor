@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createSyncClient, SyncUnauthorized } from "./sync-client.js";
+import { createSyncClient, SyncRequestTimeout, SyncUnauthorized } from "./sync-client.js";
 
 function sseBody(frames: string[], { end = false } = {}) {
   const encoder = new TextEncoder();
@@ -726,6 +726,680 @@ describe("createSyncClient addChannel", () => {
     client.addChannel(second.channel);
     expect(first.log).toEqual(["opened", "closed"]);
     expect(second.log).toEqual(["opened"]);
+    client.stop();
+  });
+});
+
+describe("createSyncClient reconnectNow", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const sse = {
+    protocol: 1,
+    transport: "sse",
+    endpoint: "/_parlor/sync/stream",
+    pollIntervalMs: 2000,
+  };
+  const poll = { protocol: 1, transport: "poll", endpoint: "", pollIntervalMs: 2000 };
+  const isPoll = (path: unknown) => String(path).includes("/sync?since=");
+
+  it("ends a backoff wait at once, resets the backoff, and keeps reconnecting afterwards", async () => {
+    const attempts: number[] = [];
+    const request = vi.fn(async (path: string) => {
+      if (path.endsWith("/sync/token")) {
+        attempts.push(Date.now());
+        return new Response("down", { status: 502 });
+      }
+      return Response.json({ events: [], cursor: "" });
+    });
+    const client = createSyncClient({
+      request,
+      onEvents: vi.fn(),
+      onError: vi.fn(),
+      reconnectBaseMs: 1000,
+    });
+    const t0 = Date.now();
+    client.start();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(attempts.map((at) => at - t0)).toEqual([0, 1000, 3000]);
+
+    client.reconnectNow();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(attempts.map((at) => at - t0)).toEqual([0, 1000, 3000, 3000]);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(attempts.map((at) => at - t0)).toEqual([0, 1000, 3000, 3000, 4000]);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(attempts.map((at) => at - t0)).toEqual([0, 1000, 3000, 3000, 4000, 6000]);
+    client.stop();
+  });
+
+  it("polls at once while the next poll is waiting, and does nothing while one is in flight", async () => {
+    let release: (() => void) | undefined;
+    let hold = false;
+    const request = vi.fn(async (path: string) => {
+      if (path.endsWith("/sync/token")) return Response.json(poll);
+      if (hold) await new Promise<void>((resolve) => (release = resolve));
+      return Response.json({ events: [], cursor: "" });
+    });
+    const client = createSyncClient({ request, onEvents: vi.fn() });
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const polls = () => request.mock.calls.filter(([p]) => isPoll(p)).length;
+    expect(polls()).toBe(1);
+
+    client.reconnectNow();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(polls()).toBe(2);
+
+    hold = true;
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(polls()).toBe(3);
+    client.reconnectNow();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(polls()).toBe(3);
+    release?.();
+    client.stop();
+  });
+
+  it("does nothing while an SSE stream is open", async () => {
+    const request = vi.fn(async (path: string) => {
+      if (path.endsWith("/sync/token")) return Response.json(sse);
+      if (path.includes("/sync/stream")) {
+        return new Response(
+          sseBody(['event: handshake\ndata: {"protocol":1,"capabilities":[]}\n\n']),
+          { status: 200 },
+        );
+      }
+      return Response.json({ events: [], cursor: "" });
+    });
+    const client = createSyncClient({ request, onEvents: vi.fn() });
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+    const before = request.mock.calls.length;
+    client.reconnectNow();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(request.mock.calls.length).toBe(before);
+    client.stop();
+  });
+
+  it("negotiates again at once when a refused poll left the client waiting to reconnect", async () => {
+    let refused = false;
+    const tokens: number[] = [];
+    const request = vi.fn(async (path: string) => {
+      if (path.endsWith("/sync/token")) {
+        tokens.push(Date.now());
+        return Response.json(poll);
+      }
+      return refused
+        ? new Response(null, { status: 401 })
+        : Response.json({ events: [], cursor: "" });
+    });
+    const client = createSyncClient({
+      request,
+      onEvents: vi.fn(),
+      onUnauthorized: vi.fn(),
+      reconnectBaseMs: 1000,
+    });
+    client.start();
+    await vi.advanceTimersByTimeAsync(2500);
+    refused = true;
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(client.transport).toBeUndefined();
+    const before = tokens.length;
+
+    refused = false;
+    client.reconnectNow();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(tokens.length).toBe(before + 1);
+    expect(client.transport).toBe("poll");
+    client.stop();
+  });
+
+  it("lets stop end a pending backoff wait so a restart connects", async () => {
+    const tokens = vi.fn();
+    const request = vi.fn(async (path: string) => {
+      if (path.endsWith("/sync/token")) {
+        tokens();
+        return new Response("down", { status: 502 });
+      }
+      return Response.json({ events: [], cursor: "" });
+    });
+    const client = createSyncClient({ request, onEvents: vi.fn(), onError: vi.fn() });
+    client.start();
+    await vi.advanceTimersByTimeAsync(10);
+    client.stop();
+    await vi.advanceTimersByTimeAsync(0);
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(tokens).toHaveBeenCalledTimes(2);
+    client.stop();
+  });
+});
+
+describe("createSyncClient pollEveryMs", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  function polling(pollIntervalMs: number, every: () => number, hidden = false) {
+    const times: number[] = [];
+    const request = vi.fn(async (path: string) => {
+      if (path.endsWith("/sync/token")) {
+        return Response.json({
+          protocol: 1,
+          transport: "poll",
+          endpoint: "",
+          pollIntervalMs,
+        });
+      }
+      times.push(Date.now());
+      return Response.json({ events: [], cursor: "" });
+    });
+    const client = createSyncClient({
+      request,
+      onEvents: vi.fn(),
+      pollEveryMs: every,
+      isHidden: () => hidden,
+    });
+    return { client, times };
+  }
+
+  it("reads the interval each time the next poll is scheduled", async () => {
+    let every = 15_000;
+    const { client, times } = polling(2000, () => every);
+    const t0 = Date.now();
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    every = 3000;
+    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(times.map((at) => at - t0)).toEqual([0, 15_000, 18_000]);
+    client.stop();
+  });
+
+  it("never polls faster than the negotiated interval, and keeps the hidden floor", async () => {
+    const fast = polling(2000, () => 500);
+    const t0 = Date.now();
+    fast.client.start();
+    await vi.advanceTimersByTimeAsync(4100);
+    expect(fast.times.map((at) => at - t0)).toEqual([0, 2000, 4000]);
+    fast.client.stop();
+
+    const hidden = polling(2000, () => 3000, true);
+    const t1 = Date.now();
+    hidden.client.start();
+    await vi.advanceTimersByTimeAsync(20_100);
+    expect(hidden.times.map((at) => at - t1)).toEqual([0, 10_000, 20_000]);
+    hidden.client.stop();
+  });
+});
+
+describe("createSyncClient request timeouts", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const hang = (init?: RequestInit) =>
+    new Promise<Response>((_, reject) =>
+      init?.signal?.addEventListener("abort", () => reject(new Error("aborted"))),
+    );
+
+  it("fails a hung negotiation after requestTimeoutMs and keeps negotiating with backoff", async () => {
+    const tokens: number[] = [];
+    const request = vi.fn(async (path: string, init?: RequestInit) => {
+      if (path.endsWith("/sync/token")) {
+        tokens.push(Date.now());
+        return hang(init);
+      }
+      return Response.json({ events: [], cursor: "" });
+    });
+    const onError = vi.fn();
+    const client = createSyncClient({
+      request,
+      onEvents: vi.fn(),
+      onError,
+      requestTimeoutMs: 5000,
+      reconnectBaseMs: 1000,
+    });
+    const t0 = Date.now();
+    client.start();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(onError.mock.calls[0]![0]).toBeInstanceOf(SyncRequestTimeout);
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(tokens.map((at) => at - t0)).toEqual([0, 6000]);
+    client.stop();
+  });
+
+  it("times a hung negotiation out even when the request ignores its signal", async () => {
+    const request = vi.fn(async (path: string) =>
+      path.endsWith("/sync/token")
+        ? new Promise<Response>(() => {})
+        : Response.json({ events: [], cursor: "" }),
+    );
+    const onError = vi.fn();
+    const client = createSyncClient({
+      request,
+      onEvents: vi.fn(),
+      onError,
+      requestTimeoutMs: 1000,
+    });
+    client.start();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(onError).toHaveBeenCalledOnce();
+    client.stop();
+  });
+
+  it("counts a hung poll as one failed poll and polls again", async () => {
+    let hung = true;
+    const polls: number[] = [];
+    const request = vi.fn(async (path: string, init?: RequestInit) => {
+      if (path.endsWith("/sync/token")) {
+        return Response.json({
+          protocol: 1,
+          transport: "poll",
+          endpoint: "",
+          pollIntervalMs: 2000,
+        });
+      }
+      polls.push(Date.now());
+      if (hung) {
+        hung = false;
+        return hang(init);
+      }
+      return Response.json({ events: [], cursor: "" });
+    });
+    const onError = vi.fn();
+    const client = createSyncClient({
+      request,
+      onEvents: vi.fn(),
+      onError,
+      requestTimeoutMs: 4000,
+    });
+    const t0 = Date.now();
+    client.start();
+    await vi.advanceTimersByTimeAsync(6100);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(polls.map((at) => at - t0)).toEqual([0, 6000]);
+    client.stop();
+  });
+
+  it("never times out the SSE stream", async () => {
+    const encoder = new TextEncoder();
+    const request = vi.fn(async (path: string) => {
+      if (path.endsWith("/sync/token")) {
+        return Response.json({
+          protocol: 1,
+          transport: "sse",
+          endpoint: "/_parlor/sync/stream",
+          pollIntervalMs: 2000,
+        });
+      }
+      if (path.includes("/sync/stream")) {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(
+                encoder.encode(
+                  'event: handshake\ndata: {"protocol":1,"capabilities":[],"keepAliveMs":600000}\n\n',
+                ),
+              );
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      return Response.json({ events: [], cursor: "" });
+    });
+    const onError = vi.fn();
+    const client = createSyncClient({
+      request,
+      onEvents: vi.fn(),
+      onError,
+      requestTimeoutMs: 1000,
+    });
+    client.start();
+    await vi.advanceTimersByTimeAsync(10_000);
+    const streams = request.mock.calls.filter(([p]) =>
+      String(p).includes("/sync/stream"),
+    );
+    expect(streams).toHaveLength(1);
+    expect(onError).not.toHaveBeenCalled();
+    client.stop();
+  });
+});
+
+describe("createSyncClient onResume", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  function sseServer() {
+    let down = false;
+    const request = vi.fn(async (path: string) => {
+      if (down) throw new Error("offline");
+      if (path.endsWith("/sync/token")) {
+        return Response.json({
+          protocol: 1,
+          transport: "sse",
+          endpoint: "/_parlor/sync/stream",
+          pollIntervalMs: 2000,
+        });
+      }
+      if (path.includes("/sync/stream")) {
+        return new Response(
+          sseBody(['event: handshake\ndata: {"protocol":1,"capabilities":[]}\n\n'], {
+            end: true,
+          }),
+          { status: 200 },
+        );
+      }
+      return Response.json({ events: [], cursor: "" });
+    });
+    return {
+      request,
+      cut: () => (down = true),
+      restore: () => (down = false),
+    };
+  }
+
+  it("fires once when the stream reopens after a drop, not on the first open nor on fallback polls", async () => {
+    const server = sseServer();
+    const onResume = vi.fn();
+    const onNegotiated = vi.fn();
+    const client = createSyncClient({
+      request: server.request,
+      onEvents: vi.fn(),
+      onError: vi.fn(),
+      onResume,
+      onNegotiated,
+      reconnectBaseMs: 1000,
+      reconnectMaxMs: 1000,
+    });
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onResume).not.toHaveBeenCalled();
+
+    server.cut();
+    await vi.advanceTimersByTimeAsync(7000);
+    expect(client.transport).toBe("poll");
+    expect(onNegotiated.mock.calls).toEqual([["sse"]]);
+    expect(onResume).not.toHaveBeenCalled();
+
+    server.restore();
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(onResume).toHaveBeenCalledTimes(1);
+    client.stop();
+  });
+
+  it("fires once when a poll succeeds after a failed one on a poll deployment", async () => {
+    let failing = false;
+    const request = vi.fn(async (path: string) => {
+      if (path.endsWith("/sync/token")) {
+        return Response.json({
+          protocol: 1,
+          transport: "poll",
+          endpoint: "",
+          pollIntervalMs: 1000,
+        });
+      }
+      if (failing) return new Response("down", { status: 502 });
+      return Response.json({ events: [], cursor: "" });
+    });
+    const onResume = vi.fn();
+    const client = createSyncClient({
+      request,
+      onEvents: vi.fn(),
+      onError: vi.fn(),
+      onResume,
+    });
+    client.start();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(onResume).not.toHaveBeenCalled();
+
+    failing = true;
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(onResume).not.toHaveBeenCalled();
+
+    failing = false;
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(onResume).toHaveBeenCalledTimes(1);
+    client.stop();
+  });
+});
+
+describe("createSyncClient stop", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const negotiated = () =>
+    Response.json({ protocol: 1, transport: "poll", endpoint: "", pollIntervalMs: 100 });
+
+  function heldPoll() {
+    let signal: AbortSignal | undefined;
+    const answers: ((response: Response) => void)[] = [];
+    const request = vi.fn(async (path: string, init?: RequestInit) => {
+      if (path.endsWith("/sync/token")) return negotiated();
+      signal = init?.signal ?? undefined;
+      return new Promise<Response>((resolve) => {
+        answers.push(resolve);
+      });
+    });
+    return {
+      request,
+      answers,
+      answer: (response: Response) => answers.at(-1)!(response),
+      signal: () => signal,
+    };
+  }
+
+  it("stop aborts an in-flight poll and drops its late events", async () => {
+    const held = heldPoll();
+    const onEvents = vi.fn();
+    const onError = vi.fn();
+    const client = createSyncClient({
+      request: held.request,
+      onEvents,
+      onError,
+      coalesceMs: 10,
+    });
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(held.signal()?.aborted).toBe(false);
+
+    client.stop();
+    expect(held.signal()?.aborted).toBe(true);
+
+    held.answer(Response.json({ events: [event(1, "a")], cursor: "1.a" }));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(onEvents).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    expect(client.cursor).toBe("");
+    expect(held.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("stop drops a late 401 without reaching onUnauthorized or onError", async () => {
+    const held = heldPoll();
+    const onUnauthorized = vi.fn();
+    const onError = vi.fn();
+    const client = createSyncClient({
+      request: held.request,
+      onEvents: vi.fn(),
+      onError,
+      onUnauthorized,
+    });
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    client.stop();
+
+    held.answer(new Response("no", { status: 401 }));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(onUnauthorized).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    expect(held.request).toHaveBeenCalledTimes(2);
+  });
+
+  describe("a stop between a request settling and its result being delivered", () => {
+    function stoppedWhenSettled(held = heldPoll()) {
+      let stopOnSettle = false;
+      let stopClient: () => void = () => undefined;
+      const onEvents = vi.fn();
+      const onError = vi.fn();
+      const onUnauthorized = vi.fn();
+      const onResume = vi.fn();
+      const client = createSyncClient({
+        request: held.request,
+        onEvents,
+        onError,
+        onUnauthorized,
+        onResume,
+        coalesceMs: 10,
+        clearTimeout: (id) => {
+          globalThis.clearTimeout(id);
+          if (!stopOnSettle) return;
+          stopOnSettle = false;
+          stopClient();
+        },
+      });
+      stopClient = () => client.stop();
+      return {
+        held,
+        client,
+        onEvents,
+        onError,
+        onUnauthorized,
+        onResume,
+        answerThenStop: async (response: Response) => {
+          stopOnSettle = true;
+          held.answer(response);
+          await vi.advanceTimersByTimeAsync(0);
+          expect(stopOnSettle).toBe(false);
+        },
+      };
+    }
+
+    it("delivers no events and moves no cursor from a poll that settled before the stop", async () => {
+      const run = stoppedWhenSettled();
+      run.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      await run.answerThenStop(Response.json({ events: [event(1, "a")], cursor: "1.a" }));
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(run.client.cursor).toBe("");
+      expect(run.onEvents).not.toHaveBeenCalled();
+      expect(run.onResume).not.toHaveBeenCalled();
+      expect(run.onError).not.toHaveBeenCalled();
+      expect(run.held.request).toHaveBeenCalledTimes(2);
+    });
+
+    it("reports no 401 from a poll that settled before the stop", async () => {
+      const run = stoppedWhenSettled();
+      run.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      await run.answerThenStop(new Response("no", { status: 401 }));
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(run.onUnauthorized).not.toHaveBeenCalled();
+      expect(run.onError).not.toHaveBeenCalled();
+      expect(run.held.request).toHaveBeenCalledTimes(2);
+    });
+
+    it("acts on no negotiation that settled before the stop", async () => {
+      let answer!: (response: Response) => void;
+      const request = vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            answer = resolve;
+          }),
+      );
+      const onNegotiated = vi.fn();
+      const onUnauthorized = vi.fn();
+      let stopOnSettle = false;
+      let stopClient: () => void = () => undefined;
+      const client = createSyncClient({
+        request,
+        onEvents: vi.fn(),
+        onError: vi.fn(),
+        onNegotiated,
+        onUnauthorized,
+        clearTimeout: (id) => {
+          globalThis.clearTimeout(id);
+          if (!stopOnSettle) return;
+          stopOnSettle = false;
+          stopClient();
+        },
+      });
+      stopClient = () => client.stop();
+      client.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      stopOnSettle = true;
+      answer(negotiated());
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(onNegotiated).not.toHaveBeenCalled();
+      expect(client.transport).toBeUndefined();
+      expect(request).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("stop aborts an in-flight negotiation and ignores its late answer", async () => {
+    let signal: AbortSignal | undefined;
+    let answer!: (response: Response) => void;
+    const request = vi.fn(async (path: string, init?: RequestInit) => {
+      if (path.endsWith("/sync/token")) {
+        signal = init?.signal ?? undefined;
+        return new Promise<Response>((resolve) => {
+          answer = resolve;
+        });
+      }
+      return Response.json({ events: [], cursor: "" });
+    });
+    const onNegotiated = vi.fn();
+    const onUnauthorized = vi.fn();
+    const client = createSyncClient({
+      request,
+      onEvents: vi.fn(),
+      onError: vi.fn(),
+      onNegotiated,
+      onUnauthorized,
+    });
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    client.stop();
+    expect(signal?.aborted).toBe(true);
+
+    answer(new Response("no", { status: 401 }));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(onUnauthorized).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledTimes(1);
+
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    answer(negotiated());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onNegotiated).toHaveBeenCalledTimes(1);
+    client.stop();
+  });
+
+  it("a restarted client ignores the stale poll of its previous run", async () => {
+    const held = heldPoll();
+    const onEvents = vi.fn();
+    const client = createSyncClient({
+      request: held.request,
+      onEvents,
+      onError: vi.fn(),
+      coalesceMs: 10,
+    });
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const [stale] = held.answers;
+    client.stop();
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+
+    stale!(Response.json({ events: [event(1, "old")], cursor: "1.old" }));
+    await vi.advanceTimersByTimeAsync(20);
+    expect(onEvents).not.toHaveBeenCalled();
+    expect(client.cursor).toBe("");
     client.stop();
   });
 });

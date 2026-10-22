@@ -15,7 +15,7 @@ Alice connects a computer to her account, opens the Agent sidebar in the app hea
 
 ## How to get to it (user POV)
 
-- Sign in, press `button "Agent"` in the app header: the sidebar (region `Agent`) opens with the computer picker (`combobox "Agent"`, one option per connected computer's agent, `<agent> on <host name>`), the thread log (`ol[role=log]`), `textbox "Message"` and `button "Send"`; with no computer online it shows `No computer connected` and a disabled composer. A running turn adds `button "Stop"` and the note `Working...`; a queued prompt shows `Waiting for the computer`.
+- Sign in, press `button "Agent"` in the app header: the sidebar (region `Agent`) opens with the computer picker (`combobox "Agent"`, one option per connected computer's agent, `<agent> on <host name>`), the thread log (`ol[role=log]`), `textbox "Message"` and `button "Send"`; with no computer online it shows `No computer connected` and a disabled composer. A running turn adds `button "Stop"` and the note `Working...`; a queued prompt's meta line reads `Queued`, and while its computer is offline the status line (`p.composer-status[role=status]`) reads `Waiting for {host name} to come online`.
 - Escape closes the sidebar and returns focus to `button "Agent"`; answering a card returns focus to `textbox "Message"`.
 - Connect a computer from the app's consent page (`Connect a computer`, with `button "Connect"` and `button "Cancel"`); it then shows under "Connected computers" on `/settings` with `button "Revoke <host name>"`.
 
