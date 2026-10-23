@@ -954,8 +954,9 @@ export const CONNECTED_PATTERN = /Connected to (.+?) as (\S+?)\. /;
 
 /**
  * Alice connects the host to the instance the way a user does: run the command the sidebar
- * names and click `Connect` on the consent page, the one approval. `appTab` is the page id
- * of Alice's app tab, which stays selected on return.
+ * names and click `Connect` on the consent page, the one approval; the tab returns to the app,
+ * whose browser the host then trusts unasked. `appTab` is the page id of Alice's app tab,
+ * which stays selected on return.
  */
 export async function connectHost(check, { host, browser, appTab, label = "connect" }) {
   const info = host.info;
@@ -1021,9 +1022,14 @@ export async function connectHost(check, { host, browser, appTab, label = "conne
   const shown = { appName: connected[1], email: connected[2] };
   check.save(`${label}.terminal-connected.json`, shown);
   const tab = await browser.page(
-    `async () => { for (let i = 0; i < 40 && !/Connected to/.test(document.querySelector('h1')?.textContent ?? ''); i++) await new Promise((r) => setTimeout(r, 250)); return document.body.innerText.slice(0, 400); }`,
+    `async () => { for (let i = 0; i < 40 && !(location.origin === ${JSON.stringify(web)} && !location.hash); i++) await new Promise((r) => setTimeout(r, 250)); return { url: location.href, hash: location.hash }; }`,
   );
-  check.save(`${label}.tab-after.json`, { text: tab });
+  check.save(`${label}.tab-after.json`, tab);
+  check.expect(
+    `${label}: the tab returns to the app with the pairing secret already off its URL`,
+    typeof tab?.url === "string" && tab.url.startsWith(web) && !tab.hash,
+    tab,
+  );
 
   await browser.closepage(consentTab);
   await browser.selectpage(appTab);

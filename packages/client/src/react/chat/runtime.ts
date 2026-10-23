@@ -1,5 +1,6 @@
 import type { AgentConfirmation, AgentUiClient } from "@parlor/agent-ui/client";
 import type { CapabilityHandle, LocalAgentHost } from "@parlor/capabilities";
+import { deviceCode } from "@parlor/capabilities/encoding";
 import {
   CHAT_CHANNEL,
   CHAT_TAG,
@@ -73,6 +74,8 @@ export interface ChatWait {
   readonly reason: "offline" | "approval";
   readonly hostId: string;
   readonly hostName: string;
+  /** While approving: the four digits the computer's dialog shows for this device too. */
+  readonly code?: string | undefined;
 }
 
 /**
@@ -247,6 +250,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
   let pingRefused = false;
   let generation = 0;
   let device: SessionDevice | undefined;
+  let code: string | undefined;
   let setup: DeviceSetup | undefined;
   let afterSetup: (() => Promise<void>) | undefined;
   let explainers = 0;
@@ -270,6 +274,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     reason,
     hostId,
     hostName: hosts.find((host) => host.id === hostId)?.name ?? "your computer",
+    ...(reason === "approval" && code ? { code } : {}),
   });
 
   const waitOf = (): ChatWait | undefined => {
@@ -504,6 +509,12 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
 
   const deviceOf = async (): Promise<SessionDevice | undefined> => {
     const found = await deps.auth?.device?.();
+    if (found && found !== device) {
+      void deviceCode(found.keys.signingKey).then((digits) => {
+        code = digits;
+        emit();
+      });
+    }
     device = found ?? device;
     return found;
   };

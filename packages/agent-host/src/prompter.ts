@@ -11,6 +11,8 @@ export interface LocalPrompter {
     readonly appName: string;
     readonly account: AccountSummary;
     readonly device: { readonly name: string; readonly platform: string };
+    /** The four digits the asking browser shows too, from `deviceCode`. */
+    readonly code: string;
     /** Aborts when the turn waiting on this answer ends; the dialog closes. */
     readonly signal?: AbortSignal | undefined;
   }): Promise<boolean>;
@@ -55,10 +57,10 @@ const yes = (answer: string | undefined) => /^y(es)?$/i.test(answer?.trim() ?? "
 /** Interactive `connect`: asks on the TTY that ran it. */
 export function terminalPrompter(): LocalPrompter {
   return {
-    approveDevice: async ({ appName, account, device }) =>
+    approveDevice: async ({ appName, account, device, code }) =>
       yes(
         await ask(
-          `Let ${printable(device.name)} (${printable(device.platform)}) run agents here for ${printable(appName)} as ${printable(account.email ?? account.name)}? [y/N] `,
+          `Let ${printable(device.name)} run agents here for ${printable(appName)} as ${printable(account.email ?? account.name)}? It shows the code ${printable(code)}. Allow it only if you just sent a message from it and see the same code. [y/N] `,
         ),
       ),
     answerHere: async ({ appName, agent, question, choices }) => {
@@ -102,11 +104,15 @@ function osascript(
   });
 }
 
+/** Each paragraph is cleaned on its own, so only this code decides where the dialog breaks lines. */
 async function confirm(
-  text: string,
+  paragraphs: string | readonly string[],
   buttons: readonly [string, string],
   signal?: AbortSignal,
 ): Promise<boolean> {
+  const text = (typeof paragraphs === "string" ? [paragraphs] : paragraphs)
+    .map(clipped)
+    .join("\n\n");
   const answer = await osascript(
     [
       "on run argv",
@@ -114,7 +120,7 @@ async function confirm(
       "return button returned of reply",
       "end run",
     ],
-    [clipped(text), ...buttons],
+    [text, ...buttons],
     signal,
   );
   return answer === buttons[1];
@@ -150,9 +156,13 @@ export function macDialogPrompter(): LocalPrompter {
   const host = computerName();
   const identity = (account: AccountSummary) => account.email ?? account.name;
   return {
-    approveDevice: ({ appName, account, device, signal }) =>
+    approveDevice: ({ appName, account, device, code, signal }) =>
       confirm(
-        `${device.name} (${device.platform}) wants to use agents on ${host} for ${appName} as ${identity(account)}.`,
+        [
+          `Allow ${device.name} to use your agents?`,
+          `${device.name} sent a message from ${appName} as ${identity(account)} and wants your agents on ${host} to run it. It shows the code ${code}.`,
+          "Allow it only if you just sent that message and see the same code.",
+        ],
         ["Don't allow", "Allow"],
         signal,
       ),

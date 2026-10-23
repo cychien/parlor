@@ -97,7 +97,9 @@ function statusText({ status, wait, setup }: ChatState): string {
   if (wait) {
     return wait.reason === "offline"
       ? `Waiting for ${wait.hostName} to come online`
-      : `Waiting for ${wait.hostName} to approve this device`;
+      : wait.code
+        ? `Waiting for ${wait.hostName} to approve this device. Check that it shows ${wait.code}.`
+        : `Waiting for ${wait.hostName} to approve this device`;
   }
   if (status === "sending") return "Sending...";
   if (status === "running") return "Working...";

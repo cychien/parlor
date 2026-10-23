@@ -14,7 +14,16 @@ const signature = z.object({
   clientDataJSON: z.string().optional(),
 });
 
-const signed = z.object({ deviceId: idSchema("device"), at: z.number(), signature });
+const signed = z.object({
+  deviceId: idSchema("device"),
+  at: z.number(),
+  signature,
+  /** The browser that approved the computer's connect proving it, so the computer trusts it unasked. */
+  pairing: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{43}$/)
+    .optional(),
+});
 
 const agentRef = z.object({ hostId: idSchema("host"), agentId: z.string().min(1) });
 

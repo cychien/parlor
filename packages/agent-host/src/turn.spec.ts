@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { pairingProof } from "@parlor/auth";
+import { deviceCode } from "@parlor/capabilities/encoding";
 import type {
   ClaimedTurn,
   HostFrame,
@@ -161,6 +163,7 @@ interface HarnessOptions {
   readonly policy?: RemotePolicy;
   readonly prompter?: Partial<LocalPrompter>;
   readonly now?: () => number;
+  readonly pairing?: TurnDeps["pairing"];
 }
 
 let harnesses = 0;
@@ -258,6 +261,7 @@ function harness(
     policy: options.policy ?? DEV_POLICY,
     prompter,
     now,
+    ...(options.pairing ? { pairing: options.pairing } : {}),
   };
   const appended = () =>
     logged.flatMap((entry) => (entry.kind === "append" ? entry.items : []));
@@ -717,6 +721,7 @@ async function signedClaim(
     readonly app?: string;
     readonly device?: DeviceKeys | undefined;
     readonly sign?: boolean;
+    readonly pairing?: string;
   } = {},
 ): Promise<ClaimedTurn> {
   const base = claim(thread, options.agent ?? "fake-a", text);
@@ -732,7 +737,17 @@ async function signedClaim(
     ...base,
     prompt: {
       ...base.prompt,
-      body: { ...base.prompt.body, ...(signed ? { signed } : {}) },
+      body: {
+        ...base.prompt.body,
+        ...(signed
+          ? {
+              signed: {
+                ...signed,
+                ...(options.pairing ? { pairing: options.pairing } : {}),
+              },
+            }
+          : {}),
+      },
     },
     device: "device" in options ? options.device : device.keys,
   };
@@ -848,6 +863,7 @@ describe("runTurn trusting the device that sent the prompt", () => {
         appName: "Hello",
         account: grant.account,
         device: { name: "Chrome on macOS", platform: "web" },
+        code: await deviceCode(device.keys.signingKey),
       }),
     );
     await vi.waitFor(() => expect(eventsOf(run)).toEqual([{ event: "device_pending" }]));
@@ -887,6 +903,67 @@ describe("runTurn trusting the device that sent the prompt", () => {
       harness(undefined, { trust, policy, prompter: { approveDevice } }).deps,
     );
     expect(approveDevice).toHaveBeenCalledTimes(2);
+  });
+
+  it("trusts the browser that approved connect, unasked, once its first prompt proves the pairing secret", async () => {
+    const device = await TestDevice.create();
+    const trust = memoryTrust();
+    const secret = "c2VjcmV0LXNlY3JldC1zZWNyZXQtc2VjcmV0LXNlY3I";
+    let held: string | undefined = secret;
+    const forget = vi.fn(async () => {
+      held = undefined;
+    });
+    const approveDevice = vi.fn(async () => false);
+    const run = harness(undefined, {
+      trust,
+      policy,
+      prompter: { approveDevice },
+      pairing: { secret: async () => held, forget },
+    });
+    const turn = await signedClaim(device, asId("thread", "t5-paired"), "paired-prompt", {
+      pairing: await pairingProof(secret, device.id, device.keys.signingKey),
+    });
+    expect(await runTurn(turn, run.deps)).toMatchObject({ state: "done" });
+    expect(approveDevice).not.toHaveBeenCalled();
+    expect(eventsOf(run)).toEqual([]);
+    expect(forget).toHaveBeenCalledOnce();
+    expect(await trust.get(APP, device.id)).toMatchObject({
+      deviceId: device.id,
+      via: "pairing",
+      signingKey: device.keys.signingKey,
+    });
+  });
+
+  it("asks as for any new device when the pairing proof is for another device or secret", async () => {
+    const device = await TestDevice.create();
+    const other = await TestDevice.create();
+    const secret = "c2VjcmV0LXNlY3JldC1zZWNyZXQtc2VjcmV0LXNlY3I";
+    const forget = vi.fn(async () => undefined);
+    for (const pairing of [
+      await pairingProof(secret, other.id, other.keys.signingKey),
+      await pairingProof(
+        "b3RoZXItb3RoZXItb3RoZXItb3RoZXItb3RoZXItb3R",
+        device.id,
+        device.keys.signingKey,
+      ),
+    ]) {
+      const approveDevice = vi.fn(async () => false);
+      const run = harness(undefined, {
+        trust: memoryTrust(),
+        policy,
+        prompter: { approveDevice },
+        pairing: { secret: async () => secret, forget },
+      });
+      const turn = await signedClaim(device, asId("thread", "t5-forged"), "forged", {
+        pairing,
+      });
+      expect(await runTurn(turn, run.deps)).toEqual({
+        state: "failed",
+        reason: "device_rejected",
+      });
+      expect(approveDevice).toHaveBeenCalledOnce();
+    }
+    expect(forget).not.toHaveBeenCalled();
   });
 
   it("does not ask again for a pinned device, and runs its prompt", async () => {

@@ -2,13 +2,18 @@ import { mkdir } from "node:fs/promises";
 
 import {
   answerStatement,
+  checkPairingProof,
   type PinnedDevice,
   signedPrompt,
   statementBytes,
   verifyStatement,
   type VerifyOutcome,
 } from "@parlor/auth";
-import { canonicalBytes, encodeBase64url } from "@parlor/capabilities/encoding";
+import {
+  canonicalBytes,
+  deviceCode,
+  encodeBase64url,
+} from "@parlor/capabilities/encoding";
 import type {
   ChatEvent,
   ChatItemBody,
@@ -54,6 +59,11 @@ export interface TurnDeps {
   readonly policy: RemotePolicy;
   readonly prompter: LocalPrompter;
   readonly now: () => number;
+  /** The secret the browser that approved this grant's `connect` proves, until it is used. */
+  readonly pairing?: {
+    secret(): Promise<string | undefined>;
+    forget(): Promise<void>;
+  };
 }
 
 export const PROMPT_MAX_AGE_MS = 10 * 60_000;
@@ -367,6 +377,7 @@ export async function runTurn(
         appName: grant.appName,
         account: grant.account,
         device: { name: device.name, platform: device.platform },
+        code: await deviceCode(device.signingKey),
         signal: AbortSignal.any([signal, timeout]),
       });
       logEvent("device_prompt", {
@@ -457,6 +468,25 @@ export async function runTurn(
       );
     }
     if (known) return { device: known };
+    const proof = claimed.prompt.body.signed?.pairing;
+    const secret = proof ? await deps.pairing?.secret() : undefined;
+    if (
+      proof &&
+      secret &&
+      (await checkPairingProof(secret, proof, keys.id, keys.signingKey))
+    ) {
+      const device: TrustedDevice = {
+        ...pinned,
+        name: keys.name,
+        platform: keys.platform,
+        approvedAt: deps.now(),
+        via: "pairing",
+      };
+      await deps.trust.pin(origin, device);
+      await deps.pairing?.forget();
+      logEvent("device_trusted", { deviceId: keys.id, via: "pairing" });
+      return { device };
+    }
     await event("device_pending");
     const watching = new AbortController();
     const decision = await approve(

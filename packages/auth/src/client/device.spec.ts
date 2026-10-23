@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { AgentUiClient } from "@parlor/agent-ui/client";
 import { PresenceSetupCancelled } from "@parlor/capabilities";
+import { encodeBase64url } from "@parlor/capabilities/encoding";
 import type { SessionSnapshot } from "@parlor/client";
 import { asId, type Tag } from "@parlor/core";
 import { createDatabase, type DatabaseHandle } from "@parlor/data";
@@ -20,6 +21,7 @@ import {
 // Relative: `createChatRuntime` is internal to `@parlor/client`, and a dependency back would cycle.
 import { createChatRuntime } from "../../../client/src/react/chat/runtime.js";
 import {
+  checkPairingProof,
   promptStatement,
   signedPrompt,
   statementBytes,
@@ -277,6 +279,43 @@ describe("the auth client's device", () => {
       );
     expect(await verify(plain, true)).toBe("presence_required");
     expect(await verify(present, true)).toBe("valid");
+  });
+
+  it("keeps the pairing secret the host's redirect puts on the URL, takes it off, and proves it on prompts", async () => {
+    const secret = encodeBase64url(new Uint8Array(32).map((_, at) => at + 1));
+    const stored = new Map<string, string>();
+    page.localStorage = {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => stored.set(key, value),
+    };
+    const replaceState = vi.fn();
+    const scope = globalThis as { history?: unknown };
+    scope.history = { state: null, replaceState };
+    page.location = new URL(`${PAGE}/todos?x=1#parlor-host-pairing=${secret}`);
+    try {
+      const { auth } = await signedIn(new TestDeviceKey());
+      expect(stored.get("parlor:host-pairing")).toBe(secret);
+      expect(replaceState).toHaveBeenCalledWith(null, "", "/todos?x=1");
+      const device = (await auth.device())!;
+      const signed = await device.signPrompt(prompt);
+      expect(
+        await checkPairingProof(
+          secret,
+          signed.pairing!,
+          device.id,
+          device.keys.signingKey,
+        ),
+      ).toBe(true);
+    } finally {
+      page.location = new URL(PAGE);
+      delete scope.history;
+    }
+  });
+
+  it("proves no pairing on a prompt from a browser the host never redirected", async () => {
+    const { auth } = await signedIn(new TestDeviceKey());
+    const signed = await (await auth.device())!.signPrompt(prompt);
+    expect(signed).not.toHaveProperty("pairing");
   });
 
   it("logs the digest of what it signed when the page asks for it", async () => {

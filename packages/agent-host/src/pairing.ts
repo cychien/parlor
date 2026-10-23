@@ -2,7 +2,11 @@ import { createHash, randomBytes, randomInt } from "node:crypto";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import type { AccountSummary, HostGrantResponse } from "@parlor/auth";
+import {
+  type AccountSummary,
+  HOST_PAIRING_FRAGMENT,
+  type HostGrantResponse,
+} from "@parlor/auth";
 import type { HostPairing, PairingDevice } from "@parlor/capabilities";
 
 import { hostAssertion } from "./assertion.js";
@@ -106,6 +110,7 @@ async function loopback(state: string): Promise<{
   readonly redirectUri: string;
   readonly callback: Promise<Callback>;
   readonly answer: (heading: string, detail: string) => void;
+  readonly redirect: (url: string) => void;
   readonly close: () => void;
 }> {
   let deliver: (callback: Callback) => void = () => undefined;
@@ -139,6 +144,10 @@ async function loopback(state: string): Promise<{
     redirectUri: `http://127.0.0.1:${port}/callback`,
     callback,
     answer,
+    redirect: (url) => {
+      if (!waiting || waiting.headersSent) return;
+      waiting.writeHead(303, { location: url, "cache-control": "no-store" }).end();
+    },
     close: () => {
       answer("Parlor Host stopped", "Go back to your terminal.");
       server.close();
@@ -232,11 +241,15 @@ export async function pair(input: PairInput): Promise<PairOutcome> {
           throw error;
         }
         await key.keep(granted.grant.id);
-        listener.answer(
-          `Connected to ${appName}`,
-          `${input.hostName} now runs agents for ${granted.account.email ?? granted.account.name}. You can close this tab.`,
+        const pairingSecret = base64url(randomBytes(32));
+        listener.redirect(
+          `${origin}/#${new URLSearchParams({ [HOST_PAIRING_FRAGMENT]: pairingSecret })}`,
         );
-        return { paired: true, grant: grantOf(granted), approvedBy: granted.approvedBy };
+        return {
+          paired: true,
+          grant: { ...grantOf(granted), pairingSecret },
+          approvedBy: granted.approvedBy,
+        };
       } finally {
         listener.close();
       }

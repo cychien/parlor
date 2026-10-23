@@ -4,6 +4,7 @@ import type {
   LocalAgentHost,
   PairingDevice,
 } from "@parlor/capabilities";
+import { deviceCode } from "@parlor/capabilities/encoding";
 import type {
   AnswerToSign,
   ChatSnapshot,
@@ -1173,6 +1174,27 @@ describe("createChatRuntime device signatures", () => {
       itemId: string;
       answer: { signed?: ItemSignature };
     }[];
+
+  it("gives this device's code in the approval wait once this tab has signed with it", async () => {
+    const d = device();
+    const h = setup({
+      auth: d.source,
+      open: async () =>
+        snapshot({
+          items: [
+            logged(1, "item_p", "prompt", "go"),
+            itemOf(2, "turn_1.1", "event", { event: "device_pending" }),
+          ],
+          turns: [turn("turn_1", "running")],
+        }),
+    });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().wait?.reason).toBe("approval"));
+    expect(h.runtime.get().wait?.code).toBeUndefined();
+    await h.runtime.send("again");
+    const code = await deviceCode(keysOf("dev_1").signingKey);
+    await vi.waitFor(() => expect(h.runtime.get().wait?.code).toBe(code));
+  });
 
   it("signs the prompt it sends with the device, over the facts the host rebuilds it from", async () => {
     const d = device();

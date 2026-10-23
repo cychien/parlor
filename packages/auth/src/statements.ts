@@ -129,6 +129,66 @@ export function statementBytes(statement: Statement): Uint8Array {
   return canonicalBytes(statement);
 }
 
+/** The fragment Parlor Host's loopback redirect carries back to the browser that approved `connect`. */
+export const HOST_PAIRING_FRAGMENT = "parlor-host-pairing";
+
+const pairingKey = (secret: string) =>
+  crypto.subtle.importKey(
+    "raw",
+    new Uint8Array(decodeBase64url(secret)),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign", "verify"],
+  );
+
+const pairingBytes = (deviceId: string, signingKey: JsonWebKey) =>
+  canonicalBytes({
+    v: 1,
+    kind: "pairing",
+    deviceId,
+    signingKey: {
+      crv: signingKey.crv,
+      kty: signingKey.kty,
+      x: signingKey.x,
+      y: signingKey.y,
+    },
+  });
+
+/**
+ * The browser that approved `connect` gets the host's pairing secret through the loopback
+ * redirect, never through the app; this binds it to one device's keys.
+ */
+export async function pairingProof(
+  secret: string,
+  deviceId: string,
+  signingKey: JsonWebKey,
+): Promise<string> {
+  const mac = await crypto.subtle.sign(
+    "HMAC",
+    await pairingKey(secret),
+    new Uint8Array(pairingBytes(deviceId, signingKey)),
+  );
+  return encodeBase64url(new Uint8Array(mac));
+}
+
+export async function checkPairingProof(
+  secret: string,
+  proof: string,
+  deviceId: string,
+  signingKey: JsonWebKey,
+): Promise<boolean> {
+  try {
+    return await crypto.subtle.verify(
+      "HMAC",
+      await pairingKey(secret),
+      new Uint8Array(decodeBase64url(proof)),
+      new Uint8Array(pairingBytes(deviceId, signingKey)),
+    );
+  } catch {
+    return false;
+  }
+}
+
 interface ClientData {
   readonly type?: unknown;
   readonly challenge?: unknown;
