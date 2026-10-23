@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { resolve } from "node:path";
 
 import { agentManifest, DEFAULT_ROUTE_TREE } from "@parlor/agent-ui/vite";
 import { GENERATED_DIR, type ParlorConfig } from "@parlor/config";
@@ -9,6 +9,7 @@ import { defaultClientConditions, type PluginOption } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
 import { appCsp, metaCsp, serializeCsp } from "./csp.js";
+import { routeGeneratorOptions, routesDirectory, routeTreeFile } from "./route-tree.js";
 
 export const FRAMEWORK_ROUTE_PREFIX = "/_parlor";
 /** OAuth discovery lives at the origin root (RFC 8414, RFC 9728), outside the framework prefix. */
@@ -73,26 +74,19 @@ export function webManifest(config: ParlorConfig) {
   };
 }
 
-export function routeTreeFile(config: ParlorConfig): string {
-  return config.web.routeTree ?? DEFAULT_ROUTE_TREE;
-}
-
-export function routesDirectory(config: ParlorConfig): string {
-  return join(dirname(routeTreeFile(config)), "routes");
-}
-
 function fileRoutes(config: ParlorConfig, root: string): PluginOption[] {
   if (!existsSync(resolve(root, routesDirectory(config)))) return [];
-  return [
-    tanstackRouter({
-      target: "react",
-      routesDirectory: routesDirectory(config),
-      generatedRouteTree: routeTreeFile(config),
-      tmpDir: resolve(root, GENERATED_DIR, "tanstack"),
-      quoteStyle: "double",
-      semicolons: true,
-    }),
-  ];
+  return [tanstackRouter(routeGeneratorOptions(config, root))];
+}
+
+function titlePlugin(config: ParlorConfig): PluginOption {
+  return {
+    name: "parlor:title",
+    transformIndexHtml(html) {
+      if (/<title>/i.test(html)) return;
+      return [{ tag: "title", children: config.app.name, injectTo: "head" }];
+    },
+  };
 }
 
 export function parlorWeb(
@@ -104,6 +98,7 @@ export function parlorWeb(
     ...fileRoutes(config, options.root ?? process.cwd()),
     react(),
     cspPlugin(config, options),
+    titlePlugin(config),
     agentManifest({
       app: {
         id: config.app.id,

@@ -18,6 +18,9 @@ catalogs:
     '@tanstack/router-core':
       specifier: ^1.171.38
       version: 1.171.38
+    '@tanstack/router-generator':
+      specifier: ^1.167.45
+      version: 1.167.45
     '@tanstack/router-plugin':
       specifier: ^1.168.47
       version: 1.168.47
@@ -535,6 +538,9 @@ importers:
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
+      vite:
+        specifier: 'catalog:'
+        version: 8.3.3(@types/node@24.19.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)
       vitest:
         specifier: 'catalog:'
         version: 5.0.3(@opentelemetry/api@1.9.1)(@types/node@24.19.1)(happy-dom@20.14.5)(vite@8.3.3(@types/node@24.19.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15))
@@ -753,6 +759,9 @@ importers:
         specifier: ^7.4.1
         version: 7.4.1
     devDependencies:
+      '@tanstack/router-generator':
+        specifier: 'catalog:'
+        version: 1.167.45
       '@types/node':
         specifier: 'catalog:'
         version: 24.19.1
@@ -6188,7 +6197,7 @@ snapshots:
       jose: 6.2.12
       kysely: 0.29.7
       nanostores: 1.5.5
-      zod: 4.6.5
+      zod: 4.6.7
     optionalDependencies:
       '@opentelemetry/api': 1.9.1
 
@@ -6686,7 +6695,7 @@ snapshots:
 
   '@modelcontextprotocol/core@2.3.1':
     dependencies:
-      zod: 4.6.5
+      zod: 4.6.7
 
   '@modelcontextprotocol/sdk@1.32.1(zod@4.6.5)':
     dependencies:
@@ -7084,7 +7093,7 @@ snapshots:
       jiti: 2.7.0
       magic-string: 0.30.21
       prettier: 3.9.10
-      zod: 4.6.5
+      zod: 4.6.7
     transitivePeerDependencies:
       - supports-color
 
