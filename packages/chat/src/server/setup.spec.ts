@@ -1,9 +1,14 @@
 import { createRegistry } from "@parlor/core/registry";
 import type { PluginHost } from "@parlor/server";
 import { createServer } from "@parlor/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { chat, DEFAULT_LEASE_MS, MAX_LEASE_MS } from "./index.js";
+import {
+  chat,
+  DEFAULT_LEASE_MS,
+  MAX_LEASE_MS,
+  UNAVAILABLE_WITHOUT_AUTH,
+} from "./index.js";
 import { testAuth } from "./spec-kit.js";
 
 const database = {
@@ -53,12 +58,16 @@ describe("chat() setup", () => {
     );
   });
 
-  it("refuses to start without an auth provider that mints turn tokens", () => {
-    const message =
-      "chat() needs an auth provider that can mint turn tokens; add `auth` to createServer (parlor dev installs one).";
-    expect(() => chat().setup(hostWith({ auth: undefined }))).toThrow(message);
+  it("serves nothing and warns once without an auth provider that mints turn tokens", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(chat().setup(hostWith({ auth: undefined }))).toEqual({});
     const { delegate: _delegate, ...withoutDelegate } = testAuth();
-    expect(() => chat().setup(hostWith({ auth: withoutDelegate }))).toThrow(message);
+    expect(chat().setup(hostWith({ auth: withoutDelegate }))).toEqual({});
+    expect(warn.mock.calls).toEqual([
+      [UNAVAILABLE_WITHOUT_AUTH],
+      [UNAVAILABLE_WITHOUT_AUTH],
+    ]);
+    warn.mockRestore();
   });
 
   it("refuses to start without a database", () => {
