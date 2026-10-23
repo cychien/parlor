@@ -19,6 +19,14 @@ pnpm parlor dev --target ios      # also android
 
 `--device <name>` picks a simulator or device for iOS and Android. A desktop target can only be built on its own operating system.
 
+To try several targets at once, name them together:
+
+```sh
+pnpm parlor dev --target web,mac
+```
+
+They share one server and one database, and the native ones act as the web app's origin, so connecting your computer once serves all of them, as in production. Each project runs one `parlor dev` at a time: a second one stops and names the one already running, because both would open the same database.
+
 Generated native projects live in `.parlor/`. Never edit them; they are rewritten on every run.
 
 ## What changes per platform

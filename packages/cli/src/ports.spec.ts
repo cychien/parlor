@@ -61,12 +61,24 @@ describe("firstFreePort", () => {
 });
 
 describe("resolveDevPorts", () => {
+  it("gives each target its own web port, the first at the wanted one, none the server's", async () => {
+    const port = await freeRun(5);
+    await hold(port + 2, "127.0.0.1");
+    const lines: string[] = [];
+    expect(
+      await resolveDevPorts({ server: port + 1, web: port, targets: 3 }, (line) =>
+        lines.push(line),
+      ),
+    ).toEqual({ server: port + 1, web: [port, port + 3, port + 4] });
+    expect(lines).toEqual([]);
+  });
+
   it("keeps free ports and says nothing", async () => {
     const port = await freeRun(2);
     const lines: string[] = [];
     expect(
       await resolveDevPorts({ server: port, web: port + 1 }, (line) => lines.push(line)),
-    ).toEqual({ server: port, web: port + 1 });
+    ).toEqual({ server: port, web: [port + 1] });
     expect(lines).toEqual([]);
   });
 
@@ -77,7 +89,7 @@ describe("resolveDevPorts", () => {
     const lines: string[] = [];
     expect(
       await resolveDevPorts({ server: port, web: port + 2 }, (line) => lines.push(line)),
-    ).toEqual({ server: port + 1, web: port + 3 });
+    ).toEqual({ server: port + 1, web: [port + 3] });
     expect(lines).toEqual([
       `Port ${port} is in use, so the server uses ${port + 1}.`,
       `Port ${port + 2} is in use, so the page uses ${port + 3}.`,

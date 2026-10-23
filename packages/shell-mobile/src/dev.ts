@@ -12,6 +12,8 @@ export const CAPACITOR_CONDITION = "parlor-capacitor";
 export interface MobileDevOptions {
   readonly device?: string | undefined;
   readonly signal?: AbortSignal | undefined;
+  /** The web target's origin when `parlor dev` runs both, so the app pairs and signs as it. */
+  readonly appOrigin?: string | undefined;
 }
 
 function runArgs(platform: MobilePlatform, device: string | undefined): string[] {
@@ -36,6 +38,7 @@ export async function startMobileDev(
   const web = await startWebDev(loaded, {
     conditions: [CAPACITOR_CONDITION],
     serverUrl: loaded.config.server.url,
+    appOrigin: options.appOrigin,
   });
   try {
     await runCapacitor(runArgs(platform, options.device), {

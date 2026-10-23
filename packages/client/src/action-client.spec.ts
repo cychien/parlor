@@ -115,6 +115,11 @@ describe("appOrigin", () => {
     vi.stubGlobal("location", { origin });
   }
 
+  it("is the origin parlor dev names for every target it runs, over this page's own", () => {
+    pageAt("http://localhost:5176");
+    expect(appOrigin(SERVER, "http://localhost:5174/")).toBe("http://localhost:5174");
+  });
+
   it("is the page origin when the app is served over http(s)", () => {
     pageAt("https://hello.example.com");
     expect(appOrigin(SERVER)).toBe("https://hello.example.com");

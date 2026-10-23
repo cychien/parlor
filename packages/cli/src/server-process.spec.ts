@@ -30,6 +30,19 @@ describe("serverEnv", () => {
       PARLOR_APP_NAME: "Test",
     });
   });
+
+  it("names the first frontend the app's origin and lets the server trust the others", () => {
+    const config = parseConfig({ app: { id: "dev.parlor.test", name: "Test" } });
+    expect(
+      serverEnv(config, {}, ["http://localhost:5174", "http://localhost:5176"]),
+    ).toMatchObject({
+      PARLOR_WEB_ORIGIN: "http://localhost:5174",
+      PARLOR_DEV_ORIGINS: "http://localhost:5176",
+    });
+    expect(serverEnv(config, {}, ["http://localhost:5174"])).not.toHaveProperty(
+      "PARLOR_DEV_ORIGINS",
+    );
+  });
 });
 
 function freePort(): Promise<number> {

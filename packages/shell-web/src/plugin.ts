@@ -22,6 +22,8 @@ export { DEFAULT_ROUTE_TREE };
 export interface WebOptions {
   readonly conditions?: readonly string[] | undefined;
   readonly serverUrl?: string | undefined;
+  /** The origin every target of one `parlor dev` signs for and pairs with, when it is not this page's. */
+  readonly appOrigin?: string | undefined;
   readonly root?: string | undefined;
   /** Writes the policy into the built `index.html` for shells that serve it without HTTP headers. */
   readonly cspMeta?: boolean | undefined;
@@ -113,6 +115,7 @@ export function parlorWeb(
       config: () => ({
         define: {
           "import.meta.env.PARLOR_SERVER_URL": JSON.stringify(options.serverUrl ?? ""),
+          "import.meta.env.PARLOR_APP_ORIGIN": JSON.stringify(options.appOrigin ?? ""),
         },
         resolve: { conditions: [...defaultClientConditions, ...conditions] },
         server: {

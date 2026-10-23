@@ -89,6 +89,20 @@ describe("server url", () => {
       '"https://api.test"',
     );
     expect(without.define?.["import.meta.env.PARLOR_SERVER_URL"]).toBe('""');
+    expect(without.define?.["import.meta.env.PARLOR_APP_ORIGIN"]).toBe('""');
+  });
+
+  it("injects the app origin parlor dev names for a target next to the web one", async () => {
+    const injected = await resolveConfig(
+      {
+        configFile: false,
+        plugins: parlorWeb(config, { appOrigin: "http://localhost:5174" }),
+      },
+      "serve",
+    );
+    expect(injected.define?.["import.meta.env.PARLOR_APP_ORIGIN"]).toBe(
+      '"http://localhost:5174"',
+    );
   });
 });
 
