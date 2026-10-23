@@ -10,6 +10,7 @@ describe("create-parlor arguments", () => {
       install: true,
       git: true,
       packageManager: undefined,
+      addons: [],
       dryRun: false,
       help: false,
       version: false,
@@ -24,6 +25,10 @@ describe("create-parlor arguments", () => {
       "--no-git",
       "--package-manager",
       "bun",
+      "--add",
+      "auth",
+      "--add",
+      "auth",
       "--dry-run",
       "--",
     ]);
@@ -33,12 +38,14 @@ describe("create-parlor arguments", () => {
       install: false,
       git: false,
       packageManager: "bun",
+      addons: ["auth"],
       dryRun: true,
     });
   });
 
   it("refuses an unknown package manager, option or a second directory", () => {
     expect(() => parseCreateArgs(["--package-manager", "cargo"])).toThrow(/cargo/);
+    expect(() => parseCreateArgs(["--add", "payments"])).toThrow(/payments/);
     expect(() => parseCreateArgs(["--template", "x"])).toThrow();
     expect(() => parseCreateArgs(["a", "b"])).toThrow(/one directory/);
   });

@@ -24,7 +24,13 @@ export function nextSteps(project: CreatedProject, cwd: string): readonly string
       ? []
       : [step(formatCommand(pm.install))]),
     step(pm.run("dev"), "web app on http://localhost:5173, API on :3000"),
-    step(pm.exec("parlor", ["add", "auth"]), "sign-in with Better Auth"),
+    ...project.addons.deferred.map((addon) =>
+      step(pm.exec("parlor", ["add", addon]), `finish adding ${addon}`),
+    ),
+    ...(project.addons.applied.includes("auth") ||
+    project.addons.deferred.includes("auth")
+      ? []
+      : [step(pm.exec("parlor", ["add", "auth"]), "sign-in with Better Auth")]),
     step(
       pm.exec("parlor", ["dev", "--target", "mac"]),
       "the same app as a desktop window",

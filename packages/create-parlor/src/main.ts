@@ -62,6 +62,7 @@ async function main(argv: readonly string[]): Promise<number> {
     mode: request.dryRun ? "dry-run" : "apply",
     install: request.install,
     git: request.git,
+    addons: request.addons,
     log: (line) => console.log(line),
   });
   const lines = request.dryRun

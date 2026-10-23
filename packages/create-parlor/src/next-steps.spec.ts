@@ -15,6 +15,7 @@ function created(overrides: Partial<CreatedProject> = {}): CreatedProject {
     packageManager: { name: "pnpm", version: "11.21.0" },
     files: ["package.json", "server.ts"],
     install: { kind: "installed" },
+    addons: { applied: [], deferred: [] },
     git: { kind: "committed" },
     ...overrides,
   };
@@ -65,6 +66,24 @@ describe("next steps (D5)", () => {
       "/work",
     );
     expect(failed.some((line) => line.includes("pnpm install"))).toBe(true);
+  });
+
+  it("lists a deferred add-on as its own command instead of the auth hint", () => {
+    const lines = nextSteps(
+      created({
+        install: { kind: "skipped" },
+        addons: { applied: [], deferred: ["auth"] },
+      }),
+      "/work",
+    );
+    expect(lines.filter((line) => line.includes("parlor add auth"))).toEqual([
+      "  pnpm parlor add auth           finish adding auth",
+    ]);
+    const applied = nextSteps(
+      created({ addons: { applied: ["auth"], deferred: [] } }),
+      "/work",
+    );
+    expect(applied.some((line) => line.includes("parlor add auth"))).toBe(false);
   });
 
   it("says why there is no initial commit when git failed", () => {

@@ -1,6 +1,13 @@
 import { parseArgs } from "node:util";
 
-import { CreateError, PACKAGE_MANAGERS, type PackageManagerName } from "@parlor/scaffold";
+import {
+  ADDON_NAMES,
+  type AddonName,
+  CreateError,
+  isAddonName,
+  PACKAGE_MANAGERS,
+  type PackageManagerName,
+} from "@parlor/scaffold";
 
 export const DEFAULT_DIRECTORY = "my-parlor-app";
 
@@ -10,6 +17,7 @@ export interface CreateRequest {
   readonly install: boolean;
   readonly git: boolean;
   readonly packageManager: PackageManagerName | undefined;
+  readonly addons: readonly AddonName[];
   readonly dryRun: boolean;
   readonly help: boolean;
   readonly version: boolean;
@@ -19,6 +27,7 @@ export const USAGE = `Usage: create-parlor [directory] [options]
 
   -y, --yes                    Use every default and never prompt
       --package-manager <pm>   npm, pnpm, yarn or bun (default: the one running this)
+      --add <addon>            Run \`parlor add <addon>\` after install; repeatable (${ADDON_NAMES.join(", ")})
       --no-install             Skip installing dependencies
       --no-git                 Skip the initial git commit
       --dry-run                List the files that would be written and stop
@@ -37,6 +46,7 @@ export function parseCreateArgs(argv: readonly string[]): CreateRequest {
       install: { type: "boolean", default: true },
       git: { type: "boolean", default: true },
       "package-manager": { type: "string" },
+      add: { type: "string", multiple: true, default: [] },
       "dry-run": { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
       version: { type: "boolean", short: "v", default: false },
@@ -54,12 +64,19 @@ export function parseCreateArgs(argv: readonly string[]): CreateRequest {
       `Unknown package manager "${manager}". Expected one of: ${PACKAGE_MANAGERS.join(", ")}`,
     );
   }
+  const unknownAddons = values.add.filter((name) => !isAddonName(name));
+  if (unknownAddons.length > 0) {
+    throw new CreateError(
+      `Unknown add-on ${unknownAddons.map((name) => `"${name}"`).join(", ")}. Expected one of: ${ADDON_NAMES.join(", ")}`,
+    );
+  }
   return {
     directory: positionals[0],
     yes: values.yes,
     install: values.install,
     git: values.git,
     packageManager: manager as PackageManagerName | undefined,
+    addons: [...new Set(values.add.filter(isAddonName))],
     dryRun: values["dry-run"],
     help: values.help,
     version: values.version,
