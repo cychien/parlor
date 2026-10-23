@@ -20,10 +20,10 @@ import { defineConfig } from "@parlor/config";
 | `app.name` | required | the window and tab title |
 | `app.description`, `app.version`, `app.scheme` | none, `0.1.0`, none | metadata; `scheme` is the deep-link URL scheme |
 | `server.entry` | `server.ts` | the module that default-exports `createServer(...)` |
-| `server.port` | `3000` | the server's port in development |
+| `server.port` | `3000` | the server's port in development, or the next free one |
 | `server.url` | none | the public server origin native shells call |
 | `server.sync.transport` | by preset | `sse` or `poll` |
-| `web.port` | `5173` | the web app's port in development |
+| `web.port` | `5173` | the web app's port in development, or the next free one |
 | `web.pwa`, `web.themeColor`, `web.backgroundColor` | `true`, `#ffffff`, `#ffffff` | the installable web app |
 | `web.routeTree`, `web.csp` | `src/routeTree.gen.ts`, none | the generated route tree; extra CSP sources |
 | `desktop.width`, `desktop.height`, `desktop.agentHost` | `1024`, `768`, none | the desktop window; bundle Parlor Host |

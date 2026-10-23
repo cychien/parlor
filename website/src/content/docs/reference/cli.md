@@ -11,7 +11,7 @@ Run the commands through the package manager: `pnpm parlor <command>`, `npx parl
 
 | Command | What it does |
 | --- | --- |
-| `parlor dev [--target <t>] [--port <p>] [--device <d>] [--no-agent-host]` | runs the server, the web app and, without sign-in, the agent host; `--target` is `web`, `mac`, `windows`, `linux`, `ios` or `android` |
+| `parlor dev [--target <t>] [--port <p>] [--device <d>] [--no-agent-host]` | runs the server, the web app and, without sign-in, the agent host; `--target` is `web`, `mac`, `windows`, `linux`, `ios` or `android`; a busy server or web port moves to the next free one |
 | `parlor build [--target <t>] [--preset <p>]` | builds for a target; the web target builds the server for a deploy preset |
 | `parlor deploy [--preset <p>]` | builds and deploys the server to its platform |
 | `parlor db generate [--name <n>]` | writes a SQL migration from `schema/` |

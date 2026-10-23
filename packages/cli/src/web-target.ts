@@ -46,7 +46,7 @@ export const webTarget: TargetHandler = {
     } catch (error) {
       if (isPortInUse(error)) {
         throw new CliError(
-          `Port ${loaded.config.web.port} is already in use. Pass --port or change web.port in parlor.config.ts.`,
+          `Port ${loaded.config.web.port} was taken while parlor dev was starting. Run it again.`,
           { cause: error },
         );
       }
