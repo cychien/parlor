@@ -28,7 +28,7 @@ function freePort(): Promise<number> {
 }
 
 describe("serve-entry", () => {
-  it("closes the app and exits promptly on SIGTERM", async () => {
+  it("prints one line naming the port and closes the app promptly on SIGTERM", async () => {
     const root = await mkdtemp(join(tmpdir(), "parlor-serve-entry-"));
     const closedMarker = join(root, "closed");
     const entry = join(root, "server.ts");
@@ -51,9 +51,15 @@ describe("serve-entry", () => {
         fileURLToPath(new URL("./serve-entry.ts", import.meta.url)),
         entry,
       ],
-      { cwd: root, env: { ...env, PORT: String(port) }, stdio: "ignore" },
+      {
+        cwd: root,
+        env: { ...env, PORT: String(port) },
+        stdio: ["ignore", "pipe", "ignore"],
+      },
     );
-    const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+    let stdout = "";
+    child.stdout?.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
+    const exited = new Promise<void>((resolve) => child.once("close", () => resolve()));
     try {
       let ready = false;
       for (let i = 0; i < 100 && !ready; i++) {
@@ -71,6 +77,7 @@ describe("serve-entry", () => {
 
       expect(Date.now() - startedAt).toBeLessThan(SHUTDOWN_BOUND_MS);
       await expect(access(closedMarker)).resolves.toBeUndefined();
+      expect(stdout).toBe(`parlor server listening on http://localhost:${port}\n`);
     } finally {
       child.kill("SIGKILL");
     }
