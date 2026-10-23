@@ -20,9 +20,9 @@ cd my-app
 pnpm dev
 ```
 
-Open `http://localhost:5173`. The page is a todo list. Add a todo to see it work.
+Open the `Local:` URL it prints, `http://localhost:5173` unless that port is taken. The page is a todo list. Add a todo to see it work.
 
-`pnpm dev` runs three things: the server with your actions on port 3000, the web app on port 5173, and a small host that lets the coding agents on this computer reach the app.
+`pnpm dev` runs three things: the server with your actions on port 3000, the web app on port 5173, and a small host that lets the coding agents on this computer reach the app. A port another program holds moves to the next free one, and `pnpm dev` says so.
 
 ## Let the agent use it
 
