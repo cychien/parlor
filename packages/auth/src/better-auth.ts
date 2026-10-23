@@ -92,6 +92,15 @@ export function bridgeOf(options: BetterAuthOptions): Bridge {
   return (plugin as BridgePlugin).bridge;
 }
 
+/** The other frontends one `parlor dev` serves next to the web target, each on its own port. */
+export function devOrigins(env: NodeJS.ProcessEnv = process.env): readonly string[] {
+  if (env.PARLOR_DEV !== "1") return [];
+  return (env.PARLOR_DEV_ORIGINS ?? "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter((origin) => /^https?:\/\//.test(origin));
+}
+
 function originOf(options: ParlorAuthOptions): string {
   const origin =
     options.origin ?? process.env.PARLOR_ORIGIN ?? process.env.PARLOR_WEB_ORIGIN;
@@ -121,10 +130,11 @@ export function parlorAuth(options: ParlorAuthOptions): BetterAuthOptions {
     baseURL,
     basePath: AUTH_BASE_PATH,
     trustedOrigins: Array.isArray(trusted)
-      ? [origin, ...SHELL_ORIGINS, ...trusted]
+      ? [origin, ...SHELL_ORIGINS, ...devOrigins(), ...trusted]
       : async (request) => [
           origin,
           ...SHELL_ORIGINS,
+          ...devOrigins(),
           ...(typeof trusted === "function" ? await trusted(request) : []),
         ],
     disabledPaths: [...DISABLED_PATHS, ...(rest.disabledPaths ?? [])],

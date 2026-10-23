@@ -6,7 +6,6 @@ import {
 } from "@parlor/shell-mobile";
 
 import { CliError } from "./errors.js";
-import { startServerProcess, untilListening } from "./server-process.js";
 import { onShutdown } from "./shutdown.js";
 import type { TargetHandler } from "./targets.js";
 
@@ -31,15 +30,15 @@ async function surfaceCapacitorErrors<T>(run: () => Promise<T>): Promise<T> {
 
 export function mobileTarget(platform: MobilePlatform): TargetHandler {
   return {
+    assertHost: () => assertIosHost(platform),
     async dev(loaded, options) {
-      assertIosHost(platform);
       await surfaceCapacitorErrors(async () => {
-        await untilListening(startServerProcess(loaded), loaded.config.server.port);
         const controller = new AbortController();
         onShutdown(() => controller.abort());
         await startMobileDev(loaded, platform, {
           device: options.device,
           signal: controller.signal,
+          appOrigin: options.appOrigin,
         });
       });
     },

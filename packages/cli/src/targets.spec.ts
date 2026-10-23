@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { parsePort } from "./commands/dev.js";
-import { parseTarget, resolveHandler, type TargetHandler } from "./targets.js";
+import {
+  parseTarget,
+  parseTargets,
+  resolveHandler,
+  type TargetHandler,
+} from "./targets.js";
 
 describe("parseTarget", () => {
   it("defaults to web", () => {
@@ -13,6 +18,18 @@ describe("parseTarget", () => {
     expect(() => parseTarget("osx")).toThrow(
       /Unknown target "osx".*web, ios, android, mac, windows, linux/,
     );
+  });
+});
+
+describe("parseTargets", () => {
+  it("defaults to web and takes several joined by commas, each once, in order", () => {
+    expect(parseTargets(undefined)).toEqual(["web"]);
+    expect(parseTargets("mac")).toEqual(["mac"]);
+    expect(parseTargets("web, mac,web")).toEqual(["web", "mac"]);
+  });
+
+  it("rejects an unknown target in the list", () => {
+    expect(() => parseTargets("web,osx")).toThrow(/Unknown target "osx"/);
   });
 });
 

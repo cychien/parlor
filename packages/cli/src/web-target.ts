@@ -8,7 +8,6 @@ import {
 import { buildWeb, startWebDev } from "@parlor/shell-web";
 
 import { CliError } from "./errors.js";
-import { startServerProcess, untilListening } from "./server-process.js";
 import { onShutdown } from "./shutdown.js";
 import type { BuildOptions, TargetHandler } from "./targets.js";
 
@@ -37,11 +36,9 @@ export async function buildWebAndServer(
 }
 
 export const webTarget: TargetHandler = {
-  async dev(loaded) {
-    const serverProcess = startServerProcess(loaded);
-    await untilListening(serverProcess, loaded.config.server.port);
+  async dev(loaded, options) {
     try {
-      const server = await startWebDev(loaded);
+      const server = await startWebDev(loaded, { appOrigin: options.appOrigin });
       onShutdown(() => server.close());
     } catch (error) {
       if (isPortInUse(error)) {

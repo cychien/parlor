@@ -7,6 +7,8 @@ export type Target = (typeof TARGETS)[number];
 
 export interface DevOptions {
   readonly device?: string | undefined;
+  /** The web target's origin when this target runs next to it, so both pair once. */
+  readonly appOrigin?: string | undefined;
 }
 
 export interface BuildOptions {
@@ -14,6 +16,9 @@ export interface BuildOptions {
 }
 
 export interface TargetHandler {
+  /** Throws when this machine cannot run the target, before `parlor dev` starts anything. */
+  assertHost?(): void;
+  /** Starts this target's frontend; `parlor dev` already runs the server it talks to. */
   dev(loaded: LoadedConfig, options: DevOptions): Promise<void>;
   build(loaded: LoadedConfig, options: BuildOptions): Promise<void>;
 }
@@ -30,6 +35,17 @@ export function parseTarget(value: unknown): Target {
     );
   }
   return target as Target;
+}
+
+/** `web,mac` runs both against one server; the first is the default `web`. */
+export function parseTargets(value: unknown): readonly Target[] {
+  const names = (value === undefined ? "web" : String(value))
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+  const targets = [...new Set(names.map(parseTarget))];
+  if (targets.length === 0) return ["web"];
+  return targets;
 }
 
 export function resolveHandler(

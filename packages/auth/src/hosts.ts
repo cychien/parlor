@@ -28,7 +28,7 @@ import { calculateJwkThumbprint, compactVerify, decodeProtectedHeader } from "jo
 import { z } from "zod";
 
 import { signedIn } from "./account.js";
-import { AUTH_PLUGIN, type ParlorAuthSettings } from "./better-auth.js";
+import { AUTH_PLUGIN, devOrigins, type ParlorAuthSettings } from "./better-auth.js";
 import { type Database, jwkOf, rowsOf } from "./database.js";
 import { escape, failure, page } from "./pages.js";
 import { RevocationSet } from "./revocation.js";
@@ -630,7 +630,10 @@ ${hidden}
             ? Response.json({ error: { code, message } }, { status })
             : failure(message, status);
         const origin = request.headers.get("origin");
-        if (origin !== settings.origin && !(origin && SHELL_ORIGINS.includes(origin))) {
+        if (
+          origin !== settings.origin &&
+          !(origin && [...SHELL_ORIGINS, ...devOrigins()].includes(origin))
+        ) {
           return refuse(
             403,
             "forbidden",

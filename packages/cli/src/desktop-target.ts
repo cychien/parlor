@@ -1,7 +1,6 @@
 import { buildDesktop, startDesktopDev, TauriCliError } from "@parlor/shell-desktop";
 
 import { CliError } from "./errors.js";
-import { startServerProcess, untilListening } from "./server-process.js";
 import { onShutdown } from "./shutdown.js";
 import type { Target, TargetHandler } from "./targets.js";
 
@@ -35,13 +34,15 @@ async function surfaceTauriErrors<T>(run: () => Promise<T>): Promise<T> {
 
 export function desktopTarget(target: Target): TargetHandler {
   return {
-    async dev(loaded) {
-      assertHostMatches(target);
+    assertHost: () => assertHostMatches(target),
+    async dev(loaded, options) {
       await surfaceTauriErrors(async () => {
-        await untilListening(startServerProcess(loaded), loaded.config.server.port);
         const controller = new AbortController();
         onShutdown(() => controller.abort());
-        await startDesktopDev(loaded, { signal: controller.signal });
+        await startDesktopDev(loaded, {
+          signal: controller.signal,
+          appOrigin: options.appOrigin,
+        });
       });
     },
     async build(loaded, _options) {

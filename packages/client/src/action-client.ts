@@ -106,12 +106,22 @@ export function resolveServerOrigin(): string {
   return injectedServerUrl() || globalThis.location?.origin || "";
 }
 
+function injectedAppOrigin(): string {
+  const env = (import.meta as { env?: { PARLOR_APP_ORIGIN?: string } }).env;
+  return env?.PARLOR_APP_ORIGIN ?? "";
+}
+
 /**
  * The one name of this app's backend on every surface: the page's own origin when it is
  * served over http(s) and is not a shell's webview origin, else the shell's `server.url`.
+ * `parlor dev` running several targets names the web target's origin for all of them.
  * Statements are signed for it and the host is paired with it.
  */
-export function appOrigin(serverUrl: string = resolveServerOrigin()): string {
+export function appOrigin(
+  serverUrl: string = resolveServerOrigin(),
+  injected: string = injectedAppOrigin(),
+): string {
+  if (injected) return new URL(injected).origin;
   const page = globalThis.location?.origin ?? "";
   if (/^https?:\/\//.test(page) && !SHELL_ORIGINS.includes(page)) return page;
   try {

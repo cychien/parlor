@@ -10,6 +10,8 @@ export const TAURI_CONDITION = "parlor-tauri";
 
 export interface DesktopDevOptions {
   readonly signal?: AbortSignal | undefined;
+  /** The web target's origin when `parlor dev` runs both, so the window pairs and signs as it. */
+  readonly appOrigin?: string | undefined;
 }
 
 export async function startDesktopDev(
@@ -23,6 +25,7 @@ export async function startDesktopDev(
   const web = await startWebDev(loaded, {
     conditions: [TAURI_CONDITION],
     serverUrl: loaded.config.server.url,
+    appOrigin: options.appOrigin,
   });
   const devUrl = `http://localhost:${loaded.config.web.port}`;
   try {
