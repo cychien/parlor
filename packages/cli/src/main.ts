@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { ConfigError } from "@parlor/config";
 import { defineCommand, runCommand, runMain } from "citty";
 

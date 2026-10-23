@@ -1,9 +1,11 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 
 import type { LoadedConfig } from "@parlor/config";
 
+import { CliError } from "./errors.js";
 import { stopServerProcess } from "./server-process.js";
 import { onShutdown } from "./shutdown.js";
 
@@ -16,13 +18,21 @@ export interface DevAgentHostOptions {
   readonly serverHasAuth: boolean;
 }
 
-function agentHostBin(): string {
-  return join(
-    dirname(require.resolve("@parlor/agent-host")),
-    "..",
-    "bin",
-    "parlor-host-dev.mjs",
-  );
+export const AGENT_HOST_BIN = "parlor-host";
+
+/**
+ * The `parlor-host` bin as the installed manifest declares it: `bin/parlor-host-dev.mjs` (tsx on
+ * `src/`) in the repo, `dist/main.js` once `publishConfig` is applied. Resolving the exported
+ * `package.json` works under CJS resolution, which the package's `import`-only entry does not.
+ */
+export function agentHostBin(): string {
+  const manifestPath = require.resolve("@parlor/agent-host/package.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+    readonly bin?: Readonly<Record<string, string>>;
+  };
+  const bin = manifest.bin?.[AGENT_HOST_BIN];
+  if (!bin) throw new CliError(`@parlor/agent-host has no ${AGENT_HOST_BIN} bin`);
+  return join(dirname(manifestPath), bin);
 }
 
 /**
