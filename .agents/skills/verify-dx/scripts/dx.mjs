@@ -35,9 +35,15 @@ const USAGE = `dx: drive Parlor the way a developer outside the repo does
   dx version                      print the last published version
   dx new <name> [--fixture <f>]   make an empty project folder with its own HOME,
                                   optionally filled from fixtures/<f>
-  dx run <name> -- <cmd...>       run a command in the project, isolated
-  dx up <name> [--pm pnpm|npm]    start the dev script, wait until the page and the
-                                  server answer, print JSON
+  dx run <name> [--dir <sub>] -- <cmd...>
+                                  run a command in the project (or app/<sub>), isolated
+  dx up <name> [--pm pnpm|npm] [--dir <sub>]
+                                  start the dev script (in app/<sub>), wait until the
+                                  page and the server answer, print JSON
+  dx fake-agent <name> <script.json>
+                                  make the repo's fake ACP agent one of the project's
+                                  agents (restart dev to pick it up); stderr goes to
+                                  <project>/fake-agent.err
   dx down <name>                  stop the dev script
   dx path <name>                  print the project and HOME folders
   dx rm <name>                    stop and delete the project
@@ -129,16 +135,7 @@ async function publish(args) {
   );
   sh(
     "pnpm",
-    [
-      "-r",
-      "publish",
-      "--registry",
-      REGISTRY,
-      "--no-git-checks",
-      "--ignore-scripts",
-      "--tag",
-      "dx",
-    ],
+    ["-r", "publish", "--registry", REGISTRY, "--no-git-checks", "--ignore-scripts"],
     {
       cwd: stage,
       env: { ...process.env, NPM_CONFIG_USERCONFIG: join(REGISTRY_DIR, "publish.npmrc") },
@@ -194,6 +191,11 @@ function create(name, args) {
   mkdirSync(app, { recursive: true });
   mkdirSync(home, { recursive: true });
   writeFileSync(join(app, ".npmrc"), `registry=${REGISTRY}\n`);
+  writeFileSync(join(home, ".npmrc"), `registry=${REGISTRY}\n`);
+  writeFileSync(
+    join(home, ".gitconfig"),
+    "[user]\n\tname = DX Developer\n\temail = dx@example.com\n",
+  );
   const fixture = flag(args, "--fixture");
   if (fixture) {
     const source = join(SKILL_DIR, "fixtures", fixture);
@@ -231,10 +233,12 @@ function isolatedEnv(home) {
 function run(name, args) {
   const { app, home } = project(name);
   if (!existsSync(app)) fail(`no project ${name}`);
-  const command = args[0] === "--" ? args.slice(1) : args;
+  const sub = args[0] === "--dir" ? args[1] : undefined;
+  const rest = sub === undefined ? args : args.slice(2);
+  const command = rest[0] === "--" ? rest.slice(1) : rest;
   if (command.length === 0) fail("dx run <name> -- <cmd...>");
   const result = spawnSync(command[0], command.slice(1), {
-    cwd: app,
+    cwd: join(app, sub ?? "."),
     env: isolatedEnv(home),
     stdio: "inherit",
   });
@@ -282,6 +286,7 @@ async function up(name, args) {
     );
   }
   const pm = flag(args, "--pm") ?? "pnpm";
+  const cwd = join(app, flag(args, "--dir") ?? ".");
   const webPort = await freePort(5173);
   const devArgs =
     pm === "npm"
@@ -290,7 +295,7 @@ async function up(name, args) {
   const log = join(project(name).root, "dev.log");
   const out = openSync(log, "w");
   const child = spawn(pm, devArgs, {
-    cwd: app,
+    cwd,
     env: isolatedEnv(home),
     detached: true,
     stdio: ["ignore", out, out],
@@ -355,6 +360,31 @@ async function down(name) {
   rmSync(state, { force: true });
 }
 
+function fakeAgent(name, scriptPath) {
+  const { root, home } = project(name);
+  if (!existsSync(root)) fail(`no project ${name}`);
+  if (!scriptPath || !existsSync(scriptPath)) fail("dx fake-agent <name> <script.json>");
+  const script = join(root, "fake-script.json");
+  cpSync(resolve(scriptPath), script);
+  const quote = (value) => `'${value.replaceAll("'", `'\\''`)}'`;
+  const wrapper = join(root, "fake-agent.sh");
+  writeFileSync(
+    wrapper,
+    `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(join(REPO, "packages", "agent-host", "bin", "fake-agent.mjs"))} ${quote(script)} 2>>${quote(join(root, "fake-agent.err"))}\n`,
+    { mode: 0o755 },
+  );
+  const agents = join(home, ".parlor", "host", "agents.json");
+  mkdirSync(dirname(agents), { recursive: true });
+  const profile = {
+    id: "fake",
+    name: "Fake agent",
+    launch: { kind: "native", command: wrapper, args: [] },
+    binary: process.execPath,
+  };
+  writeFileSync(agents, `${JSON.stringify([profile], null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ agents, script, wrapper }, null, 2)}\n`);
+}
+
 const [command, name, ...rest] = process.argv.slice(2);
 switch (command) {
   case "registry":
@@ -375,6 +405,9 @@ switch (command) {
     break;
   case "up":
     await up(name, rest);
+    break;
+  case "fake-agent":
+    fakeAgent(name, rest[0]);
     break;
   case "down":
     await down(name);

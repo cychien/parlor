@@ -15,7 +15,7 @@ $D --help
 ## Registry and publishing
 
 - The registry is Verdaccio on `http://127.0.0.1:4873/`, from `~/cychien/parlor-dx/registry` (`PARLOR_DX_REGISTRY_DIR`). `$D registry` starts it when it is down. `@parlor/*` is served only from it; every other package is proxied from npmjs and cached, so a second install is warm.
-- `$D publish` runs `pnpm build`, copies every non-private `packages/*` into a stage folder, sets every version to `0.0.0-dx.<UTC stamp>`, installs the stage from the repo lockfile and the local store, and runs `pnpm -r publish --tag dx` there, so `workspace:` and `catalog:` are rewritten and `publishConfig` is applied exactly as a real `pnpm publish` does. The checkout is never modified. `--no-build` skips the build when `dist` is current.
+- `$D publish` runs `pnpm build`, copies every non-private `packages/*` into a stage folder, sets every version to `0.0.0-dx.<UTC stamp>`, installs the stage from the repo lockfile and the local store, and runs `pnpm -r publish` there (moving `latest`, so `pnpm create parlor` picks it up), so `workspace:` and `catalog:` are rewritten and `publishConfig` is applied exactly as a real `pnpm publish` does. The checkout is never modified. `--no-build` skips the build when `dist` is current.
 - A fresh version per publish means no unpublish, and no client cache can serve a stale tarball for the same version. `$D version` prints the last one; `~/.cache/parlor-verify-dx/published.json` records it with the commit and whether the tree was dirty.
 - Publish after every framework change you want to prove. A project installed before keeps its old version until you reinstall it with the new one.
 
@@ -30,6 +30,7 @@ $D down demo
 $D rm demo
 ```
 
+- `new` gives the HOME a git identity (`DX Developer <dx@example.com>`), as a developer's machine has, and writes the registry into both `app/.npmrc` and `home/.npmrc`, because pnpm 11 ignores `npm_config_registry` in the environment and a project that `create` makes below `app/` reads only the user config.
 - A project lives in `~/.cache/parlor-verify-dx/projects/<name>/` (`PARLOR_DX_HOME`) as `app/` (the project) and `home/` (its HOME). `run` and `up` set `HOME`, the XDG dirs, the registry, a shared npm cache and pnpm store under the root, and drop every inherited `npm_*`, `pnpm_*`, `PARLOR_*`, `NODE_OPTIONS` and `VITEST*` variable, so nothing of the repo or of your own HOME (Claude Code config, Keychain-backed grants, a global pnpm) leaks in. `PATH` is kept.
 - `new` with no fixture leaves an empty folder for flows that create the project themselves (`pnpm create parlor`). A fixture's `package.json` uses `{{VERSION}}` for `@parlor/*`, replaced with the last published version.
 - `up` needs port 3000 free (the server's default `server.port`; a project cannot override it from the command line) and picks the first free web port from 5173 for `--port`, because other apps on this machine hold 5173. It returns when `GET <web>/` and `GET <server>/_parlor/manifest` answer, with `readyMs`. Output goes to `<project>/dev.log`. One project is up at a time.
