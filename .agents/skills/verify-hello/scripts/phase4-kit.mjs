@@ -950,18 +950,14 @@ export function readConsentUrl(host, terminal) {
   return found.at(-1);
 }
 
-export const PROMPT_PATTERN =
-  /Connect this computer to (.+?) as (\S+?)\? Code (.+?) \[y\/N\]/;
+export const CONNECTED_PATTERN = /Connected to (.+?) as (\S+?)\. /;
 
 /**
  * Alice connects the host to the instance the way a user does: run the command the sidebar
- * names, click `Connect` on the consent page, answer `y`. `appTab` is the page id of Alice's
- * app tab, which stays selected on return. `beforeAnswer` runs just before `y` is sent.
+ * names and click `Connect` on the consent page, the one approval. `appTab` is the page id
+ * of Alice's app tab, which stays selected on return.
  */
-export async function connectHost(
-  check,
-  { host, browser, appTab, beforeAnswer, label = "connect" },
-) {
+export async function connectHost(check, { host, browser, appTab, label = "connect" }) {
   const info = host.info;
   const web = info.urls.web;
   const actions = { computer: 0, browser: 0 };
@@ -1002,37 +998,38 @@ export async function connectHost(
 
   const consentTab = await browser.newpage(url);
   await browser.page(
-    `async () => { for (let i = 0; i < 40 && !document.querySelector('p.code'); i++) await new Promise((r) => setTimeout(r, 250)); return true; }`,
+    `async () => { for (let i = 0; i < 40 && !document.querySelector('form button[value="connect"]'); i++) await new Promise((r) => setTimeout(r, 250)); return true; }`,
   );
   const consent = await browser.page(`(L) => ({
     heading: (document.querySelector('h1,h2') ?? {}).textContent ?? null,
-    code: document.querySelector('p.code')?.textContent.trim() ?? null,
     text: document.body.innerText.slice(0, 600),
   })`);
   await browser.snapshot(`${label}.consent.aria.txt`);
   await browser.screenshot(`${label}.consent.png`);
   check.save(`${label}.consent.json`, consent);
+  const clickedAt = Date.now();
   await browser.click("button", "Connect");
   actions.browser += 1;
 
-  const prompt = await terminal.waitFor(PROMPT_PATTERN, 60_000);
-  if (!prompt) {
+  const connected = await terminal.waitFor(CONNECTED_PATTERN, 60_000);
+  if (!connected) {
     terminal.save();
     throw new Error(
-      `the terminal never asked for confirmation; terminal:\n${terminal.text.slice(-1500)}`,
+      `the terminal never said it connected; terminal:\n${terminal.text.slice(-1500)}`,
     );
   }
-  const shown = { appName: prompt[1], email: prompt[2], code: prompt[3] };
-  check.save(`${label}.terminal-prompt.json`, shown);
+  const shown = { appName: connected[1], email: connected[2] };
+  check.save(`${label}.terminal-connected.json`, shown);
+  const tab = await browser.page(
+    `async () => { for (let i = 0; i < 40 && !/Connected to/.test(document.querySelector('h1')?.textContent ?? ''); i++) await new Promise((r) => setTimeout(r, 250)); return document.body.innerText.slice(0, 400); }`,
+  );
+  check.save(`${label}.tab-after.json`, { text: tab });
 
   await browser.closepage(consentTab);
   await browser.selectpage(appTab);
-  if (beforeAnswer) await beforeAnswer();
-  const answeredAt = terminal.send("y\r");
-  actions.computer += 1;
   const exitCode = await terminal.waitExit(60_000);
   terminal.save();
-  return { terminal, shown, consent, actions, answeredAt, exitCode, url };
+  return { terminal, shown, consent, tab, actions, clickedAt, exitCode, url };
 }
 
 /**

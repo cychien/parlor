@@ -181,6 +181,10 @@ const DIFFERENCES_6: Readonly<
     agreed: true,
     why: "spec 8.6: `handover` carries the binary and signature, `confirm_local_pairing` is new",
   },
+  "agent-host/src/pairing.ts PairingChannel changed": {
+    agreed: true,
+    why: "connect asks once: the consent page approves a browser pairing, and only the ipc channel, which has no consent page, confirms in the shell's native dialog",
+  },
   "capabilities/src/device-key/capacitor.ts capacitorDeviceKey changed": {
     agreed: true,
     why: "the skeleton's default loader is a placeholder that rejects; this one loads `@parlor/capacitor-device-key`",

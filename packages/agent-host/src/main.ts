@@ -159,13 +159,12 @@ const connect = defineCommand({
           hostName: computerName(),
           platform: platformName(),
           keys: kit.keychainHostKeys(KEYCHAIN_SERVICE),
-          prompter: kit.terminalPrompter(),
           workspaceRoot: paths.workspaces,
           channel: {
             kind: "browser",
             open: async (url) => {
               process.stdout.write(
-                `Open this page in your browser to connect this computer:\n${url}\n`,
+                `Approve the connection in your browser. If it did not open, visit:\n${url}\n`,
               );
               spawn("open", [url], { stdio: "ignore", detached: true })
                 .on("error", () => undefined)
@@ -181,7 +180,7 @@ const connect = defineCommand({
       }
       if (!outcome.paired) {
         const why = {
-          declined_locally: "You did not confirm the connection here.",
+          declined_locally: "You did not confirm the connection.",
           declined_in_app: "The connection was cancelled in the browser.",
           timeout: "The connection was not approved within 10 minutes.",
         }[outcome.reason];
@@ -213,7 +212,7 @@ const connect = defineCommand({
       return;
     }
     process.stdout.write(
-      `Connected to ${printable(grant.appName)} as ${printable(grant.account.email ?? grant.account.name)}. Your agents are ready in its sidebar.\n`,
+      `Connected to ${printable(grant.appName)} as ${printable(grant.account.email ?? grant.account.name)}. Your agents are ready in its sidebar.\nNot you? Run \`npx @parlor/agent-host disconnect ${origin}\`.\n`,
     );
   },
 });

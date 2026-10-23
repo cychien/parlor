@@ -1,33 +1,44 @@
 import { createHash, randomBytes, randomInt } from "node:crypto";
-import { createServer, type Server } from "node:http";
+import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import type { HostGrantResponse } from "@parlor/auth";
+import type { AccountSummary, HostGrantResponse } from "@parlor/auth";
 import type { HostPairing, PairingDevice } from "@parlor/capabilities";
 
 import { hostAssertion } from "./assertion.js";
 import type { AppGrant, HostKeyPair, HostKeys } from "./grants.js";
 import { workspaceOf } from "./naming.js";
-import { type LocalPrompter, printable } from "./prompter.js";
+import { printable } from "./prompter.js";
 import { revokeGrant } from "./revoke.js";
 
 export const PAIRING_TIMEOUT_MS = 10 * 60_000;
 
+export interface PairingReview {
+  readonly appName: string;
+  readonly appOrigin: string;
+  readonly account: AccountSummary;
+  readonly matchingCode: string;
+}
+
 /**
  * `browser`: a one-shot 127.0.0.1 listener (RFC 8252) accepting exactly this attempt's
- * `state`. `ipc`: the desktop shell's signed-in webview gets the code from the backend
- * and hands it over Tauri IPC; no listener at all.
+ * `state`; the consent page is the one decision. `ipc`: the desktop shell's signed-in
+ * webview gets the code from the backend and hands it over Tauri IPC, with no consent page,
+ * so the shell's native dialog confirms the account the host got back.
  */
 export type PairingChannel =
   | { readonly kind: "browser"; open(url: string): Promise<void> }
-  | { readonly kind: "ipc"; authorize(pairing: HostPairing): Promise<string> };
+  | {
+      readonly kind: "ipc";
+      authorize(pairing: HostPairing): Promise<string>;
+      confirm(review: PairingReview): Promise<boolean>;
+    };
 
 export interface PairInput {
   readonly appOrigin: string;
   readonly hostName: string;
   readonly platform: string;
   readonly channel: PairingChannel;
-  readonly prompter: LocalPrompter;
   readonly keys: HostKeys;
   readonly workspaceRoot: string;
 }
@@ -81,35 +92,57 @@ async function appNameOf(origin: string): Promise<string> {
 
 type Callback = { readonly code: string } | { readonly declined: true };
 
+const escapeHtml = (text: string) =>
+  printable(text).replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
+
+const RESULT_STYLE = `:root{color-scheme:light dark;--bg:#f6f6f4;--card:#fff;--text:#1d1d1b;--muted:#5f5f5a;--line:#e2e2dc}@media (prefers-color-scheme:dark){:root{--bg:#151514;--card:#1f1f1d;--text:#ededea;--muted:#a3a39d;--line:#34342f}}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:16px;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}main{width:100%;max-width:420px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:28px}h1{font-size:20px;line-height:1.3;margin:0 0 8px}p{margin:0;color:var(--muted)}`;
+
+function resultPage(heading: string, detail: string): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(heading)}</title><style>${RESULT_STYLE}</style></head><body><main><h1>${escapeHtml(heading)}</h1><p>${escapeHtml(detail)}</p></main></body></html>`;
+}
+
+/** Holds the browser's request until the exchange settles, so the tab says what happened. */
 async function loopback(state: string): Promise<{
   readonly redirectUri: string;
   readonly callback: Promise<Callback>;
+  readonly answer: (heading: string, detail: string) => void;
   readonly close: () => void;
 }> {
   let deliver: (callback: Callback) => void = () => undefined;
   const callback = new Promise<Callback>((resolve) => (deliver = resolve));
+  let waiting: ServerResponse | undefined;
   const server: Server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    if (url.pathname !== "/callback" || url.searchParams.get("state") !== state) {
+    if (
+      waiting ||
+      url.pathname !== "/callback" ||
+      url.searchParams.get("state") !== state
+    ) {
       response
         .writeHead(404, { "content-type": "text/plain" })
         .end("Not this connection.");
       return;
     }
+    waiting = response;
     const code = url.searchParams.get("code");
-    response
-      .writeHead(200, { "content-type": "text/html; charset=utf-8" })
-      .end(
-        "<!doctype html><title>Parlor Host</title><p>Go back to your terminal to finish connecting this computer.</p>",
-      );
     deliver(code ? { code } : { declined: true });
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as AddressInfo;
+  const answer = (heading: string, detail: string) => {
+    if (!waiting || waiting.headersSent) return;
+    waiting
+      .writeHead(200, { "content-type": "text/html; charset=utf-8" })
+      .end(resultPage(heading, detail));
+  };
   return {
     redirectUri: `http://127.0.0.1:${port}/callback`,
     callback,
-    close: () => server.close(),
+    answer,
+    close: () => {
+      answer("Parlor Host stopped", "Go back to your terminal.");
+      server.close();
+    },
   };
 }
 
@@ -166,15 +199,18 @@ export async function pair(input: PairInput): Promise<PairOutcome> {
     matchingCode: matchingCode(),
     keyThumbprint: key.thumbprint,
   };
+  const grantOf = (granted: HostGrantResponse): AppGrant => ({
+    appOrigin: origin,
+    appName,
+    grantId: granted.grant.id,
+    hostId: granted.grant.hostId,
+    account: granted.account,
+    workspace: workspaceOf(input.workspaceRoot, origin),
+    createdAt: Date.now(),
+  });
   const deadline = timeout(PAIRING_TIMEOUT_MS);
   try {
-    let callback: Callback | "timeout";
-    if (input.channel.kind === "ipc") {
-      callback = await Promise.race([
-        input.channel.authorize(pairing).then((code) => ({ code })),
-        deadline.expired,
-      ]);
-    } else {
+    if (input.channel.kind === "browser") {
       const listener = await loopback(pairing.state);
       try {
         const query = new URLSearchParams({
@@ -182,26 +218,39 @@ export async function pair(input: PairInput): Promise<PairOutcome> {
           ...pairing,
         });
         await input.channel.open(`${origin}/_parlor/auth/hosts/authorize?${query}`);
-        callback = await Promise.race([listener.callback, deadline.expired]);
+        const callback = await Promise.race([listener.callback, deadline.expired]);
+        if (callback === "timeout") return { paired: false, reason: "timeout" };
+        if (!("code" in callback)) {
+          listener.answer("Not connected", "You cancelled the connection.");
+          return { paired: false, reason: "declined_in_app" };
+        }
+        let granted: HostGrantResponse;
+        try {
+          granted = await exchange(origin, key, callback.code, codeVerifier);
+        } catch (error) {
+          listener.answer("Not connected", (error as Error).message);
+          throw error;
+        }
+        await key.keep(granted.grant.id);
+        listener.answer(
+          `Connected to ${appName}`,
+          `${input.hostName} now runs agents for ${granted.account.email ?? granted.account.name}. You can close this tab.`,
+        );
+        return { paired: true, grant: grantOf(granted), approvedBy: granted.approvedBy };
       } finally {
         listener.close();
       }
     }
-    if (callback === "timeout") return { paired: false, reason: "timeout" };
-    if (!("code" in callback)) return { paired: false, reason: "declined_in_app" };
 
+    const callback = await Promise.race([
+      input.channel.authorize(pairing).then((code) => ({ code })),
+      deadline.expired,
+    ]);
+    if (callback === "timeout") return { paired: false, reason: "timeout" };
     const granted = await exchange(origin, key, callback.code, codeVerifier);
-    const grant: AppGrant = {
-      appOrigin: origin,
-      appName,
-      grantId: granted.grant.id,
-      hostId: granted.grant.hostId,
-      account: granted.account,
-      workspace: workspaceOf(input.workspaceRoot, origin),
-      createdAt: Date.now(),
-    };
+    const grant = grantOf(granted);
     const confirmed = await Promise.race([
-      input.prompter.confirmPairing({
+      input.channel.confirm({
         appName,
         appOrigin: origin,
         account: granted.account,
@@ -269,34 +318,26 @@ export interface LocalPairing {
   confirm(connect: boolean): Promise<PairOutcome>;
 }
 
-export function startLocalPairing(
-  input: Omit<PairInput, "channel" | "prompter">,
-): LocalPairing {
+export function startLocalPairing(input: Omit<PairInput, "channel">): LocalPairing {
   const ready = deferred<HostPairing>();
   const code = deferred<string>();
   const review = deferred<LocalPairingReview>();
   const decision = deferred<boolean>();
-  const prompter: LocalPrompter = {
-    confirmPairing: (shown) => {
-      review.resolve({
-        account: printable(shown.account.email ?? shown.account.name),
-        appName: printable(shown.appName),
-        matchingCode: shown.matchingCode,
-      });
-      return decision.promise;
-    },
-    approveDevice: async () => false,
-    answerHere: async () => undefined,
-    turnStarted: () => undefined,
-  };
   const outcome = pair({
     ...input,
-    prompter,
     channel: {
       kind: "ipc",
       authorize: (pairing) => {
         ready.resolve(pairing);
         return code.promise;
+      },
+      confirm: (shown) => {
+        review.resolve({
+          account: printable(shown.account.email ?? shown.account.name),
+          appName: printable(shown.appName),
+          matchingCode: shown.matchingCode,
+        });
+        return decision.promise;
       },
     },
   });

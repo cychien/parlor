@@ -604,10 +604,9 @@ export function hostRoutes(deps: HostGrantDeps): readonly AnyPluginRoute[] {
           )
           .join("\n");
         const body = `
-<h1>Connect a computer to ${escape(app)}?</h1>
+<h1>Connect ${escape(pairing.hostName)} to ${escape(app)}?</h1>
 <p>Signed in as <strong>${escape(profile?.email ?? profile?.name ?? "your account")}</strong>.</p>
-<p><strong>${escape(pairing.hostName)}</strong> (${escape(pairing.platform)}) wants to run agents for your account. Continue only if you started this on that computer, and its matching code is:</p>
-<p class="code">${escape(pairing.matchingCode)}</p>
+<p>The coding agents on <strong>${escape(pairing.hostName)}</strong> (${escape(pairing.platform)}) will take your prompts from ${escape(app)} and run on that computer. Continue only if you just ran <code>connect</code> there.</p>
 <form method="post" action="${escape(authorizeUrl)}">
 ${hidden}
 <button type="submit" name="decision" value="cancel">Cancel</button>

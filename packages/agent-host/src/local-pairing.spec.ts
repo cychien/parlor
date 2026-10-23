@@ -58,7 +58,6 @@ async function started(name: string) {
     proxy: createMcpProxy("parlor-host"),
     launcher: acpLauncher(),
     prompter: {
-      confirmPairing: async () => false,
       approveDevice: async () => false,
       answerHere: async () => undefined,
       turnStarted: () => undefined,

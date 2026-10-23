@@ -4,7 +4,7 @@ Alice connects a computer to her account, opens the Agent sidebar in the app hea
 
 ## Sub-features
 
-- `chat-pair` connects a computer: the consent page, the matching code, the grant, and `/settings` listing it.
+- `chat-pair` connects a computer: the consent page as the one approval, the grant, and `/settings` listing it.
 - `chat-send` sends a prompt from the composer and shows the reply growing, a tool item, and the finished turn.
 - `chat-reload` reloads the tab mid-stream without losing or duplicating an item.
 - `chat-cancel` stops a running turn from `button "Stop"` and keeps the text already streamed.
