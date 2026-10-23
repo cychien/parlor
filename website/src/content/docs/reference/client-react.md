@@ -1,0 +1,40 @@
+---
+title: "@parlor/client/react"
+description: FrameworkProvider, the action hooks, sessions, capabilities and the chat primitives.
+---
+
+```ts
+import { useActionQuery } from "@parlor/client/react";
+//       ^?
+```
+
+```ts
+import { useActionMutation } from "@parlor/client/react";
+//       ^?
+```
+
+TanStack Query's `useQuery` and `useMutation` over actions. Queries refetch when any caller runs an action that writes what they read. See [Pages and hooks](/guides/pages-and-hooks/).
+
+```ts
+import { FrameworkProvider } from "@parlor/client/react";
+//       ^?
+```
+
+Wraps the app: `client` (the action client), `router` (the TanStack router) and, with sign-in, `auth` (the auth client from `@parlor/auth/client`).
+
+## Sessions and capabilities
+
+- `useSession()`: `{ status: "loading" | "signed-in" | "signed-out" | "anonymous", user? }`.
+- `useCapability(definition)`: resolves a capability from `@parlor/capabilities` on the current platform; `{ available: true, api }` or `{ available: false, reason }`.
+- `useActionClient()`: the client from the provider.
+
+## Agents
+
+- `useAgentView(view, { get })`: exposes a view to the agent while its element is on screen; attach the returned `ref`.
+- `useAgentConfirmations()`: the agent calls waiting for the user's approval.
+- `useAgentActivity()`: what the agent is doing in the app right now.
+- `useChat()`: the sidebar's state and commands; `status` is `"unavailable"` when the server has no chat.
+
+## Chat primitives
+
+Unstyled components the template's sidebar is built from, under the `Chat` namespace: `Chat.Root`, `Chat.Thread`, `Chat.Confirmations`, `Chat.Composer`, `Chat.Input`, `Chat.Send`, `Chat.Stop`, `Chat.Status`, `Chat.Ask`, `Chat.AskForm` and `Chat.AskChoice`. See [The agent sidebar](/guides/agent-sidebar/).

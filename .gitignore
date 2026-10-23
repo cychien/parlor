@@ -1,5 +1,5 @@
 # 設計討論文件，本機參考用，不進 repo
-docs/
+/docs/
 
 node_modules/
 dist/
