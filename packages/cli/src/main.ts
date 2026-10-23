@@ -6,11 +6,12 @@ import { build } from "./commands/build.js";
 import { db } from "./commands/db.js";
 import { deploy } from "./commands/deploy.js";
 import { dev } from "./commands/dev.js";
+import { typegen } from "./commands/typegen.js";
 import { CliError } from "./errors.js";
 
 const main = defineCommand({
   meta: { name: "parlor", description: "Parlor CLI" },
-  subCommands: { dev, build, deploy, db },
+  subCommands: { dev, build, deploy, db, typegen },
 });
 
 function isHelp(arg: string): boolean {
