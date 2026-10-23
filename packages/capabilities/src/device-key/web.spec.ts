@@ -9,7 +9,7 @@ import {
   encodeBase64url,
   publicPoint,
 } from "./encoding.js";
-import { deviceKey } from "./index.js";
+import { deviceKey, PresenceSetupCancelled } from "./index.js";
 import { fakeApis, fakeAuthenticator, fakeIndexedDB } from "./spec-kit.js";
 import { webDeviceKey } from "./web.js";
 
@@ -147,15 +147,43 @@ describe("webDeviceKey publicKeys", () => {
     );
   });
 
-  it("omits presence for good when the user cancels the passkey, instead of asking on every load", async () => {
+  it("keeps nothing when the user cancels the passkey, so the next enrollment asks again", async () => {
     const { authenticator, device, open } = await created({ cancel: true });
-    expect((await device.publicKeys(enrollment())).presence).toBeUndefined();
-    authenticator.cancel = false;
-    expect((await (await open()).publicKeys(enrollment())).presence).toBeUndefined();
-    expect(authenticator.created).toHaveLength(1);
-    await expect(device.sign(new Uint8Array([1]), { presence: true })).rejects.toThrow(
-      /no presence key/,
+    expect(await device.presenceSetup!()).toBe("needed");
+    await expect(device.publicKeys(enrollment())).rejects.toBeInstanceOf(
+      PresenceSetupCancelled,
     );
+    expect(await (await open()).presenceSetup!()).toBe("needed");
+    authenticator.cancel = false;
+    const keys = await (await open()).publicKeys(enrollment());
+    expect(keys.presence).toMatchObject({ format: "webauthn" });
+    expect(authenticator.created).toHaveLength(2);
+    expect(await device.presenceSetup!()).toBe("done");
+  });
+
+  it("settles without a passkey for good when presence is declined, and never asks", async () => {
+    const { authenticator, device, open } = await created();
+    expect((await device.publicKeys(enrollment(), { presence: false })).presence).toBe(
+      undefined,
+    );
+    expect((await (await open()).publicKeys(enrollment())).presence).toBeUndefined();
+    expect(authenticator.created).toEqual([]);
+    expect(await device.presenceSetup!()).toBe("done");
+  });
+
+  it("needs no setup and makes no passkey where there is no platform authenticator", async () => {
+    const storage = fakeIndexedDB();
+    const authenticator = fakeAuthenticator(ORIGIN);
+    const device = webDeviceKey(
+      fakeApis({
+        indexedDB: storage.factory,
+        credentials: authenticator.credentials,
+        platformAuthenticator: false,
+      }),
+    ).create();
+    expect(await device.presenceSetup!()).toBe("done");
+    expect((await device.publicKeys(enrollment())).presence).toBeUndefined();
+    expect(authenticator.created).toEqual([]);
   });
 });
 

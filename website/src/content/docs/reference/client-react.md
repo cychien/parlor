@@ -34,6 +34,7 @@ Wraps the app: `client` (the action client), `router` (the TanStack router) and,
 - `useAgentConfirmations()`: the agent calls waiting for the user's approval.
 - `useAgentActivity()`: what the agent is doing in the app right now.
 - `useChat()`: the sidebar's state and commands; `status` is `"unavailable"` when the server has no chat.
+- `useDeviceSetup()`: for a card that explains setting up a browser. While it is mounted, the first prompt on a browser that would create a passkey waits in `setup` until the user calls `setUpDevice({ passkey })` or `dismissSetup()`. Without it, the first prompt opens the browser's passkey prompt directly.
 
 ## Chat primitives
 

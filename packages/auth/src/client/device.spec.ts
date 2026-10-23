@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type { AgentUiClient } from "@parlor/agent-ui/client";
+import { PresenceSetupCancelled } from "@parlor/capabilities";
 import type { SessionSnapshot } from "@parlor/client";
 import { asId, type Tag } from "@parlor/core";
 import { createDatabase, type DatabaseHandle } from "@parlor/data";
@@ -148,6 +149,34 @@ describe("the auth client's device", () => {
     expect(devices).toEqual([
       expect.objectContaining({ id: device!.id, platform: "web" }),
     ]);
+  });
+
+  it("asks for setup while enrolling would make a passkey, and is ready once enrolled", async () => {
+    const key = new TestDeviceKey();
+    key.setup = "needed";
+    const { auth } = await signedIn(key);
+    expect(await auth.deviceSetup()).toBe("needed");
+    await auth.device();
+    expect(await auth.deviceSetup()).toBe("ready");
+  });
+
+  it("enrolls nothing when the passkey is cancelled, and enrolls on the next call", async () => {
+    const key = new TestDeviceKey();
+    key.cancelNext = true;
+    const { auth, calls } = await signedIn(key);
+    await expect(auth.device()).rejects.toBeInstanceOf(PresenceSetupCancelled);
+    expect(calls.filter((call) => call.endsWith("/enrollDevice"))).toEqual([]);
+    const device = await auth.device();
+    expect(device?.keys.presenceKey).toBeDefined();
+    expect(calls.filter((call) => call.endsWith("/enrollDevice"))).toHaveLength(1);
+  });
+
+  it("enrolls without a presence key when the user skips the passkey", async () => {
+    const { auth } = await signedIn(new TestDeviceKey());
+    const device = await auth.device({ presence: false });
+    expect(device?.keys.presenceKey).toBeUndefined();
+    const devices = await auth.account.call("devices", {});
+    expect(devices).toEqual([expect.objectContaining({ id: device!.id })]);
   });
 
   it("R5-04: shares one enrollment between calls made at once", async () => {
@@ -366,6 +395,7 @@ describe("the auth client's device", () => {
       const device = (await auth.device())!;
       expect(enrolled).toHaveBeenCalledWith(
         expect.objectContaining({ rpId: new URL(ORIGIN).hostname }),
+        { presence: true },
       );
       const signed = await device.signPrompt(prompt);
       const statement = await promptStatement(ORIGIN, prompt, signed.at);

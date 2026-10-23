@@ -20,8 +20,11 @@ export type {
   ChatStatus,
   ChatWait,
   ConnectOption,
+  DeviceSetup,
+  DeviceSetupCommands,
 } from "./chat/runtime.js";
 export { useChat } from "./chat/use-chat.js";
+export { useDeviceSetup } from "./chat/use-device-setup.js";
 export type { ChatItem } from "@parlor/chat";
 export { useAgentActivity } from "./agent-ui/use-agent-activity.js";
 export { useAgentConfirmations } from "./agent-ui/use-agent-confirmations.js";

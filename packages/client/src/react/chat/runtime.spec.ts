@@ -1349,6 +1349,120 @@ describe("createChatRuntime device signatures", () => {
     await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
     expect(h.runtime.get().items[0]).toMatchObject({ failure: "device_rejected" });
   });
+  describe("setting up a browser before its first prompt", () => {
+    const needingSetup = (cancelFirst = false) => {
+      const d = device();
+      let cancel = cancelFirst;
+      const enroll = d.source.device;
+      const source = {
+        deviceSetup: vi.fn(async () => "needed" as const),
+        device: vi.fn(async (options?: { readonly presence?: boolean }) => {
+          if (cancel) {
+            cancel = false;
+            throw Object.assign(new Error("The passkey was not created."), {
+              name: "PresenceSetupCancelled",
+            });
+          }
+          return enroll(options);
+        }),
+      };
+      return { ...d, source };
+    };
+    const sends = (h: ReturnType<typeof setup>) =>
+      h.calls.filter((call) => call.name === "send");
+    const explained = (auth: NonNullable<Parameters<typeof setup>[0]>["auth"]) => {
+      const h = setup({ auth });
+      h.runtime.explainSetup();
+      return h;
+    };
+
+    it("explains the passkey before the first prompt, then sends it once set up", async () => {
+      const d = needingSetup();
+      const h = explained(d.source);
+      h.runtime.start();
+      await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+      h.runtime.setDraft("hi");
+      await h.runtime.send();
+      expect(h.runtime.get().setup).toEqual({ step: "explain" });
+      expect(d.source.device).not.toHaveBeenCalled();
+      expect(sends(h)).toEqual([]);
+      expect(h.runtime.get().draft).toBe("hi");
+
+      await h.runtime.setUpDevice({ passkey: true });
+      expect(d.source.device).toHaveBeenCalledWith({ presence: true });
+      expect(h.runtime.get().setup).toBeUndefined();
+      expect(sends(h)).toHaveLength(1);
+      expect(h.runtime.get().draft).toBe("");
+    });
+
+    it("keeps the prompt waiting when the passkey is cancelled, and sends it set up without one", async () => {
+      const d = needingSetup(true);
+      const h = explained(d.source);
+      h.runtime.start();
+      await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+      h.runtime.setDraft("hi");
+      await h.runtime.send();
+      await h.runtime.setUpDevice({ passkey: true });
+      expect(h.runtime.get().setup).toEqual({ step: "cancelled" });
+      expect(h.runtime.get().error).toBeUndefined();
+      expect(sends(h)).toEqual([]);
+
+      await h.runtime.setUpDevice({ passkey: false });
+      expect(d.source.device).toHaveBeenCalledWith({ presence: false });
+      expect(h.runtime.get().setup).toBeUndefined();
+      expect(sends(h)).toHaveLength(1);
+    });
+
+    it("sends nothing and keeps the draft when the setup is dismissed", async () => {
+      const d = needingSetup();
+      const h = explained(d.source);
+      h.runtime.start();
+      await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+      h.runtime.setDraft("hi");
+      await h.runtime.send();
+      h.runtime.dismissSetup();
+      expect(h.runtime.get().setup).toBeUndefined();
+      expect(h.runtime.get().draft).toBe("hi");
+      await h.runtime.setUpDevice({ passkey: true });
+      expect(d.source.device).not.toHaveBeenCalled();
+      expect(sends(h)).toEqual([]);
+    });
+
+    it("enrolls directly, as before, when no UI explains the setup", async () => {
+      const d = needingSetup();
+      const h = setup({ auth: d.source });
+      h.runtime.start();
+      await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+      await h.runtime.send("hi");
+      expect(h.runtime.get().setup).toBeUndefined();
+      expect(d.source.device).toHaveBeenCalled();
+      expect(sends(h)).toHaveLength(1);
+    });
+
+    it("drops a waiting setup when the last UI explaining it goes away", async () => {
+      const d = needingSetup();
+      const h = setup({ auth: d.source });
+      const stop = h.runtime.explainSetup();
+      h.runtime.start();
+      await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+      await h.runtime.send("hi");
+      expect(h.runtime.get().setup).toEqual({ step: "explain" });
+      stop();
+      expect(h.runtime.get().setup).toBeUndefined();
+    });
+
+    it("asks nothing once the device is set up", async () => {
+      const d = needingSetup();
+      const h = explained(d.source);
+      h.runtime.start();
+      await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+      await h.runtime.send("first");
+      await h.runtime.setUpDevice({ passkey: true });
+      await h.runtime.send("second");
+      expect(h.runtime.get().setup).toBeUndefined();
+      expect(sends(h)).toHaveLength(2);
+    });
+  });
 });
 
 describe("createChatRuntime resend", () => {

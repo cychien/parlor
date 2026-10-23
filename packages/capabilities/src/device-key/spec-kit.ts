@@ -147,11 +147,14 @@ export function fakeAuthenticator(origin: string): FakeAuthenticator {
 export function fakeApis(input: {
   readonly indexedDB?: IDBFactory | undefined;
   readonly credentials?: CredentialsContainer | undefined;
+  readonly platformAuthenticator?: boolean;
 }): () => WebDeviceKeyApis {
   return () => ({
     subtle: globalThis.crypto.subtle,
     indexedDB: input.indexedDB,
     credentials: input.credentials,
+    platformAuthenticator: async () =>
+      input.platformAuthenticator ?? input.credentials !== undefined,
   });
 }
 

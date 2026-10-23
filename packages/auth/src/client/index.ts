@@ -72,6 +72,7 @@ export class AuthClientError extends Error {
 export type DeviceHandle = SessionDevice;
 
 export interface AuthClient extends SessionSource, DeviceSource, HostAuthorizer {
+  deviceSetup(): Promise<"needed" | "ready">;
   /** Plug into `createActionClient({ headers })` so every surface carries the session. */
   readonly headers: () => Promise<HeadersInit>;
   signIn(input: { readonly email: string; readonly password: string }): Promise<void>;
@@ -276,18 +277,24 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
   };
 
   const devices = new Map<string, Promise<DeviceHandle | undefined>>();
-  const enroll = async (user: SessionUser): Promise<DeviceHandle | undefined> => {
+  const enroll = async (
+    user: SessionUser,
+    wantsPresence: boolean,
+  ): Promise<DeviceHandle | undefined> => {
     const key = options.deviceKey ?? (await keysOfThisPlatform());
     if (!key) return undefined;
     const app = appOrigin(baseUrl || undefined);
     const rpId = hostnameOf(app);
     const { challenge } = await account.call("deviceChallenge", {});
-    const keys = await key.publicKeys({
-      rpId,
-      userId: user.id,
-      userName: user.email,
-      challenge: decodeBase64url(challenge),
-    });
+    const keys = await key.publicKeys(
+      {
+        rpId,
+        userId: user.id,
+        userName: user.email,
+        challenge: decodeBase64url(challenge),
+      },
+      { presence: wantsPresence },
+    );
     const presence = enrollmentPresence(keys.presence, rpId);
     const name = deviceName();
     const platform = detectPlatform();
@@ -356,15 +363,24 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
         await (await store)?.set(undefined);
       }
     },
-    device: async () => {
+    deviceSetup: async () => {
+      const session = current();
+      if (session.status !== "signed-in" || devices.has(session.user.id)) return "ready";
+      const key = options.deviceKey ?? (await keysOfThisPlatform());
+      return (await key?.presenceSetup?.()) === "needed" ? "needed" : "ready";
+    },
+    device: async (wanted) => {
       const session = current();
       if (session.status !== "signed-in") return undefined;
       const known = devices.get(session.user.id);
       if (known) return known;
-      const enrolling = enroll(session.user).catch((error: unknown) => {
-        if (error instanceof ActionError && error.code === "not_found") return undefined;
-        throw error;
-      });
+      const enrolling = enroll(session.user, wanted?.presence ?? true).catch(
+        (error: unknown) => {
+          if (error instanceof ActionError && error.code === "not_found")
+            return undefined;
+          throw error;
+        },
+      );
       devices.set(session.user.id, enrolling);
       enrolling.then(
         (device) => {

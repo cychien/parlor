@@ -5,20 +5,34 @@ import {
   enrollmentBytes,
   publicPoint,
 } from "./encoding.js";
-import type {
-  DeviceKey,
-  DevicePublicKeys,
-  DeviceSignature,
-  PresenceEnrollment,
-  PresencePublicKey,
-  PresenceSignature,
+import {
+  type DeviceKey,
+  type DevicePublicKeys,
+  type DeviceSignature,
+  type PresenceEnrollment,
+  type PresencePublicKey,
+  PresenceSetupCancelled,
+  type PresenceSignature,
 } from "./interface.js";
 
 export interface WebDeviceKeyApis {
   readonly subtle: SubtleCrypto | undefined;
   readonly indexedDB: IDBFactory | undefined;
   readonly credentials: CredentialsContainer | undefined;
+  /** Whether a platform authenticator (Touch ID, Windows Hello) can make the passkey. */
+  readonly platformAuthenticator?: (() => Promise<boolean>) | undefined;
 }
+
+const hasPlatformAuthenticator = async (): Promise<boolean> => {
+  try {
+    return (
+      (await globalThis.PublicKeyCredential?.isUserVerifyingPlatformAuthenticatorAvailable?.()) ??
+      false
+    );
+  } catch {
+    return false;
+  }
+};
 
 const DATABASE = "parlor";
 const STORE = "parlor-device";
@@ -85,10 +99,13 @@ const isAssertion = (
   response: AuthenticatorResponse,
 ): response is AuthenticatorAssertionResponse => "signature" in response;
 
+const NO_PRESENCE: StoredPresence = { unavailable: true };
+
 function createWebDeviceKey(
   subtle: SubtleCrypto,
   factory: IDBFactory,
   credentials: CredentialsContainer | undefined,
+  platformAuthenticator: () => Promise<boolean>,
 ): DeviceKey {
   const store = openKeyStore(factory);
 
@@ -162,18 +179,29 @@ function createWebDeviceKey(
           new Uint8Array(credential.response.attestationObject),
         ),
       };
-    } catch {
-      return { unavailable: true };
+    } catch (error) {
+      if (error instanceof Error && error.name === "NotAllowedError") {
+        throw new PresenceSetupCancelled();
+      }
+      return NO_PRESENCE;
     }
   };
 
+  const canCreatePresence = async () =>
+    credentials !== undefined && (await platformAuthenticator());
+
   const presenceOf = async (
     enrollment: PresenceEnrollment,
+    wanted: boolean,
   ): Promise<PresencePublicKey | undefined> => {
-    if (!credentials) return undefined;
     const stored =
       (await store.read<StoredPresence>(PRESENCE)) ??
-      (await store.keepFirst(PRESENCE, await createPresence(credentials, enrollment)));
+      (await store.keepFirst(
+        PRESENCE,
+        credentials && wanted && (await canCreatePresence())
+          ? await createPresence(credentials, enrollment)
+          : NO_PRESENCE,
+      ));
     if ("unavailable" in stored) return undefined;
     return {
       format: "webauthn",
@@ -229,9 +257,9 @@ function createWebDeviceKey(
   }
 
   return {
-    async publicKeys(enrollment): Promise<DevicePublicKeys> {
+    async publicKeys(enrollment, options): Promise<DevicePublicKeys> {
       const { publicKey, keyId } = await signingIdentity();
-      const presence = await presenceOf(enrollment);
+      const presence = await presenceOf(enrollment, options?.presence ?? true);
       return {
         signing: { keyId, publicKey },
         presence,
@@ -245,6 +273,10 @@ function createWebDeviceKey(
       };
     },
     sign,
+    async presenceSetup() {
+      if (await store.read<StoredPresence>(PRESENCE)) return "done";
+      return (await canCreatePresence()) ? "needed" : "done";
+    },
   };
 }
 
@@ -253,6 +285,7 @@ export function webDeviceKey(
     subtle: globalThis.crypto?.subtle,
     indexedDB: globalThis.indexedDB,
     credentials: globalThis.navigator?.credentials,
+    platformAuthenticator: hasPlatformAuthenticator,
   }),
 ): CapabilityAdapter<DeviceKey> {
   return {
@@ -262,11 +295,16 @@ export function webDeviceKey(
       return subtle !== undefined && indexedDB !== undefined;
     },
     create: () => {
-      const { subtle, indexedDB, credentials } = apis();
+      const { subtle, indexedDB, credentials, platformAuthenticator } = apis();
       if (!subtle || !indexedDB) {
         throw new Error("This browser cannot keep a device key.");
       }
-      return createWebDeviceKey(subtle, indexedDB, credentials);
+      return createWebDeviceKey(
+        subtle,
+        indexedDB,
+        credentials,
+        platformAuthenticator ?? hasPlatformAuthenticator,
+      );
     },
   };
 }

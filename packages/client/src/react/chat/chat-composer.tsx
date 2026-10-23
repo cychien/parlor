@@ -92,7 +92,8 @@ export function Stop({
   );
 }
 
-function statusText({ status, wait }: ChatState): string {
+function statusText({ status, wait, setup }: ChatState): string {
+  if (setup?.step === "passkey") return "Waiting for the passkey";
   if (wait) {
     return wait.reason === "offline"
       ? `Waiting for ${wait.hostName} to come online`
