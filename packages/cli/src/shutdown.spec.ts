@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { onShutdown } from "./shutdown.js";
+import { onShutdown, shutdownAfterError } from "./shutdown.js";
 
 describe("onShutdown", () => {
   it("runs every cleanup once and re-raises the signal with default handling", async () => {
     const calls: string[] = [];
-    onShutdown(() => {
-      calls.push("a");
+    onShutdown((signaled) => {
+      calls.push(`a:${signaled}`);
     });
-    onShutdown(async () => {
-      calls.push("b");
+    onShutdown(async (signaled) => {
+      calls.push(`b:${signaled}`);
     });
 
     const originalKill = process.kill;
@@ -25,8 +25,23 @@ describe("onShutdown", () => {
       process.kill = originalKill;
     }
 
-    expect(calls).toEqual(["a", "b"]);
+    expect(calls).toEqual(["a:true", "b:true"]);
     expect(killed).toEqual([[process.pid, "SIGINT"]]);
     expect(process.listenerCount("SIGINT")).toBe(0);
+  });
+
+  it("runs every cleanup once, unsignaled, when the CLI stops on its own error", async () => {
+    const calls: string[] = [];
+    onShutdown((signaled) => {
+      calls.push(`a:${signaled}`);
+    });
+    onShutdown(async (signaled) => {
+      calls.push(`b:${signaled}`);
+    });
+
+    await shutdownAfterError();
+    await shutdownAfterError();
+
+    expect(calls).toEqual(["a:false", "b:false"]);
   });
 });

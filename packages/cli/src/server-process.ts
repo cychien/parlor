@@ -51,6 +51,6 @@ export function startServerProcess({ config, rootDir }: LoadedConfig): ChildProc
     stdio: "inherit",
     env: serverEnv(config),
   });
-  onShutdown(() => stopServerProcess(child));
+  onShutdown((signaled) => stopServerProcess(child, signaled ? undefined : 0));
   return child;
 }
