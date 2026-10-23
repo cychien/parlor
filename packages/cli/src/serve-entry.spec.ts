@@ -9,7 +9,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
-const SHUTDOWN_BOUND_MS = 2000;
+// Well under the 10 s a missed shutdown takes, with room for a loaded machine.
+const SHUTDOWN_BOUND_MS = 6000;
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
