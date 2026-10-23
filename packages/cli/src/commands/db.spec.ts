@@ -57,7 +57,7 @@ const isAlive = (pid: number) => {
   }
 };
 
-describe("runDrizzleKit", () => {
+describe("runDrizzleKit", { timeout: GENERATE_TIMEOUT_MS }, () => {
   let projectDir: string;
   let stderrText: string;
   const stderr = new Writable({
@@ -161,7 +161,7 @@ describe("runDrizzleKit", () => {
 
     expect(await outcome).toBeInstanceOf(Error);
     await expectGone(pid);
-  }, 10_000);
+  });
 
   it("stops drizzle-kit that outlives the timeout", async () => {
     await hang();
@@ -171,7 +171,7 @@ describe("runDrizzleKit", () => {
       message: "drizzle-kit generate timed out after 3000ms",
     });
     await expectGone(await startedPid());
-  }, 10_000);
+  });
 
   describe("when the process that runs it ends", () => {
     const harness = (cliDir: string) => `
@@ -225,6 +225,6 @@ await run;
 
       expect(await exit).toEqual({ code: 3, signal: null });
       await expectGone(await readPid());
-    }, 15_000);
+    });
   });
 });
