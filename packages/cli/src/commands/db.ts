@@ -11,8 +11,22 @@ import { CliError } from "../errors.js";
 
 const require = createRequire(import.meta.url);
 
-export function drizzleKitArgs(schema: string, migrations: string): string[] {
-  return ["generate", "--dialect", "postgresql", "--schema", schema, "--out", migrations];
+/** `name` replaces drizzle-kit's random suffix, so a generated migration has a stable file name. */
+export function drizzleKitArgs(
+  schema: string,
+  migrations: string,
+  name?: string,
+): string[] {
+  return [
+    "generate",
+    "--dialect",
+    "postgresql",
+    "--schema",
+    schema,
+    "--out",
+    migrations,
+    ...(name === undefined ? [] : ["--name", name]),
+  ];
 }
 
 const STACK_FRAME = /^\s+at \S/m;
@@ -107,10 +121,16 @@ export function runDrizzleKit(
 
 const generate = defineCommand({
   meta: { name: "generate", description: "Generate a SQL migration from the schema" },
-  async run() {
+  args: {
+    name: {
+      type: "string",
+      description: "Name of the migration file instead of a random one",
+    },
+  },
+  async run({ args }) {
     const { config, rootDir } = await loadParlorConfig();
     await runDrizzleKit(
-      drizzleKitArgs(config.database.schema, config.database.migrations),
+      drizzleKitArgs(config.database.schema, config.database.migrations, args.name),
       rootDir,
     );
   },
