@@ -8,7 +8,7 @@ import {
 import { buildWeb, startWebDev } from "@parlor/shell-web";
 
 import { CliError } from "./errors.js";
-import { startServerProcess } from "./server-process.js";
+import { startServerProcess, untilListening } from "./server-process.js";
 import { onShutdown } from "./shutdown.js";
 import type { BuildOptions, TargetHandler } from "./targets.js";
 
@@ -38,7 +38,8 @@ export async function buildWebAndServer(
 
 export const webTarget: TargetHandler = {
   async dev(loaded) {
-    startServerProcess(loaded);
+    const serverProcess = startServerProcess(loaded);
+    await untilListening(serverProcess, loaded.config.server.port);
     try {
       const server = await startWebDev(loaded);
       onShutdown(() => server.close());

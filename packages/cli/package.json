@@ -33,6 +33,7 @@
     "@parlor/config": "workspace:*",
     "@parlor/data": "workspace:*",
     "@parlor/host": "workspace:*",
+    "@parlor/scaffold": "workspace:*",
     "@parlor/shell-desktop": "workspace:*",
     "@parlor/shell-mobile": "workspace:*",
     "@parlor/shell-web": "workspace:*",

@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { loadParlorConfig } from "@parlor/config";
 import { defineCommand } from "citty";
 
+import { warnChatWithoutAuth } from "../chat-warning.js";
 import { CliError } from "../errors.js";
 import { buildWebAndServer } from "../web-target.js";
 
@@ -38,6 +39,7 @@ export const deploy = defineCommand({
   },
   async run({ args }) {
     const loaded = await loadParlorConfig();
+    await warnChatWithoutAuth(loaded);
     const result = await buildWebAndServer(loaded, { preset: args.preset });
     if (result.preset === "node-server") {
       console.log(

@@ -1,14 +1,19 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
+import { type AddressInfo, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { parseConfig } from "@parlor/config";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { serverEnv, startServerProcess, stopServerProcess } from "./server-process.js";
+import {
+  serverEnv,
+  startServerProcess,
+  stopServerProcess,
+  untilListening,
+} from "./server-process.js";
 
 describe("serverEnv", () => {
   it("tells the server its port, the app name, the web origin and that it runs under parlor dev", () => {
@@ -156,5 +161,30 @@ describe("stopServerProcess", () => {
     child.exitCode = 0;
     await stopServerProcess(child, 1000);
     expect(kill).not.toHaveBeenCalled();
+  });
+});
+
+describe("untilListening", () => {
+  function child(state: { exitCode: number | null } = { exitCode: null }) {
+    return Object.assign(state, { signalCode: null }) as unknown as ChildProcess;
+  }
+
+  it("resolves once the port accepts a connection", async () => {
+    const server = createServer();
+    const port = await new Promise<number>((resolve) => {
+      const probe = createServer().listen(0, () => {
+        const { port: free } = probe.address() as AddressInfo;
+        probe.close(() => resolve(free));
+      });
+    });
+    let listened = false;
+    setTimeout(() => server.listen(port, () => (listened = true)), 150);
+    await untilListening(child(), port, 20);
+    expect(listened).toBe(true);
+    server.close();
+  });
+
+  it("stops waiting when the server process has exited", async () => {
+    await expect(untilListening(child({ exitCode: 1 }), 1, 20)).resolves.toBeUndefined();
   });
 });
