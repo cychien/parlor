@@ -466,6 +466,16 @@ describe("Chat.Status", () => {
     );
   });
 
+  it("gives the code the computer's dialog shows while it approves this device", () => {
+    const line = status({
+      status: "waiting",
+      wait: { ...mac, reason: "approval", code: "4821" },
+    });
+    expect(line.textContent).toBe(
+      "Waiting for Alice's Mac to approve this device. Check that it shows 4821.",
+    );
+  });
+
   it("T7-01a (b) names the computer that must approve this device", () => {
     const line = status({ status: "waiting", wait: { ...mac, reason: "approval" } });
     expect(line.textContent).toBe("Waiting for Alice's Mac to approve this device");

@@ -245,15 +245,17 @@ export function watchDialogs(host) {
 
 const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** `{deviceName} ({platform}) wants to use agents on {hostName} for {appName} as {email}.` */
+/**
+ * `Allow {deviceName} to use your agents?` then `{deviceName} sent a message from {appName} as
+ * {email} and wants your agents on {hostName} to run it. It shows the code {code}.`
+ */
 export function deviceApproval(dialog, hostName, email) {
   const pattern = new RegExp(
-    `^(.+) \\((.+)\\) wants to use agents on ${escapeRegExp(hostName)} for (.+) as ${escapeRegExp(email)}\\.$`,
+    `Allow (.+) to use your agents\\?\\s+\\1 sent a message from (.+) as ${escapeRegExp(email)} and wants your agents on ${escapeRegExp(hostName)} to run it\\. It shows the code (\\d{4})\\.`,
   );
   for (const text of dialog?.texts ?? []) {
     const match = text.trim().match(pattern);
-    if (match)
-      return { deviceName: match[1], platform: match[2], appName: match[3], text };
+    if (match) return { deviceName: match[1], appName: match[2], code: match[3], text };
   }
   return undefined;
 }

@@ -29,7 +29,7 @@ When it cannot edit a file safely, for example a `server.ts` that builds its opt
 ## After sign-in
 
 - Each user has their own scope, so every action that filters by `ctx.scope` shows each user only their rows. Rows created before sign-in belong to the scope `"default"`, which no signed-in user sees.
-- The sidebar connects each user's own computer: it shows `npx @parlor/agent-host connect <app url>`, which pairs that computer with the signed-in account.
+- The sidebar connects each user's own computer: it shows `npx @parlor/agent-host connect <app url>`, which pairs that computer with the signed-in account after one approval in the browser. The browser that approves is trusted right away; any other browser or device is approved once on the computer, with a four-digit code both show.
 - MCP clients sign in through OAuth. See [Agents](/guides/agents/).
 
 ## Production

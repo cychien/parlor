@@ -27,6 +27,8 @@ import { createAuthClient as createBetterAuthClient } from "better-auth/client";
 import type { AccountActions } from "../account.js";
 import {
   answerStatement,
+  HOST_PAIRING_FRAGMENT,
+  pairingProof,
   promptStatement,
   type Statement,
   statementBytes,
@@ -38,6 +40,7 @@ const RETRY_MAX_MS = 30_000;
 const TOKEN_HEADER = "set-auth-token";
 const HOST_IPC_REDIRECT = "urn:parlor:ipc";
 const DEBUG_KEY = "parlor:debug";
+const HOST_PAIRING_KEY = "parlor:host-pairing";
 
 function injectedServerUrl(): string {
   const env = (import.meta as { env?: { PARLOR_SERVER_URL?: string } }).env;
@@ -149,6 +152,33 @@ async function logSigned(statement: Statement): Promise<void> {
   console.info(`[parlor] signed ${statement.kind} sha256=${hex}`);
 }
 
+/** Takes the host's pairing secret off this page's URL, where only that redirect puts it. */
+function keepHostPairing(): void {
+  try {
+    const location = globalThis.location;
+    if (!location?.hash) return;
+    const fragment = new URLSearchParams(location.hash.slice(1));
+    const secret = fragment.get(HOST_PAIRING_FRAGMENT);
+    if (!secret) return;
+    globalThis.localStorage?.setItem(HOST_PAIRING_KEY, secret);
+    fragment.delete(HOST_PAIRING_FRAGMENT);
+    const rest = fragment.toString();
+    globalThis.history?.replaceState(
+      globalThis.history.state,
+      "",
+      `${location.pathname}${location.search}${rest ? `#${rest}` : ""}`,
+    );
+  } catch {}
+}
+
+function hostPairing(): string | undefined {
+  try {
+    return globalThis.localStorage?.getItem(HOST_PAIRING_KEY) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 const serverHasNoAuth = (error: { readonly status?: unknown }) => error.status === 404;
 
 function enrollmentPresence(presence: PresencePublicKey | undefined, rpId: string) {
@@ -185,6 +215,7 @@ function hostnameOf(origin: string): string {
 }
 
 export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
+  keepHostPairing();
   const baseUrl = options.baseUrl ?? injectedServerUrl();
   const basePath = options.basePath ?? DEFAULT_BASE_PATH;
   const store: Promise<SessionStore | undefined> = options.session
@@ -321,7 +352,9 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
         const statement = await promptStatement(app, prompt, at);
         const signature = await key.sign(statementBytes(statement), { presence: false });
         await logSigned(statement);
-        return { deviceId: id, at, signature };
+        const secret = hostPairing();
+        const pairing = secret && (await pairingProof(secret, id, signingKey));
+        return { deviceId: id, at, signature, ...(pairing ? { pairing } : {}) };
       },
       signAnswer: async (answer, { presence: wanted }) => {
         const at = Date.now();

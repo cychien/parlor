@@ -39,6 +39,7 @@ export default function AgentSidebar() {
           {(item) => <Item item={item} />}
         </Chat.Thread>
         <DeviceSetupCard />
+        <ApprovalNote />
         <Composer />
       </div>
     </Chat.Root>
@@ -209,7 +210,10 @@ function DeviceSetupCard() {
               Your browser asks to create a passkey for {site}, so you can approve your
               agent's actions with Touch ID or your device's lock.
             </li>
-            <li>{computer} asks you to allow this browser.</li>
+            <li>
+              Unless you connected {computer} from this browser, it asks you to allow this
+              browser.
+            </li>
           </ul>
           <p className={META}>
             Without a passkey, you answer your agent's permission questions on {computer}.
@@ -237,6 +241,29 @@ function DeviceSetupCard() {
           {setup.step === "cancelled" ? "Try again" : "Continue"}
         </button>
       </div>
+    </section>
+  );
+}
+
+function ApprovalNote() {
+  const { wait } = useChat();
+  if (wait?.reason !== "approval") return null;
+  return (
+    <section
+      aria-label="Approve this browser"
+      className="mx-4 mb-4 space-y-1 rounded-lg border border-zinc-200 p-3 text-sm"
+    >
+      <p className="font-medium">Approve this browser on {wait.hostName}</p>
+      <p>
+        A dialog on {wait.hostName} asks to allow this browser.
+        {wait.code ? (
+          <>
+            {" "}
+            Allow it if it shows{" "}
+            <span className="font-mono font-semibold tracking-wider">{wait.code}</span>.
+          </>
+        ) : null}
+      </p>
     </section>
   );
 }

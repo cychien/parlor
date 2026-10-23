@@ -13,6 +13,8 @@ import { describe, expect, it } from "vitest";
 import {
   answerStatement,
   type AnswerStatement,
+  checkPairingProof,
+  pairingProof,
   type PinnedDevice,
   promptStatement,
   type PromptStatement,
@@ -67,6 +69,26 @@ async function signedPromptOf(key: TestDeviceKey, statement: PromptStatement) {
 }
 
 const options = { requirePresence: false, now: NOW, maxAgeMs: 10 * MINUTE };
+
+describe("pairingProof", () => {
+  const secret = encodeBase64url(new Uint8Array(32).map((_, at) => at));
+  const key = { kty: "EC", crv: "P-256", x: "x1", y: "y1" };
+
+  it("is checked by the same secret for the same device and signing key only", async () => {
+    const proof = await pairingProof(secret, "device-1", { ...key, d: "private" });
+    expect(proof).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(await checkPairingProof(secret, proof, "device-1", key)).toBe(true);
+    expect(await checkPairingProof(secret, proof, "device-2", key)).toBe(false);
+    expect(await checkPairingProof(secret, proof, "device-1", { ...key, x: "x2" })).toBe(
+      false,
+    );
+    const other = encodeBase64url(new Uint8Array(32).fill(7));
+    expect(await checkPairingProof(other, proof, "device-1", key)).toBe(false);
+    expect(await checkPairingProof(secret, "not base64url!", "device-1", key)).toBe(
+      false,
+    );
+  });
+});
 
 describe("T5-05 statementBytes", () => {
   it("is sorted-key JSON whatever order the fields were written in", async () => {

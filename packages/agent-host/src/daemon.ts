@@ -189,6 +189,16 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
           policy,
           prompter: deps.prompter,
           now: Date.now,
+          pairing: {
+            secret: async () =>
+              (await deps.grants.get(link.grant.appOrigin))?.pairingSecret,
+            forget: async () => {
+              const saved = await deps.grants.get(link.grant.appOrigin);
+              if (!saved?.pairingSecret) return;
+              const { pairingSecret: _used, ...rest } = saved;
+              await deps.grants.save(rest);
+            },
+          },
         }),
       )
       .then(

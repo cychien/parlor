@@ -34,7 +34,7 @@ function connectAs(
     url: string;
     page: string;
     statusesBefore: number[];
-    tab: Promise<string>;
+    tab: Promise<{ status: number; location: string | null; text: string }>;
   }[] = [];
   const statuses: number[] = [];
   const realFetch = globalThis.fetch;
@@ -60,9 +60,13 @@ function connectAs(
           url,
           options.decision ?? "connect",
         );
-        const tab = realFetch(answer.headers.get("location")!).then((response) =>
-          response.text(),
-        );
+        const tab = realFetch(answer.headers.get("location")!, {
+          redirect: "manual",
+        }).then(async (response) => ({
+          status: response.status,
+          location: response.headers.get("location"),
+          text: await response.text(),
+        }));
         opened.push({ url, page, statusesBefore, tab });
       },
     },
@@ -109,10 +113,11 @@ describe("pairing a computer from its terminal", () => {
       new URL(opened!.url).searchParams.get("matchingCode")!,
     );
     const tab = await opened!.tab;
-    expect(tab).toContain("<h1>Connected to Hello</h1>");
-    expect(tab).toContain(
-      "Alice&#39;s MacBook Pro now runs agents for alice@example.com. You can close this tab.",
-    );
+    expect(tab.status).toBe(303);
+    const back = new URL(tab.location!);
+    expect(back.origin + back.pathname).toBe(`${app.origin}/`);
+    const secret = new URLSearchParams(back.hash.slice(1)).get("parlor-host-pairing");
+    expect(secret).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(outcome).toMatchObject({
       paired: true,
       grant: {
@@ -120,6 +125,7 @@ describe("pairing a computer from its terminal", () => {
         appName: "Hello",
         account: { email: "alice@example.com" },
         workspace: `/Users/alice/Parlor/${new URL(app.origin).host.replace(":", "-")}`,
+        pairingSecret: secret,
       },
     });
     expect(alices.keys.origins()).toEqual([app.origin]);
@@ -135,9 +141,9 @@ describe("pairing a computer from its terminal", () => {
     });
     await expect(attempt.outcome).rejects.toThrow("This code has expired.");
     expect(attempt.keys.origins()).toEqual([]);
-    const tab = await attempt.opened[0]!.tab;
-    expect(tab).toContain("<h1>Not connected</h1>");
-    expect(tab).toContain("This code has expired.");
+    const { text } = await attempt.opened[0]!.tab;
+    expect(text).toContain("<h1>Not connected</h1>");
+    expect(text).toContain("This code has expired.");
   });
 
   it("stops when the consent page is cancelled", async () => {
@@ -145,27 +151,22 @@ describe("pairing a computer from its terminal", () => {
     const attempt = connectAs(dave, { decision: "cancel" });
     expect(await attempt.outcome).toEqual({ paired: false, reason: "declined_in_app" });
     expect(attempt.keys.origins()).toEqual([]);
-    expect(await attempt.opened[0]!.tab).toContain("You cancelled the connection.");
+    expect((await attempt.opened[0]!.tab).text).toContain(
+      "You cancelled the connection.",
+    );
   });
 
-  it("T4-10: the tab shows the app's name and the account without control characters or markup", async () => {
+  it("T4-10: the tab shows what the app said went wrong without control characters or markup", async () => {
     const hostile = createServer((request, response) => {
       request.resume();
       request.on("end", () => {
         const path = new URL(request.url ?? "/", "http://stub").pathname;
-        const body =
+        const [status, body] =
           path === "/_parlor/manifest"
-            ? { protocol: 1, app: { name: "\u001b[2J<b>Hello</b>\u0007" } }
-            : {
-                grant: { id: "host:g1", hostId: "h1" },
-                account: {
-                  userId: "alice",
-                  name: "Alice",
-                  email: "\u001b[31malice\u009b0m@example.com<script>",
-                },
-              };
+            ? [200, { protocol: 1, app: { name: "Hello" } }]
+            : [400, { error: { message: "\u001b[2J<b>Expired</b>\u0007\u009b0m" } }];
         response
-          .writeHead(200, { "content-type": "application/json" })
+          .writeHead(status, { "content-type": "application/json" })
           .end(JSON.stringify(body));
       });
     });
@@ -188,7 +189,7 @@ describe("pairing a computer from its terminal", () => {
             tab = fetch(callback).then((response) => response.text());
           },
         },
-      });
+      }).catch(() => undefined);
     } finally {
       await new Promise((resolve) => hostile.close(resolve));
     }
@@ -199,8 +200,8 @@ describe("pairing a computer from its terminal", () => {
         return code < 0x20 || (code >= 0x7f && code <= 0x9f);
       }),
     ).toEqual([]);
-    expect(html).toContain("<h1>Connected to [2J&#60;b&#62;Hello&#60;/b&#62;</h1>");
-    expect(html).toContain("[31malice0m@example.com&#60;script&#62;");
+    expect(html).toContain("<h1>Not connected</h1>");
+    expect(html).toContain("[2J&#60;b&#62;Expired&#60;/b&#62;0m");
   });
 });
 

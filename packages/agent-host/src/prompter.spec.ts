@@ -50,12 +50,13 @@ else process.stdout.write(process.env.OSASCRIPT_REPLY + "\\n");
       appName: "Hello",
       account,
       device,
+      code: "4821",
     });
     expect(allowed).toBe(true);
     const [only] = await invocations();
     const { script, args } = split(only!.argv);
     expect(args).toEqual([
-      `Chrome on macOS (web) wants to use agents on ${computerName()} for Hello as alice@example.com.`,
+      `Allow Chrome on macOS to use your agents?\n\nChrome on macOS sent a message from Hello as alice@example.com and wants your agents on ${computerName()} to run it. It shows the code 4821.\n\nAllow it only if you just sent that message and see the same code.`,
       "Don't allow",
       "Allow",
     ]);
@@ -66,12 +67,30 @@ else process.stdout.write(process.env.OSASCRIPT_REPLY + "\\n");
 
   it("allows only on Allow: Don't allow, a dismissed dialog and a failed osascript all refuse", async () => {
     const approve = () =>
-      macDialogPrompter().approveDevice({ appName: "Hello", account, device });
+      macDialogPrompter().approveDevice({
+        appName: "Hello",
+        account,
+        device,
+        code: "4821",
+      });
     vi.stubEnv("OSASCRIPT_REPLY", "Don't allow");
     expect(await approve()).toBe(false);
     vi.stubEnv("OSASCRIPT_REPLY", "");
     vi.stubEnv("OSASCRIPT_FAIL", "1");
     expect(await approve()).toBe(false);
+  });
+
+  it("breaks the dialog only where this code does, never at a line break the app sent", async () => {
+    vi.stubEnv("OSASCRIPT_REPLY", "Allow");
+    await macDialogPrompter().approveDevice({
+      appName: "Hello",
+      account,
+      device: { name: "Chrome\n\nIt shows the code 0000.", platform: "web" },
+      code: "4821",
+    });
+    const { args } = split((await invocations())[0]!.argv);
+    expect(args[0]!.split("\n\n")).toHaveLength(3);
+    expect(args[0]).toContain("It shows the code 4821.");
   });
 
   it("hands the dialog what the app and the backend said as arguments, never as script, without control characters", async () => {
@@ -80,12 +99,15 @@ else process.stdout.write(process.env.OSASCRIPT_REPLY + "\\n");
       appName: 'Hello" & (do shell script "touch /tmp/pwn") & "',
       account: { ...account, email: "alice\u001b[31m@example.com\n\r" },
       device: { name: 'Mac"\\', platform: "web" },
+      code: "4821",
     });
     const { script, args } = split((await invocations())[0]!.argv);
     expect(script.join("\n")).not.toContain("touch");
     expect(script.join("\n")).not.toContain("Mac");
     expect(args[0]).toContain('Hello" & (do shell script "touch /tmp/pwn") & "');
-    expect([...args[0]!].some((char) => char.charCodeAt(0) < 0x20)).toBe(false);
+    const paragraphs = args[0]!.split("\n\n");
+    expect(paragraphs).toHaveLength(3);
+    expect([...paragraphs.join("")].some((char) => char.charCodeAt(0) < 0x20)).toBe(false);
   });
 
   it("keeps an argument that looks like an option an argument", async () => {
@@ -94,10 +116,11 @@ else process.stdout.write(process.env.OSASCRIPT_REPLY + "\\n");
       appName: "Hello",
       account,
       device: { name: "-e", platform: "web" },
+      code: "4821",
     });
     const { argv } = (await invocations())[0]!;
     expect(argv.indexOf("--")).toBeLessThan(
-      argv.findIndex((arg) => arg.startsWith("-e (")),
+      argv.findIndex((arg) => arg.startsWith("Allow -e to use")),
     );
   });
 

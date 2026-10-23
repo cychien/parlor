@@ -22,6 +22,11 @@ export interface AppGrant {
   readonly dev?: true | undefined;
   /** Refused here but not yet revoked by the app: kept only to retry the revoke, never served. */
   readonly declined?: true | undefined;
+  /**
+   * Handed only to the browser that approved `connect`, through the loopback redirect; that
+   * browser proves it on its first prompt and is trusted without asking, then this is dropped.
+   */
+  readonly pairingSecret?: string | undefined;
 }
 
 /** One key per app grant in the OS keychain; the server holds only its public half. */

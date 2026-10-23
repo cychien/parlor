@@ -51,3 +51,18 @@ export function enrollmentBytes(input: {
       : null,
   });
 }
+
+/**
+ * Four digits both the computer's approval dialog and the browser show for one device, read
+ * off its signing key, so the user can tell the browser asking is the one in front of them.
+ */
+export async function deviceCode(signingKey: JsonWebKey): Promise<string> {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest(
+      "SHA-256",
+      new Uint8Array(canonicalBytes(publicPoint(signingKey))),
+    ),
+  );
+  const value = new DataView(digest.buffer).getUint32(0);
+  return String(value % 10_000).padStart(4, "0");
+}

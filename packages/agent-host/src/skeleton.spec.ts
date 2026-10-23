@@ -88,6 +88,22 @@ const DIFFERENCES: Readonly<
     agreed: true,
     why: "its default apis carry `platformAuthenticator`",
   },
+  "agent-host/src/turn.ts TurnDeps changed": {
+    agreed: true,
+    why: "`pairing` hands a turn the grant's pairing secret and drops it once used; connect trusts the browser that approved it: the host's pairing secret reaches only that browser through the loopback redirect, and its first prompt proves it",
+  },
+  "auth/src/statements.ts HOST_PAIRING_FRAGMENT added": {
+    agreed: true,
+    why: "connect trusts the browser that approved it: the host's pairing secret reaches only that browser through the loopback redirect, and its first prompt proves it",
+  },
+  "auth/src/statements.ts checkPairingProof added": {
+    agreed: true,
+    why: "connect trusts the browser that approved it: the host's pairing secret reaches only that browser through the loopback redirect, and its first prompt proves it",
+  },
+  "auth/src/statements.ts pairingProof added": {
+    agreed: true,
+    why: "connect trusts the browser that approved it: the host's pairing secret reaches only that browser through the loopback redirect, and its first prompt proves it",
+  },
   "auth/src/client/index.ts AuthClientOptions changed": {
     agreed: true,
     why: "`deviceKey` injects the keys, as `session` injects the session store",

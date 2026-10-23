@@ -160,6 +160,8 @@ With sign-in, the sidebar shows a command that connects your computer to your ac
 npx @parlor/agent-host connect http://localhost:5173
 ```
 
+Run it, press **Connect** in the browser tab it opens, and the tab returns to the app. That browser is trusted right away. Another browser or device asks once on your computer, showing a four-digit code to compare with the one it shows.
+
 ## Next
 
 - [Actions](/guides/actions/): inputs, reads and writes, confirmation, errors.
