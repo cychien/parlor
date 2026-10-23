@@ -1,4 +1,12 @@
-import { chmod, mkdir, readlink, realpath, rm, symlink } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  readlink,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import { basename, delimiter, dirname, join } from "node:path";
 
@@ -78,16 +86,33 @@ function incompatibleMessage(
     : `${grant.appName} is older than this Parlor Host: it speaks host protocol ${welcome.protocols.max}, and this computer needs ${HOST_PROTOCOL}.`;
 }
 
-async function putHostCommandFirstOnPath(root: string): Promise<void> {
-  const entry = selfEntry();
-  if (!entry || !basename(entry).startsWith("parlor-host")) return;
+const shellQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
+
+/**
+ * Agents start `parlor-host mcp-proxy` by name. An entry named otherwise, such as the
+ * published `dist/main.js` that `parlor dev` runs with node, gets a shim instead of a link.
+ */
+export async function putHostCommandFirstOnPath(
+  root: string,
+  entry: string | undefined = selfEntry(),
+): Promise<void> {
+  if (!entry) return;
   const bin = join(root, "bin");
   const link = join(bin, "parlor-host");
   await mkdir(bin, { recursive: true, mode: 0o700 });
   const target = await realpath(entry);
-  if ((await readlink(link).catch(() => undefined)) !== target) {
+  if (basename(entry).startsWith("parlor-host")) {
+    if ((await readlink(link).catch(() => undefined)) !== target) {
+      await rm(link, { force: true });
+      await symlink(target, link);
+    }
+  } else {
     await rm(link, { force: true });
-    await symlink(target, link);
+    await writeFile(
+      link,
+      `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(target)} "$@"\n`,
+      { mode: 0o700 },
+    );
   }
   const path = (process.env.PATH ?? "").split(delimiter).filter((dir) => dir !== bin);
   process.env.PATH = [bin, ...path].join(delimiter);
