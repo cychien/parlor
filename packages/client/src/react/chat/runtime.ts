@@ -91,6 +91,8 @@ export type LinkState =
       readonly status: "unlinked";
       readonly hostName: string;
       readonly code?: string | undefined;
+      /** What a linked phone's camera opens to link this device: `<app>/link#d=…&c=…`. */
+      readonly qr?: string | undefined;
       readonly expiresAt?: string | undefined;
       readonly busy: boolean;
       readonly error?: string | undefined;
@@ -276,7 +278,9 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
   let generation = 0;
   let device: SessionDevice | undefined;
   let linkInfo: Awaited<ReturnType<DeviceLinker["linkState"]>> | undefined;
-  let linking: { readonly code: string; readonly expiresAt: string } | undefined;
+  let linking:
+    | { readonly code: string; readonly qr: string; readonly expiresAt: string }
+    | undefined;
   let linkBusy = false;
   let linkError: string | undefined;
   let setup: DeviceSetup | undefined;
@@ -322,6 +326,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       status: "unlinked",
       hostName: reporting[0]!.name,
       code: linking?.code,
+      qr: linking?.qr,
       expiresAt: linking?.expiresAt,
       busy: linkBusy,
       error: linkError,
@@ -808,7 +813,11 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       emit();
       try {
         const started = await deps.auth.startLink(options);
-        linking = { code: started.code, expiresAt: started.expiresAt };
+        linking = {
+          code: started.code,
+          qr: `${deps.appOrigin}/link#${new URLSearchParams({ d: started.deviceId, c: started.commitment })}`,
+          expiresAt: started.expiresAt,
+        };
         linkInfo = {
           vouched: false,
           pairing: false,

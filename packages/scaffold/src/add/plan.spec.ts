@@ -52,6 +52,7 @@ describe("planAddons", () => {
       ["src/header-actions.tsx", "update"],
       ["src/main.tsx", "update"],
       ["src/routes/__root.tsx", "update"],
+      ["src/routes/link.tsx", "create"],
       ["src/routes/sign-in.tsx", "create"],
     ]);
     expect(plan.dependencies).toEqual([

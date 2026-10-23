@@ -7,7 +7,8 @@ import {
   useLinkDevice,
   useSession,
 } from "@parlor/client/react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { encode } from "uqr";
 
 import { ConfirmationCard, focusComposer } from "./confirmation-card.js";
 import { sidebarView } from "./sidebar-view.js";
@@ -130,7 +131,10 @@ function Computers() {
           </button>
         ) : (
           <>
-            <p>Run this in a terminal on your computer to chat with its agents here:</p>
+            <p>
+              To chat with the AI agents on your computer, set it up once: run this in a
+              terminal on it, then link this device.
+            </p>
             <code data-testid="connect-command" className="block wrap-anywhere text-xs">
               {connect.command}
             </code>
@@ -199,6 +203,27 @@ function useExpired(expiresAt: string | undefined): boolean {
   return expiresAt !== undefined && expiredAt === expiresAt;
 }
 
+function LinkQr({ value }: { readonly value: string }) {
+  const { size, path } = useMemo(() => {
+    const qr = encode(value, { border: 2 });
+    const cells = qr.data.flatMap((row, y) =>
+      row.flatMap((dark, x) => (dark ? [`M${x} ${y}h1v1h-1z`] : [])),
+    );
+    return { size: qr.size, path: cells.join("") };
+  }, [value]);
+  return (
+    <svg
+      viewBox={`0 0 ${size} ${size}`}
+      role="img"
+      aria-label="QR code to link this device"
+      shapeRendering="crispEdges"
+      className="mx-auto size-40 rounded bg-white"
+    >
+      <path d={path} fill="currentColor" />
+    </svg>
+  );
+}
+
 function LinkCard() {
   const { link, startLink } = useChat();
   const expired = useExpired(link.status === "unlinked" ? link.expiresAt : undefined);
@@ -248,9 +273,10 @@ function LinkCard() {
     <section aria-label="Link this device" className={NOTE}>
       <p className="font-medium">Link this device</p>
       <p>
-        On a device you already use, open the Agent sidebar, choose Link a device, and
-        type:
+        Scan this with a phone you already use with your agents, or on any device you
+        already use open the Agent sidebar, choose Link a device, and type the code.
       </p>
+      {link.qr ? <LinkQr value={link.qr} /> : null}
       <p
         data-testid="link-code"
         className="py-1 text-center font-mono text-2xl font-semibold tracking-widest"

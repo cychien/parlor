@@ -38,7 +38,10 @@ const messageOf = (error: unknown): string => {
 export function useLinkDevice(): {
   readonly available: boolean;
   readonly state: LinkDeviceState;
-  check(code: string): Promise<void>;
+  /** A typed code, or the device id and commitment a scanned QR carried. */
+  check(
+    from: string | { readonly deviceId: string; readonly commitment: string },
+  ): Promise<void>;
   confirm(): Promise<void>;
   reset(): void;
 } {
@@ -48,11 +51,11 @@ export function useLinkDevice(): {
   const available = Boolean(auth?.resolveLink && auth.vouch && auth.canVouch);
 
   const check = useCallback(
-    async (code: string) => {
+    async (from: string | { readonly deviceId: string; readonly commitment: string }) => {
       if (!auth?.resolveLink || !auth.canVouch) return;
       setState({ step: "checking" });
       try {
-        const link = await auth.resolveLink(code);
+        const link = await auth.resolveLink(from);
         pending.current = link;
         const device = { name: link.name, platform: link.platform };
         setState(
@@ -61,7 +64,7 @@ export function useLinkDevice(): {
             : {
                 step: "on-computer",
                 device,
-                command: `npx @parlor/agent-host link ${appOrigin()} ${code.toUpperCase().replace(/[\s-]/g, "")}`,
+                command: `npx @parlor/agent-host link ${appOrigin()} ${link.code}`,
               },
         );
       } catch (error) {

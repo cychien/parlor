@@ -171,6 +171,26 @@ describe("linking a device", () => {
     await expect(laptop.resolveLink(started.code)).rejects.toThrow(/No device of yours/);
   });
 
+  it("finds the device a scanned QR names by its id and whole commitment, and refuses an altered one", async () => {
+    const { auth: laptop } = await signedIn(new TestDeviceKey());
+    await laptop.device();
+    const phone = await secondDevice();
+    const started = await phone.startLink();
+    const pending = await laptop.resolveLink({
+      deviceId: started.deviceId,
+      commitment: started.commitment,
+    });
+    expect(pending).toMatchObject({
+      id: started.deviceId,
+      commitment: started.commitment,
+      code: started.code,
+    });
+    const altered = `${started.commitment.slice(0, -1)}${started.commitment.endsWith("A") ? "B" : "A"}`;
+    await expect(
+      laptop.resolveLink({ deviceId: started.deviceId, commitment: altered }),
+    ).rejects.toThrow(/do not match/);
+  });
+
   it("A3: refuses to vouch when the keys the app returns do not match the code", async () => {
     const other = await new TestDeviceKey().publicKeys({
       rpId: "hello.example",

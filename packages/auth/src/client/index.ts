@@ -460,23 +460,36 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
         device: own.id,
         code,
       });
-      return { deviceId: own.id, code, expiresAt };
+      return { deviceId: own.id, code, commitment, expiresAt };
     },
-    resolveLink: async (typed): Promise<PendingLink> => {
-      const code = normalizeLinkCode(typed);
-      const found = await account.call("resolveDeviceLink", { code });
+    resolveLink: async (from): Promise<PendingLink> => {
+      const code = typeof from === "string" ? normalizeLinkCode(from) : undefined;
+      const found = await account.call(
+        "resolveDeviceLink",
+        code ? { code } : { device: (from as { deviceId: string }).deviceId },
+      );
       const commitment = await deviceCommitment(
         appOrigin(baseUrl || undefined),
         found.id,
         found.signingKey,
         found.presenceKey?.publicKey,
       );
-      if (linkCode(commitment) !== code) {
+      const matches =
+        typeof from === "string"
+          ? linkCode(commitment) === code
+          : found.id === from.deviceId && commitment === from.commitment;
+      if (!matches) {
         throw new Error(
           "The app returned a device whose keys do not match this code, so it was not linked.",
         );
       }
-      return { id: found.id, name: found.name, platform: found.platform, commitment };
+      return {
+        id: found.id,
+        name: found.name,
+        platform: found.platform,
+        commitment,
+        code: linkCode(commitment),
+      };
     },
     canVouch: async () => {
       const session = current();

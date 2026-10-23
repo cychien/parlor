@@ -732,11 +732,9 @@ ${hidden}
         const { fields } = await bodyOf(request);
         const code =
           z.object({ code: z.string().max(32) }).safeParse(fields).data?.code ?? "";
-        const found = await findPendingDevice(
-          databaseOf(host),
-          caller.principal.userId,
+        const found = await findPendingDevice(databaseOf(host), caller.principal.userId, {
           code,
-        );
+        });
         if (!found) {
           return Response.json(
             {

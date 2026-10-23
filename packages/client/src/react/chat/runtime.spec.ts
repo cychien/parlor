@@ -1475,6 +1475,7 @@ describe("createChatRuntime linking this device", () => {
     start = vi.fn(async (_options?: { readonly presence?: boolean }) => ({
       deviceId: "dev_new",
       code: "K7M4PX2Q8R",
+      commitment: "c0mm1tment",
       expiresAt: "2026-10-24T10:15:00.000Z",
     })),
   ) => {
@@ -1516,6 +1517,7 @@ describe("createChatRuntime linking this device", () => {
     expect(h.runtime.get().link).toMatchObject({
       status: "unlinked",
       code: "K7M4PX2Q8R",
+      qr: "https://hello.test/link#d=dev_new&c=c0mm1tment",
       expiresAt: "2026-10-24T10:15:00.000Z",
     });
     l.set({ deviceId: "dev_new", vouched: true, pairing: false });
