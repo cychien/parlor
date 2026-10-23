@@ -1473,6 +1473,33 @@ describe("createChatRuntime device signatures", () => {
       expect(h.runtime.get().setup).toBeUndefined();
     });
 
+    it("gives the code in the approval wait for a device enrolled through the setup", async () => {
+      const d = needingSetup();
+      const enrolled = await device().source.device();
+      const remembered = {
+        deviceSetup: d.source.deviceSetup,
+        device: vi.fn(async () => enrolled),
+      };
+      const h = setup({
+        auth: remembered,
+        open: async () =>
+          snapshot({
+            items: [
+              logged(1, "item_p", "prompt", "go"),
+              itemOf(2, "turn_1.1", "event", { event: "device_pending" }),
+            ],
+            turns: [turn("turn_1", "running")],
+          }),
+      });
+      h.runtime.explainSetup();
+      h.runtime.start();
+      await vi.waitFor(() => expect(h.runtime.get().wait?.reason).toBe("approval"));
+      await h.runtime.send("hi");
+      await h.runtime.setUpDevice({ passkey: true });
+      const code = await deviceCode(keysOf("dev_1").signingKey);
+      await vi.waitFor(() => expect(h.runtime.get().wait?.code).toBe(code));
+    });
+
     it("asks nothing once the device is set up", async () => {
       const d = needingSetup();
       const h = explained(d.source);

@@ -507,8 +507,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     return waiting;
   };
 
-  const deviceOf = async (): Promise<SessionDevice | undefined> => {
-    const found = await deps.auth?.device?.();
+  const remember = (found: SessionDevice | undefined) => {
     if (found && found !== device) {
       void deviceCode(found.keys.signingKey).then((digits) => {
         code = digits;
@@ -516,6 +515,11 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       });
     }
     device = found ?? device;
+  };
+
+  const deviceOf = async (): Promise<SessionDevice | undefined> => {
+    const found = await deps.auth?.device?.();
+    remember(found);
     return found;
   };
 
@@ -721,7 +725,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       setup = { step: "passkey" };
       emit();
       try {
-        device = (await deps.auth?.device?.({ presence: passkey })) ?? device;
+        remember(await deps.auth?.device?.({ presence: passkey }));
       } catch (error) {
         if (error instanceof Error && error.name === "PresenceSetupCancelled") {
           setup = { step: "cancelled" };
