@@ -111,6 +111,7 @@ const EXPECTED_FILES = [
   "schema/todos.ts",
   "server.ts",
   "src/agent/agent-button.tsx",
+  "src/agent/agent.css",
   "src/agent/agent-sidebar.tsx",
   "src/agent/confirmation-card.tsx",
   "src/agent/sidebar-view.ts",

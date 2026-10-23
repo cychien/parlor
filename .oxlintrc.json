@@ -18,6 +18,7 @@
       }
     ],
     "import/no-cycle": "error",
+    "import/no-unassigned-import": ["warn", { "allow": ["**/*.css"] }],
     "react/react-in-jsx-scope": "off",
     "eslint/no-underscore-dangle": "off",
     "import/no-named-as-default-member": "off"
@@ -28,7 +29,8 @@
     "**/.output/**",
     "**/.parlor/**",
     "docs/**",
-    "**/routeTree.gen.ts"
+    "**/routeTree.gen.ts",
+    "**/.astro/**"
   ],
   "overrides": [
     {

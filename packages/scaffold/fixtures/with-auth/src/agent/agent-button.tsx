@@ -11,6 +11,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
+import "./agent.css";
 import { sidebarView } from "./sidebar-view.js";
 import { agentPanel } from "./views.js";
 
@@ -92,6 +93,7 @@ export function AgentButton() {
           id={regionId}
           ref={attach}
           aria-labelledby={titleId}
+          data-agent-sidebar
           hidden={!open}
           className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-zinc-200 bg-white shadow-xl"
         >

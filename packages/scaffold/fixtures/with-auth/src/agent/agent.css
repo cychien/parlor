@@ -1,0 +1,5 @@
+@media (min-width: 64rem) {
+  body:has(> [data-agent-sidebar]:not([hidden])) {
+    padding-right: 28rem;
+  }
+}
