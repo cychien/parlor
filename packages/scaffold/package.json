@@ -1,0 +1,45 @@
+{
+  "name": "@parlor/scaffold",
+  "version": "0.0.0",
+  "description": "What create-parlor and parlor add share: the templates, the add-on model, the syntax-tree edit engine, package manager detection, install and git",
+  "files": [
+    "dist",
+    "templates/default",
+    "!templates/*/node_modules",
+    "!templates/*/.parlor"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      },
+      "./package.json": "./package.json"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.spec.json --noEmit",
+    "test": "vitest run",
+    "catalog": "tsx scripts/write-catalog.ts"
+  },
+  "dependencies": {
+    "@babel/parser": "^7.29.9"
+  },
+  "devDependencies": {
+    "@babel/types": "^7.29.8",
+    "@parlor/config": "workspace:*",
+    "@types/node": "catalog:",
+    "tsx": "^4.23.15",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
