@@ -1,0 +1,19 @@
+/* A signature under a `^?` query wraps inside its code frame instead of running off its edge. */
+.expressive-code .frame > pre {
+  container-type: inline-size;
+}
+
+.expressive-code .twoslash-static {
+  margin-left: 0 !important;
+}
+
+.expressive-code .twoslash-static-container {
+  max-width: calc(100cqw - 2.5rem);
+}
+
+.expressive-code .twoslash-static-container pre,
+.expressive-code .twoslash-static-container .ec-line,
+.expressive-code .twoslash-static-container .ec-line .code {
+  white-space: pre-wrap !important;
+  overflow-wrap: anywhere;
+}

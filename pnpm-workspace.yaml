@@ -3,6 +3,7 @@ packages:
   - packages/scaffold/templates/default
   - packages/scaffold/fixtures/with-auth
   - examples/*
+  - website
 
 allowBuilds:
   esbuild: true
