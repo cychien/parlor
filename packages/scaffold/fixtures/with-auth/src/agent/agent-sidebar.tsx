@@ -4,14 +4,16 @@ import {
   Chat,
   type ChatItem,
   useChat,
+  useDeviceSetup,
 } from "@parlor/client/react";
 import { type ReactNode, useEffect } from "react";
 
 import { ConfirmationCard, focusComposer } from "./confirmation-card.js";
 import { sidebarView } from "./sidebar-view.js";
 
-const BUTTON = "rounded-md border border-zinc-300 px-3 py-1 text-sm hover:bg-zinc-100";
-const PRIMARY = "rounded-md bg-zinc-900 px-3 py-1 text-sm font-medium text-white";
+const DISABLED = "disabled:cursor-not-allowed disabled:opacity-40";
+const BUTTON = `rounded-md border border-zinc-300 px-3 py-1 text-sm enabled:hover:bg-zinc-100 ${DISABLED}`;
+const PRIMARY = `rounded-md bg-zinc-900 px-3 py-1 text-sm font-medium text-white ${DISABLED}`;
 const META = "text-xs text-zinc-500";
 
 export default function AgentSidebar() {
@@ -36,6 +38,7 @@ export default function AgentSidebar() {
         >
           {(item) => <Item item={item} />}
         </Chat.Thread>
+        <DeviceSetupCard />
         <Composer />
       </div>
     </Chat.Root>
@@ -174,6 +177,67 @@ function ThreadEmpty() {
         ? "Your conversation with an agent shows up here."
         : "Ask your agent to do something in this app, like adding a todo."}
     </p>
+  );
+}
+
+function DeviceSetupCard() {
+  const { agent } = useChat();
+  const { setup, setUpDevice, dismissSetup } = useDeviceSetup();
+  if (!setup) return null;
+  const computer = agent?.hostName ?? "your computer";
+  const site = globalThis.location?.hostname ?? "this app";
+  const busy = setup.step === "passkey";
+  return (
+    <section
+      aria-label="Set up this browser"
+      className="mx-4 mb-4 space-y-2 rounded-lg border border-zinc-200 p-3 text-sm"
+    >
+      {setup.step === "cancelled" ? (
+        <>
+          <p className="font-medium">The passkey was not created</p>
+          <p>
+            Try again, or continue without one. Your agent's permission questions are then
+            answered on {computer}.
+          </p>
+        </>
+      ) : (
+        <>
+          <p className="font-medium">Set up this browser</p>
+          <p>Before your first message, two things happen once:</p>
+          <ul className="list-disc space-y-1 pl-5">
+            <li>
+              Your browser asks to create a passkey for {site}, so you can approve your
+              agent's actions with Touch ID or your device's lock.
+            </li>
+            <li>{computer} asks you to allow this browser.</li>
+          </ul>
+          <p className={META}>
+            Without a passkey, you answer your agent's permission questions on {computer}.
+          </p>
+        </>
+      )}
+      <div className="flex flex-wrap justify-end gap-2 pt-1">
+        <button type="button" onClick={dismissSetup} disabled={busy} className={BUTTON}>
+          Not now
+        </button>
+        <button
+          type="button"
+          onClick={() => void setUpDevice({ passkey: false })}
+          disabled={busy}
+          className={BUTTON}
+        >
+          Skip passkey
+        </button>
+        <button
+          type="button"
+          onClick={() => void setUpDevice({ passkey: true })}
+          disabled={busy}
+          className={PRIMARY}
+        >
+          {setup.step === "cancelled" ? "Try again" : "Continue"}
+        </button>
+      </div>
+    </section>
   );
 }
 

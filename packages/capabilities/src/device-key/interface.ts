@@ -4,8 +4,20 @@
  * agent's own permission prompts and always needs Touch ID, Face ID or a passkey.
  */
 export interface DeviceKey {
-  /** Creates the keys on first use; stable afterwards. */
-  publicKeys(enrollment: PresenceEnrollment): Promise<DevicePublicKeys>;
+  /**
+   * Creates the keys on first use; stable afterwards. `presence: false` settles this device
+   * without a presence key. Throws `PresenceSetupCancelled`, keeping nothing, when the user
+   * dismisses the platform's prompt, so a later call can ask again.
+   */
+  publicKeys(
+    enrollment: PresenceEnrollment,
+    options?: { readonly presence?: boolean },
+  ): Promise<DevicePublicKeys>;
+  /**
+   * `needed` while the next `publicKeys` would show a platform prompt (a passkey on the web),
+   * so the app can explain it first. Absent where creating the keys never prompts.
+   */
+  presenceSetup?(): Promise<"needed" | "done">;
   sign(
     payload: Uint8Array,
     options: { readonly presence: false },
@@ -14,6 +26,13 @@ export interface DeviceKey {
     payload: Uint8Array,
     options: { readonly presence: true },
   ): Promise<PresenceSignature>;
+}
+
+export class PresenceSetupCancelled extends Error {
+  override readonly name = "PresenceSetupCancelled";
+  constructor() {
+    super("The passkey was not created.");
+  }
 }
 
 export interface PresenceEnrollment {

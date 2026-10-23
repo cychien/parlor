@@ -75,6 +75,15 @@ export interface ChatWait {
   readonly hostName: string;
 }
 
+/**
+ * Set while an action waits for this device to be set up: on a browser, the first prompt
+ * would otherwise open a passkey prompt with no warning. `explain` until the user picks,
+ * `passkey` while the browser asks, `cancelled` once they dismissed it.
+ */
+export interface DeviceSetup {
+  readonly step: "explain" | "passkey" | "cancelled";
+}
+
 export interface ChatState {
   readonly status: ChatStatus;
   /** Set exactly while `status` is `waiting`; approval wins when both reasons hold. */
@@ -89,6 +98,7 @@ export interface ChatState {
   readonly draft: string;
   /** Why the last send, stop or answer failed; cleared by the next one that succeeds. */
   readonly error: string | undefined;
+  readonly setup: DeviceSetup | undefined;
 }
 
 export interface ChatCommands {
@@ -111,10 +121,22 @@ export interface ChatCommands {
   newThread(): void;
 }
 
-export interface ChatRuntime extends ChatCommands {
+export interface DeviceSetupCommands {
+  /** Sets this device up, with a passkey or without one, then runs what waited for it. */
+  setUpDevice(options: { readonly passkey: boolean }): Promise<void>;
+  /** Drops what waited for the setup; the draft stays. */
+  dismissSetup(): void;
+}
+
+export interface ChatRuntime extends ChatCommands, DeviceSetupCommands {
   subscribe(listener: () => void): () => void;
   get(): ChatState;
   start(): () => void;
+  /**
+   * Called by a UI that explains the device setup, until it unmounts. Without one, the first
+   * prompt enrolls the device directly, as before.
+   */
+  explainSetup(): () => void;
 }
 
 export interface ChatRuntimeDeps {
@@ -225,6 +247,9 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
   let pingRefused = false;
   let generation = 0;
   let device: SessionDevice | undefined;
+  let setup: DeviceSetup | undefined;
+  let afterSetup: (() => Promise<void>) | undefined;
+  let explainers = 0;
   const resends = new Map<ItemId, PendingSend>();
   const answerIds = new Map<string, ItemId>();
   const stopIds = new Map<TurnId, ItemId>();
@@ -298,6 +323,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       connect,
       draft,
       error: failure,
+      setup,
     };
   };
 
@@ -482,6 +508,20 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     return found;
   };
 
+  const whenSetUp = async (action: () => Promise<void>): Promise<void> => {
+    if (
+      explainers > 0 &&
+      device === undefined &&
+      (await deps.auth?.deviceSetup?.()) === "needed"
+    ) {
+      afterSetup = action;
+      setup = { step: "explain" };
+      emit();
+      return;
+    }
+    await action();
+  };
+
   const signPrompt = async (prompt: PromptToSign): Promise<ItemSignature | undefined> =>
     (await deviceOf())?.signPrompt(prompt);
 
@@ -585,10 +625,12 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
               turnId: mint("turn"),
               itemId: mint("item"),
             });
-      await submit(attempt, target.key, () => {
-        pendingSend = undefined;
-        if (draft.trim() === prompt) draft = "";
-      });
+      await whenSetUp(() =>
+        submit(attempt, target.key, () => {
+          pendingSend = undefined;
+          if (draft.trim() === prompt) draft = "";
+        }),
+      );
     },
     async resend(promptItemId) {
       const prompt = state.items.find(
@@ -608,7 +650,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
         };
         resends.set(prompt.id, attempt);
       }
-      await submit(attempt, key, () => resends.delete(prompt.id));
+      await whenSetUp(() => submit(attempt, key, () => resends.delete(prompt.id)));
     },
     async stop() {
       const turn = activeTurn();
@@ -636,30 +678,68 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
         choice,
         ...(values ? { values } : {}),
       };
-      await reporting(async () => {
-        const found = deps.auth?.device ? await deviceOf() : undefined;
-        if (ask.approval === "presence" && !found) {
-          throw new NeedsDevice(
-            "This question needs a device that can confirm it is you.",
-          );
+      await whenSetUp(() =>
+        reporting(async () => {
+          const found = deps.auth?.device ? await deviceOf() : undefined;
+          if (ask.approval === "presence" && !found) {
+            throw new NeedsDevice(
+              "This question needs a device that can confirm it is you.",
+            );
+          }
+          const signed = await found?.signAnswer(toSign, {
+            presence: ask.approval === "presence",
+          });
+          await calls.call("answer", {
+            threadId: target,
+            turnId: ask.turnId,
+            itemId,
+            answer: {
+              askId: ask.id,
+              choice,
+              ...(values ? { values } : {}),
+              ...(signed ? { signed } : {}),
+            },
+          });
+          answerIds.delete(askId);
+          await refresh();
+        }),
+      );
+    },
+    async setUpDevice({ passkey }) {
+      if (setup === undefined || setup.step === "passkey") return;
+      setup = { step: "passkey" };
+      emit();
+      try {
+        device = (await deps.auth?.device?.({ presence: passkey })) ?? device;
+      } catch (error) {
+        if (error instanceof Error && error.name === "PresenceSetupCancelled") {
+          setup = { step: "cancelled" };
+          emit();
+          return;
         }
-        const signed = await found?.signAnswer(toSign, {
-          presence: ask.approval === "presence",
-        });
-        await calls.call("answer", {
-          threadId: target,
-          turnId: ask.turnId,
-          itemId,
-          answer: {
-            askId: ask.id,
-            choice,
-            ...(values ? { values } : {}),
-            ...(signed ? { signed } : {}),
-          },
-        });
-        answerIds.delete(askId);
-        await refresh();
-      });
+        setup = undefined;
+        afterSetup = undefined;
+        failure = readable(error);
+        emit();
+        return;
+      }
+      const waiting = afterSetup;
+      setup = undefined;
+      afterSetup = undefined;
+      emit();
+      await waiting?.();
+    },
+    dismissSetup() {
+      setup = undefined;
+      afterSetup = undefined;
+      emit();
+    },
+    explainSetup() {
+      explainers += 1;
+      return () => {
+        explainers -= 1;
+        if (explainers === 0 && setup !== undefined) runtime.dismissSetup();
+      };
     },
     choose(agentKey) {
       chosen = agentKey;

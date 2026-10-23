@@ -38,8 +38,14 @@ export interface SessionDevice {
 }
 
 export interface DeviceSource {
-  /** Enrolls this device with the account on first use; undefined where it cannot sign. */
-  device(): Promise<SessionDevice | undefined>;
+  /**
+   * Enrolls this device with the account on first use; undefined where it cannot sign.
+   * `presence: false` enrolls it without a presence key. Rejects with the capability's
+   * `PresenceSetupCancelled` when the user dismisses the passkey prompt.
+   */
+  device(options?: { readonly presence?: boolean }): Promise<SessionDevice | undefined>;
+  /** `needed` while the first `device()` would ask the user to create a passkey. */
+  deviceSetup?(): Promise<"needed" | "ready">;
 }
 
 export interface HostAuthorizer {

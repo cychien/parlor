@@ -1,10 +1,11 @@
-import type {
-  DeviceKey,
-  DevicePublicKeys,
-  DeviceSignature,
-  PresenceEnrollment,
-  PresencePublicKey,
-  PresenceSignature,
+import {
+  type DeviceKey,
+  type DevicePublicKeys,
+  type DeviceSignature,
+  type PresenceEnrollment,
+  type PresencePublicKey,
+  PresenceSetupCancelled,
+  type PresenceSignature,
 } from "@parlor/capabilities";
 import {
   decodeBase64url,
@@ -40,22 +41,40 @@ export class TestDeviceKey implements DeviceKey {
   readonly #signing = generate();
   readonly #presence: Promise<CryptoKeyPair> | undefined;
 
+  /** What `presenceSetup` answers until the keys are made, like a browser with a passkey to create. */
+  setup: "needed" | "done" = "done";
+  /** The next `publicKeys` acts as if the user dismissed the passkey prompt. */
+  cancelNext = false;
+
   constructor(withPresence = true) {
     this.#presence = withPresence ? generate() : undefined;
   }
 
-  async publicKeys(enrollment: PresenceEnrollment): Promise<DevicePublicKeys> {
+  async presenceSetup(): Promise<"needed" | "done"> {
+    return this.setup;
+  }
+
+  async publicKeys(
+    enrollment: PresenceEnrollment,
+    options?: { readonly presence?: boolean },
+  ): Promise<DevicePublicKeys> {
+    if (this.cancelNext) {
+      this.cancelNext = false;
+      throw new PresenceSetupCancelled();
+    }
+    this.setup = "done";
     const signing = await point((await this.#signing).publicKey);
-    const presence: PresencePublicKey | undefined = this.#presence
-      ? await (async () => {
-          const publicKey = await point((await this.#presence!).publicKey);
-          return {
-            format: "es256-raw" as const,
-            keyId: await idOf(publicKey),
-            publicKey,
-          };
-        })()
-      : undefined;
+    const presence: PresencePublicKey | undefined =
+      this.#presence && options?.presence !== false
+        ? await (async () => {
+            const publicKey = await point((await this.#presence!).publicKey);
+            return {
+              format: "es256-raw" as const,
+              keyId: await idOf(publicKey),
+              publicKey,
+            };
+          })()
+        : undefined;
     return {
       signing: { keyId: await idOf(signing), publicKey: signing },
       presence,

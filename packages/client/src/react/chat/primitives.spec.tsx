@@ -41,6 +41,8 @@ const baseState: ChatState = {
     command: "npx @parlor/agent-host connect https://app.test",
   },
   draft: "",
+  error: undefined,
+  setup: undefined,
 };
 
 function fakeRuntime(initial: Partial<ChatState> = {}) {
@@ -202,6 +204,14 @@ describe("Chat.Composer", () => {
     fireEvent.keyDown(screen.getByRole("textbox", { name: "Message" }), { key: "Enter" });
     expect(fake.runtime.send).not.toHaveBeenCalled();
     fake.set({ draft: "x".repeat(32_000) });
+    expect(send.disabled).toBe(false);
+  });
+
+  it("cannot send while the device setup waits for the user", () => {
+    const fake = composer({ draft: "hello", setup: { step: "explain" } });
+    const send = screen.getByRole("button", { name: "Send" }) as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+    fake.set({ setup: undefined });
     expect(send.disabled).toBe(false);
   });
 
@@ -448,6 +458,12 @@ describe("Chat.Status", () => {
     expect(line.dataset.status).toBe("waiting");
     expect(line.dataset.wait).toBe("offline");
     expect(line.className).toBe("line");
+  });
+
+  it("says it waits for the passkey while the browser asks for one", () => {
+    expect(status({ setup: { step: "passkey" } }).textContent).toBe(
+      "Waiting for the passkey",
+    );
   });
 
   it("T7-01a (b) names the computer that must approve this device", () => {

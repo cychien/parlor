@@ -5,6 +5,7 @@ import type { DeviceKey } from "./interface.js";
 
 export { capacitorDeviceKey, type CapacitorDeviceKeyModule } from "./capacitor.js";
 
+export { PresenceSetupCancelled } from "./interface.js";
 export type {
   DeviceKey,
   DevicePublicKeys,

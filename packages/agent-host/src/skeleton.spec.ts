@@ -64,9 +64,37 @@ const DIFFERENCES: Readonly<
     agreed: true,
     why: "addendum D9: the failure the sidebar shows",
   },
+  "auth/src/client/index.ts AuthClient changed": {
+    agreed: true,
+    why: "`deviceSetup` says whether the first enrollment would create a passkey",
+  },
+  "capabilities/src/device-key/index.ts PresenceSetupCancelled added": {
+    agreed: true,
+    why: "the first prompt on a browser explains the passkey before creating it; a cancel keeps nothing so it can be asked again, and skipping enrolls without a presence key",
+  },
+  "capabilities/src/device-key/interface.ts DeviceKey changed": {
+    agreed: true,
+    why: "the first prompt on a browser explains the passkey before creating it; a cancel keeps nothing so it can be asked again, and skipping enrolls without a presence key",
+  },
+  "capabilities/src/device-key/interface.ts PresenceSetupCancelled added": {
+    agreed: true,
+    why: "the first prompt on a browser explains the passkey before creating it; a cancel keeps nothing so it can be asked again, and skipping enrolls without a presence key",
+  },
+  "capabilities/src/device-key/web.ts WebDeviceKeyApis changed": {
+    agreed: true,
+    why: "`platformAuthenticator` asks whether Touch ID or Windows Hello can make the passkey before offering it",
+  },
+  "capabilities/src/device-key/web.ts webDeviceKey changed": {
+    agreed: true,
+    why: "its default apis carry `platformAuthenticator`",
+  },
   "auth/src/client/index.ts AuthClientOptions changed": {
     agreed: true,
     why: "`deviceKey` injects the keys, as `session` injects the session store",
+  },
+  "client/src/session.ts DeviceSource changed": {
+    agreed: true,
+    why: "`device({ presence })` and `deviceSetup` let the chat explain the passkey before the first prompt creates it",
   },
   "client/src/session.ts SessionDevice changed": {
     agreed: true,

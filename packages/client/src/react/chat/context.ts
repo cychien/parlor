@@ -20,6 +20,7 @@ export function canSend(state: ChatState): boolean {
   const { agent } = state;
   return (
     state.draft.trim() !== "" &&
+    state.setup === undefined &&
     !isPromptTooLong(state.draft) &&
     agent !== undefined &&
     agent.ready &&
