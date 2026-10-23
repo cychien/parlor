@@ -1,3 +1,4 @@
+import type { UserConfig as ViteUserConfig } from "vite";
 import { z } from "zod";
 
 export const CSP_DIRECTIVES = [
@@ -15,6 +16,10 @@ export const CSP_DIRECTIVES = [
   "base-uri",
   "form-action",
 ] as const;
+
+function isPlainObject(value: unknown): boolean {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 const APP_ID = /^[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)+$/;
 
@@ -67,6 +72,13 @@ export const parlorConfigSchema = z.object({
     })
     .prefault({}),
   deploy: z.object({ preset: z.string().optional() }).prefault({}),
+  /**
+   * Merged into the Vite config `parlor dev` and `parlor build` own, for plugins such as
+   * `@tailwindcss/vite`. Keys Parlor sets itself (root, ports, outDir) are ignored with a warning.
+   */
+  vite: z
+    .custom<ViteUserConfig>(isPlainObject, "vite must be a Vite config object")
+    .optional(),
 });
 
 export type ParlorConfigInput = z.input<typeof parlorConfigSchema>;

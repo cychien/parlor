@@ -1,6 +1,7 @@
 import { loadParlorConfig } from "@parlor/config";
 import { defineCommand } from "citty";
 
+import { warnChatWithoutAuth } from "../chat-warning.js";
 import { handlers } from "../handlers.js";
 import { parseTarget, resolveHandler } from "../targets.js";
 
@@ -21,6 +22,8 @@ export const build = defineCommand({
   async run({ args }) {
     const target = parseTarget(args.target);
     const handler = resolveHandler(handlers, target);
-    await handler.build(await loadParlorConfig(), { preset: args.preset });
+    const loaded = await loadParlorConfig();
+    await warnChatWithoutAuth(loaded);
+    await handler.build(loaded, { preset: args.preset });
   },
 });

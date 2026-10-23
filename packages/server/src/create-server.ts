@@ -203,6 +203,7 @@ export function createServer<T extends ActionMap>(
     basePath,
     database,
     ...(auth ? { auth } : {}),
+    authMisconfigured: "auth" in options && auth === undefined,
     callerOf: callers,
     ready,
     announce: async (target, tags, within) => {

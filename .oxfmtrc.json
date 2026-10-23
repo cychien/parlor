@@ -4,5 +4,11 @@
   "printWidth": 90,
   "trailingComma": "all",
   "sortImports": true,
-  "ignorePatterns": ["docs/**", "**/dist/**", "pnpm-lock.yaml", "**/routeTree.gen.ts"]
+  "ignorePatterns": [
+    "docs/**",
+    "**/dist/**",
+    "pnpm-lock.yaml",
+    "**/routeTree.gen.ts",
+    "**/.astro/**"
+  ]
 }

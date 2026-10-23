@@ -1,0 +1,46 @@
+{
+  "name": "parlor-website",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/sample-paths.ts && astro dev",
+    "build": "node scripts/sample-paths.ts && node scripts/check-samples.ts && astro build",
+    "preview": "astro preview",
+    "typecheck": "astro sync && tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "0.42.6",
+    "@ec-ts/twoslash": "1.0.0",
+    "astro": "7.4.2",
+    "expressive-code-twoslash": "0.6.1",
+    "starlight-links-validator": "0.27.0",
+    "typescript": "6.0.3"
+  },
+  "devDependencies": {
+    "@parlor/auth": "workspace:*",
+    "@parlor/capabilities": "workspace:*",
+    "@parlor/chat": "workspace:*",
+    "@parlor/cli": "workspace:*",
+    "@parlor/client": "workspace:*",
+    "@parlor/config": "workspace:*",
+    "@parlor/core": "workspace:*",
+    "@parlor/data": "workspace:*",
+    "@parlor/server": "workspace:*",
+    "@tailwindcss/vite": "^4.3.3",
+    "@tanstack/react-query": "catalog:",
+    "@tanstack/react-router": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "better-auth": "1.7.7",
+    "create-parlor": "workspace:*",
+    "drizzle-orm": "^0.45.4",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:",
+    "zod": "catalog:"
+  }
+}

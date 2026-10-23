@@ -1,17 +1,14 @@
 import type { LoadedConfig } from "@parlor/config";
 import { createServer, type ViteDevServer } from "vite";
 
-import { parlorWeb, type WebOptions } from "./plugin.js";
+import type { WebOptions } from "./plugin.js";
+import { parlorViteConfig } from "./vite-config.js";
 
 export async function startWebDev(
-  { config, rootDir }: LoadedConfig,
+  loaded: LoadedConfig,
   options: WebOptions = {},
 ): Promise<ViteDevServer> {
-  const server = await createServer({
-    root: rootDir,
-    configFile: false,
-    plugins: parlorWeb(config, { ...options, root: rootDir }),
-  });
+  const server = await createServer(parlorViteConfig(loaded, options, {}));
   await server.listen();
   server.printUrls();
   return server;

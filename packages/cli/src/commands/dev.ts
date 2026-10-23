@@ -1,4 +1,5 @@
 import { loadParlorConfig } from "@parlor/config";
+import { inspectServerEntry } from "@parlor/scaffold";
 import { defineCommand } from "citty";
 
 import { startDevAgentHost } from "../agent-host-process.js";
@@ -39,7 +40,11 @@ export const dev = defineCommand({
     const handler = resolveHandler(handlers, target);
     const loaded = await loadParlorConfig();
     const port = parsePort(args.port);
-    startDevAgentHost(loaded, { enabled: args["agent-host"], serverHasAuth: false });
+    const server = await inspectServerEntry(loaded.rootDir, loaded.config.server.entry);
+    startDevAgentHost(loaded, {
+      enabled: args["agent-host"],
+      serverHasAuth: server.auth === "installed",
+    });
     await handler.dev(
       port === undefined
         ? loaded

@@ -3,23 +3,23 @@ import { join } from "node:path";
 import { GENERATED_DIR, type LoadedConfig } from "@parlor/config";
 import { build } from "vite";
 
-import { parlorWeb, type WebOptions } from "./plugin.js";
+import type { WebOptions } from "./plugin.js";
+import { parlorViteConfig } from "./vite-config.js";
 
 export function webOutDir(rootDir: string): string {
   return join(rootDir, GENERATED_DIR, "web");
 }
 
 export async function buildWeb(
-  { config, rootDir }: LoadedConfig,
+  loaded: LoadedConfig,
   options: WebOptions = {},
 ): Promise<string> {
-  const outDir = webOutDir(rootDir);
-  await build({
-    root: rootDir,
-    configFile: false,
-    plugins: parlorWeb(config, { ...options, root: rootDir }),
-    build: { outDir, emptyOutDir: true },
-    logLevel: "warn",
-  });
+  const outDir = webOutDir(loaded.rootDir);
+  await build(
+    parlorViteConfig(loaded, options, {
+      build: { outDir, emptyOutDir: true },
+      logLevel: "warn",
+    }),
+  );
   return outDir;
 }

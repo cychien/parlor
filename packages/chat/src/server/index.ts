@@ -58,6 +58,13 @@ export {
 
 export const CHAT_PLUGIN = "chat";
 
+/** Chat then serves nothing, so the client reads `useChat().status` as `unavailable`. */
+export const UNAVAILABLE_WITHOUT_AUTH =
+  "chat() is unavailable: no auth provider is configured, so every action runs without a signed-in user.";
+
+export const AUTH_UNDEFINED =
+  "auth is undefined. Check the environment variables your auth setup reads, or remove the auth option to run without sign-in.";
+
 /** Outlives a 30 s network drop plus a 5 s reconnect. */
 export const DEFAULT_LEASE_MS = 60_000;
 export const DEFAULT_HEARTBEAT_MS = 30_000;
@@ -102,12 +109,12 @@ export function chat(options: ChatOptions = {}): ServerPlugin {
         );
       }
       const { auth, database } = host;
-      if (!auth?.delegate) {
-        throw new Error(
-          "chat() needs an auth provider that can mint turn tokens; add `auth` to createServer (parlor dev installs one).",
-        );
-      }
       if (!database) throw new Error("chat() needs a database.");
+      if (!auth?.delegate) {
+        if (host.authMisconfigured) throw new Error(AUTH_UNDEFINED);
+        console.warn(UNAVAILABLE_WITHOUT_AUTH);
+        return {};
+      }
       const relay = (options.relay ?? inProcessRelay)();
       const db = () => database.read() as ChatDb;
       const transact: ChatActionDeps["transact"] = (scope, work) =>

@@ -1,0 +1,9 @@
+{
+  "extends": ["@parlor/config/tsconfig", "./.generated/sample-paths.json"],
+  "compilerOptions": {
+    "noEmit": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "types": ["node"]
+  }
+}

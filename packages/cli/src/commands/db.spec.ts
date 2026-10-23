@@ -28,6 +28,13 @@ describe("drizzleKitArgs", () => {
       "migrations",
     ]);
   });
+
+  it("names the migration when asked, as parlor add does", () => {
+    expect(drizzleKitArgs("schema", "migrations", "auth").slice(-2)).toEqual([
+      "--name",
+      "auth",
+    ]);
+  });
 });
 
 const tasksSchema = (columns: string) => `

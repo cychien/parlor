@@ -1,0 +1,8 @@
+{
+  "steps": {
+    "Add a todo called From the agent": [
+      { "kind": "call_app", "tool": "addTodo", "input": { "title": "From the agent" } },
+      { "kind": "reply", "chunks": ["Added the todo From the agent."] }
+    ]
+  }
+}

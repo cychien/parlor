@@ -2,18 +2,21 @@
   "name": "@parlor/config",
   "version": "0.0.0",
   "files": [
-    "dist"
+    "dist",
+    "tsconfig.app.json"
   ],
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./tsconfig": "./tsconfig.app.json"
   },
   "publishConfig": {
     "exports": {
       ".": {
         "types": "./dist/index.d.ts",
         "import": "./dist/index.js"
-      }
+      },
+      "./tsconfig": "./tsconfig.app.json"
     }
   },
   "scripts": {
@@ -28,6 +31,15 @@
   "devDependencies": {
     "@types/node": "catalog:",
     "typescript": "catalog:",
+    "vite": "catalog:",
     "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "vite": "^8.0.0"
+  },
+  "peerDependenciesMeta": {
+    "vite": {
+      "optional": true
+    }
   }
 }

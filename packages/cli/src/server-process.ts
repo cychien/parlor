@@ -1,6 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { once } from "node:events";
 import { createRequire } from "node:module";
+import { connect } from "node:net";
 import { join } from "node:path";
 
 import { appServerEnv, type LoadedConfig, type ParlorConfig } from "@parlor/config";
@@ -36,6 +37,29 @@ export async function stopServerProcess(
     await exited;
   } finally {
     clearTimeout(nudge);
+  }
+}
+
+function accepts(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = connect(port, "localhost");
+    socket.once("connect", () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once("error", () => resolve(false));
+  });
+}
+
+/** Lets the page's first requests reach the server instead of failing in Vite's proxy. */
+export async function untilListening(
+  child: ChildProcess,
+  port: number,
+  intervalMs = 100,
+): Promise<void> {
+  while (child.exitCode === null && child.signalCode === null) {
+    if (await accepts(port)) return;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
 }
 

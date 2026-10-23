@@ -96,6 +96,8 @@ export interface PluginHost {
   readonly database: DataProvider | undefined;
   /** The installed auth provider, for plugins that mint or look up credentials (chat). */
   readonly auth?: AuthProvider | undefined;
+  /** `createServer` got an `auth` key whose value is undefined: a sign-in setup that failed to configure. */
+  readonly authMisconfigured?: boolean;
   callerOf(request: Request): Promise<Caller>;
   /**
    * Resolves once the database holds every plugin's tables. Work a plugin starts on its own,

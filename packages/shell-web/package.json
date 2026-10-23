@@ -32,6 +32,7 @@
     "workbox-window": "^7.4.1"
   },
   "devDependencies": {
+    "@tanstack/router-generator": "catalog:",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

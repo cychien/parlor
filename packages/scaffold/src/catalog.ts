@@ -1,0 +1,22 @@
+/** Generated from the `catalog` in the repo's `pnpm-workspace.yaml` by `scripts/write-catalog.ts`; `catalog.spec.ts` fails when they differ. */
+export const CATALOG: Readonly<Record<string, string>> = {
+  "@standard-schema/spec": "^1.1.0",
+  "@tanstack/react-query": "^5.104.1",
+  "@tanstack/react-router": "^1.170.45",
+  "@tanstack/router-core": "^1.171.38",
+  "@tanstack/router-generator": "^1.167.45",
+  "@tanstack/router-plugin": "^1.168.47",
+  "@testing-library/react": "^16.3.3",
+  "@types/node": "^24.14.0",
+  "@types/react": "^19.3.0",
+  "@types/react-dom": "^19.3.0",
+  "@vitejs/plugin-react": "^6.1.2",
+  h3: "^2.0.1",
+  "happy-dom": "^20.14.5",
+  react: "^19.3.0",
+  "react-dom": "^19.3.0",
+  typescript: "^7.0.2",
+  vite: "^8.3.3",
+  vitest: "^5.0.3",
+  zod: "^4.6.5",
+};
