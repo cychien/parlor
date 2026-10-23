@@ -27,6 +27,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@parlor/agent-host": "workspace:*",
     "@parlor/cli": "workspace:*",
     "@parlor/config": "workspace:*",
     "@tailwindcss/vite": "^4.3.3",
