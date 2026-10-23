@@ -68,6 +68,7 @@ function SignIn() {
             name="name"
             aria-label="Name"
             placeholder="Name"
+            autoComplete="name"
             required
             className={FIELD}
           />
