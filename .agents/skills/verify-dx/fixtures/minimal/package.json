@@ -1,0 +1,36 @@
+{
+  "name": "dx-minimal",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "parlor dev",
+    "build": "parlor build",
+    "typegen": "parlor typegen",
+    "typecheck": "parlor typegen && tsc --noEmit"
+  },
+  "dependencies": {
+    "@parlor/client": "{{VERSION}}",
+    "@parlor/core": "{{VERSION}}",
+    "@parlor/server": "{{VERSION}}",
+    "@tanstack/react-query": "^5.104.1",
+    "@tanstack/react-router": "^1.170.45",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@parlor/cli": "{{VERSION}}",
+    "@parlor/config": "{{VERSION}}",
+    "@tailwindcss/vite": "^4.1.0",
+    "@types/node": "^24.14.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "tailwindcss": "^4.1.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.3"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
