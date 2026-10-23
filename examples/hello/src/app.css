@@ -335,6 +335,15 @@ button.danger {
   text-align: center;
 }
 
+.sidebar-note .link-qr {
+  justify-self: center;
+  width: 160px;
+  height: 160px;
+  border-radius: 6px;
+  background: #fff;
+  color: #000;
+}
+
 .sidebar-note form {
   display: grid;
   gap: 8px;
@@ -352,7 +361,7 @@ button.danger {
   margin: 0 16px 8px;
 }
 
-.sidebar-note .connect-command {
+.connect-command {
   justify-self: stretch;
   padding: 8px 10px;
   border: 1px solid var(--line);
