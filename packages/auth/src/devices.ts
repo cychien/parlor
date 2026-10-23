@@ -11,13 +11,25 @@ import {
   type UserId,
 } from "@parlor/core";
 import { type ActionsOf, createRegistry } from "@parlor/core/registry";
-import type { DeviceKeys, Migration, PluginHost, PresenceKey } from "@parlor/server";
+import type {
+  DeviceKeys,
+  DeviceVouch,
+  Migration,
+  PluginHost,
+  PresenceKey,
+} from "@parlor/server";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { signedIn } from "./account.js";
 import { type Database, jwkOf, rowsOf } from "./database.js";
 import { verifyEs256 } from "./es256.js";
+import {
+  LINK_CODE_LENGTH,
+  normalizeLinkCode,
+  verifyStatement,
+  vouchStatement,
+} from "./statements.js";
 
 export type { PresenceKey } from "@parlor/server";
 
@@ -40,23 +52,25 @@ interface DeviceRow {
   readonly signing_key: JsonWebKey | string;
   readonly presence_key: PresenceKey | string | null;
   readonly created_ms: string | number;
+  readonly vouches: DeviceVouch[] | string | null;
 }
+
+const parsed = <T>(value: T | string | null): T | null =>
+  typeof value === "string" ? (JSON.parse(value) as T) : value;
 
 export function createDeviceRegistry(database: DataProvider): DeviceRegistry {
   return {
     async get(userId, deviceId) {
       const [row] = rowsOf<DeviceRow>(
         await (database.read() as Database).execute(sql`
-          select id, user_id, name, platform, signing_key, presence_key,
+          select id, user_id, name, platform, signing_key, presence_key, vouches,
             (extract(epoch from created_at) * 1000)::bigint as created_ms
           from parlor_auth_devices
           where id = ${deviceId} and user_id = ${userId} and revoked_at is null`),
       );
       if (!row) return undefined;
-      const presence =
-        typeof row.presence_key === "string"
-          ? (JSON.parse(row.presence_key) as PresenceKey)
-          : row.presence_key;
+      const presence = parsed(row.presence_key);
+      const vouches = parsed(row.vouches) ?? [];
       return {
         id: asId("device", row.id),
         userId: asId("user", row.user_id),
@@ -64,6 +78,7 @@ export function createDeviceRegistry(database: DataProvider): DeviceRegistry {
         platform: row.platform,
         signingKey: jwkOf(row.signing_key),
         presenceKey: presence ?? undefined,
+        ...(vouches.length > 0 ? { vouches } : {}),
         createdAt: Number(row.created_ms),
       };
     },
@@ -96,15 +111,47 @@ export const DEVICES_MIGRATION: Migration = {
     )`,
 };
 
+export const DEVICE_LINKING_MIGRATION: Migration = {
+  id: "auth/0007_device_linking",
+  sql: `
+    alter table parlor_auth_devices add column vouches jsonb not null default '[]'::jsonb;
+    alter table parlor_auth_devices add column link_code text;
+    alter table parlor_auth_devices add column link_expires_at timestamptz;
+    create index parlor_auth_devices_link_code on parlor_auth_devices (user_id, link_code)
+      where link_code is not null`,
+};
+
 export interface ConnectedDevice {
   readonly id: DeviceId;
   readonly name: string;
   readonly platform: string;
   readonly current: boolean;
   readonly createdAt: string;
+  /** A linked device vouched for it; the computer pins it on its first prompt. */
+  readonly vouched: boolean;
+}
+
+/** A device waiting to be linked, as the one linking it checks it against the code. */
+export interface PendingDevice {
+  readonly id: DeviceId;
+  readonly name: string;
+  readonly platform: string;
+  readonly signingKey: JsonWebKey;
+  readonly presenceKey?: PresenceKey | undefined;
 }
 
 const CHALLENGE_TTL_MS = 5 * 60_000;
+const LINK_TTL_MS = 15 * 60_000;
+const VOUCH_MAX_AGE_MS = 5 * 60_000;
+const linkCodeInput = z
+  .string()
+  .min(LINK_CODE_LENGTH)
+  .max(32)
+  .transform(normalizeLinkCode)
+  .refine(
+    (code) => /^[0-9A-HJKMNP-TV-Z]{10}$/.test(code),
+    "Enter the 10-character code.",
+  );
 const P256 = { name: "ECDSA", namedCurve: "P-256" } as const;
 
 const jwk = z.record(z.string(), z.unknown());
@@ -143,6 +190,7 @@ interface DeviceListRow {
   readonly name: string;
   readonly platform: string;
   readonly created_at: string | Date;
+  readonly vouched: boolean;
 }
 
 function databaseOf(host: PluginHost): DataProvider {
@@ -187,6 +235,30 @@ async function presenceOf(
 
 const isoOf = (value: string | Date): string => new Date(value).toISOString();
 
+/** `code` normalized; only `userId`'s own device, still within its 15 minutes. */
+export async function findPendingDevice(
+  database: DataProvider,
+  userId: UserId,
+  code: string,
+): Promise<PendingDevice | undefined> {
+  const [row] = rowsOf<DeviceRow>(
+    await (database.read() as Database).execute(sql`
+      select id, user_id, name, platform, signing_key, presence_key, vouches, 0 as created_ms
+      from parlor_auth_devices
+      where user_id = ${userId} and link_code = ${normalizeLinkCode(code)}
+        and link_expires_at > ${new Date().toISOString()} and revoked_at is null`),
+  );
+  if (!row) return undefined;
+  const presence = parsed(row.presence_key);
+  return {
+    id: asId("device", row.id),
+    name: row.name,
+    platform: row.platform,
+    signingKey: jwkOf(row.signing_key),
+    ...(presence ? { presenceKey: presence } : {}),
+  };
+}
+
 export function deviceAccountActions(deps: DeviceActionDeps) {
   return createRegistry({
     devices: defineAction({
@@ -197,7 +269,8 @@ export function deviceAccountActions(deps: DeviceActionDeps) {
         const user = signedIn(ctx);
         const rows = rowsOf<DeviceListRow>(
           await (databaseOf(deps.host).read() as Database).execute(sql`
-            select id, name, platform, created_at from parlor_auth_devices
+            select id, name, platform, created_at, jsonb_array_length(vouches) > 0 as vouched
+            from parlor_auth_devices
             where user_id = ${user.userId} and revoked_at is null order by created_at, id`),
         );
         return rows.map((row) => ({
@@ -206,6 +279,7 @@ export function deviceAccountActions(deps: DeviceActionDeps) {
           platform: row.platform,
           current: row.id === user.deviceId,
           createdAt: isoOf(row.created_at),
+          vouched: row.vouched,
         }));
       },
     }),
@@ -298,6 +372,112 @@ export function deviceAccountActions(deps: DeviceActionDeps) {
           await deps.host.announce(ctx.scope, [[DEVICES_TAG, enrolled.id]]);
         }
         return { id: enrolled.id };
+      },
+    }),
+    startDeviceLink: defineAction({
+      description:
+        "Show this device's link code for 15 minutes, so a linked device can find it.",
+      input: z.object({ device: z.string().min(1), code: linkCodeInput }),
+      run: async ({ device, code }, ctx): Promise<{ readonly expiresAt: string }> => {
+        const user = signedIn(ctx);
+        const expiresAt = new Date(Date.now() + LINK_TTL_MS).toISOString();
+        const started = rowsOf<{ readonly id: string }>(
+          await databaseOf(deps.host).transaction((handle) =>
+            (handle as Database).execute(sql`
+              update parlor_auth_devices set link_code = ${code}, link_expires_at = ${expiresAt}
+              where id = ${device} and user_id = ${user.userId} and revoked_at is null
+              returning id`),
+          ),
+        );
+        if (started.length === 0)
+          throw new ActionError("not_found", `No device ${device}`);
+        return { expiresAt };
+      },
+    }),
+    resolveDeviceLink: defineAction({
+      description:
+        "Find this account's device showing a link code, to check it and vouch for it.",
+      input: z.object({ code: linkCodeInput }),
+      run: async ({ code }, ctx): Promise<PendingDevice> => {
+        const user = signedIn(ctx);
+        const found = await findPendingDevice(databaseOf(deps.host), user.userId, code);
+        if (!found) {
+          throw new ActionError(
+            "not_found",
+            "No device of yours shows this code. Check it, or show a new code on the device.",
+          );
+        }
+        return found;
+      },
+    }),
+    vouchDevice: defineAction({
+      description:
+        "Vouch, with this device's presence key, that a device showing a link code is the user's.",
+      input: z.object({
+        device: z.string().min(1),
+        voucher: z.string().min(1),
+        app: z.string().url(),
+        commitment: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+        at: z.number(),
+        signature: deviceSignature,
+      }),
+      run: async (input, ctx): Promise<{ readonly id: string }> => {
+        const user = signedIn(ctx);
+        const voucher = await deps.registry.get(
+          user.userId,
+          asId("device", input.voucher),
+        );
+        if (!voucher?.presenceKey) {
+          throw new ActionError(
+            "forbidden",
+            "Only a linked device that can confirm it is you can link another device.",
+          );
+        }
+        const outcome = await verifyStatement(
+          {
+            statement: vouchStatement(
+              input.app,
+              input.voucher,
+              input.device,
+              input.commitment,
+              input.at,
+            ),
+            deviceId: voucher.id,
+            signature: input.signature as never,
+          },
+          {
+            deviceId: voucher.id,
+            signingKey: voucher.signingKey,
+            presenceKey: voucher.presenceKey,
+          },
+          { requirePresence: true, now: Date.now(), maxAgeMs: VOUCH_MAX_AGE_MS },
+        );
+        if (outcome !== "valid") throw invalid("This confirmation did not check out.");
+        const vouch: DeviceVouch = {
+          voucher: voucher.id,
+          commitment: input.commitment,
+          at: input.at,
+          signature: input.signature,
+        };
+        const vouched = rowsOf<{ readonly id: string }>(
+          await databaseOf(deps.host).transaction((handle) =>
+            (handle as Database).execute(sql`
+              update parlor_auth_devices
+              set vouches = vouches || ${JSON.stringify([vouch])}::jsonb,
+                link_code = null, link_expires_at = null
+              where id = ${input.device} and user_id = ${user.userId} and revoked_at is null
+                and link_code is not null and link_expires_at > ${new Date().toISOString()}
+              returning id`),
+          ),
+        );
+        if (vouched.length === 0) {
+          throw new ActionError(
+            "not_found",
+            "That device's code expired. Show a new code on it and try again.",
+          );
+        }
+        await deps.host.announce(ctx.scope, [[DEVICES_TAG, input.device]]);
+        return { id: input.device };
       },
     }),
     revokeDevice: defineAction({

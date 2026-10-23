@@ -277,7 +277,6 @@ function deps(
   proxy: McpProxy,
 ): TurnDeps {
   const prompter: LocalPrompter = {
-    approveDevice: async () => false,
     answerHere: async () => undefined,
     turnStarted: () => undefined,
   };

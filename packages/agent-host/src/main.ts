@@ -123,6 +123,7 @@ async function host() {
     ensureService,
     fileGrantStore,
     HostAlreadyRunning,
+    fileTrustStore,
     hostPaths,
     keychainHostKeys,
     loadPolicy,
@@ -131,6 +132,67 @@ async function host() {
     terminalPrompter,
   };
 }
+
+const link = defineCommand({
+  meta: {
+    name: "link",
+    description: "Link a device showing a link code to this computer's agents",
+  },
+  args: {
+    url: { type: "positional", required: true, description: "The app's URL" },
+    code: {
+      type: "positional",
+      required: true,
+      description: "The code the device shows",
+    },
+  },
+  async run({ args }) {
+    const [kit, { linkDevice }, { askYesNo }, { computerName }] = await Promise.all([
+      host(),
+      import("./link-device.js"),
+      import("./prompter.js"),
+      import("./naming.js"),
+    ]);
+    const origin = new URL(args.url).origin;
+    const paths = kit.hostPaths();
+    const grant = await kit.fileGrantStore(paths.grants).get(origin);
+    if (!grant || grant.declined) {
+      fail(
+        `This computer is not connected to ${origin}. Run \`npx @parlor/agent-host connect ${origin}\` first.`,
+      );
+      return;
+    }
+    const keys = kit.keychainHostKeys(KEYCHAIN_SERVICE);
+    let outcome: Awaited<ReturnType<typeof linkDevice>>;
+    try {
+      outcome = await linkDevice({
+        appOrigin: origin,
+        code: args.code,
+        assert: (request) => keys.assert(origin, request),
+        trust: kit.fileTrustStore(paths.trust),
+        confirm: (device) =>
+          askYesNo(
+            `Link ${device.name} to your agents on ${computerName()} for ${grant.appName} as ${grant.account.email ?? grant.account.name}?`,
+          ),
+      });
+    } catch (error) {
+      fail(errorText(error));
+      return;
+    }
+    if (!outcome.linked) {
+      fail("Not linked.");
+      return;
+    }
+    const client = await kit.connectControl(paths.control);
+    if (client) {
+      await client.send({ op: "connect", appOrigin: origin });
+      client.close();
+    }
+    process.stdout.write(
+      `Linked ${printable(outcome.device.name)}. It can use your agents now.\n`,
+    );
+  },
+});
 
 const connect = defineCommand({
   meta: { name: "connect", description: "Connect this computer to a Parlor app" },
@@ -422,6 +484,7 @@ void runMain(
     },
     subCommands: {
       connect,
+      link,
       disconnect,
       status,
       daemon,

@@ -30,6 +30,7 @@ import { z } from "zod";
 import { signedIn } from "./account.js";
 import { AUTH_PLUGIN, devOrigins, type ParlorAuthSettings } from "./better-auth.js";
 import { type Database, jwkOf, rowsOf } from "./database.js";
+import { findPendingDevice } from "./devices.js";
 import { escape, failure, page } from "./pages.js";
 import { RevocationSet } from "./revocation.js";
 import { HOST_ASSERTION_TYP, HOST_AUDIENCE, type HostAssertion } from "./tokens.js";
@@ -723,6 +724,34 @@ ${hidden}
         return Response.json(response);
       },
     },
+    pluginRoute({
+      method: "POST",
+      path: "/hosts/devices/link",
+      access: ["host"],
+      handle: async (request, caller) => {
+        const { fields } = await bodyOf(request);
+        const code =
+          z.object({ code: z.string().max(32) }).safeParse(fields).data?.code ?? "";
+        const found = await findPendingDevice(
+          databaseOf(host),
+          caller.principal.userId,
+          code,
+        );
+        if (!found) {
+          return Response.json(
+            {
+              error: {
+                code: "not_found",
+                message:
+                  "No device of this account shows that code. Check it, or show a new code on the device.",
+              },
+            },
+            { status: 404 },
+          );
+        }
+        return Response.json(found);
+      },
+    }),
     pluginRoute({
       method: "POST",
       path: "/hosts/revoke",

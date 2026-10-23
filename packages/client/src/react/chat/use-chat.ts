@@ -18,6 +18,7 @@ export function useChat(): ChatState & ChatCommands {
       choose: runtime.choose,
       openThread: runtime.openThread,
       newThread: runtime.newThread,
+      startLink: runtime.startLink,
     }),
     [state, runtime],
   );

@@ -86,4 +86,8 @@ export const CHAT_MIGRATIONS: readonly Migration[] = [
         on parlor_chat_items (thread_id, (body->>'itemId'))
         where kind = 'event' and body->>'event' = 'answer_rejected';`,
   },
+  {
+    id: "chat/0003_host_devices",
+    sql: `alter table parlor_chat_hosts add column devices jsonb;`,
+  },
 ];

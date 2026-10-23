@@ -1,6 +1,5 @@
 import type { AgentConfirmation, AgentUiClient } from "@parlor/agent-ui/client";
 import type { CapabilityHandle, LocalAgentHost } from "@parlor/capabilities";
-import { deviceCode } from "@parlor/capabilities/encoding";
 import {
   CHAT_CHANNEL,
   CHAT_TAG,
@@ -33,7 +32,12 @@ import type { ClientChannel } from "@parlor/sync";
 
 import { generateClientId } from "../../action-client.js";
 import type { PluginClient } from "../../plugin-client.js";
-import type { DeviceSource, HostAuthorizer, SessionDevice } from "../../session.js";
+import type {
+  DeviceLinker,
+  DeviceSource,
+  HostAuthorizer,
+  SessionDevice,
+} from "../../session.js";
 import {
   applyFrame,
   mergeSnapshot,
@@ -74,9 +78,23 @@ export interface ChatWait {
   readonly reason: "offline" | "approval";
   readonly hostId: string;
   readonly hostName: string;
-  /** While approving: the four digits the computer's dialog shows for this device too. */
-  readonly code?: string | undefined;
 }
+
+/**
+ * Whether this device may send: `linked` (or nothing to link), `checking` until it knows, or
+ * `unlinked` with the code it shows once `startLink` made one. A device links once, from a
+ * device already linked or from the computer.
+ */
+export type LinkState =
+  | { readonly status: "linked" | "checking" }
+  | {
+      readonly status: "unlinked";
+      readonly hostName: string;
+      readonly code?: string | undefined;
+      readonly expiresAt?: string | undefined;
+      readonly busy: boolean;
+      readonly error?: string | undefined;
+    };
 
 /**
  * Set while an action waits for this device to be set up: on a browser, the first prompt
@@ -102,6 +120,7 @@ export interface ChatState {
   /** Why the last send, stop or answer failed; cleared by the next one that succeeds. */
   readonly error: string | undefined;
   readonly setup: DeviceSetup | undefined;
+  readonly link: LinkState;
 }
 
 export interface ChatCommands {
@@ -122,6 +141,8 @@ export interface ChatCommands {
   openThread(threadId: string | undefined): void;
   /** Starts a blank thread; it exists on the server once the first prompt is sent. */
   newThread(): void;
+  /** Shows this device's link code, after Face ID or Touch ID unless `presence` is false. */
+  startLink(options?: { readonly presence?: boolean }): Promise<void>;
 }
 
 export interface DeviceSetupCommands {
@@ -154,12 +175,16 @@ export interface ChatRuntimeDeps {
   readonly transport: () => "sse" | "poll" | undefined;
   readonly onNegotiated: (listener: (transport: "sse" | "poll") => void) => () => void;
   readonly isHidden?: (() => boolean) | undefined;
-  readonly auth: Partial<DeviceSource & HostAuthorizer> | undefined;
+  readonly auth: Partial<DeviceSource & HostAuthorizer & DeviceLinker> | undefined;
   readonly localHost: Promise<CapabilityHandle<LocalAgentHost>>;
   readonly threadId: string | undefined;
 }
 
 export const HOST_GRANTS_TAG = "parlor_auth_hosts";
+export const DEVICES_TAG = "parlor_auth_devices";
+
+const LINKED: LinkState = { status: "linked" };
+const CHECKING: LinkState = { status: "checking" };
 
 const READ_RETRY_BASE_MS = 1_000;
 const READ_RETRY_MAX_MS = 30_000;
@@ -250,7 +275,10 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
   let pingRefused = false;
   let generation = 0;
   let device: SessionDevice | undefined;
-  let code: string | undefined;
+  let linkInfo: Awaited<ReturnType<DeviceLinker["linkState"]>> | undefined;
+  let linking: { readonly code: string; readonly expiresAt: string } | undefined;
+  let linkBusy = false;
+  let linkError: string | undefined;
   let setup: DeviceSetup | undefined;
   let afterSetup: (() => Promise<void>) | undefined;
   let explainers = 0;
@@ -274,8 +302,31 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     reason,
     hostId,
     hostName: hosts.find((host) => host.id === hostId)?.name ?? "your computer",
-    ...(reason === "approval" && code ? { code } : {}),
   });
+
+  const linkOf = (): LinkState => {
+    if (!deps.auth?.linkState) return LINKED;
+    const reporting = hosts.filter((host) => host.online && host.devices !== undefined);
+    if (reporting.length === 0) return LINKED;
+    if (!linkInfo) return CHECKING;
+    const { deviceId } = linkInfo;
+    if (
+      linkInfo.pairing ||
+      linkInfo.vouched ||
+      (deviceId !== undefined &&
+        reporting.some((host) => host.devices?.includes(deviceId)))
+    ) {
+      return LINKED;
+    }
+    return {
+      status: "unlinked",
+      hostName: reporting[0]!.name,
+      code: linking?.code,
+      expiresAt: linking?.expiresAt,
+      busy: linkBusy,
+      error: linkError,
+    };
+  };
 
   const waitOf = (): ChatWait | undefined => {
     const approving = turns.find(awaitsApproval);
@@ -329,6 +380,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       draft,
       error: failure,
       setup,
+      link: linkOf(),
     };
   };
 
@@ -509,14 +561,18 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
 
   const deviceOf = async (): Promise<SessionDevice | undefined> => {
     const found = await deps.auth?.device?.();
-    if (found && found !== device) {
-      void deviceCode(found.keys.signingKey).then((digits) => {
-        code = digits;
-        emit();
-      });
-    }
     device = found ?? device;
     return found;
+  };
+
+  const refreshLink = async () => {
+    if (!deps.auth?.linkState) return;
+    try {
+      linkInfo = await deps.auth.linkState();
+    } catch {
+      return;
+    }
+    emit();
   };
 
   const whenSetUp = async (action: () => Promise<void>): Promise<void> => {
@@ -745,6 +801,30 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       afterSetup = undefined;
       emit();
     },
+    async startLink(options) {
+      if (!deps.auth?.startLink || linkBusy) return;
+      linkBusy = true;
+      linkError = undefined;
+      emit();
+      try {
+        const started = await deps.auth.startLink(options);
+        linking = { code: started.code, expiresAt: started.expiresAt };
+        linkInfo = {
+          vouched: false,
+          pairing: false,
+          ...linkInfo,
+          deviceId: started.deviceId,
+        };
+      } catch (error) {
+        linkError =
+          error instanceof Error && error.name === "PresenceSetupCancelled"
+            ? "Face ID or Touch ID was cancelled. Try again, or link without it."
+            : readable(error);
+      } finally {
+        linkBusy = false;
+        emit();
+      }
+    },
     explainSetup() {
       explainers += 1;
       return () => {
@@ -792,6 +872,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
         const computers = tags.some(
           (tag) => tagsOverlap(tag, [HOSTS_TAG]) || tagsOverlap(tag, [HOST_GRANTS_TAG]),
         );
+        if (tags.some((tag) => tagsOverlap(tag, [DEVICES_TAG]))) void refreshLink();
         if (loaded === "failed" && (mine || computers)) {
           cancelRetry();
           void loadFirst().then(emit);
@@ -889,10 +970,12 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
           });
           if (!outcome.connected) throw new Error(`Connecting failed: ${outcome.reason}`);
           await refreshHosts();
+          await refreshLink();
         },
       };
       emit();
     });
+    void refreshLink();
     await loadFirst();
     announceActivity();
     emit();

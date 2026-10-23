@@ -72,6 +72,23 @@ export interface DeviceKeys {
   readonly platform: string;
   readonly signingKey: JsonWebKey;
   readonly presenceKey?: PresenceKey | undefined;
+  /** Linked devices' signed word that this one is the user's; each computer checks them itself. */
+  readonly vouches?: readonly DeviceVouch[] | undefined;
+}
+
+/** A `VouchStatement` as the voucher signed it, with its presence key. */
+export interface DeviceVouch {
+  readonly voucher: DeviceId;
+  readonly commitment: string;
+  readonly at: number;
+  readonly signature: {
+    readonly keyId: string;
+    readonly presence: "none" | "user";
+    readonly format: "es256-raw" | "webauthn";
+    readonly signature: string;
+    readonly authenticatorData?: string | undefined;
+    readonly clientDataJSON?: string | undefined;
+  };
 }
 
 export type PresenceKey =

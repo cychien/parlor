@@ -1,21 +1,8 @@
 import { execFile } from "node:child_process";
 import { createInterface } from "node:readline";
 
-import type { AccountSummary } from "@parlor/auth";
-
-import { computerName } from "./naming.js";
-
 /** The computer's own surface, which no app, backend or web page can draw. */
 export interface LocalPrompter {
-  approveDevice(input: {
-    readonly appName: string;
-    readonly account: AccountSummary;
-    readonly device: { readonly name: string; readonly platform: string };
-    /** The four digits the asking browser shows too, from `deviceCode`. */
-    readonly code: string;
-    /** Aborts when the turn waiting on this answer ends; the dialog closes. */
-    readonly signal?: AbortSignal | undefined;
-  }): Promise<boolean>;
   /** The chosen option id, or undefined when dismissed. */
   answerHere(input: {
     readonly appName: string;
@@ -54,15 +41,13 @@ function ask(question: string): Promise<string | undefined> {
 
 const yes = (answer: string | undefined) => /^y(es)?$/i.test(answer?.trim() ?? "");
 
+/** A `[y/N]` question on the terminal that ran a command; only yes is yes. */
+export const askYesNo = async (question: string): Promise<boolean> =>
+  yes(await ask(`${printable(question)} [y/N] `));
+
 /** Interactive `connect`: asks on the TTY that ran it. */
 export function terminalPrompter(): LocalPrompter {
   return {
-    approveDevice: async ({ appName, account, device, code }) =>
-      yes(
-        await ask(
-          `Let ${printable(device.name)} run agents here for ${printable(appName)} as ${printable(account.email ?? account.name)}? It shows the code ${printable(code)}. Allow it only if you just sent a message from it and see the same code. [y/N] `,
-        ),
-      ),
     answerHere: async ({ appName, agent, question, choices }) => {
       const menu = choices
         .map((choice, at) => `  ${at + 1}. ${printable(choice.label)}`)
@@ -104,28 +89,6 @@ function osascript(
   });
 }
 
-/** Each paragraph is cleaned on its own, so only this code decides where the dialog breaks lines. */
-async function confirm(
-  paragraphs: string | readonly string[],
-  buttons: readonly [string, string],
-  signal?: AbortSignal,
-): Promise<boolean> {
-  const text = (typeof paragraphs === "string" ? [paragraphs] : paragraphs)
-    .map(clipped)
-    .join("\n\n");
-  const answer = await osascript(
-    [
-      "on run argv",
-      `set reply to display dialog (item 1 of argv) with title "${DIALOG_TITLE}" buttons {item 2 of argv, item 3 of argv} default button (item 2 of argv)`,
-      "return button returned of reply",
-      "end run",
-    ],
-    [text, ...buttons],
-    signal,
-  );
-  return answer === buttons[1];
-}
-
 function choose(
   text: string,
   labels: readonly string[],
@@ -153,19 +116,7 @@ function choose(
 }
 
 export function macDialogPrompter(): LocalPrompter {
-  const host = computerName();
-  const identity = (account: AccountSummary) => account.email ?? account.name;
   return {
-    approveDevice: ({ appName, account, device, code, signal }) =>
-      confirm(
-        [
-          `Allow ${device.name} to use your agents?`,
-          `${device.name} sent a message from ${appName} as ${identity(account)} and wants your agents on ${host} to run it. It shows the code ${code}.`,
-          "Allow it only if you just sent that message and see the same code.",
-        ],
-        ["Don't allow", "Allow"],
-        signal,
-      ),
     answerHere: async ({ appName, agent, question, choices, signal }) => {
       const label = await choose(
         `${agent} for ${appName} asks: ${question}`,

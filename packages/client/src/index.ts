@@ -18,12 +18,15 @@ export {
 export { ACTION_QUERY_PREFIX, actionQueryKey } from "./query-keys.js";
 export { createPluginClient, type PluginClient } from "./plugin-client.js";
 export type {
+  DeviceLinker,
   DeviceSource,
   FrameworkAuth,
   HostAuthorizer,
+  PendingLink,
   SessionDevice,
   SessionSnapshot,
   SessionSource,
   SessionUser,
 } from "./session.js";
+export { LinkOnComputer } from "./session.js";
 export type { Register, RegisteredActions } from "./register.js";

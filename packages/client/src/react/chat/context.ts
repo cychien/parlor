@@ -21,6 +21,7 @@ export function canSend(state: ChatState): boolean {
   return (
     state.draft.trim() !== "" &&
     state.setup === undefined &&
+    state.link.status === "linked" &&
     !isPromptTooLong(state.draft) &&
     agent !== undefined &&
     agent.ready &&

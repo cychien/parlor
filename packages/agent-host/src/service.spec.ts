@@ -97,7 +97,6 @@ async function startDaemon(
     proxy: createMcpProxy("parlor-host"),
     launcher: acpLauncher(),
     prompter: {
-      approveDevice: async () => false,
       answerHere: async () => undefined,
       turnStarted: () => undefined,
     },
@@ -653,7 +652,6 @@ describe("handing over with a turn running", () => {
       proxy: createMcpProxy("parlor-host"),
       launcher: acpLauncher(),
       prompter: {
-        approveDevice: async () => false,
         answerHere: async () => undefined,
         turnStarted: () => undefined,
       },

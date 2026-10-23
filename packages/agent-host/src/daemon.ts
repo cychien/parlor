@@ -185,7 +185,17 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
           launcher: deps.launcher,
           pool: deps.pool,
           proxy: deps.proxy,
-          trust: deps.trust,
+          trust: {
+            ...deps.trust,
+            pin: async (appOrigin, device) => {
+              await deps.trust.pin(appOrigin, device);
+              void report(state).catch(() => undefined);
+            },
+            forget: async (appOrigin, deviceId) => {
+              await deps.trust.forget(appOrigin, deviceId);
+              void report(state).catch(() => undefined);
+            },
+          },
           policy,
           prompter: deps.prompter,
           now: Date.now,
@@ -288,8 +298,19 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
     return state;
   };
 
+  const pinnedDevices = async (state: LinkState) =>
+    state.link.grant.dev
+      ? undefined
+      : (await deps.trust.list(state.link.grant.appOrigin)).map(
+          (device) => device.deviceId,
+        );
+
   const report = async (state: LinkState) => {
-    const reported = state.link.api.calls.call("hostReport", { online: true, agents });
+    const reported = state.link.api.calls.call("hostReport", {
+      online: true,
+      agents,
+      devices: await pinnedDevices(state),
+    });
     const timeout = new Promise<never>((_, reject) =>
       setTimeout(
         () => reject(new Error("The app did not answer in time.")),

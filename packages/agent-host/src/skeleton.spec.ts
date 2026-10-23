@@ -64,6 +64,74 @@ const DIFFERENCES: Readonly<
     agreed: true,
     why: "addendum D9: the failure the sidebar shows",
   },
+  "agent-host/src/trust.ts TrustStore changed": {
+    agreed: true,
+    why: "`list` lets the host report which devices it runs prompts from, so a new device knows it still has to link",
+  },
+  "agent-host/src/trust.ts TrustedDevice changed": {
+    agreed: true,
+    why: "`via: vouched` and `voucher` record a device a linked one vouched for",
+  },
+  "auth/src/devices.ts ConnectedDevice changed": {
+    agreed: true,
+    why: "`vouched` tells a new device a linked one vouched for it",
+  },
+  "auth/src/devices.ts DEVICE_LINKING_MIGRATION added": {
+    agreed: true,
+    why: "device linking (docs/features/device-linking spec 5): a new device is linked by a linked device's presence-signed vouch over a commitment to its keys, or from the computer, instead of a dialog on the computer",
+  },
+  "auth/src/devices.ts PendingDevice added": {
+    agreed: true,
+    why: "device linking (docs/features/device-linking spec 5): a new device is linked by a linked device's presence-signed vouch over a commitment to its keys, or from the computer, instead of a dialog on the computer",
+  },
+  "auth/src/devices.ts findPendingDevice added": {
+    agreed: true,
+    why: "one lookup shared by the account action and the host's `link` route",
+  },
+  "auth/src/statements.ts LINK_CODE_LENGTH added": {
+    agreed: true,
+    why: "device linking (docs/features/device-linking spec 5): a new device is linked by a linked device's presence-signed vouch over a commitment to its keys, or from the computer, instead of a dialog on the computer",
+  },
+  "auth/src/statements.ts Signed changed": {
+    agreed: true,
+    why: "a vouch is always signed with presence",
+  },
+  "auth/src/statements.ts Statement changed": {
+    agreed: true,
+    why: "`VouchStatement` joins the statements devices sign",
+  },
+  "auth/src/statements.ts VouchStatement added": {
+    agreed: true,
+    why: "device linking (docs/features/device-linking spec 5): a new device is linked by a linked device's presence-signed vouch over a commitment to its keys, or from the computer, instead of a dialog on the computer",
+  },
+  "auth/src/statements.ts deviceCommitment added": {
+    agreed: true,
+    why: "device linking (docs/features/device-linking spec 5): a new device is linked by a linked device's presence-signed vouch over a commitment to its keys, or from the computer, instead of a dialog on the computer",
+  },
+  "auth/src/statements.ts formatLinkCode added": {
+    agreed: true,
+    why: "device linking (docs/features/device-linking spec 5): a new device is linked by a linked device's presence-signed vouch over a commitment to its keys, or from the computer, instead of a dialog on the computer",
+  },
+  "auth/src/statements.ts linkCode added": {
+    agreed: true,
+    why: "device linking (docs/features/device-linking spec 5): a new device is linked by a linked device's presence-signed vouch over a commitment to its keys, or from the computer, instead of a dialog on the computer",
+  },
+  "auth/src/statements.ts normalizeLinkCode added": {
+    agreed: true,
+    why: "device linking (docs/features/device-linking spec 5): a new device is linked by a linked device's presence-signed vouch over a commitment to its keys, or from the computer, instead of a dialog on the computer",
+  },
+  "auth/src/statements.ts vouchStatement added": {
+    agreed: true,
+    why: "device linking (docs/features/device-linking spec 5): a new device is linked by a linked device's presence-signed vouch over a commitment to its keys, or from the computer, instead of a dialog on the computer",
+  },
+  "client/src/session.ts FrameworkAuth changed": {
+    agreed: true,
+    why: "`DeviceLinker` is optional on the auth the provider takes",
+  },
+  "server/src/auth.ts DeviceKeys changed": {
+    agreed: true,
+    why: "`vouches` carries linked devices' signed word to each computer, which checks them itself",
+  },
   "auth/src/client/index.ts AuthClient changed": {
     agreed: true,
     why: "`deviceSetup` says whether the first enrollment would create a passkey",

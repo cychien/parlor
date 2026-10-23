@@ -4,7 +4,6 @@ import type {
   LocalAgentHost,
   PairingDevice,
 } from "@parlor/capabilities";
-import { deviceCode } from "@parlor/capabilities/encoding";
 import type {
   AnswerToSign,
   ChatSnapshot,
@@ -1175,27 +1174,6 @@ describe("createChatRuntime device signatures", () => {
       answer: { signed?: ItemSignature };
     }[];
 
-  it("gives this device's code in the approval wait once this tab has signed with it", async () => {
-    const d = device();
-    const h = setup({
-      auth: d.source,
-      open: async () =>
-        snapshot({
-          items: [
-            logged(1, "item_p", "prompt", "go"),
-            itemOf(2, "turn_1.1", "event", { event: "device_pending" }),
-          ],
-          turns: [turn("turn_1", "running")],
-        }),
-    });
-    h.runtime.start();
-    await vi.waitFor(() => expect(h.runtime.get().wait?.reason).toBe("approval"));
-    expect(h.runtime.get().wait?.code).toBeUndefined();
-    await h.runtime.send("again");
-    const code = await deviceCode(keysOf("dev_1").signingKey);
-    await vi.waitFor(() => expect(h.runtime.get().wait?.code).toBe(code));
-  });
-
   it("signs the prompt it sends with the device, over the facts the host rebuilds it from", async () => {
     const d = device();
     const h = setup({ auth: d.source });
@@ -1484,6 +1462,104 @@ describe("createChatRuntime device signatures", () => {
       expect(h.runtime.get().setup).toBeUndefined();
       expect(sends(h)).toHaveLength(2);
     });
+  });
+});
+
+describe("createChatRuntime linking this device", () => {
+  const reporting = (devices: string[]) => ({
+    ...snapshot(),
+    hosts: [{ ...claudeOnMac(), devices }],
+  });
+  const linker = (
+    state: { deviceId?: string; vouched: boolean; pairing: boolean },
+    start = vi.fn(async (_options?: { readonly presence?: boolean }) => ({
+      deviceId: "dev_new",
+      code: "K7M4PX2Q8R",
+      expiresAt: "2026-10-24T10:15:00.000Z",
+    })),
+  ) => {
+    let current = state;
+    return {
+      set: (next: typeof state) => (current = next),
+      start,
+      source: {
+        linkState: vi.fn(async () => current),
+        startLink: start,
+      },
+    };
+  };
+
+  it("needs no link where no computer says which devices it runs prompts from", async () => {
+    const l = linker({ vouched: false, pairing: false });
+    const h = setup({ auth: l.source });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    expect(h.runtime.get().link).toEqual({ status: "linked" });
+  });
+
+  it("asks an unlinked device to link, shows its code, and lets it send once a linked device vouches", async () => {
+    const l = linker({ vouched: false, pairing: false });
+    const h = setup({ auth: l.source, open: async () => reporting(["dev_laptop"]) });
+    h.runtime.start();
+    await vi.waitFor(() =>
+      expect(h.runtime.get().link).toEqual({
+        status: "unlinked",
+        hostName: "Alice's Mac",
+        code: undefined,
+        expiresAt: undefined,
+        busy: false,
+        error: undefined,
+      }),
+    );
+    await h.runtime.startLink();
+    expect(l.start).toHaveBeenCalledWith(undefined);
+    expect(h.runtime.get().link).toMatchObject({
+      status: "unlinked",
+      code: "K7M4PX2Q8R",
+      expiresAt: "2026-10-24T10:15:00.000Z",
+    });
+    l.set({ deviceId: "dev_new", vouched: true, pairing: false });
+    h.tags(["parlor_auth_devices", "dev_new"]);
+    await vi.waitFor(() => expect(h.runtime.get().link).toEqual({ status: "linked" }));
+  });
+
+  it("is linked when a computer runs its prompts, or when it approved connect there", async () => {
+    for (const state of [
+      { deviceId: "dev_laptop", vouched: false, pairing: false },
+      { vouched: false, pairing: true },
+    ]) {
+      const h = setup({
+        auth: linker(state).source,
+        open: async () => reporting(["dev_laptop"]),
+      });
+      h.runtime.start();
+      await vi.waitFor(() => expect(h.runtime.get().link).toEqual({ status: "linked" }));
+    }
+  });
+
+  it("says Face ID or Touch ID was cancelled, and links without it when asked", async () => {
+    const start = vi.fn(async (options?: { readonly presence?: boolean }) => {
+      if (options?.presence !== false) {
+        throw Object.assign(new Error("The passkey was not created."), {
+          name: "PresenceSetupCancelled",
+        });
+      }
+      return {
+        deviceId: "dev_new",
+        code: "K7M4PX2Q8R",
+        expiresAt: "2026-10-24T10:15:00.000Z",
+      };
+    });
+    const l = linker({ vouched: false, pairing: false }, start);
+    const h = setup({ auth: l.source, open: async () => reporting(["dev_laptop"]) });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().link.status).toBe("unlinked"));
+    await h.runtime.startLink();
+    expect(h.runtime.get().link).toMatchObject({
+      error: "Face ID or Touch ID was cancelled. Try again, or link without it.",
+    });
+    await h.runtime.startLink({ presence: false });
+    expect(h.runtime.get().link).toMatchObject({ code: "K7M4PX2Q8R", error: undefined });
   });
 });
 

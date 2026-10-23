@@ -43,6 +43,7 @@ const baseState: ChatState = {
   draft: "",
   error: undefined,
   setup: undefined,
+  link: { status: "linked" },
 };
 
 function fakeRuntime(initial: Partial<ChatState> = {}) {
@@ -212,6 +213,19 @@ describe("Chat.Composer", () => {
     const send = screen.getByRole("button", { name: "Send" }) as HTMLButtonElement;
     expect(send.disabled).toBe(true);
     fake.set({ setup: undefined });
+    expect(send.disabled).toBe(false);
+  });
+
+  it("cannot send from a device that is not linked yet, or while that is being checked", () => {
+    const fake = composer({
+      draft: "hello",
+      link: { status: "unlinked", hostName: "Alice's Mac", busy: false },
+    });
+    const send = screen.getByRole("button", { name: "Send" }) as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+    fake.set({ link: { status: "checking" } });
+    expect(send.disabled).toBe(true);
+    fake.set({ link: { status: "linked" } });
     expect(send.disabled).toBe(false);
   });
 
@@ -466,14 +480,11 @@ describe("Chat.Status", () => {
     );
   });
 
-  it("gives the code the computer's dialog shows while it approves this device", () => {
-    const line = status({
-      status: "waiting",
-      wait: { ...mac, reason: "approval", code: "4821" },
-    });
-    expect(line.textContent).toBe(
-      "Waiting for Alice's Mac to approve this device. Check that it shows 4821.",
-    );
+  it("asks to link this device while it is not linked", () => {
+    expect(
+      status({ link: { status: "unlinked", hostName: "Alice's Mac", busy: false } })
+        .textContent,
+    ).toBe("Link this device to send messages");
   });
 
   it("T7-01a (b) names the computer that must approve this device", () => {

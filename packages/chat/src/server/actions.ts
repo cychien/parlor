@@ -292,6 +292,7 @@ export function hostChatActions(deps: ChatActionDeps) {
         name: z.string().min(1).max(80),
         platform: z.string().min(1).max(32),
         agents: z.array(agentInfoSchema).max(32),
+        devices: z.array(z.string().min(1).max(64)).max(256).optional(),
       }),
       writes: [HOSTS_TAG],
       run: async (input, host, ctx): Promise<HostWelcome & { readonly id: string }> => {
@@ -310,6 +311,7 @@ export function hostChatActions(deps: ChatActionDeps) {
           name: input.name,
           platform: input.platform,
           agents: input.agents,
+          devices: input.devices,
           online: true,
           ttlMs: 2 * deps.heartbeatMs,
         });
@@ -327,7 +329,11 @@ export function hostChatActions(deps: ChatActionDeps) {
     }),
     hostReport: chatAction("host", enforcing, {
       description: "This computer went offline or changed its agents.",
-      input: z.object({ online: z.boolean(), agents: z.array(agentInfoSchema).max(32) }),
+      input: z.object({
+        online: z.boolean(),
+        agents: z.array(agentInfoSchema).max(32),
+        devices: z.array(z.string().min(1).max(64)).max(256).optional(),
+      }),
       writes: [HOSTS_TAG],
       run: async (
         input,
@@ -341,6 +347,7 @@ export function hostChatActions(deps: ChatActionDeps) {
           name: known.name,
           platform: known.platform,
           agents: input.agents,
+          devices: input.devices,
           online: input.online,
           ttlMs: 2 * deps.heartbeatMs,
         });
