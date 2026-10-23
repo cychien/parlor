@@ -2,6 +2,7 @@
 import { ConfigError } from "@parlor/config";
 import { defineCommand, runCommand, runMain } from "citty";
 
+import { add } from "./commands/add.js";
 import { build } from "./commands/build.js";
 import { db } from "./commands/db.js";
 import { deploy } from "./commands/deploy.js";
@@ -11,7 +12,7 @@ import { CliError } from "./errors.js";
 
 const main = defineCommand({
   meta: { name: "parlor", description: "Parlor CLI" },
-  subCommands: { dev, build, deploy, db, typegen },
+  subCommands: { dev, build, deploy, db, add, typegen },
 });
 
 function isHelp(arg: string): boolean {
