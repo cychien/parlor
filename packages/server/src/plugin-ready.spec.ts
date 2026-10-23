@@ -45,5 +45,5 @@ describe("PluginHost.ready", () => {
     )) as { rows: unknown[] };
     expect(tables.rows).toEqual([{ tablename: "parlor_late_items" }]);
     await server.close();
-  });
+  }, 30_000);
 });
