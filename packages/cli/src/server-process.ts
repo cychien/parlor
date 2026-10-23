@@ -70,7 +70,7 @@ export function startServerProcess({ config, rootDir }: LoadedConfig): ChildProc
     import.meta.url.endsWith(".js") ? ".js" : ".ts",
   );
   const entry = join(rootDir, config.server.entry);
-  const child = spawn(process.execPath, [tsxBin, "watch", runner, entry], {
+  const child = spawn(process.execPath, [tsxBin, "watch", "--clear-screen=false", runner, entry], {
     cwd: rootDir,
     stdio: "inherit",
     env: serverEnv(config),

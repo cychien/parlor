@@ -26,6 +26,6 @@ loaded.default?.installUiManifest?.(
 if (handler) {
   onShutdown(() => loaded.default?.close?.());
   const port = Number(process.env.PORT ?? 3000);
-  serve({ fetch: (request) => handler(request), port });
+  serve({ fetch: (request) => handler(request), port, silent: true });
   console.log(`parlor server listening on http://localhost:${port}`);
 }
