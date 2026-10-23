@@ -9,6 +9,7 @@ import { deploy } from "./commands/deploy.js";
 import { dev } from "./commands/dev.js";
 import { typegen } from "./commands/typegen.js";
 import { CliError } from "./errors.js";
+import { shutdownAfterError } from "./shutdown.js";
 
 const main = defineCommand({
   meta: { name: "parlor", description: "Parlor CLI" },
@@ -30,6 +31,7 @@ async function run(rawArgs: string[]): Promise<void> {
 try {
   await run(process.argv.slice(2));
 } catch (error) {
+  await shutdownAfterError();
   if (error instanceof CliError || error instanceof ConfigError) {
     console.error(error.message);
     process.exit(1);

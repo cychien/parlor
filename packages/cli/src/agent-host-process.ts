@@ -50,6 +50,6 @@ export function startDevAgentHost(
     [agentHostBin(), "dev", "--app", `http://localhost:${config.server.port}`],
     { cwd: rootDir, stdio: "inherit", env: process.env },
   );
-  onShutdown(() => stopServerProcess(child));
+  onShutdown((signaled) => stopServerProcess(child, signaled ? undefined : 0));
   return child;
 }
