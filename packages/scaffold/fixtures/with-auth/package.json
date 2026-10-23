@@ -1,0 +1,44 @@
+{
+  "name": "parlor-fixture-with-auth",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "parlor dev",
+    "build": "parlor build",
+    "typecheck": "parlor typegen && tsc --noEmit",
+    "test": "vitest run",
+    "db:generate": "parlor db generate",
+    "db:migrate": "parlor db migrate"
+  },
+  "dependencies": {
+    "@parlor/auth": "workspace:*",
+    "@parlor/chat": "workspace:*",
+    "@parlor/client": "workspace:*",
+    "@parlor/core": "workspace:*",
+    "@parlor/data": "workspace:*",
+    "@parlor/server": "workspace:*",
+    "@tanstack/react-query": "catalog:",
+    "@tanstack/react-router": "catalog:",
+    "better-auth": "1.7.7",
+    "drizzle-orm": "^0.45.4",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@parlor/cli": "workspace:*",
+    "@parlor/config": "workspace:*",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "tailwindcss": "^4.3.3",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

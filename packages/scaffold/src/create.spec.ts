@@ -180,13 +180,19 @@ describe("createProject", () => {
       mode: "apply",
       install: false,
       git: false,
+      addons: [],
       log: () => {},
     }) as const;
 
   it("lists the files of a dry run and writes nothing", async () => {
     const directory = join(await mkdtemp(join(tmpdir(), "parlor-create-")), "my-app");
-    const project = await createProject({ ...options(directory), mode: "dry-run" });
+    const project = await createProject({
+      ...options(directory),
+      mode: "dry-run",
+      addons: ["auth"],
+    });
     expect(project.files).toContain("package.json");
+    expect(project.addons).toEqual({ applied: [], deferred: ["auth"] });
     await expect(readdir(directory)).rejects.toThrow(/ENOENT/);
   });
 

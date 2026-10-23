@@ -82,11 +82,19 @@ export function commandsFor({ name }: PackageManager): PackageManagerCommands {
     }),
     run: (script) =>
       name === "pnpm" || name === "yarn" ? `${name} ${script}` : `${name} run ${script}`,
-    exec: (bin, args) => {
-      const runner = { npm: "npx", pnpm: "pnpm", yarn: "yarn", bun: "bunx" }[name];
-      return [runner, bin, ...args].join(" ");
-    },
+    exec: (bin, args) =>
+      formatCommand(execCommand({ name, version: undefined }, bin, args)),
   };
+}
+
+/** The runnable form of `commandsFor(manager).exec`. */
+export function execCommand(
+  { name }: PackageManager,
+  bin: string,
+  args: readonly string[],
+): Command {
+  const runner = { npm: "npx", pnpm: "pnpm", yarn: "yarn", bun: "bunx" }[name];
+  return { bin: runner, args: [bin, ...args] };
 }
 
 export function formatCommand(command: Command): string {

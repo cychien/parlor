@@ -1,6 +1,8 @@
+import { spawn } from "node:child_process";
 import { mkdir, readdir } from "node:fs/promises";
 import { basename } from "node:path";
 
+import type { AddonName } from "./addons/index.js";
 import { CATALOG } from "./catalog.js";
 import { renderAgentsMd, renderReadme } from "./docs.js";
 import { editSource, type Op } from "./edit/ops.js";
@@ -11,6 +13,7 @@ import { type GitOutcome, initialCommit } from "./git.js";
 import { type AppIdentity, identityFor } from "./identity.js";
 import {
   commandsFor,
+  execCommand,
   type InstallOutcome,
   type PackageManager,
   packageManagerField,
@@ -25,6 +28,8 @@ export interface CreateOptions {
   readonly mode: "apply" | "dry-run";
   readonly install: boolean;
   readonly git: boolean;
+  /** Run through the project's own CLI after a successful install, so create needs no toolchain. */
+  readonly addons: readonly AddonName[];
   readonly log: (line: string) => void;
 }
 
@@ -34,6 +39,11 @@ export interface CreatedProject {
   readonly packageManager: PackageManager;
   readonly files: readonly string[];
   readonly install: InstallOutcome | { readonly kind: "skipped" };
+  readonly addons: {
+    readonly applied: readonly AddonName[];
+    /** Still to run as `<pm> exec parlor add <name>`; the next steps print the command. */
+    readonly deferred: readonly AddonName[];
+  };
   readonly git: GitOutcome | { readonly kind: "disabled" };
 }
 
@@ -184,6 +194,7 @@ export async function createProject(options: CreateOptions): Promise<CreatedProj
     packageManager,
     files: [...files.keys()],
     install: { kind: "skipped" } as CreatedProject["install"],
+    addons: { applied: [], deferred: options.addons },
     git: { kind: "disabled" } as CreatedProject["git"],
   };
   if (options.mode === "dry-run") return result;
@@ -192,6 +203,37 @@ export async function createProject(options: CreateOptions): Promise<CreatedProj
   const install = options.install
     ? await runInstall(directory, commandsFor(packageManager).install, options.log)
     : result.install;
+  const addons =
+    install.kind === "installed" || install.kind === "ignored-builds"
+      ? await applyAddons(directory, packageManager, options.addons)
+      : result.addons;
   const git = options.git ? await initialCommit(directory) : result.git;
-  return { ...result, install, git };
+  return { ...result, install, addons, git };
+}
+
+/** `--no-git-check`: the files are about to be committed as one, so they are untracked now. */
+async function applyAddons(
+  directory: string,
+  packageManager: PackageManager,
+  addons: readonly AddonName[],
+): Promise<CreatedProject["addons"]> {
+  const applied: AddonName[] = [];
+  const deferred: AddonName[] = [];
+  for (const addon of addons) {
+    const command = execCommand(packageManager, "parlor", [
+      "add",
+      addon,
+      "--no-git-check",
+    ]);
+    const code = await new Promise<number | null>((resolve) => {
+      const child = spawn(command.bin, command.args, {
+        cwd: directory,
+        stdio: "inherit",
+      });
+      child.once("error", () => resolve(null));
+      child.once("close", resolve);
+    });
+    (code === 0 ? applied : deferred).push(addon);
+  }
+  return { applied, deferred };
 }

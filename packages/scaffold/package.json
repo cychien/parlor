@@ -5,6 +5,7 @@
   "files": [
     "dist",
     "templates/default",
+    "templates/auth",
     "!templates/*/node_modules",
     "!templates/*/.parlor"
   ],
@@ -26,7 +27,8 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.spec.json --noEmit",
     "test": "vitest run",
-    "catalog": "tsx scripts/write-catalog.ts"
+    "catalog": "tsx scripts/write-catalog.ts",
+    "fixtures": "tsx scripts/write-fixtures.ts"
   },
   "dependencies": {
     "@babel/parser": "^7.29.9"

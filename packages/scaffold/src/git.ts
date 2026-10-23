@@ -40,3 +40,27 @@ export async function initialCommit(directory: string): Promise<GitOutcome> {
     return { kind: "failed", message: stderr || (error as Error).message };
   }
 }
+
+/**
+ * Paths with uncommitted changes, untracked included, so `parlor add` refuses to edit a tree
+ * whose diff the developer could not review afterwards. `undefined` outside a work tree or
+ * without git: nothing to check against.
+ */
+export async function uncommittedChanges(
+  directory: string,
+): Promise<readonly string[] | undefined> {
+  try {
+    const output = await git(directory, [
+      "status",
+      "--porcelain",
+      "--untracked-files=all",
+      ".",
+    ]);
+    return output
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => line.slice(3).replace(/^.* -> /, ""));
+  } catch {
+    return undefined;
+  }
+}
