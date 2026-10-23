@@ -1,16 +1,17 @@
 import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { asId } from "@parlor/core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { type AppGrant, fileGrantStore, keychainHostKeys } from "./grants.js";
+import { pair, UnrevokedGrant } from "./pairing.js";
 import { hostPaths } from "./paths.js";
 
 const BIN = fileURLToPath(new URL("../bin/parlor-host-dev.mjs", import.meta.url));
@@ -77,26 +78,17 @@ interface Ran {
   readonly stderr: string;
 }
 
-function parlorHost(
-  args: readonly string[],
-  options: { readonly answer?: string; readonly path?: string } = {},
-): Promise<Ran> {
+function parlorHost(args: readonly string[]): Promise<Ran> {
   const child = spawn(process.execPath, [BIN, ...args], {
     env: {
       ...process.env,
       HOME: home,
-      PATH: [options.path, process.env.PATH].filter(Boolean).join(delimiter),
     },
     stdio: ["pipe", "pipe", "pipe"],
   });
   let stdout = "";
   let stderr = "";
-  child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
-    stdout += chunk;
-    if (options.answer !== undefined && stdout.includes("[y/N]")) {
-      child.stdin.end(`${options.answer}\n`);
-    }
-  });
+  child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
   child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
   return new Promise((resolve) =>
     child.once("exit", (code) => resolve({ code, stdout, stderr })),
@@ -151,31 +143,22 @@ describe("revoking a grant the app refuses to revoke", () => {
     expect(await keyKept()).toBe(false);
   }, 60_000);
 
-  it("T4-12: a pairing declined here keeps the grant and key, never served, until the revoke goes through", async () => {
-    const bin = join(home, "bin");
-    mkdirSync(bin, { recursive: true });
-    const browser = join(bin, "open");
-    await writeFile(
-      browser,
-      [
-        `#!${process.execPath}`,
-        "const url = new URL(process.argv[2]);",
-        'const callback = new URL(url.searchParams.get("redirectUri"));',
-        'callback.searchParams.set("state", url.searchParams.get("state"));',
-        'callback.searchParams.set("code", "code-1");',
-        "await fetch(callback);",
-        "",
-      ].join("\n"),
-    );
-    await chmod(browser, 0o755);
-
+  it("T4-12: a pairing declined in the native dialog keeps the grant and key, never served, until the revoke goes through", async () => {
     revokeStatus = 500;
-    const declined = await parlorHost(["connect", origin], { answer: "n", path: bin });
-    expect(declined.stdout).toContain(
-      "Connect this computer to Hello as alice@example.com?",
-    );
-    expect(declined.code).not.toBe(0);
-    expect(declined.stderr).toContain("Hello");
+    const declined = await pair({
+      appOrigin: origin,
+      hostName: "Alice's MacBook Pro",
+      platform: "macos",
+      keys: keychainHostKeys(SERVICE),
+      workspaceRoot: join(home, "Parlor"),
+      channel: {
+        kind: "ipc",
+        authorize: async () => "code-1",
+        confirm: async () => false,
+      },
+    }).catch((error: unknown) => error);
+    expect(declined).toBeInstanceOf(UnrevokedGrant);
+    await fileGrantStore(paths().grants).save((declined as UnrevokedGrant).grant);
     expect(await savedGrants()).toMatchObject({
       [origin]: { grantId: "host:declined", declined: true },
     });

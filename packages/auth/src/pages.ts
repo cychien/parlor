@@ -18,7 +18,7 @@ p { margin: 0 0 12px; color: var(--muted); }
 ul { margin: 0 0 20px; padding-left: 20px; }
 li { margin-bottom: 6px; }
 strong { color: var(--text); font-weight: 600; }
-.code { font: 600 22px/1.3 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: 0.08em; color: var(--text); margin: 0 0 16px; }
+code { font: 0.9em ui-monospace, "SF Mono", Menlo, monospace; color: var(--text); }
 form { display: flex; gap: 8px; justify-content: flex-end; margin: 0; }
 button { font: inherit; font-weight: 600; padding: 9px 18px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--text); cursor: pointer; }
 button[value="true"], button[value="connect"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }

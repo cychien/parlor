@@ -1,7 +1,9 @@
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { pair, type PairInput, pairingDeviceOf, startLocalPairing } from "./pairing.js";
-import type { LocalPrompter } from "./prompter.js";
 import { type Browser, memoryHostKeys, type SpecApp, startSpecApp } from "./spec-kit.js";
 
 let app: SpecApp;
@@ -20,35 +22,27 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-interface Prompted {
-  readonly appName: string;
-  readonly account: { readonly email?: string | undefined };
-  readonly matchingCode: string;
-}
-
-function prompter(answer: boolean, prompted: Prompted[]): LocalPrompter {
-  return {
-    confirmPairing: async (input) => {
-      prompted.push(input);
-      return answer;
-    },
-    approveDevice: async () => false,
-    answerHere: async () => undefined,
-    turnStarted: () => undefined,
-  };
-}
-
 function connectAs(
   browser: Browser,
-  options: { readonly confirm?: boolean; readonly decision?: "connect" | "cancel" } = {},
+  options: {
+    readonly decision?: "connect" | "cancel";
+    readonly tokenAnswer?: Response;
+  } = {},
 ) {
   const keys = memoryHostKeys();
-  const prompted: Prompted[] = [];
-  const opened: { url: string; page: string; statusesBefore: number[] }[] = [];
+  const opened: {
+    url: string;
+    page: string;
+    statusesBefore: number[];
+    tab: Promise<string>;
+  }[] = [];
   const statuses: number[] = [];
   const realFetch = globalThis.fetch;
   vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
-    const response = await realFetch(...args);
+    const response =
+      options.tokenAnswer && String(args[0]).endsWith("/_parlor/auth/hosts/token")
+        ? options.tokenAnswer
+        : await realFetch(...args);
     statuses.push(response.status);
     return response;
   });
@@ -57,7 +51,6 @@ function connectAs(
     hostName: "Alice's MacBook Pro",
     platform: "macos",
     keys,
-    prompter: prompter(options.confirm ?? true, prompted),
     workspaceRoot: "/Users/alice/Parlor",
     channel: {
       kind: "browser",
@@ -67,12 +60,14 @@ function connectAs(
           url,
           options.decision ?? "connect",
         );
-        opened.push({ url, page, statusesBefore });
-        void fetch(answer.headers.get("location")!);
+        const tab = realFetch(answer.headers.get("location")!).then((response) =>
+          response.text(),
+        );
+        opened.push({ url, page, statusesBefore, tab });
       },
     },
   };
-  return { outcome: pair(input), keys, prompted, opened };
+  return { outcome: pair(input), keys, opened };
 }
 
 describe("pairing a computer from its terminal", () => {
@@ -109,17 +104,15 @@ describe("pairing a computer from its terminal", () => {
     expect(
       opened!.statusesBefore.filter((status) => status === 401 || status === 403),
     ).toEqual([]);
-    expect(opened!.page).toContain("Connect a computer to Hello?");
-    const code = new URL(opened!.url).searchParams.get("matchingCode")!;
-    expect(code).toMatch(/^[A-Z2-9]{3}-[A-Z2-9]{3}$/);
-    expect(opened!.page).toContain(code);
-    expect(alices.prompted).toEqual([
-      expect.objectContaining({
-        appName: "Hello",
-        account: expect.objectContaining({ email: "alice@example.com" }),
-        matchingCode: code,
-      }),
-    ]);
+    expect(opened!.page).toContain("Connect Alice&#39;s MacBook Pro to Hello?");
+    expect(opened!.page.replace(/<input [^>]*>/g, "")).not.toContain(
+      new URL(opened!.url).searchParams.get("matchingCode")!,
+    );
+    const tab = await opened!.tab;
+    expect(tab).toContain("<h1>Connected to Hello</h1>");
+    expect(tab).toContain(
+      "Alice&#39;s MacBook Pro now runs agents for alice@example.com. You can close this tab.",
+    );
     expect(outcome).toMatchObject({
       paired: true,
       grant: {
@@ -132,24 +125,82 @@ describe("pairing a computer from its terminal", () => {
     expect(alices.keys.origins()).toEqual([app.origin]);
   });
 
-  it("forgets the key and revokes the grant when the account shown is declined here", async () => {
+  it("connects on the consent page alone and keeps no key when the exchange fails", async () => {
     const carol = await app.signUp("Carol");
-    const attempt = connectAs(carol, { confirm: false });
-    expect(await attempt.outcome).toEqual({ paired: false, reason: "declined_locally" });
-    expect(attempt.keys.origins()).toEqual([]);
-    const hosts = await carol.fetch("/_parlor/auth/actions/hosts", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: "{}",
+    const attempt = connectAs(carol, {
+      tokenAnswer: Response.json(
+        { error: { message: "This code has expired." } },
+        { status: 400 },
+      ),
     });
-    expect(((await hosts.json()) as { data: unknown[] }).data).toEqual([]);
+    await expect(attempt.outcome).rejects.toThrow("This code has expired.");
+    expect(attempt.keys.origins()).toEqual([]);
+    const tab = await attempt.opened[0]!.tab;
+    expect(tab).toContain("<h1>Not connected</h1>");
+    expect(tab).toContain("This code has expired.");
   });
 
   it("stops when the consent page is cancelled", async () => {
     const dave = await app.signUp("Dave");
     const attempt = connectAs(dave, { decision: "cancel" });
     expect(await attempt.outcome).toEqual({ paired: false, reason: "declined_in_app" });
-    expect(attempt.prompted).toEqual([]);
+    expect(attempt.keys.origins()).toEqual([]);
+    expect(await attempt.opened[0]!.tab).toContain("You cancelled the connection.");
+  });
+
+  it("T4-10: the tab shows the app's name and the account without control characters or markup", async () => {
+    const hostile = createServer((request, response) => {
+      request.resume();
+      request.on("end", () => {
+        const path = new URL(request.url ?? "/", "http://stub").pathname;
+        const body =
+          path === "/_parlor/manifest"
+            ? { protocol: 1, app: { name: "\u001b[2J<b>Hello</b>\u0007" } }
+            : {
+                grant: { id: "host:g1", hostId: "h1" },
+                account: {
+                  userId: "alice",
+                  name: "Alice",
+                  email: "\u001b[31malice\u009b0m@example.com<script>",
+                },
+              };
+        response
+          .writeHead(200, { "content-type": "application/json" })
+          .end(JSON.stringify(body));
+      });
+    });
+    await new Promise<void>((resolve) => hostile.listen(0, "127.0.0.1", resolve));
+    let tab: Promise<string> = Promise.resolve("");
+    try {
+      await pair({
+        appOrigin: `http://127.0.0.1:${(hostile.address() as AddressInfo).port}`,
+        hostName: "Alice's MacBook Pro",
+        platform: "macos",
+        keys: memoryHostKeys(),
+        workspaceRoot: "/Users/alice/Parlor",
+        channel: {
+          kind: "browser",
+          open: async (url) => {
+            const asked = new URL(url);
+            const callback = new URL(asked.searchParams.get("redirectUri")!);
+            callback.searchParams.set("state", asked.searchParams.get("state")!);
+            callback.searchParams.set("code", "code-1");
+            tab = fetch(callback).then((response) => response.text());
+          },
+        },
+      });
+    } finally {
+      await new Promise((resolve) => hostile.close(resolve));
+    }
+    const html = await tab;
+    expect(
+      [...html].filter((char) => {
+        const code = char.codePointAt(0)!;
+        return code < 0x20 || (code >= 0x7f && code <= 0x9f);
+      }),
+    ).toEqual([]);
+    expect(html).toContain("<h1>Connected to [2J&#60;b&#62;Hello&#60;/b&#62;</h1>");
+    expect(html).toContain("[31malice0m@example.com&#60;script&#62;");
   });
 });
 

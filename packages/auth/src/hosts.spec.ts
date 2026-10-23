@@ -44,7 +44,7 @@ async function codeFrom(response: Response): Promise<string> {
 }
 
 describe("the consent page", () => {
-  it("names the app, the account, the computer and its matching code", async () => {
+  it("names the computer, the app and the account, and is the one place the connection is approved", async () => {
     const alice = await signUp("Alice");
     const computer = new Computer("Alice's MacBook", "macos");
     const response = await alice.fetch(
@@ -57,10 +57,12 @@ describe("the consent page", () => {
     );
     const html = await response.text();
     expect(html).toContain("<title>Connect a computer</title>");
-    expect(html).toContain("Connect a computer to Hello?");
+    expect(html).toContain("<h1>Connect Alice&#39;s MacBook to Hello?</h1>");
     expect(html).toContain("<strong>alice@example.com</strong>");
-    expect(html).toContain("<strong>Alice&#39;s MacBook</strong> (macos)");
-    expect(html).toContain('<p class="code">K7M-4PX</p>');
+    expect(html).toContain(
+      "The coding agents on <strong>Alice&#39;s MacBook</strong> (macos) will take your prompts from Hello and run on that computer. Continue only if you just ran <code>connect</code> there.",
+    );
+    expect(html.replace(/<input [^>]*>/g, "")).not.toContain("K7M-4PX");
     expect(html).toContain('name="decision" value="connect">Connect</button>');
     expect(html).toContain('name="decision" value="cancel">Cancel</button>');
     expect(html).toContain(`name="keyThumbprint" value="${await computer.thumbprint()}"`);

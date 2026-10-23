@@ -5,17 +5,8 @@ import type { AccountSummary } from "@parlor/auth";
 
 import { computerName } from "./naming.js";
 
-/**
- * The computer's own surface, which no app, backend or web page can draw. Every decision
- * that gives a remote party power over this computer lands here.
- */
+/** The computer's own surface, which no app, backend or web page can draw. */
 export interface LocalPrompter {
-  confirmPairing(input: {
-    readonly appName: string;
-    readonly appOrigin: string;
-    readonly account: AccountSummary;
-    readonly matchingCode: string;
-  }): Promise<boolean>;
   approveDevice(input: {
     readonly appName: string;
     readonly account: AccountSummary;
@@ -64,12 +55,6 @@ const yes = (answer: string | undefined) => /^y(es)?$/i.test(answer?.trim() ?? "
 /** Interactive `connect`: asks on the TTY that ran it. */
 export function terminalPrompter(): LocalPrompter {
   return {
-    confirmPairing: async ({ appName, account, matchingCode }) =>
-      yes(
-        await ask(
-          `Connect this computer to ${printable(appName)} as ${printable(account.email ?? account.name)}? Code ${printable(matchingCode)} [y/N] `,
-        ),
-      ),
     approveDevice: async ({ appName, account, device }) =>
       yes(
         await ask(
@@ -165,11 +150,6 @@ export function macDialogPrompter(): LocalPrompter {
   const host = computerName();
   const identity = (account: AccountSummary) => account.email ?? account.name;
   return {
-    confirmPairing: ({ appName, account, matchingCode }) =>
-      confirm(
-        `Connect ${host} to ${appName} as ${identity(account)}? Code ${matchingCode}.`,
-        ["Cancel", "Connect"],
-      ),
     approveDevice: ({ appName, account, device, signal }) =>
       confirm(
         `${device.name} (${device.platform}) wants to use agents on ${host} for ${appName} as ${identity(account)}.`,

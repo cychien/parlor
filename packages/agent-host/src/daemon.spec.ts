@@ -200,7 +200,6 @@ describe("an app the host cannot speak to", () => {
       proxy: createMcpProxy("parlor-host"),
       launcher: acpLauncher(),
       prompter: {
-        confirmPairing: async () => false,
         approveDevice: async () => false,
         answerHere: async () => undefined,
         turnStarted: () => undefined,
@@ -256,7 +255,6 @@ describe("disconnecting through the daemon", () => {
       proxy: createMcpProxy("parlor-host"),
       launcher: acpLauncher(),
       prompter: {
-        confirmPairing: async () => false,
         approveDevice: async () => false,
         answerHere: async () => undefined,
         turnStarted: () => undefined,
@@ -353,7 +351,6 @@ describe("disconnecting through the daemon", () => {
       proxy: createMcpProxy("parlor-host"),
       launcher: acpLauncher(),
       prompter: {
-        confirmPairing: async () => false,
         approveDevice: async () => false,
         answerHere: async () => undefined,
         turnStarted: () => undefined,
@@ -446,7 +443,6 @@ describe("what the daemon enforces on a grant's turns", () => {
       proxy: createMcpProxy("parlor-host"),
       launcher: acpLauncher(),
       prompter: {
-        confirmPairing: async () => false,
         approveDevice: async () => false,
         answerHere: async () => undefined,
         turnStarted: () => undefined,
@@ -542,7 +538,6 @@ describe("a daemon that is slow to detect its agents", () => {
       proxy: createMcpProxy("parlor-host"),
       launcher: acpLauncher(),
       prompter: {
-        confirmPairing: async () => false,
         approveDevice: async () => false,
         answerHere: async () => undefined,
         turnStarted: () => undefined,
