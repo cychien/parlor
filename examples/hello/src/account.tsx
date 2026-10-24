@@ -1,6 +1,7 @@
 import type { ConnectedAgent, ConnectedHost, SignedInSession } from "@parlor/auth";
-import { useSession } from "@parlor/client/react";
+import { useDevices, useSession } from "@parlor/client/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 
 import { auth } from "./auth.js";
 
@@ -46,6 +47,7 @@ export function AccountPanel() {
         Signed in as <strong>{session.user.name}</strong> ({session.user.email})
       </p>
       <Sessions />
+      <Devices />
       <Agents />
       <Computers />
     </section>
@@ -89,6 +91,101 @@ function Sessions() {
             )}
           </li>
         ))}
+      </ul>
+    </>
+  );
+}
+
+function Devices() {
+  const { available, devices, removal, remove, reset } = useDevices();
+  const [confirming, setConfirming] = useState<string | undefined>(undefined);
+  if (!available) return null;
+  const nameOf = (id: string | undefined) =>
+    devices?.find((device) => device.id === id)?.name;
+  return (
+    <>
+      <h3>Devices that can use your agents</h3>
+      <ul className="rows" aria-label="Devices" aria-busy={devices === undefined}>
+        {(devices ?? []).map((device) => {
+          const from = nameOf(device.linkedBy);
+          const failed =
+            (removal.step === "error" || removal.step === "on-computer") &&
+            removal.id === device.id
+              ? removal
+              : undefined;
+          return (
+            <li key={device.id}>
+              <div>
+                <p>{device.name}</p>
+                <p className="row-meta">
+                  {from
+                    ? `Linked from ${from}`
+                    : `Added ${when.format(new Date(device.createdAt))}`}
+                </p>
+                {confirming === device.id ? (
+                  <p>
+                    {device.current
+                      ? "Remove this device? It will need to be linked again to use your agents."
+                      : `Remove ${device.name}? It will no longer be able to use your agents.`}
+                  </p>
+                ) : null}
+                {failed?.step === "error" ? (
+                  <p className="problem" role="alert">
+                    {failed.message}
+                  </p>
+                ) : failed?.step === "on-computer" ? (
+                  <>
+                    <p>
+                      This browser cannot confirm with Face ID or Touch ID. On your
+                      computer, run:
+                    </p>
+                    <code className="connect-command">{failed.command}</code>
+                  </>
+                ) : null}
+              </div>
+              {confirming === device.id ? (
+                <span className="row-actions">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      reset();
+                      setConfirming(undefined);
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="danger"
+                    disabled={removal.step === "removing"}
+                    onClick={() =>
+                      void remove(device.id).then((removed) => {
+                        if (removed) setConfirming(undefined);
+                      })
+                    }
+                  >
+                    Remove with Face ID or Touch ID
+                  </button>
+                </span>
+              ) : (
+                <span className="row-actions">
+                  {device.current ? <span className="tag">This device</span> : null}
+                  <button
+                    type="button"
+                    className="danger"
+                    aria-label={`Remove ${device.name}`}
+                    onClick={() => {
+                      reset();
+                      setConfirming(device.id);
+                    }}
+                  >
+                    Remove
+                  </button>
+                </span>
+              )}
+            </li>
+          );
+        })}
       </ul>
     </>
   );

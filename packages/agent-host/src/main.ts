@@ -194,6 +194,50 @@ const link = defineCommand({
   },
 });
 
+const devices = defineCommand({
+  meta: {
+    name: "devices",
+    description: "List the devices that can use this computer's agents, or remove one",
+  },
+  args: {
+    url: { type: "positional", required: true, description: "The app's URL" },
+    remove: { type: "string", description: "The id of a device to remove" },
+  },
+  async run({ args }) {
+    const [kit, { describeDevices, removeDevice }] = await Promise.all([
+      host(),
+      import("./device-list.js"),
+    ]);
+    const origin = new URL(args.url).origin;
+    const paths = kit.hostPaths();
+    const grant = await kit.fileGrantStore(paths.grants).get(origin);
+    if (!grant || grant.declined) {
+      fail(`This computer is not connected to ${origin}.`);
+      return;
+    }
+    const trust = kit.fileTrustStore(paths.trust);
+    if (!args.remove) {
+      process.stdout.write(describeDevices(grant.appName, await trust.list(origin)));
+      return;
+    }
+    let removed: Awaited<ReturnType<typeof removeDevice>>;
+    try {
+      removed = await removeDevice(trust, origin, args.remove);
+    } catch (error) {
+      fail(errorText(error));
+      return;
+    }
+    const client = await kit.connectControl(paths.control);
+    if (client) {
+      await client.send({ op: "connect", appOrigin: origin });
+      client.close();
+    }
+    process.stdout.write(
+      `Removed ${printable(removed.name)}. It must be linked again to use your agents here.\n`,
+    );
+  },
+});
+
 const connect = defineCommand({
   meta: { name: "connect", description: "Connect this computer to a Parlor app" },
   args: { url: { type: "positional", required: true, description: "The app's URL" } },
@@ -491,6 +535,7 @@ void runMain(
     subCommands: {
       connect,
       link,
+      devices,
       disconnect,
       status,
       daemon,

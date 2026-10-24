@@ -78,7 +78,8 @@ const withoutDeviceActions = (request: Request): Response | undefined =>
 
 function client(
   deviceKey?: TestDeviceKey,
-  answer: (request: Request) => Response | undefined = () => undefined,
+  answer: (request: Request) => Response | Promise<Response> | undefined = () =>
+    undefined,
 ) {
   const calls: string[] = [];
   let token: string | undefined;
@@ -118,7 +119,7 @@ function settled(auth: AuthClient): Promise<SessionSnapshot> {
 
 async function signedIn(
   deviceKey?: TestDeviceKey,
-  answer?: (request: Request) => Response | undefined,
+  answer?: (request: Request) => Response | Promise<Response> | undefined,
 ) {
   const { auth, calls } = client(deviceKey, answer);
   await auth.signUp({ name: "Alice", email: "alice@example.com", password: PASSWORD });
@@ -129,7 +130,7 @@ async function signedIn(
 describe("linking a device", () => {
   async function secondDevice(
     key = new TestDeviceKey(),
-    answer?: (request: Request) => Response | undefined,
+    answer?: (request: Request) => Response | Promise<Response> | undefined,
     email = "alice@example.com",
   ) {
     const { auth } = client(key, answer);
@@ -247,6 +248,68 @@ describe("linking a device", () => {
     const pending = await laptop.resolveLink(code);
     expect(pending.id).toBe(deviceId);
     await expect(laptop.vouch(pending)).rejects.toMatchObject({ name: "LinkOnComputer" });
+  });
+});
+
+describe("removing a device", () => {
+  async function another(
+    key: TestDeviceKey,
+    answer?: (request: Request) => Response | Promise<Response> | undefined,
+  ) {
+    const { auth } = client(key, answer);
+    await auth.signIn({ email: "alice@example.com", password: PASSWORD });
+    await settled(auth);
+    await auth.device();
+    return auth;
+  }
+
+  it("A6: a linked device removes another with presence; it leaves the list and no computer gets its keys", async () => {
+    const { auth: laptop } = await signedIn(new TestDeviceKey());
+    const own = (await laptop.device())!;
+    const phone = await another(new TestDeviceKey());
+    const phoneId = (await phone.device())!.id;
+    expect(
+      (await laptop.listDevices()).map(({ id, current }) => ({ id, current })),
+    ).toEqual(
+      expect.arrayContaining([
+        { id: own.id, current: true },
+        { id: phoneId, current: false },
+      ]),
+    );
+    await laptop.removeDevice(phoneId);
+    expect((await laptop.listDevices()).map(({ id }) => id)).toEqual([own.id]);
+    expect(await phone.linkState()).toEqual({ vouched: false, pairing: false });
+    expect((await phone.startLink()).deviceId).not.toBe(phoneId);
+    const session = laptop.current();
+    if (session.status !== "signed-in") throw new Error("signed out");
+    expect(
+      await app.provider.device!(asId("user", session.user.id), asId("device", phoneId)),
+    ).toBeUndefined();
+    await expect(laptop.removeDevice(phoneId)).rejects.toThrow(/No device/);
+  });
+
+  it("D3: refuses a removal signed for another device, and a device with no presence key cannot remove", async () => {
+    const tamper = async (request: Request) => {
+      const body = (await request.json()) as Record<string, unknown>;
+      return server.fetch(
+        new Request(request.url, {
+          method: "POST",
+          headers: request.headers,
+          body: JSON.stringify({ ...body, device: "someone-else" }),
+        }),
+      );
+    };
+    const { auth: laptop } = await signedIn(new TestDeviceKey(), (request) =>
+      request.url.endsWith("/actions/removeDevice") ? tamper(request) : undefined,
+    );
+    await laptop.device();
+    const phone = await another(new TestDeviceKey(false));
+    const phoneId = (await phone.device())!.id;
+    await expect(laptop.removeDevice(phoneId)).rejects.toThrow(/did not check out/);
+    await expect(phone.removeDevice(phoneId)).rejects.toMatchObject({
+      name: "LinkOnComputer",
+    });
+    expect((await laptop.listDevices()).map(({ id }) => id)).toContain(phoneId);
   });
 });
 

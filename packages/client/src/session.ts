@@ -63,6 +63,20 @@ export interface PendingLink {
   readonly code: string;
 }
 
+/** One of the account's devices, as the devices list shows it. */
+export interface AccountDevice {
+  readonly id: string;
+  readonly name: string;
+  readonly platform: string;
+  /** This device. */
+  readonly current: boolean;
+  readonly createdAt: string;
+  readonly vouched: boolean;
+  readonly linking: boolean;
+  /** The device whose vouch linked it last. */
+  readonly linkedBy?: string | undefined;
+}
+
 /** Thrown by `vouch` on a device with no presence key: the computer itself links it then. */
 export class LinkOnComputer extends Error {
   override readonly name = "LinkOnComputer";
@@ -96,6 +110,9 @@ export interface DeviceLinker {
   vouch(link: PendingLink): Promise<void>;
   /** Whether this device has a presence key to vouch with; never prompts. */
   canVouch(): Promise<boolean>;
+  listDevices(): Promise<readonly AccountDevice[]>;
+  /** Removes a device, confirmed with Face ID or Touch ID; throws `LinkOnComputer` without them. */
+  removeDevice(id: string): Promise<void>;
 }
 
 /** What `FrameworkProvider` takes as `auth`; signing, host pairing and linking are optional. */

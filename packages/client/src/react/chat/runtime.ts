@@ -279,7 +279,12 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
   let device: SessionDevice | undefined;
   let linkInfo: Awaited<ReturnType<DeviceLinker["linkState"]>> | undefined;
   let linking:
-    | { readonly code: string; readonly qr: string; readonly expiresAt: string }
+    | {
+        readonly deviceId: string;
+        readonly code: string;
+        readonly qr: string;
+        readonly expiresAt: string;
+      }
     | undefined;
   let linkBusy = false;
   let linkError: string | undefined;
@@ -577,6 +582,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     } catch {
       return;
     }
+    if (linking && linking.deviceId !== linkInfo.deviceId) linking = undefined;
     emit();
   };
 
@@ -814,6 +820,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       try {
         const started = await deps.auth.startLink(options);
         linking = {
+          deviceId: started.deviceId,
           code: started.code,
           qr: `${deps.appOrigin}/link#${new URLSearchParams({ d: started.deviceId, c: started.commitment })}`,
           expiresAt: started.expiresAt,

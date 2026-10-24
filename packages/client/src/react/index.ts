@@ -26,6 +26,7 @@ export type {
 } from "./chat/runtime.js";
 export { useChat } from "./chat/use-chat.js";
 export { useDeviceSetup } from "./chat/use-device-setup.js";
+export { type RemoveDeviceState, useDevices } from "./use-devices.js";
 export { type LinkDeviceState, useLinkDevice } from "./use-link-device.js";
 export type { ChatItem } from "@parlor/chat";
 export { useAgentActivity } from "./agent-ui/use-agent-activity.js";

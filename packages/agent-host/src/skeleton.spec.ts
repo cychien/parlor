@@ -120,6 +120,14 @@ const DIFFERENCES: Readonly<
     agreed: true,
     why: "device linking (docs/features/device-linking spec 5): a new device is linked by a linked device's presence-signed vouch over a commitment to its keys, or from the computer, instead of a dialog on the computer",
   },
+  "auth/src/statements.ts RemoveStatement added": {
+    agreed: true,
+    why: "device linking (docs/features/device-linking S9, D3): a linked device removes a device by signing a remove statement with presence",
+  },
+  "auth/src/statements.ts removeStatement added": {
+    agreed: true,
+    why: "device linking (docs/features/device-linking S9, D3): a linked device removes a device by signing a remove statement with presence",
+  },
   "auth/src/statements.ts vouchStatement added": {
     agreed: true,
     why: "device linking (docs/features/device-linking spec 5): a new device is linked by a linked device's presence-signed vouch over a commitment to its keys, or from the computer, instead of a dialog on the computer",

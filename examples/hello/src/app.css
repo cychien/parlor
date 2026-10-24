@@ -356,6 +356,11 @@ button.danger {
   text-transform: uppercase;
 }
 
+.linked-notice {
+  border-bottom: 1px solid var(--line);
+  background: var(--accent-soft);
+}
+
 .link-a-device {
   flex: none;
   margin: 0 16px 8px;
@@ -780,6 +785,13 @@ h3 {
 .row-meta {
   color: var(--muted);
   font-size: 14px;
+}
+
+.row-actions {
+  display: flex;
+  flex: none;
+  gap: 8px;
+  align-items: center;
 }
 
 .tag {

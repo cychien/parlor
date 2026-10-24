@@ -364,6 +364,15 @@ export async function runTurn(
     return undefined;
   };
 
+  const pinVouched = async (device: TrustedDevice) => {
+    await deps.trust.pin(origin, device);
+    logEvent("device_trusted", { deviceId: device.deviceId, via: "vouched" });
+    deps.prompter.deviceLinked?.({
+      appName: grant.appName,
+      device: device.name ?? "A device",
+    });
+  };
+
   const unlinked = `Link this device to use your agents on ${computerName()}: open the Agent sidebar on it.`;
 
   const admit = async (): Promise<Admission> => {
@@ -433,8 +442,7 @@ export async function runTurn(
     }
     const vouched = await vouchedFor(keys);
     if (vouched) {
-      await deps.trust.pin(origin, vouched);
-      logEvent("device_trusted", { deviceId: keys.id, via: "vouched" });
+      await pinVouched(vouched);
       return { device: vouched };
     }
     return refuse("device_rejected", "device_rejected", unlinked);
@@ -669,8 +677,7 @@ export async function runTurn(
         deliver(waiting, item, rejected(unlinked));
         return;
       }
-      await deps.trust.pin(origin, vouched);
-      logEvent("device_trusted", { deviceId: vouched.deviceId, via: "vouched" });
+      await pinVouched(vouched);
       deliver(waiting, item, { kind: "accepted" });
     };
 
