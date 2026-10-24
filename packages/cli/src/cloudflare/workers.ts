@@ -12,3 +12,10 @@ export class DurableObject<Env = unknown> {
     this.env = bindings;
   }
 }
+
+/** On Workers it keeps the request alive for `promise`; a Node process runs on anyway, so this only reports a failure. */
+export function waitUntil(promise: Promise<unknown>): void {
+  promise.catch((error: unknown) => {
+    console.error("[parlor] work passed to waitUntil failed:", error);
+  });
+}
