@@ -173,7 +173,7 @@ export function createActionRunner<T extends ActionMap>(
       actions,
       name,
       input,
-      { scope: resolvedScope, source, principal: caller.principal, signal },
+      { scope: resolvedScope, source, principal: caller.principal, signal, request },
       {
         data: database,
         enforcing: callers.enforcing,
