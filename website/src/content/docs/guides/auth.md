@@ -34,6 +34,57 @@ When it cannot edit a file safely, for example a `server.ts` that builds its opt
 - The computer that runs the agents must be a Mac for now: `npx @parlor/agent-host connect` refuses on Windows and Linux before it pairs, because Parlor Host keeps its keys in the macOS Keychain. `parlor dev` works on every platform, and the app itself, with its sidebar, runs in any browser and on iPhone.
 - MCP clients sign in through OAuth. See [Agents](/parlor/guides/agents/).
 
+## Email codes and Google
+
+`parlor add auth` signs in with a password. To sign in with a code sent by email, or with Google, add Better Auth's `emailOTP` plugin and `socialProviders` in `auth.ts` and turn passwords off:
+
+```ts
+import { parlorAuth } from "@parlor/auth";
+import { emailOTP } from "better-auth/plugins";
+
+declare function sendEmail(to: string, text: string): Promise<void>;
+
+export const authOptions = parlorAuth({
+  appName: "Courses",
+  signInPage: "/sign-in",
+  emailAndPassword: { enabled: false },
+  socialProviders: {
+    google: {
+      clientId: process.env.GOOGLE_CLIENT_ID!,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+    },
+  },
+  plugins: [
+    emailOTP({
+      sendVerificationOTP: ({ email, otp }) => sendEmail(email, `Your code is ${otp}`),
+    }),
+  ],
+});
+```
+
+The sign-in page calls the auth client:
+
+```ts
+import { createAuthClient } from "@parlor/auth/client";
+
+const auth = createAuthClient();
+
+await auth.emailOtp.send({ email: "ada@example.com" });
+await auth.emailOtp.signIn({ email: "ada@example.com", otp: "123456" });
+
+if (await auth.social.available()) {
+  await auth.social.signIn({ provider: "google", callbackURL: "/" });
+}
+```
+
+Both work the same in a browser and in the desktop and iPhone apps, where the session is a bearer token in the Keychain like a password sign-in's.
+
+- **On the web**, `social.signIn` sends the page to Google, which returns to `callbackURL` signed in, so the promise never resolves. A failure returns to the sign-in page with `?error=`. A sign-in page opened by an MCP client's authorization (its URL carries `sig`) resumes that authorization after Google, as it does after a password.
+- **In the desktop and iPhone apps**, Google refuses the app's own webview, so `social.signIn` opens it in the system's sign-in browser (ASWebAuthenticationSession), which returns to the app through `app.scheme`. The promise resolves once the app is signed in, on the page that called it; navigate from there. Closing the browser throws `AuthClientError` with code `CANCELLED`. The system browser never keeps the session: the server hands the app a single-use code that expires after a minute, which only the app that started the sign-in can redeem, because it holds the PKCE verifier. `app.scheme` must be set in `parlor.config.ts`.
+- `social.available()` is false where the app has no sign-in browser, such as Android for now; hide the button there.
+
+In the Google Cloud console, create an OAuth client of type Web application with the redirect URI `https://<your origin>/_parlor/auth/callback/google`. The same client serves the web and the apps. Other providers in `socialProviders`, and `genericOAuth` providers, work the same way.
+
 ## Production
 
 Set two environment variables on the server:
