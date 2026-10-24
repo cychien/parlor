@@ -21,7 +21,7 @@ import type {
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 
-import { signedIn } from "./account.js";
+import { requireChat, signedIn } from "./account.js";
 import { type Database, jwkOf, rowsOf } from "./database.js";
 import { verifyEs256 } from "./es256.js";
 import {
@@ -306,6 +306,7 @@ export function deviceAccountActions(deps: DeviceActionDeps) {
       input: z.object({}),
       run: async (_input, ctx): Promise<{ readonly challenge: string }> => {
         const user = signedIn(ctx);
+        await requireChat(deps.host, ctx);
         const challenge = randomBytes(32).toString("base64url");
         await databaseOf(deps.host).transaction(async (handle) => {
           const tx = handle as Database;
@@ -332,6 +333,7 @@ export function deviceAccountActions(deps: DeviceActionDeps) {
       }),
       run: async (input, ctx): Promise<{ readonly id: DeviceId }> => {
         const user = signedIn(ctx);
+        await requireChat(deps.host, ctx);
         const signing = await pointOf(input.signing.publicKey);
         const presence = await presenceOf(input.presence);
         const { proof } = input;
@@ -398,6 +400,7 @@ export function deviceAccountActions(deps: DeviceActionDeps) {
       input: z.object({ device: z.string().min(1), code: linkCodeInput }),
       run: async ({ device, code }, ctx): Promise<{ readonly expiresAt: string }> => {
         const user = signedIn(ctx);
+        await requireChat(deps.host, ctx);
         const expiresAt = new Date(Date.now() + LINK_TTL_MS).toISOString();
         const started = rowsOf<{ readonly id: string }>(
           await databaseOf(deps.host).transaction((handle) =>
@@ -421,6 +424,7 @@ export function deviceAccountActions(deps: DeviceActionDeps) {
       ]),
       run: async (input, ctx): Promise<PendingDevice> => {
         const user = signedIn(ctx);
+        await requireChat(deps.host, ctx);
         const found = await findPendingDevice(databaseOf(deps.host), user.userId, input);
         if (!found) {
           throw new ActionError(
@@ -444,6 +448,7 @@ export function deviceAccountActions(deps: DeviceActionDeps) {
       }),
       run: async (input, ctx): Promise<{ readonly id: string }> => {
         const user = signedIn(ctx);
+        await requireChat(deps.host, ctx);
         const voucher = await deps.registry.get(
           user.userId,
           asId("device", input.voucher),

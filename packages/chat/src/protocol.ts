@@ -11,6 +11,8 @@ import type { ChatItemBody } from "./items.js";
 import type { AgentInfo, OpenItem } from "./model.js";
 
 export const CHAT_CHANNEL = "chat";
+/** The plugin name, so its routes live under `/_parlor/chat/`. */
+export const CHAT_PLUGIN = "chat";
 
 export type StreamingKind = "reply" | "reasoning";
 

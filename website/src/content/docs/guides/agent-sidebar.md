@@ -15,6 +15,23 @@ After `parlor add auth`, each user connects their own computer instead: the side
 
 In a production build without sign-in, chat is unavailable: `useChat().status` is `"unavailable"`, and the template's sidebar says so. `parlor build` warns about it.
 
+## Who may use it
+
+By default everyone signed in may use the agent. To limit it, for example to admins, pass `access` to `chat()` in `server.ts`:
+
+```ts
+import type { UserId } from "@parlor/core";
+declare function findUser(userId: UserId): Promise<{ role: string } | undefined>;
+// ---cut---
+import { chat } from "@parlor/chat/server";
+
+chat({
+  access: async ({ userId }) => (await findUser(userId))?.role === "admin",
+});
+```
+
+The server then refuses everyone else on every chat surface: reading and sending, their computers taking turns, and pairing a computer or a device in the first place. Hiding the button is not what keeps them out. In the client, `useChat().unavailable?.reason` is `"forbidden"` for a refused user, so the UI can hide the agent; the template's sidebar shows a short note instead. Agents connected over MCP are unaffected, because they call the app's actions as the user. See [`@parlor/chat`](/parlor/reference/chat/#who-may-use-the-agent).
+
 ## The files are yours
 
 The sidebar is ordinary code in your project, copied in when the app was created:

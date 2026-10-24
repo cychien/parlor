@@ -1,8 +1,16 @@
 import { userAudience } from "@parlor/agent-ui/server";
-import type { Tag } from "@parlor/core";
+import {
+  type DataProvider,
+  DEV_USER_ID,
+  type Principal,
+  type Tag,
+  type UserId,
+  userOf,
+} from "@parlor/core";
 import { REVOCATION_HORIZON_MS, type ServerPlugin } from "@parlor/server";
 
 import type { ChatOwner } from "../model.js";
+import { CHAT_PLUGIN } from "../protocol.js";
 import { CHAT_TAG, type ChatActionDeps, chatActions, HOSTS_TAG } from "./actions.js";
 import { inProcessRelay, type LiveRelay } from "./live.js";
 import { CHAT_MIGRATIONS } from "./migrations.js";
@@ -37,6 +45,7 @@ export {
   MAX_OPEN_TURNS,
 } from "./live.js";
 export { CHAT_MIGRATIONS } from "./migrations.js";
+export { CHAT_PLUGIN } from "../protocol.js";
 export {
   type ChatActionConfig,
   chatAction,
@@ -57,8 +66,6 @@ export {
   type UserDraft,
 } from "./store.js";
 
-export const CHAT_PLUGIN = "chat";
-
 /** Chat then serves nothing, so the client reads `useChat().status` as `unavailable`. */
 export const UNAVAILABLE_WITHOUT_AUTH =
   "chat() is unavailable: no auth provider is configured, so every action runs without a signed-in user.";
@@ -71,7 +78,23 @@ export const DEFAULT_LEASE_MS = 60_000;
 export const DEFAULT_HEARTBEAT_MS = 30_000;
 export const DEFAULT_MAX_QUEUED = 4;
 
+/** Who asks to use the chat, with what the server knows to decide. */
+export interface ChatAccessRequest {
+  /** Whose chat it is: the signed-in user, or the user a connected computer works for. */
+  readonly userId: UserId;
+  readonly principal: Principal;
+  readonly scope: string;
+  readonly database: DataProvider;
+}
+
+export type ChatAccess = (request: ChatAccessRequest) => boolean | Promise<boolean>;
+
 export interface ChatOptions {
+  /**
+   * Who may use the agent; everyone signed in when absent. A refused user can neither read
+   * nor send, their computers take no turns, and auth pairs no computer or device for them.
+   */
+  readonly access?: ChatAccess | undefined;
   /** App notes for the agent in every fresh session's context, such as an AGENTS.md excerpt. */
   readonly instructions?: string | undefined;
   readonly leaseMs?: number | undefined;
@@ -171,8 +194,20 @@ export function chat(options: ChatOptions = {}): ServerPlugin {
         appName: process.env.PARLOR_APP_NAME ?? "this app",
         appOrigin: () => process.env.PARLOR_ORIGIN ?? process.env.PARLOR_WEB_ORIGIN ?? "",
       });
+      const { access } = options;
       return {
         actions,
+        ...(access
+          ? {
+              allows: ({ principal, scope }) =>
+                access({
+                  userId: userOf(principal) ?? DEV_USER_ID,
+                  principal,
+                  scope,
+                  database,
+                }),
+            }
+          : {}),
         routes: chatRoutes({
           db,
           store: sqlChatStore,

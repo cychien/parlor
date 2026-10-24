@@ -27,7 +27,7 @@ import { sql } from "drizzle-orm";
 import { calculateJwkThumbprint, compactVerify, decodeProtectedHeader } from "jose";
 import { z } from "zod";
 
-import { signedIn } from "./account.js";
+import { CHAT_REFUSED, chatAllows, signedIn } from "./account.js";
 import { AUTH_PLUGIN, devOrigins, type ParlorAuthSettings } from "./better-auth.js";
 import { type Database, jwkOf, rowsOf } from "./database.js";
 import { findPendingDevice } from "./devices.js";
@@ -589,6 +589,7 @@ export function hostRoutes(deps: HostGrantDeps): readonly AnyPluginRoute[] {
       path: "/hosts/authorize",
       access: ["user"],
       handle: async (request, caller) => {
+        if (!(await chatAllows(host, caller))) return failure(CHAT_REFUSED, 403);
         const parsed = authorizeRequest.safeParse(
           Object.fromEntries(new URL(request.url).searchParams),
         );
@@ -640,6 +641,9 @@ ${hidden}
             "forbidden",
             "This answer did not come from the consent page.",
           );
+        }
+        if (!(await chatAllows(host, caller))) {
+          return refuse(403, "forbidden", CHAT_REFUSED);
         }
         const parsed = authorizeAnswer.safeParse(fields);
         if (!parsed.success) {
@@ -729,6 +733,12 @@ ${hidden}
       path: "/hosts/devices/link",
       access: ["host"],
       handle: async (request, caller) => {
+        if (!(await chatAllows(host, caller))) {
+          return Response.json(
+            { error: { code: "forbidden", message: CHAT_REFUSED } },
+            { status: 403 },
+          );
+        }
         const { fields } = await bodyOf(request);
         const code =
           z.object({ code: z.string().max(32) }).safeParse(fields).data?.code ?? "";
