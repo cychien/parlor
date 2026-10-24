@@ -1,14 +1,14 @@
 {
   "name": "@parlor/capabilities",
   "version": "0.1.0",
-  "license": "MIT",
   "homepage": "https://cychien.github.io/parlor",
+  "bugs": "https://github.com/cychien/parlor/issues",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/cychien/parlor.git",
     "directory": "packages/capabilities"
   },
-  "bugs": "https://github.com/cychien/parlor/issues",
   "files": [
     "dist"
   ],
@@ -50,10 +50,14 @@
   },
   "devDependencies": {
     "@capacitor/app": "^8.1.2",
+    "@capacitor/filesystem": "^8.1.5",
     "@capacitor/local-notifications": "^8.3.1",
+    "@capacitor/share": "^8.0.3",
     "@parlor/capacitor-device-key": "workspace:*",
     "@tauri-apps/api": "^2.12.1",
     "@tauri-apps/plugin-deep-link": "^2.6.1",
+    "@tauri-apps/plugin-dialog": "^2.8.3",
+    "@tauri-apps/plugin-fs": "^2.7.1",
     "@tauri-apps/plugin-notification": "^2.5.1",
     "@types/node": "catalog:",
     "happy-dom": "catalog:",
@@ -62,29 +66,45 @@
   },
   "peerDependencies": {
     "@capacitor/app": ">=8",
+    "@capacitor/filesystem": ">=8",
     "@capacitor/local-notifications": ">=8",
+    "@capacitor/share": ">=8",
     "@parlor/capacitor-device-key": ">=0",
     "@tauri-apps/api": ">=2",
     "@tauri-apps/plugin-deep-link": ">=2",
+    "@tauri-apps/plugin-dialog": ">=2",
+    "@tauri-apps/plugin-fs": ">=2",
     "@tauri-apps/plugin-notification": ">=2"
   },
   "peerDependenciesMeta": {
+    "@capacitor/app": {
+      "optional": true
+    },
+    "@capacitor/filesystem": {
+      "optional": true
+    },
+    "@capacitor/local-notifications": {
+      "optional": true
+    },
+    "@capacitor/share": {
+      "optional": true
+    },
+    "@parlor/capacitor-device-key": {
+      "optional": true
+    },
     "@tauri-apps/api": {
       "optional": true
     },
     "@tauri-apps/plugin-deep-link": {
       "optional": true
     },
+    "@tauri-apps/plugin-dialog": {
+      "optional": true
+    },
+    "@tauri-apps/plugin-fs": {
+      "optional": true
+    },
     "@tauri-apps/plugin-notification": {
-      "optional": true
-    },
-    "@capacitor/app": {
-      "optional": true
-    },
-    "@capacitor/local-notifications": {
-      "optional": true
-    },
-    "@parlor/capacitor-device-key": {
       "optional": true
     }
   }

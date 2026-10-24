@@ -2,6 +2,8 @@ import { tauriDeepLink } from "../deep-link/tauri.js";
 import { webDeepLink } from "../deep-link/web.js";
 import { tauriDeviceKey } from "../device-key/tauri.js";
 import { webDeviceKey } from "../device-key/web.js";
+import { tauriFiles } from "../files/tauri.js";
+import { webFiles } from "../files/web.js";
 import { tauriLocalAgentHost } from "../local-agent-host/tauri.js";
 import { webLocalAgentHost } from "../local-agent-host/web.js";
 import { tauriNotifications } from "../notifications/tauri.js";
@@ -16,4 +18,5 @@ export const platformAdapters: PlatformAdapters = {
   sessionStore: [tauriSessionStore(), webSessionStore()],
   deviceKey: [tauriDeviceKey(), webDeviceKey()],
   localAgentHost: [tauriLocalAgentHost(), webLocalAgentHost()],
+  files: [tauriFiles(), webFiles()],
 };

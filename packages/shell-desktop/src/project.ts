@@ -61,10 +61,6 @@ export function tauriConfig(config: ParlorConfig): Record<string, unknown> {
   };
 }
 
-function agentHostDependencies(config: ParlorConfig): string {
-  return config.desktop.agentHost ? 'tauri-plugin-dialog = "2"\n' : "";
-}
-
 export function cargoToml(config: ParlorConfig): string {
   return `[package]
 name = "${TAURI_CARGO_PACKAGE}"
@@ -82,8 +78,10 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-deep-link = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
 tauri-plugin-notification = "2"
-${agentHostDependencies(config)}parlor-shell = { path = ${JSON.stringify(SHELL_CRATE_DIR)} }
+parlor-shell = { path = ${JSON.stringify(SHELL_CRATE_DIR)} }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 `;
@@ -109,7 +107,7 @@ const AGENT_HOST_COMMANDS = [
  * Every app registers the Keychain `parlor_session_*` and `parlor_device_key_*` commands.
  * With `desktop.agentHost`, `setup()` also runs the bundled `parlor-host daemon --ensure`
  * (adopt, install or upgrade the per-user service) and the `parlor_host_*` commands
- * and the dialog plugin join them.
+ * join them. The dialog and fs plugins back the `files` capability.
  */
 export function libRs(config: ParlorConfig): string {
   const agentHost = Boolean(config.desktop.agentHost);
@@ -119,7 +117,9 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_notification::init())
-${agentHost ? "        .plugin(tauri_plugin_dialog::init())\n        .setup(|app| parlor_shell::setup(app))\n" : ""}        .invoke_handler(tauri::generate_handler![
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
+${agentHost ? "        .setup(|app| parlor_shell::setup(app))\n" : ""}        .invoke_handler(tauri::generate_handler![
 ${commands.map((command) => `            parlor_shell::${command},`).join("\n")}
         ])
         .run(tauri::generate_context!())
@@ -204,16 +204,16 @@ export const CAPABILITIES = {
   identifier: "default",
   description: "Permissions Parlor needs on desktop",
   windows: ["main"],
-  permissions: ["core:default", "notification:default", "deep-link:default"],
+  permissions: [
+    "core:default",
+    "notification:default",
+    "deep-link:default",
+    "dialog:default",
+    "fs:allow-read-file",
+    "fs:allow-write-file",
+    "fs:allow-stat",
+  ],
 };
-
-function capabilitiesOf(config: ParlorConfig) {
-  if (!config.desktop.agentHost) return CAPABILITIES;
-  return {
-    ...CAPABILITIES,
-    permissions: [...CAPABILITIES.permissions, "dialog:default"],
-  };
-}
 
 export function tauriProjectFiles(config: ParlorConfig): Record<string, string> {
   return {
@@ -222,7 +222,7 @@ export function tauriProjectFiles(config: ParlorConfig): Record<string, string> 
     "src-tauri/build.rs": BUILD_RS,
     "src-tauri/src/main.rs": MAIN_RS,
     "src-tauri/src/lib.rs": libRs(config),
-    "src-tauri/capabilities/default.json": `${JSON.stringify(capabilitiesOf(config), null, 2)}\n`,
+    "src-tauri/capabilities/default.json": `${JSON.stringify(CAPABILITIES, null, 2)}\n`,
     "src-tauri/.gitignore": "target/\ngen/schemas/\n",
     ".gitignore": "*\n",
   };
