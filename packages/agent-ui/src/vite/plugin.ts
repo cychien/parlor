@@ -10,7 +10,12 @@ import {
   type ViteDevServer,
 } from "vite";
 
-import { type ManifestBuild, type UiAppInfo, UI_MANIFEST_FILE } from "../manifest.js";
+import {
+  type ManifestBuild,
+  type UiAppInfo,
+  UI_MANIFEST_FILE,
+  type UiManifest,
+} from "../manifest.js";
 import { buildUiManifest } from "./manifest.js";
 
 export const DEFAULT_ROUTE_TREE = "src/routeTree.gen.ts";
@@ -65,15 +70,22 @@ type RouteTreeLoad =
   | { readonly ok: true; readonly module: unknown }
   | { readonly ok: false; readonly failure: string };
 
-export function agentManifest(options: AgentManifestOptions): Plugin {
+export interface AgentManifestApi {
+  /** The manifest last generated, until the route tree fails to load. */
+  manifest(): UiManifest | undefined;
+}
+
+export function agentManifest(options: AgentManifestOptions): Plugin<AgentManifestApi> {
   let root = process.cwd();
   let logger: Logger | undefined;
   let lastWritten: string | undefined;
+  let current: UiManifest | undefined;
 
   const routeTreePath = () => resolve(root, options.routeTree ?? DEFAULT_ROUTE_TREE);
   const outFile = () => join(root, GENERATED_DIR, UI_MANIFEST_FILE);
 
   const write = async (build: ManifestBuild) => {
+    current = build.manifest;
     for (const warning of build.warnings) logger?.warn(`[parlor] ${warning}`);
     const json = `${JSON.stringify(build.manifest, null, 2)}\n`;
     lastWritten ??= await readFile(outFile(), "utf8").catch(() => undefined);
@@ -149,6 +161,7 @@ export function agentManifest(options: AgentManifestOptions): Plugin {
 
   return {
     name: "parlor:agent-manifest",
+    api: { manifest: () => current },
     configResolved(config) {
       root = config.root;
       logger = config.logger;
@@ -175,6 +188,7 @@ export function agentManifest(options: AgentManifestOptions): Plugin {
         );
         await rm(outFile(), { force: true });
         lastWritten = undefined;
+        current = undefined;
         return;
       }
       await write(manifestFromModule(options.app, loaded.module));
