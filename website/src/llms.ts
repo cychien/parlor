@@ -26,11 +26,12 @@ export function stripTwoslash(markdown: string): string {
 }
 
 /** llms.txt (llmstxt.org): the title, a summary, then one link per page, every page. */
-export function llmsIndex(pages: readonly DocPage[], site: URL, summary: string): string {
+/** `root` is where the docs are served, base path included: `https://example.com/docs/`. */
+export function llmsIndex(pages: readonly DocPage[], root: URL, summary: string): string {
   const links = [...pages]
     .sort((a, b) => a.slug.localeCompare(b.slug))
     .map((page) => {
-      const url = new URL(`${page.slug}.md`, site).href;
+      const url = new URL(`${page.slug}.md`, root).href;
       return `- [${page.title}](${url})${page.description ? `: ${page.description}` : ""}`;
     });
   return `# Parlor\n\n> ${summary}\n\n## Docs\n\n${links.join("\n")}\n`;

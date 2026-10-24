@@ -8,4 +8,4 @@ import { DEPLOY_PRESETS } from "@parlor/host";
 console.log(DEPLOY_PRESETS.join(", "));
 ```
 
-Docs: https://parlor.dev/guides/deploy/
+Docs: https://cychien.github.io/parlor/guides/deploy/

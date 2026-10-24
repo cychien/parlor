@@ -13,4 +13,4 @@ const handle = await resolveCapability(notifications);
 if (handle.available) await handle.api.show("Saved");
 ```
 
-Docs: https://parlor.dev/reference/capabilities/
+Docs: https://cychien.github.io/parlor/reference/capabilities/

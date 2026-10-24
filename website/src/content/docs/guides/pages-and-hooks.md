@@ -144,4 +144,4 @@ export const Route = createFileRoute("/")({
 });
 ```
 
-The sidebar's agent receives the current page's description, so "delete the second one" has a referent. Agents also get every page's path, description, `$params` and the search params its `validateSearch` schema takes, so they can open any page with `ui_navigate`. See [The agent sidebar](/guides/agent-sidebar/).
+The sidebar's agent receives the current page's description, so "delete the second one" has a referent. Agents also get every page's path, description, `$params` and the search params its `validateSearch` schema takes, so they can open any page with `ui_navigate`. See [The agent sidebar](/parlor/guides/agent-sidebar/).

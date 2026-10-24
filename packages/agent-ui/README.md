@@ -8,4 +8,4 @@ import { UI_MANIFEST_FILE } from "@parlor/agent-ui";
 console.log(UI_MANIFEST_FILE);
 ```
 
-Docs: https://parlor.dev/guides/agent-sidebar/
+Docs: https://cychien.github.io/parlor/guides/agent-sidebar/

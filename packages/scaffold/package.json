@@ -1,7 +1,15 @@
 {
   "name": "@parlor/scaffold",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "What create-parlor and parlor add share: the templates, the add-on model, the syntax-tree edit engine, package manager detection, install and git",
+  "license": "MIT",
+  "homepage": "https://cychien.github.io/parlor",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cychien/parlor.git",
+    "directory": "packages/scaffold"
+  },
+  "bugs": "https://github.com/cychien/parlor/issues",
   "files": [
     "dist",
     "templates/default",

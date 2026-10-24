@@ -17,7 +17,7 @@ export interface SampleError {
  * `SAMPLES_TSCONFIG`, so `// @errors`, `// ---cut---` and `// @filename` mean the same in both.
  */
 const DOCS_DIR = new URL("../src/content/docs/", import.meta.url);
-const DOCS_LINK = /https:\/\/parlor\.dev\/([^\s)>"`]*)/g;
+const DOCS_LINK = /https:\/\/cychien\.github\.io\/parlor\/([^\s)>"`]*)/g;
 const SITE_FILES: ReadonlySet<string> = new Set(["llms.txt", "llms-full.txt"]);
 
 /** Slugs of the docs pages: `guides/actions`, and `` for the home page. */
@@ -45,7 +45,7 @@ export function brokenDocsLinks(
       const slug = path.split("#")[0]!.replace(/\/$/, "");
       return !slugs.has(slug) && !SITE_FILES.has(slug);
     })
-    .map((path) => `https://parlor.dev/${path}`);
+    .map((path) => `https://cychien.github.io/parlor/${path}`);
 }
 
 type Twoslasher = ReturnType<typeof createTwoslasher>;

@@ -5,7 +5,8 @@ import starlightLinksValidator from "starlight-links-validator";
 import { typecheckedSamples } from "./src/samples.ts";
 
 export default defineConfig({
-  site: process.env.PARLOR_DOCS_SITE ?? "https://parlor.dev",
+  site: process.env.PARLOR_DOCS_SITE ?? "https://cychien.github.io",
+  base: "/parlor",
   integrations: [
     starlight({
       title: "Parlor",

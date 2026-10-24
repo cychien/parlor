@@ -167,7 +167,7 @@ To use your agents from another browser or your phone, link it once: it shows a 
 
 ## Next
 
-- [Actions](/guides/actions/): inputs, reads and writes, confirmation, errors.
-- [The agent sidebar](/guides/agent-sidebar/): how the sidebar works and how to change it.
-- [Targets](/guides/targets/): the same app on macOS, iOS and Android.
-- [Deploy](/guides/deploy/): build the server and the web app for production.
+- [Actions](/parlor/guides/actions/): inputs, reads and writes, confirmation, errors.
+- [The agent sidebar](/parlor/guides/agent-sidebar/): how the sidebar works and how to change it.
+- [Targets](/parlor/guides/targets/): the same app on macOS, iOS and Android.
+- [Deploy](/parlor/guides/deploy/): build the server and the web app for production.

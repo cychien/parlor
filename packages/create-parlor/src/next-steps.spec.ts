@@ -33,7 +33,7 @@ describe("next steps (D5)", () => {
       "  pnpm parlor dev --target mac   the same app as a desktop window",
       "",
       "Open http://localhost:5173 and press Agent to chat with your coding agent.",
-      "AGENTS.md tells coding agents how this project works. Docs: https://parlor.dev/llms.txt",
+      "AGENTS.md tells coding agents how this project works. Docs: https://cychien.github.io/parlor/llms.txt",
     ]);
   });
 

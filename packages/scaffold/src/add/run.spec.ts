@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { templateFiles } from "../files.js";
 import { DEFAULT_LAYOUT } from "../fixtures.js";
+import { FRAMEWORK_VERSION } from "../version.js";
 import type { AddTools } from "./run.js";
 import { addAddons, formatAddResult } from "./run.js";
 
@@ -207,7 +208,7 @@ describe("parlor add never leaves a half-done project (H1)", () => {
       .split("\n")
       .map((line) => JSON.parse(line));
     expect(calls).toEqual([
-      ["add", "@parlor/auth@0.0.0"],
+      ["add", `@parlor/auth@${FRAMEWORK_VERSION}`],
       ["add", `better-auth@${PIN}`],
     ]);
     expect(await readFile(join(dir, "server.ts"), "utf8")).toContain(
@@ -248,7 +249,7 @@ describe("parlor add never leaves a half-done project (H1)", () => {
     const result = await addAddons(request(dir, { install: false }));
     expect(result).toMatchObject({
       kind: "applied",
-      pending: ["pnpm add @parlor/auth@0.0.0", "pnpm parlor add auth"],
+      pending: [`pnpm add @parlor/auth@${FRAMEWORK_VERSION}`, "pnpm parlor add auth"],
     });
     expect(await readFile(join(dir, "auth.ts"), "utf8")).toContain("createAuth");
   });

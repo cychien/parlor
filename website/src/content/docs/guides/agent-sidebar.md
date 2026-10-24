@@ -11,7 +11,7 @@ A new app has an **Agent** button in its header. It opens a sidebar where you ch
 - The agent runs on your computer, with your own subscription. When it calls an app tool, the call goes to the app's actions under your scope, and any `confirm: true` action waits for you in the sidebar.
 - The page tells the agent where you are: the current route's `staticData.description` and the views on screen (see below), so a prompt such as "check off the first one" has a referent.
 
-After `parlor add auth`, each user connects their own computer instead: the sidebar shows a command such as `npx @parlor/agent-host connect http://localhost:5173`, which pairs that computer with the signed-in account. See [Auth](/guides/auth/).
+After `parlor add auth`, each user connects their own computer instead: the sidebar shows a command such as `npx @parlor/agent-host connect http://localhost:5173`, which pairs that computer with the signed-in account. See [Auth](/parlor/guides/auth/).
 
 In a production build without sign-in, chat is unavailable: `useChat().status` is `"unavailable"`, and the template's sidebar says so. `parlor build` warns about it.
 

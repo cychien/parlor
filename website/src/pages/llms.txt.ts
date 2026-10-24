@@ -15,10 +15,13 @@ export async function docPages(): Promise<DocPage[]> {
   }));
 }
 
-export const GET: APIRoute = async ({ site }) =>
-  new Response(
-    llmsIndex(await docPages(), site ?? new URL("https://parlor.dev"), SUMMARY),
-    {
-      headers: { "content-type": "text/plain; charset=utf-8" },
-    },
+const docsRoot = (site: URL | undefined) =>
+  new URL(
+    import.meta.env.BASE_URL.replace(/\/?$/, "/"),
+    site ?? "https://cychien.github.io",
   );
+
+export const GET: APIRoute = async ({ site }) =>
+  new Response(llmsIndex(await docPages(), docsRoot(site), SUMMARY), {
+    headers: { "content-type": "text/plain; charset=utf-8" },
+  });

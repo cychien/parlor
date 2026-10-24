@@ -16,4 +16,4 @@ Install it as a plugin: `createServer({ actions, database, plugins: [chat()] })`
 
 Chat needs an auth provider that can mint turn tokens. In development `parlor dev` installs one. In production, add sign-in with `parlor add auth`; without it the server still starts, chat serves nothing, and the client reports `useChat().status` as `"unavailable"`.
 
-The client side is in [`@parlor/client/react`](/reference/client-react/). `@parlor/chat` holds the shared types (`AgentRef`, `ThreadSummary`, `ChatItemBody`) and `@parlor/chat/testing` a fake host for tests.
+The client side is in [`@parlor/client/react`](/parlor/reference/client-react/). `@parlor/chat` holds the shared types (`AgentRef`, `ThreadSummary`, `ChatItemBody`) and `@parlor/chat/testing` a fake host for tests.

@@ -45,6 +45,6 @@ import { defineAgentView } from "@parlor/client";
 //       ^?
 ```
 
-Describes a piece of UI the agent can read; bind it with `useAgentView` from [`@parlor/client/react`](/reference/client-react/).
+Describes a piece of UI the agent can read; bind it with `useAgentView` from [`@parlor/client/react`](/parlor/reference/client-react/).
 
 Also exported: `appOrigin`, `generateClientId`, `createPluginClient` (a typed client for a plugin's actions), and the session interfaces an auth client implements (`SessionSource`, `SessionSnapshot`, `FrameworkAuth`).

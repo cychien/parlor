@@ -13,4 +13,4 @@ export const TEMPLATES_DIR: string = fileURLToPath(
   new URL("../templates/", import.meta.url),
 );
 
-export const DOCS_URL = "https://parlor.dev";
+export const DOCS_URL = "https://cychien.github.io/parlor";

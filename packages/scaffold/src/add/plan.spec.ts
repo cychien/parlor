@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { inMemoryFiles, templateFiles } from "../files.js";
 import { DEFAULT_LAYOUT } from "../fixtures.js";
+import { FRAMEWORK_VERSION } from "../version.js";
 import { planAddons } from "./plan.js";
 
 const layout = { ...DEFAULT_LAYOUT, rootDir: "/app" };
@@ -56,7 +57,7 @@ describe("planAddons", () => {
       ["src/routes/sign-in.tsx", "create"],
     ]);
     expect(plan.dependencies).toEqual([
-      { name: "@parlor/auth", version: "0.0.0", dev: false },
+      { name: "@parlor/auth", version: FRAMEWORK_VERSION, dev: false },
       {
         name: "better-auth",
         version: { fromPackage: "@parlor/auth", dependency: "better-auth" },

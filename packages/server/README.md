@@ -17,4 +17,4 @@ const database = await createDatabase({ migrationsFolder: "migrations" });
 export default createServer({ actions: registry, database });
 ```
 
-`parlor dev` serves it; `parlor build` wraps it for Node or a serverless platform. Docs: https://parlor.dev/reference/server/
+`parlor dev` serves it; `parlor build` wraps it for Node or a serverless platform. Docs: https://cychien.github.io/parlor/reference/server/

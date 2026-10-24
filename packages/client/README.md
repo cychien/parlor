@@ -18,4 +18,4 @@ export function Health() {
 }
 ```
 
-In an app, register the actions once in `src/parlor.d.ts` so names and inputs are typed. Docs: https://parlor.dev/guides/pages-and-hooks/
+In an app, register the actions once in `src/parlor.d.ts` so names and inputs are typed. Docs: https://cychien.github.io/parlor/guides/pages-and-hooks/

@@ -1,6 +1,6 @@
 # create-parlor
 
-Create a [Parlor](https://parlor.dev) app: actions, a page, and an agent sidebar that drives your own coding agent.
+Create a [Parlor](https://cychien.github.io/parlor) app: actions, a page, and an agent sidebar that drives your own coding agent.
 
 ```sh
 pnpm create parlor my-app
@@ -23,4 +23,4 @@ export const addTodo = defineAction({
 });
 ```
 
-Docs: https://parlor.dev/getting-started/
+Docs: https://cychien.github.io/parlor/getting-started/

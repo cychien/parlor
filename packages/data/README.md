@@ -13,4 +13,4 @@ const database = await createDatabase({ migrationsFolder: "migrations" });
 const rows = await database.db.execute("select 1");
 ```
 
-Docs: https://parlor.dev/guides/data/
+Docs: https://cychien.github.io/parlor/guides/data/
