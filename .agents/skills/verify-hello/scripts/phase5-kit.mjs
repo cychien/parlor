@@ -266,15 +266,28 @@ export async function linkBrowser(
   }`);
   await browser.screenshot(`${label}.card.png`);
   if (!code) throw new Error(`${label}: the sidebar showed no link code`);
-  const terminal = session.host.terminal(label, ["link", session.host.info.urls.web, code]);
+  const terminal = session.host.terminal(label, [
+    "link",
+    session.host.info.urls.web,
+    code,
+  ]);
   const asked = await terminal.waitFor(/\[y\/N\]/, ms);
   if (asked) terminal.send("y\n");
-  const linked = await terminal.waitFor(/Linked (.+?)\. It can use your agents now\./, ms);
+  const linked = await terminal.waitFor(
+    /Linked (.+?)\. It can use your agents now\./,
+    ms,
+  );
   await terminal.waitExit(ms);
   terminal.save();
-  check.save(`${label}.json`, { code, asked: Boolean(asked), linked: linked?.[1] ?? null });
+  check.save(`${label}.json`, {
+    code,
+    asked: Boolean(asked),
+    linked: linked?.[1] ?? null,
+  });
   if (!linked) {
-    throw new Error(`${label}: the host never linked ${code}:\n${terminal.text.slice(-1500)}`);
+    throw new Error(
+      `${label}: the host never linked ${code}:\n${terminal.text.slice(-1500)}`,
+    );
   }
   return { code, device: linked[1], terminal };
 }

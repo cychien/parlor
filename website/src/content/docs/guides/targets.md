@@ -10,12 +10,12 @@ pnpm parlor dev --target mac      # also windows, linux
 pnpm parlor dev --target ios      # also android
 ```
 
-| Target | Shell | Needs |
-| --- | --- | --- |
-| `web` | the browser, installable as a PWA | nothing |
-| `mac`, `windows`, `linux` | Tauri | Rust (`rustup`), and the platform's build tools |
-| `ios` | Capacitor | macOS with Xcode |
-| `android` | Capacitor | the Android SDK |
+| Target                    | Shell                             | Needs                                           |
+| ------------------------- | --------------------------------- | ----------------------------------------------- |
+| `web`                     | the browser, installable as a PWA | nothing                                         |
+| `mac`, `windows`, `linux` | Tauri                             | Rust (`rustup`), and the platform's build tools |
+| `ios`                     | Capacitor                         | macOS with Xcode                                |
+| `android`                 | Capacitor                         | the Android SDK                                 |
 
 `--device <name>` picks a simulator or device for iOS and Android. A desktop target can only be built on its own operating system.
 

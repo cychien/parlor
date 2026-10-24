@@ -26,11 +26,11 @@ import { resolveCapability } from "@parlor/capabilities";
 
 `available: false` carries a `reason`; render a fallback instead of an error. In React, `useCapability(notifications)` from `@parlor/client/react` does the same.
 
-| Capability | What |
-| --- | --- |
-| `notifications` | permission, request, show |
-| `deepLink` | receive the links that open the app through `app.scheme` |
-| `sessionStore` | keep the session token: a cookie on the web, a secure store in native shells |
-| `deviceKey` | a signing key bound to this device |
+| Capability      | What                                                                         |
+| --------------- | ---------------------------------------------------------------------------- |
+| `notifications` | permission, request, show                                                    |
+| `deepLink`      | receive the links that open the app through `app.scheme`                     |
+| `sessionStore`  | keep the session token: a cookie on the web, a secure store in native shells |
+| `deviceKey`     | a signing key bound to this device                                           |
 
 `defineCapability` defines a new one from its adapters.

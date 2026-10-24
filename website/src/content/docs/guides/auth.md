@@ -11,16 +11,16 @@ pnpm parlor add auth
 
 ## What it changes
 
-| File | Change |
-| --- | --- |
-| `auth.ts` | New: `createAuth(database)`, the Better Auth instance behind `parlorAuth()` |
-| `schema/auth.ts` | New: `export * from "@parlor/auth/schema"`, the user, session, account and verification tables |
-| `src/auth/*`, `src/routes/sign-in.tsx` | New: the browser client, the sign-in gate, the sign-out button, the sign-in page |
-| `server.ts` | `auth: createAuth(database)` passed to `createServer` |
-| `src/main.tsx` | The action client sends the session; `FrameworkProvider` gets `auth` |
-| `src/routes/__root.tsx` | The layout is wrapped in `withSignIn` |
-| `migrations/0001_auth.sql` | The auth tables |
-| `.env.example` | `PARLOR_ORIGIN` and `BETTER_AUTH_SECRET` |
+| File                                   | Change                                                                                         |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `auth.ts`                              | New: `createAuth(database)`, the Better Auth instance behind `parlorAuth()`                    |
+| `schema/auth.ts`                       | New: `export * from "@parlor/auth/schema"`, the user, session, account and verification tables |
+| `src/auth/*`, `src/routes/sign-in.tsx` | New: the browser client, the sign-in gate, the sign-out button, the sign-in page               |
+| `server.ts`                            | `auth: createAuth(database)` passed to `createServer`                                          |
+| `src/main.tsx`                         | The action client sends the session; `FrameworkProvider` gets `auth`                           |
+| `src/routes/__root.tsx`                | The layout is wrapped in `withSignIn`                                                          |
+| `migrations/0001_auth.sql`             | The auth tables                                                                                |
+| `.env.example`                         | `PARLOR_ORIGIN` and `BETTER_AUTH_SECRET`                                                       |
 
 It installs `@parlor/auth` at the framework's version and `better-auth` at the version `@parlor/auth` pins. If anything fails, it restores `package.json` and the lockfile and changes no file. A second run prints `auth is already added. Nothing changed.`
 
