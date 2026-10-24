@@ -882,9 +882,18 @@ importers:
       '@parlor/shell-web':
         specifier: workspace:*
         version: link:../shell-web
+      '@tauri-apps/api':
+        specifier: ^2.12.1
+        version: 2.12.1
       '@tauri-apps/cli':
         specifier: ^2.12.1
         version: 2.12.1
+      '@tauri-apps/plugin-deep-link':
+        specifier: ^2.6.1
+        version: 2.6.1
+      '@tauri-apps/plugin-notification':
+        specifier: ^2.5.1
+        version: 2.5.1
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
