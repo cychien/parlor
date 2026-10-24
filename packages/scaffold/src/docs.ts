@@ -58,6 +58,8 @@ ${DOCS_URL}/llms.txt (every page, as Markdown) before changing how the app is wi
 
 - Business logic lives only in \`actions/\` as \`defineAction\`. The UI calls actions with
   \`useActionQuery\` and \`useActionMutation\` from \`@parlor/client/react\`, never \`fetch\`.
+  A page loads its data in its route \`loader\` with \`ensureActionQueryData\` and reads it with
+  \`useActionSuspenseQuery\`.
 - Every table has a \`scope\` column and every action filters by \`ctx.scope\`.
 - An action that changes data declares \`writes\`; one that reads declares \`reads\`. That is how
   pages refresh when an agent changes something.

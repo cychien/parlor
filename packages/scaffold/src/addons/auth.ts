@@ -1,4 +1,4 @@
-import { defineAddon, SERVER_ENTRY } from "../add/addon.js";
+import { defineAddon, ROOT_ROUTE, SERVER_ENTRY } from "../add/addon.js";
 
 export const auth = defineAddon({
   summary: "Sign-in with email and password; each user sees only their own data.",
@@ -51,7 +51,7 @@ export const auth = defineAddon({
         { kind: "import", names: ["withSignIn"], from: "../auth/sign-in-gate.js" },
         {
           kind: "wrap-property",
-          call: { callee: "createRootRoute", from: "@tanstack/react-router" },
+          call: ROOT_ROUTE,
           path: ["component"],
           wrapper: "withSignIn",
         },
