@@ -1,14 +1,17 @@
-import { mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
-
-import { PGlite } from "@electric-sql/pglite";
 import type { DataProvider, ListenOptions, Unlisten } from "@parlor/core";
-import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
-import { migrate as migratePg } from "drizzle-orm/node-postgres/migrator";
+import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
-import { drizzle as drizzlePglite } from "drizzle-orm/pglite";
-import { migrate as migratePglite } from "drizzle-orm/pglite/migrator";
 import pg from "pg";
+
+import { migratesWhileLoading, pgliteHandle } from "#platform";
+
+import {
+  ConnectionOwner,
+  currentOwner,
+  type ScopedConnections,
+} from "./connection-scope.js";
+import { migrateDatabase } from "./migrations.js";
+import { once } from "./once.js";
 
 export type Database = PgDatabase<PgQueryResultHKT>;
 
@@ -20,6 +23,12 @@ declare module "@parlor/core" {
 
 export interface DatabaseOptions {
   readonly url?: string | undefined;
+  /**
+   * A connection that bypasses any pooler, for LISTEN and migrations. Transaction poolers
+   * such as PgBouncer, Neon's pooled endpoint or Hyperdrive cannot hold a LISTEN.
+   * Defaults to `DATABASE_DIRECT_URL`, then to `url`.
+   */
+  readonly directUrl?: string | undefined;
   readonly dataDir?: string | undefined;
   readonly migrationsFolder?: string | undefined;
 }
@@ -44,42 +53,65 @@ export function resolveDatabaseUrl(
   return env.DATABASE_URL || undefined;
 }
 
-function once(run: () => Promise<void>): () => Promise<void> {
-  let result: Promise<void> | undefined;
-  return () => (result ??= run());
+export function resolveDirectUrl(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return env.DATABASE_DIRECT_URL || undefined;
 }
 
-function pgliteHandle(dataDir: string): DatabaseHandle {
-  const client = new PGlite(dataDir);
-  const db = drizzlePglite(client);
-  return {
-    db,
-    driver: "pglite",
-    read: () => db,
-    transaction: (run) => db.transaction((tx) => run(tx)),
-    listen: async (channel, handler) => {
-      const unlisten = await client.listen(channel, handler);
-      return () => unlisten();
-    },
-    migrate: (folder) => migratePglite(db, { migrationsFolder: folder }),
-    close: once(() => client.close()),
-  };
+interface PgConnections extends ScopedConnections {
+  readonly db: NodePgDatabase;
+  readonly listeners: Set<pg.Client>;
 }
 
-function nodePostgresHandle(url: string): DatabaseHandle {
+function openPgConnections(url: string, onClose?: () => void): PgConnections {
   const pool = new pg.Pool({ connectionString: url });
   pool.on("error", (error) => {
     console.warn("[parlor] an idle database connection dropped:", error.message);
   });
-  const db = drizzlePg(pool);
   const listeners = new Set<pg.Client>();
   return {
-    db,
+    db: drizzle(pool),
+    listeners,
+    close: once(async () => {
+      onClose?.();
+      await Promise.all([...listeners].map((client) => client.end()));
+      await pool.end();
+    }),
+  };
+}
+
+/** Stays valid across scopes, so code that captured `handle.db` at startup still works. */
+function scopedDatabase(current: () => Database): Database {
+  return new Proxy({} as Database, {
+    get(_target, property) {
+      const db = current();
+      const value: unknown = Reflect.get(db, property, db);
+      return typeof value === "function" ? value.bind(db) : value;
+    },
+    has: (_target, property) => Reflect.has(current(), property),
+    getPrototypeOf: () => Reflect.getPrototypeOf(current()),
+  });
+}
+
+function nodePostgresHandle(url: string, directUrl: string): DatabaseHandle {
+  const key = {};
+  const outside = new ConnectionOwner();
+  const opened = new Set<PgConnections>();
+  const connections = () =>
+    (currentOwner() ?? outside).connectionsFor(key, () => {
+      const created = openPgConnections(url, () => opened.delete(created));
+      opened.add(created);
+      return created;
+    });
+  return {
+    db: scopedDatabase(() => connections().db),
     driver: "node-postgres",
-    read: () => db,
-    transaction: (run) => db.transaction((tx) => run(tx)),
+    read: () => connections().db,
+    transaction: (run) => connections().db.transaction((tx) => run(tx)),
     listen: async (channel, handler, options = {}) => {
-      const client = new pg.Client({ connectionString: url });
+      const { listeners } = connections();
+      const client = new pg.Client({ connectionString: directUrl });
       let state: "listening" | "lost" | "closed" = "listening";
       const current = () => state;
       const lose = () => {
@@ -114,26 +146,38 @@ function nodePostgresHandle(url: string): DatabaseHandle {
         await client.end();
       };
     },
-    migrate: (folder) => migratePg(db, { migrationsFolder: folder }),
+    migrate: async (folder) => {
+      if (directUrl === url) {
+        await migrateDatabase(connections().db, folder);
+        return;
+      }
+      const direct = openPgConnections(directUrl);
+      try {
+        await migrateDatabase(direct.db, folder);
+      } finally {
+        await direct.close();
+      }
+    },
     close: once(async () => {
-      await Promise.all([...listeners].map((client) => client.end()));
-      await pool.end();
+      outside.forget(key);
+      await Promise.all([...opened].map((created) => created.close()));
     }),
   };
-}
-
-async function preparePgliteDir(dataDir: string): Promise<void> {
-  if (/^[a-z]+:\/\//i.test(dataDir)) return;
-  await mkdir(dirname(dataDir), { recursive: true });
 }
 
 export async function createDatabase(
   options: DatabaseOptions = {},
 ): Promise<DatabaseHandle> {
   const url = options.url ?? resolveDatabaseUrl();
-  const dataDir = options.dataDir ?? DEFAULT_PGLITE_DIR;
-  if (!url) await preparePgliteDir(dataDir);
-  const handle = url ? nodePostgresHandle(url) : pgliteHandle(dataDir);
-  if (options.migrationsFolder) await handle.migrate(options.migrationsFolder);
-  return handle;
+  const handle = url
+    ? nodePostgresHandle(url, options.directUrl ?? resolveDirectUrl() ?? url)
+    : await pgliteHandle(options.dataDir ?? DEFAULT_PGLITE_DIR);
+  const folder = options.migrationsFolder;
+  if (!folder) return handle;
+  if (migratesWhileLoading) {
+    await handle.migrate(folder);
+    return handle;
+  }
+  let migrated: Promise<void> | undefined;
+  return { ...handle, prepare: () => (migrated ??= handle.migrate(folder)) };
 }
