@@ -1,5 +1,7 @@
 import { oauthProviderClient } from "@better-auth/oauth-provider/client";
 import {
+  type AuthBrowser,
+  authBrowser,
   detectPlatform,
   type DeviceKey,
   deviceKey,
@@ -9,7 +11,7 @@ import {
   type SessionStore,
   sessionStore,
 } from "@parlor/capabilities";
-import { decodeBase64url } from "@parlor/capabilities/encoding";
+import { decodeBase64url, encodeBase64url } from "@parlor/capabilities/encoding";
 import {
   type ActionClient,
   appOrigin,
@@ -25,9 +27,12 @@ import {
   type SessionUser,
 } from "@parlor/client";
 import { ActionError } from "@parlor/core";
+import type { BetterAuthClientPlugin } from "better-auth/client";
 import { createAuthClient as createBetterAuthClient } from "better-auth/client";
+import { emailOTPClient } from "better-auth/client/plugins";
 
 import type { AccountActions } from "../account.js";
+import type { nativeSignIn } from "../native-sign-in.js";
 import {
   answerStatement,
   deviceCommitment,
@@ -50,9 +55,35 @@ const HOST_IPC_REDIRECT = "urn:parlor:ipc";
 const DEBUG_KEY = "parlor:debug";
 const HOST_PAIRING_KEY = "parlor:host-pairing";
 
+const NATIVE_CALLBACK = "//_parlor/auth/callback";
+
 function injectedServerUrl(): string {
   const env = (import.meta as { env?: { PARLOR_SERVER_URL?: string } }).env;
   return env?.PARLOR_SERVER_URL ?? "";
+}
+
+function injectedScheme(): string {
+  const env = (import.meta as { env?: { PARLOR_APP_SCHEME?: string } }).env;
+  return env?.PARLOR_APP_SCHEME ?? "";
+}
+
+const nativeSignInClient = {
+  id: "parlor-native-sign-in",
+  $InferServerPlugin: {} as ReturnType<typeof nativeSignIn>,
+  atomListeners: [
+    { matcher: (path: string) => path === "/native/token", signal: "$sessionSignal" },
+  ],
+} satisfies BetterAuthClientPlugin;
+
+const randomText = (bytes: number) =>
+  encodeBase64url(crypto.getRandomValues(new Uint8Array(bytes)));
+
+async function pkceChallenge(verifier: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(verifier),
+  );
+  return encodeBase64url(new Uint8Array(digest));
 }
 
 export interface AuthClientOptions {
@@ -66,6 +97,10 @@ export interface AuthClientOptions {
   readonly session?: SessionStore | undefined;
   /** Where this device's signing keys live. Defaults to the `deviceKey` capability. */
   readonly deviceKey?: DeviceKey | undefined;
+  /** Where social sign-in runs. Defaults to the `authBrowser` capability. */
+  readonly browser?: AuthBrowser | undefined;
+  /** The app's URL scheme, where social sign-in returns in a native shell. Defaults to `app.scheme`. */
+  readonly scheme?: string | undefined;
   readonly fetch?: typeof fetch | undefined;
 }
 
@@ -82,6 +117,15 @@ export class AuthClientError extends Error {
 
 export type DeviceHandle = SessionDevice;
 
+export interface SocialSignInInput {
+  /** A provider in Better Auth's `socialProviders`, or a `genericOAuth` provider id. */
+  readonly provider: string;
+  /** On the web, the page the provider returns to once signed in. Defaults to `/`. */
+  readonly callbackURL?: string | undefined;
+  /** On the web, the page a failed sign-in returns to with `?error=`. Defaults to this page. */
+  readonly errorCallbackURL?: string | undefined;
+}
+
 export interface AuthClient
   extends SessionSource, DeviceSource, HostAuthorizer, DeviceLinker {
   deviceSetup(): Promise<"needed" | "ready">;
@@ -94,6 +138,28 @@ export interface AuthClient
     readonly password: string;
   }): Promise<void>;
   signOut(): Promise<void>;
+  /** Sign-in with a one-time code sent by email, through Better Auth's `emailOTP` plugin. */
+  readonly emailOtp: {
+    send(input: { readonly email: string }): Promise<void>;
+    /** Signs in, creating the account on first use unless the plugin disables sign-up. */
+    signIn(input: {
+      readonly email: string;
+      readonly otp: string;
+      readonly name?: string | undefined;
+    }): Promise<void>;
+  };
+  /** Sign-in with a provider such as Google, through Better Auth's `socialProviders`. */
+  readonly social: {
+    /** Whether this platform can run it: false in a native shell without the `authBrowser` capability. */
+    available(): Promise<boolean>;
+    /**
+     * On the web the page leaves for the provider and comes back to `callbackURL`, so this
+     * never resolves. In a native shell the provider opens in the system's sign-in browser
+     * and this resolves once the app is signed in; it throws `AuthClientError` with code
+     * `CANCELLED` when the user closes it.
+     */
+    signIn(input: SocialSignInInput): Promise<void>;
+  };
   /** The account actions: `sessions`, `revokeSession`, `agents`, `revokeAgent`. */
   readonly account: ActionClient<AccountActions>;
 }
@@ -243,7 +309,7 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
   const connect = () =>
     createBetterAuthClient({
       baseURL: `${baseUrl || globalThis.location.origin}${basePath}/auth`,
-      plugins: [oauthProviderClient()],
+      plugins: [oauthProviderClient(), emailOTPClient(), nativeSignInClient],
       fetchOptions: {
         ...(options.fetch ? { customFetchImpl: options.fetch } : {}),
         onRequest: async (context) => {
@@ -310,6 +376,75 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
     basePath: `${basePath}/auth`,
     headers,
   });
+
+  const signInBrowser = async (): Promise<AuthBrowser | undefined> => {
+    if (options.browser) return options.browser;
+    const handle = await resolveCapability(authBrowser);
+    return handle.available ? handle.api : undefined;
+  };
+
+  const signInOnThePage = async (browser: AuthBrowser, input: SocialSignInInput) => {
+    const page = new URL(globalThis.location.href);
+    const callbackURL = new URL(input.callbackURL ?? "/", page).href;
+    const errorPage = new URL(input.errorCallbackURL ?? page, page);
+    errorPage.searchParams.delete("error");
+    errorPage.searchParams.delete("error_description");
+    const result = await betterAuth().signIn.social({
+      provider: input.provider,
+      callbackURL,
+      errorCallbackURL: errorPage.href,
+      disableRedirect: true,
+    });
+    settle(result);
+    const url = result.data?.url;
+    if (!url)
+      throw new AuthClientError("The provider gave no sign-in page.", 500, undefined);
+    await browser.open(url, callbackURL);
+  };
+
+  const signInInTheApp = async (browser: AuthBrowser, provider: string) => {
+    const scheme = options.scheme ?? injectedScheme();
+    if (!scheme) {
+      throw new AuthClientError(
+        "Set app.scheme in parlor.config.ts to sign in with a provider in the app.",
+        0,
+        "NO_SCHEME",
+      );
+    }
+    const callback = `${scheme}:${NATIVE_CALLBACK}`;
+    const verifier = randomText(32);
+    const state = randomText(16);
+    const start = new URL(
+      `${baseUrl || globalThis.location.origin}${basePath}/auth/native/sign-in/social`,
+    );
+    start.search = new URLSearchParams({
+      provider,
+      redirect_uri: callback,
+      code_challenge: await pkceChallenge(verifier),
+      code_challenge_method: "S256",
+      state,
+    }).toString();
+    const returned = await browser.open(start.href, callback);
+    if (!returned) throw new AuthClientError("Sign-in was cancelled.", 0, "CANCELLED");
+    const answer = new URL(returned).searchParams;
+    if (answer.get("state") !== state) {
+      throw new AuthClientError(
+        "This sign-in was not started here.",
+        0,
+        "STATE_MISMATCH",
+      );
+    }
+    const failed = answer.get("error");
+    const code = answer.get("code");
+    if (failed || !code) {
+      throw new AuthClientError(
+        answer.get("error_description") || `Sign-in failed (${failed ?? "no code"}).`,
+        400,
+        failed ?? undefined,
+      );
+    }
+    settle(await betterAuth().native.token({ code, code_verifier: verifier }));
+  };
 
   const keysOfThisPlatform = async (): Promise<DeviceKey | undefined> => {
     const handle = await resolveCapability(deviceKey);
@@ -424,6 +559,31 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
     },
     signIn: async (input) => settle(await betterAuth().signIn.email(input)),
     signUp: async (input) => settle(await betterAuth().signUp.email(input)),
+    emailOtp: {
+      send: async ({ email }) =>
+        settle(
+          await betterAuth().emailOtp.sendVerificationOtp({ email, type: "sign-in" }),
+        ),
+      signIn: async ({ email, otp, name }) =>
+        settle(
+          await betterAuth().signIn.emailOtp({ email, otp, ...(name ? { name } : {}) }),
+        ),
+    },
+    social: {
+      available: async () => (await signInBrowser()) !== undefined,
+      signIn: async (input) => {
+        const browser = await signInBrowser();
+        if (!browser) {
+          throw new AuthClientError(
+            `Signing in with ${input.provider} is not available here.`,
+            0,
+            "UNSUPPORTED",
+          );
+        }
+        if (await store) await signInInTheApp(browser, input.provider);
+        else await signInOnThePage(browser, input);
+      },
+    },
     signOut: async () => {
       try {
         settle(await betterAuth().signOut());
@@ -595,4 +755,4 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
   };
 }
 
-export type { HostPairing, SessionStore } from "@parlor/capabilities";
+export type { AuthBrowser, HostPairing, SessionStore } from "@parlor/capabilities";

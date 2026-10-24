@@ -14,7 +14,7 @@ import { memoryAdapter } from "better-auth/adapters/memory";
 import { getAuthTables } from "better-auth/db";
 import { z } from "zod";
 
-import { parlorAuth } from "../better-auth.js";
+import { parlorAuth, type ParlorAuthOptions } from "../better-auth.js";
 import { betterAuthProvider } from "../provider.js";
 
 export const ORIGIN = "http://localhost:3000";
@@ -51,6 +51,8 @@ export interface TestAppOptions {
   readonly plugins?: readonly ServerPlugin[] | undefined;
   readonly wrap?: ((provider: DataProvider) => DataProvider) | undefined;
   readonly secret?: string | undefined;
+  /** More Better Auth options, such as social providers and plugins. */
+  readonly auth?: Partial<ParlorAuthOptions> | undefined;
 }
 
 /** A hello-like app on Better Auth's memory adapter, with revocations in `database`. */
@@ -71,6 +73,7 @@ export function createTestApp(
         verify: ({ hash, password }) => Promise.resolve(digest(password) === hash),
       },
     },
+    ...options.auth,
   });
   const tables = Object.values(getAuthTables(authOptions)).map((table) => [
     table.modelName,

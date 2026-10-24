@@ -104,6 +104,22 @@ describe("server url", () => {
       '"http://localhost:5174"',
     );
   });
+
+  it("injects app.scheme, which a native shell's social sign-in returns to", async () => {
+    const withScheme = await resolveConfig(
+      {
+        configFile: false,
+        plugins: parlorWeb(parseConfig({ app: { ...config.app, scheme: "todo" } })),
+      },
+      "build",
+    );
+    const without = await resolveConfig(
+      { configFile: false, plugins: parlorWeb(config) },
+      "build",
+    );
+    expect(withScheme.define?.["import.meta.env.PARLOR_APP_SCHEME"]).toBe('"todo"');
+    expect(without.define?.["import.meta.env.PARLOR_APP_SCHEME"]).toBe('""');
+  });
 });
 
 describe("file routes", () => {
