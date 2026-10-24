@@ -1,3 +1,4 @@
+import type { AuthBrowser } from "../auth-browser/interface.js";
 import type { CapabilityAdapter } from "../capability.js";
 import type { DeepLink } from "../deep-link/interface.js";
 import type { DeviceKey } from "../device-key/interface.js";
@@ -13,4 +14,5 @@ export interface PlatformAdapters {
   readonly deviceKey: readonly CapabilityAdapter<DeviceKey>[];
   readonly localAgentHost: readonly CapabilityAdapter<LocalAgentHost>[];
   readonly files: readonly CapabilityAdapter<Files>[];
+  readonly authBrowser: readonly CapabilityAdapter<AuthBrowser>[];
 }

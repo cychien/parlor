@@ -28,4 +28,14 @@ describe("parlor-shell portability", () => {
       /#\[cfg\(not\(target_os = "macos"\)\)\]\nmod store \{[\s\S]*"unsupported"/,
     );
   });
+
+  it("opens the sign-in browser on every target, and answers unsupported outside macOS", async () => {
+    const lib = await crate("lib.rs");
+    expect(lib).toMatch(/^mod auth_browser;$/m);
+    expect(lib).toMatch(/^pub use auth_browser::parlor_auth_browser_open;$/m);
+    const browser = await crate("auth_browser.rs");
+    expect(browser).toMatch(
+      /#\[cfg\(not\(target_os = "macos"\)\)\]\nmod apple \{[\s\S]*"unsupported"/,
+    );
+  });
 });
