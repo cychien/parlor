@@ -204,6 +204,7 @@ const connect = defineCommand({
     const paths = kit.hostPaths();
     const grants = kit.fileGrantStore(paths.grants);
     let grant = await grants.get(origin);
+    const alreadyConnected = grant !== undefined && !grant.declined;
     if (grant?.declined) {
       try {
         await kit.disconnectFrom(origin);
@@ -276,6 +277,11 @@ const connect = defineCommand({
     process.stdout.write(
       `Connected to ${printable(grant.appName)} as ${printable(grant.account.email ?? grant.account.name)}. Your agents are ready in its sidebar.\nNot you? Run \`npx @parlor/agent-host disconnect ${origin}\`.\n`,
     );
+    if (alreadyConnected) {
+      process.stdout.write(
+        "This computer was already connected. To use your agents from another browser or device, open the Agent sidebar there and link it.\n",
+      );
+    }
   },
 });
 

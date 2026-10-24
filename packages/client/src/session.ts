@@ -59,6 +59,8 @@ export interface PendingLink {
   readonly name: string;
   readonly platform: string;
   readonly commitment: string;
+  /** The short code the device shows, for `parlor-host link` on the computer. */
+  readonly code: string;
 }
 
 /** Thrown by `vouch` on a device with no presence key: the computer itself links it then. */
@@ -79,10 +81,17 @@ export interface DeviceLinker {
   startLink(options?: { readonly presence?: boolean }): Promise<{
     readonly deviceId: string;
     readonly code: string;
+    /** The whole hash the code is the start of; the QR carries it. */
+    readonly commitment: string;
     readonly expiresAt: string;
   }>;
-  /** The device showing `code`; throws when the keys the app returns do not match it. */
-  resolveLink(code: string): Promise<PendingLink>;
+  /**
+   * The device showing `code`, or the one whose QR named its id and whole commitment; throws
+   * when the keys the app returns do not match.
+   */
+  resolveLink(
+    from: string | { readonly deviceId: string; readonly commitment: string },
+  ): Promise<PendingLink>;
   /** Vouches with this device's presence key; throws `LinkOnComputer` when it has none. */
   vouch(link: PendingLink): Promise<void>;
   /** Whether this device has a presence key to vouch with; never prompts. */

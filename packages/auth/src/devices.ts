@@ -235,17 +235,24 @@ async function presenceOf(
 
 const isoOf = (value: string | Date): string => new Date(value).toISOString();
 
-/** `code` normalized; only `userId`'s own device, still within its 15 minutes. */
+/**
+ * A device showing a link code, found by the code (normalized) or, from its QR, by its id;
+ * only `userId`'s own device, still within its 15 minutes.
+ */
 export async function findPendingDevice(
   database: DataProvider,
   userId: UserId,
-  code: string,
+  by: { readonly code: string } | { readonly device: string },
 ): Promise<PendingDevice | undefined> {
+  const match =
+    "code" in by
+      ? sql`link_code = ${normalizeLinkCode(by.code)}`
+      : sql`id = ${by.device} and link_code is not null`;
   const [row] = rowsOf<DeviceRow>(
     await (database.read() as Database).execute(sql`
       select id, user_id, name, platform, signing_key, presence_key, vouches, 0 as created_ms
       from parlor_auth_devices
-      where user_id = ${userId} and link_code = ${normalizeLinkCode(code)}
+      where user_id = ${userId} and ${match}
         and link_expires_at > ${new Date().toISOString()} and revoked_at is null`),
   );
   if (!row) return undefined;
@@ -397,10 +404,13 @@ export function deviceAccountActions(deps: DeviceActionDeps) {
     resolveDeviceLink: defineAction({
       description:
         "Find this account's device showing a link code, to check it and vouch for it.",
-      input: z.object({ code: linkCodeInput }),
-      run: async ({ code }, ctx): Promise<PendingDevice> => {
+      input: z.union([
+        z.object({ code: linkCodeInput }),
+        z.object({ device: z.string().min(1).max(64) }),
+      ]),
+      run: async (input, ctx): Promise<PendingDevice> => {
         const user = signedIn(ctx);
-        const found = await findPendingDevice(databaseOf(deps.host), user.userId, code);
+        const found = await findPendingDevice(databaseOf(deps.host), user.userId, input);
         if (!found) {
           throw new ActionError(
             "not_found",

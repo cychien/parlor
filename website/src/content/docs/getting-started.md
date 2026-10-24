@@ -162,7 +162,7 @@ npx @parlor/agent-host connect http://localhost:5173
 
 Run it, press **Connect** in the browser tab it opens, and the tab returns to the app, ready to chat.
 
-To use your agents from another browser or your phone, link it once: it shows a code, and you type that code under **Link a device** in a browser you already use, then confirm with Face ID or Touch ID. With no linked device at hand, run the `npx @parlor/agent-host link ...` command it shows on your computer.
+To use your agents from another browser or your phone, link it once: it shows a QR code and a short code. Scan the QR with a phone you already use, or type the code under **Link a device** in a browser you already use, then confirm with Face ID or Touch ID. With no linked device at hand, run the `npx @parlor/agent-host link ...` command it shows on your computer.
 
 ## Next
 

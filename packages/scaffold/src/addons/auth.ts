@@ -80,7 +80,7 @@ export const auth = defineAddon({
     },
   ],
   generate: [
-    { kind: "route-tree", routes: ["/sign-in"] },
+    { kind: "route-tree", routes: ["/sign-in", "/link"] },
     {
       kind: "migration",
       name: "auth",

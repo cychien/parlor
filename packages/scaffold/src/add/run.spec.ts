@@ -86,7 +86,7 @@ function hashes(dir: string): Map<string, string> {
 const workingTools: AddTools = {
   routeTree: async (rootDir) => {
     const path = join(rootDir, DEFAULT_LAYOUT.routeTree);
-    await writeFile(path, `${await readFile(path, "utf8")}// "/sign-in"\n`);
+    await writeFile(path, `${await readFile(path, "utf8")}// "/sign-in" "/link"\n`);
   },
   migration: async (rootDir, name) => {
     const meta = join(rootDir, DEFAULT_LAYOUT.migrationsDir, "meta");

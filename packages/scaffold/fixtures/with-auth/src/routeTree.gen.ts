@@ -10,11 +10,17 @@
 
 import { Route as rootRouteImport } from "./routes/__root";
 import { Route as IndexRouteImport } from "./routes/index";
+import { Route as LinkRouteImport } from "./routes/link";
 import { Route as SignInRouteImport } from "./routes/sign-in";
 
 const IndexRoute = IndexRouteImport.update({
   id: "/",
   path: "/",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const LinkRoute = LinkRouteImport.update({
+  id: "/link",
+  path: "/link",
   getParentRoute: () => rootRouteImport,
 } as any);
 const SignInRoute = SignInRouteImport.update({
@@ -25,27 +31,31 @@ const SignInRoute = SignInRouteImport.update({
 
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute;
+  "/link": typeof LinkRoute;
   "/sign-in": typeof SignInRoute;
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute;
+  "/link": typeof LinkRoute;
   "/sign-in": typeof SignInRoute;
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
   "/": typeof IndexRoute;
+  "/link": typeof LinkRoute;
   "/sign-in": typeof SignInRoute;
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
-  fullPaths: "/" | "/sign-in";
+  fullPaths: "/" | "/link" | "/sign-in";
   fileRoutesByTo: FileRoutesByTo;
-  to: "/" | "/sign-in";
-  id: "__root__" | "/" | "/sign-in";
+  to: "/" | "/link" | "/sign-in";
+  id: "__root__" | "/" | "/link" | "/sign-in";
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute;
+  LinkRoute: typeof LinkRoute;
   SignInRoute: typeof SignInRoute;
 }
 
@@ -56,6 +66,13 @@ declare module "@tanstack/react-router" {
       path: "/";
       fullPath: "/";
       preLoaderRoute: typeof IndexRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/link": {
+      id: "/link";
+      path: "/link";
+      fullPath: "/link";
+      preLoaderRoute: typeof LinkRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     "/sign-in": {
@@ -70,6 +87,7 @@ declare module "@tanstack/react-router" {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  LinkRoute: LinkRoute,
   SignInRoute: SignInRoute,
 };
 export const routeTree = rootRouteImport
