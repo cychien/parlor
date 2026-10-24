@@ -17,8 +17,16 @@ export const Route = createFileRoute("/")({
       "Home: a greeting, the New task form (title and notes, the user presses Add), and the task list, oldest first, to check off tasks.",
     views: [newTaskView, taskView],
   },
+  ssr: true,
   loader: ({ context }) => ensureActionQueryData(context, "listTasks", {}),
   onError: routeErrors,
+  head: () => ({
+    meta: [
+      { title: "Tasks · Hello" },
+      { property: "og:title", content: "Tasks" },
+      { name: "description", content: "Your tasks, oldest first." },
+    ],
+  }),
   component: Home,
 });
 
