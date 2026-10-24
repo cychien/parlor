@@ -44,6 +44,7 @@ const baseState: ChatState = {
   error: undefined,
   setup: undefined,
   link: { status: "linked" },
+  presenceDue: false,
 };
 
 function fakeRuntime(initial: Partial<ChatState> = {}) {
@@ -477,6 +478,18 @@ describe("Chat.Status", () => {
   it("says it waits for the passkey while the browser asks for one", () => {
     expect(status({ setup: { step: "passkey" } }).textContent).toBe(
       "Waiting for the passkey",
+    );
+  });
+
+  it("D4: says sending will ask for Face ID or Touch ID when the computer wants it again", () => {
+    expect(status({ presenceDue: true }).textContent).toBe(
+      "Sending will ask for Face ID or Touch ID",
+    );
+  });
+
+  it("D4: says the agent is working over the Face ID or Touch ID reminder", () => {
+    expect(status({ presenceDue: true, status: "running" }).textContent).toBe(
+      "Working...",
     );
   });
 

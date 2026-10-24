@@ -42,7 +42,7 @@ import type { AppLink } from "./link.js";
 import { logEvent } from "./log.js";
 import type { McpProxy, ProxySession } from "./mcp-proxy.js";
 import { appServerOf, computerName } from "./naming.js";
-import { approvalFor, isAppTool, type RemotePolicy } from "./policy.js";
+import { approvalFor, isAppTool, presenceDueAt, type RemotePolicy } from "./policy.js";
 import type { LiveSession, SessionPool } from "./pool.js";
 import type { LocalPrompter } from "./prompter.js";
 import { agentEnvironment } from "./shell-path.js";
@@ -303,9 +303,10 @@ export async function runTurn(
   const verifyPrompt = async (
     signed: NonNullable<Awaited<ReturnType<typeof signedPrompt>>>,
     pinned: PinnedDevice,
+    requirePresence: boolean,
   ): Promise<VerifyOutcome> => {
     const outcome = await verifyStatement(signed, pinned, {
-      requirePresence: false,
+      requirePresence,
       now: deps.now(),
       maxAgeMs: promptMaxAgeMs(),
     });
@@ -373,6 +374,12 @@ export async function runTurn(
     });
   };
 
+  /** Moves the device's last presence check forward; reported so its devices know when the next is due. */
+  const confirmedPresence = async (device: TrustedDevice, at: number) => {
+    if (at <= (device.presenceAt ?? device.approvedAt)) return;
+    await deps.trust.pin(origin, { ...device, presenceAt: at });
+  };
+
   const unlinked = `Link this device to use your agents on ${computerName()}: open the Agent sidebar on it.`;
 
   const admit = async (): Promise<Admission> => {
@@ -409,9 +416,21 @@ export async function runTurn(
       signingKey: keys.signingKey,
       presenceKey: keys.presenceKey,
     };
-    const outcome = await verifyPrompt(signed, pinned);
+    const due = known && presenceDueAt(deps.policy, known);
+    const outcome = await verifyPrompt(
+      signed,
+      pinned,
+      due !== undefined && signed.statement.at > due,
+    );
     if (outcome === "stale") {
       return { outcome: await finish({ state: "failed", reason: "prompt_expired" }) };
+    }
+    if (outcome === "presence_required") {
+      return refuse(
+        "device_rejected",
+        "turn_failed",
+        `Confirm it's you to keep using your agents on ${computerName()} from this device: send again and use Face ID or Touch ID.`,
+      );
     }
     if (outcome !== "valid") {
       return refuse(
@@ -420,7 +439,12 @@ export async function runTurn(
         "This prompt's signature did not check out.",
       );
     }
-    if (known) return { device: known };
+    if (known) {
+      if (signed.signature.presence === "user") {
+        await confirmedPresence(known, signed.statement.at);
+      }
+      return { device: known };
+    }
     const proof = claimed.prompt.body.signed?.pairing;
     const secret = proof ? await deps.pairing?.secret() : undefined;
     if (
@@ -641,6 +665,9 @@ export async function runTurn(
       }
       if (outcome !== "valid")
         return rejected("This answer's signature did not check out.");
+      if (pinned && signed.signature.presence === "user") {
+        await confirmedPresence(pinned, signed.at);
+      }
       return pinned || !listed
         ? { kind: "accepted" }
         : { kind: "unpinned", device: listed };

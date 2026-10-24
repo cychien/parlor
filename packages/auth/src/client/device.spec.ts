@@ -438,6 +438,37 @@ describe("the auth client's device", () => {
     );
   });
 
+  it("D4: signs a prompt with Face ID or Touch ID when asked, which a host that wants presence accepts", async () => {
+    const { auth } = await signedIn(new TestDeviceKey());
+    const device = (await auth.device())!;
+    const plain = await device.signPrompt(prompt);
+    const present = await device.signPrompt(prompt, { presence: true });
+    expect([plain.signature.presence, present.signature.presence]).toEqual([
+      "none",
+      "user",
+    ]);
+    const pinned = await pinnedFor(auth, device.id);
+    const verify = async (signed: typeof plain) =>
+      verifyStatement(
+        (await signedPrompt(PAGE, {
+          id: asId("item", "p1"),
+          threadId: prompt.threadId,
+          turnId: prompt.turnId,
+          seq: 1,
+          at: signed.at,
+          author: "user",
+          kind: "prompt",
+          body: { text: prompt.text, agent: prompt.agent, signed },
+        }))!,
+        pinned,
+        { requirePresence: true, now: signed.at, maxAgeMs: 60_000 },
+      );
+    expect([await verify(plain), await verify(present)]).toEqual([
+      "presence_required",
+      "valid",
+    ]);
+  });
+
   it("signs an answer with presence only when asked to", async () => {
     const { auth } = await signedIn(new TestDeviceKey());
     const device = (await auth.device())!;

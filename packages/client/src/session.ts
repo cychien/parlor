@@ -29,7 +29,11 @@ export interface SessionDevice {
   readonly id: DeviceId;
   /** The public half of its keys, as the account registered them. */
   readonly keys: PairingDevice;
-  signPrompt(prompt: PromptToSign): Promise<ItemSignature>;
+  /** With `presence`, the platform asks for Touch ID, Face ID or a passkey first. */
+  signPrompt(
+    prompt: PromptToSign,
+    options?: { readonly presence?: boolean },
+  ): Promise<ItemSignature>;
   /** With `presence`, the platform asks for Touch ID, Face ID or a passkey first. */
   signAnswer(
     answer: AnswerToSign,

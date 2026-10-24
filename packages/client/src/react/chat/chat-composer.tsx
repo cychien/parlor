@@ -92,7 +92,7 @@ export function Stop({
   );
 }
 
-function statusText({ status, wait, setup, link }: ChatState): string {
+function statusText({ status, wait, setup, link, presenceDue }: ChatState): string {
   if (setup?.step === "passkey") return "Waiting for the passkey";
   if (link.status === "unlinked") return "Link this device to send messages";
   if (wait) {
@@ -102,6 +102,7 @@ function statusText({ status, wait, setup, link }: ChatState): string {
   }
   if (status === "sending") return "Sending...";
   if (status === "running") return "Working...";
+  if (presenceDue) return "Sending will ask for Face ID or Touch ID";
   return "";
 }
 

@@ -697,6 +697,7 @@ describe("runTurn against the fake agent over real stdio", () => {
 
 const APP = grant.appOrigin;
 const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
 const WAIT = { timeout: 10_000 };
 
 const pinOf = (device: TestDevice): TrustedDevice => ({
@@ -705,7 +706,7 @@ const pinOf = (device: TestDevice): TrustedDevice => ({
   presenceKey: device.keys.presenceKey,
   name: device.keys.name,
   platform: device.keys.platform,
-  approvedAt: 1,
+  approvedAt: Date.now(),
   via: "local",
 });
 
@@ -719,6 +720,7 @@ async function signedClaim(
     readonly app?: string;
     readonly device?: DeviceKeys | undefined;
     readonly sign?: boolean;
+    readonly presence?: boolean;
     readonly pairing?: string;
   } = {},
 ): Promise<ClaimedTurn> {
@@ -730,6 +732,7 @@ async function signedClaim(
           options.app ?? APP,
           { threadId: thread, turnId: base.turnId, agent: base.agent, text },
           options.at ?? Date.now(),
+          options.presence,
         );
   return {
     ...base,
@@ -1120,6 +1123,76 @@ describe("runTurn trusting the device that sent the prompt", () => {
     expect(await runTurn(stale, run.deps)).toMatchObject({ reason: "prompt_expired" });
   });
 
+  it("D4: asks a pinned device for Face ID or Touch ID again 18 hours after its last check, then not until 18 more", async () => {
+    const device = await TestDevice.create();
+    const trust = memoryTrust();
+    const linkedAt = Date.now() - 19 * HOUR;
+    await trust.pin(APP, { ...pinOf(device), approvedAt: linkedAt });
+    const thread = asId("thread", "t-recheck");
+    const without = harness(undefined, { trust, policy });
+    expect(
+      await runTurn(await signedClaim(device, thread, "lapsed-plain"), without.deps),
+    ).toEqual({ state: "failed", reason: "device_rejected" });
+    expect(eventsOf(without)).toEqual([
+      {
+        event: "turn_failed",
+        detail: `Confirm it's you to keep using your agents on ${computerName()} from this device: send again and use Face ID or Touch ID.`,
+      },
+    ]);
+    expect(ranAgentFor("lapsed-plain")).toBe(false);
+    expect((await trust.get(APP, device.id))?.presenceAt).toBeUndefined();
+
+    const confirmedAt = Date.now();
+    const confirmed = harness(undefined, { trust, policy });
+    const withPresence = await signedClaim(device, thread, "lapsed-presence", {
+      at: confirmedAt,
+      presence: true,
+    });
+    expect(await runTurn(withPresence, confirmed.deps)).toMatchObject({ state: "done" });
+    expect(await trust.get(APP, device.id)).toMatchObject({
+      approvedAt: linkedAt,
+      presenceAt: confirmedAt,
+    });
+
+    const later = harness(undefined, { trust, policy });
+    expect(
+      await runTurn(await signedClaim(device, thread, "after-check"), later.deps),
+    ).toMatchObject({ state: "done" });
+  });
+
+  it("D4: counts the 18 hours to when the prompt was signed, not to when this computer claimed it", async () => {
+    const device = await TestDevice.create();
+    const trust = memoryTrust();
+    const signedAt = Date.now();
+    await trust.pin(APP, { ...pinOf(device), approvedAt: signedAt - 18 * HOUR + MINUTE });
+    const turn = await signedClaim(device, asId("thread", "t-recheck-queued"), "queued", {
+      at: signedAt,
+    });
+    const run = harness(undefined, { trust, policy, now: () => signedAt + 5 * MINUTE });
+    expect(await runTurn(turn, run.deps)).toMatchObject({ state: "done" });
+  });
+
+  it("D4: never asks again a device with no Face ID or Touch ID, or when the policy turns it off", async () => {
+    const device = await TestDevice.create();
+    const trust = memoryTrust();
+    const { presenceKey: _none, ...withoutPresence } = pinOf(device);
+    await trust.pin(APP, { ...withoutPresence, approvedAt: Date.now() - 30 * HOUR });
+    const run = harness(undefined, { trust, policy });
+    const turn = await signedClaim(device, asId("thread", "t-recheck-none"), "no-key", {
+      device: { ...device.keys, presenceKey: undefined },
+    });
+    expect(await runTurn(turn, run.deps)).toMatchObject({ state: "done" });
+
+    const other = await TestDevice.create("device-2");
+    await trust.pin(APP, { ...pinOf(other), approvedAt: Date.now() - 30 * HOUR });
+    const off = harness(undefined, {
+      trust,
+      policy: { ...policy, promptPresence: "off" },
+    });
+    const prompt = await signedClaim(other, asId("thread", "t-recheck-off"), "off");
+    expect(await runTurn(prompt, off.deps)).toMatchObject({ state: "done" });
+  });
+
   it("skips every device check when the policy turns approval off", async () => {
     const device = await TestDevice.create();
     const run = harness(undefined, { policy: DEV_POLICY });
@@ -1199,6 +1272,7 @@ describe("runTurn taking answers only as the policy says", () => {
       expect.objectContaining({ itemId: "a1" }),
       expect.objectContaining({ itemId: "a2" }),
     ]);
+    expect((await trust.get(APP, device.id))?.presenceAt).toBe(at);
     expect(run.appended().find((item) => item.kind === "tool")!.body).toMatchObject({
       status: "done",
     });

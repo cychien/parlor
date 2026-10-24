@@ -31,7 +31,9 @@ describe.each(drivers)("the devices a computer runs prompts from on $name", (dri
   });
 
   const hosts = async () =>
-    (await app.action("alice", "hosts", {})).body as { data: { devices?: string[] }[] };
+    (await app.action("alice", "hosts", {})).body as {
+      data: { devices?: string[]; presenceDue?: Record<string, number> }[];
+    };
 
   it("are absent until the computer reports them, then listed, and kept by a report that omits them", async () => {
     await app.action("alice-host", "hostHello", {
@@ -56,5 +58,35 @@ describe.each(drivers)("the devices a computer runs prompts from on $name", (dri
       devices: [],
     });
     expect((await hosts()).data[0]?.devices).toEqual([]);
+  });
+
+  it("carry when each device must confirm with Face ID or Touch ID again, kept by a report that omits it", async () => {
+    await app.action("alice-host", "hostHello", {
+      protocols: { min: 2, max: 2 },
+      hostVersion: "1",
+      name: "Mac",
+      platform: "macos",
+      agents: [],
+    });
+    expect((await hosts()).data[0]).not.toHaveProperty("presenceDue");
+    await app.action("alice-host", "hostReport", {
+      online: true,
+      agents: [],
+      devices: ["device-laptop", "device-phone"],
+      presenceDue: { "device-phone": 1_800_000_000_000 },
+    });
+    expect((await hosts()).data[0]?.presenceDue).toEqual({
+      "device-phone": 1_800_000_000_000,
+    });
+    await app.action("alice-host", "hostReport", { online: true, agents: [] });
+    expect((await hosts()).data[0]?.presenceDue).toEqual({
+      "device-phone": 1_800_000_000_000,
+    });
+    await app.action("alice-host", "hostReport", {
+      online: true,
+      agents: [],
+      presenceDue: {},
+    });
+    expect((await hosts()).data[0]?.presenceDue).toEqual({});
   });
 });

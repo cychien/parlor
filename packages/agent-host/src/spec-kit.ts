@@ -318,9 +318,15 @@ export class TestDevice {
     app: string,
     prompt: PromptToSign,
     at: number,
+    presence = false,
   ): Promise<ItemSignature> {
     const statement = await promptStatement(app, prompt, at);
-    return this.sign(this.signing, statementBytes(statement), "none", at);
+    return this.sign(
+      presence ? this.presence : this.signing,
+      statementBytes(statement),
+      presence ? "user" : "none",
+      at,
+    );
   }
 
   async signAnswer(

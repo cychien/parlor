@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { defineCommand, runMain } from "citty";
 
 import type { AppGrant, GrantStore } from "./grants.js";
+import type { RemotePolicy } from "./policy.js";
 import { printable } from "./prompter.js";
 import { HOST_VERSION as version } from "./version.js";
 
@@ -437,19 +438,37 @@ const config = defineCommand({
       description:
         "Where an agent's permission prompts are answered: presence or computer",
     },
+    "prompt-presence": {
+      type: "string",
+      description:
+        "Hours a linked device sends before it confirms with Face ID or Touch ID again, or off",
+    },
   },
   async run({ args }) {
     const kit = await host();
     const { policy } = kit.hostPaths();
-    const answers = args.answers;
-    if (answers !== undefined && answers !== "presence" && answers !== "computer") {
-      fail("--answers takes presence or computer.");
-      return;
+    let change: Partial<RemotePolicy> = {};
+    const { answers } = args;
+    if (answers !== undefined) {
+      if (answers !== "presence" && answers !== "computer") {
+        fail("--answers takes presence or computer.");
+        return;
+      }
+      change = { ...change, answers };
+    }
+    const hours = args["prompt-presence"];
+    if (hours !== undefined) {
+      const maxAgeHours = Number(hours);
+      if (hours !== "off" && !(Number.isFinite(maxAgeHours) && maxAgeHours > 0)) {
+        fail("--prompt-presence takes a number of hours or off.");
+        return;
+      }
+      change = { ...change, promptPresence: hours === "off" ? "off" : { maxAgeHours } };
     }
     const current =
-      answers === undefined
+      Object.keys(change).length === 0
         ? await kit.loadPolicy(policy, kit.DEFAULT_POLICY)
-        : await kit.changePolicy(policy, kit.DEFAULT_POLICY, { answers });
+        : await kit.changePolicy(policy, kit.DEFAULT_POLICY, change);
     process.stdout.write(`${JSON.stringify(current)}\n`);
   },
 });

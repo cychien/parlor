@@ -170,6 +170,8 @@ export interface ChatStore {
       readonly agents: readonly AgentInfo[];
       /** Left as it was when the host does not report it. */
       readonly devices?: readonly string[] | undefined;
+      /** Left as it was when the host does not report it. */
+      readonly presenceDue?: Readonly<Record<string, number>> | undefined;
       readonly online: boolean;
       readonly ttlMs: number;
     },
@@ -845,16 +847,18 @@ export const sqlChatStore: ChatStore = {
       tx,
       sql`insert into parlor_chat_hosts
         (id, scope, owner_id, grant_id, protocol, name, platform, agents, devices,
-          online_until, announced_online)
+          presence_due, online_until, announced_online)
         values (${host.hostId}, ${owner.scope}, ${owner.userId}, ${host.grantId},
           ${report.protocol}, ${report.name}, ${report.platform},
           ${JSON.stringify(report.agents)}::jsonb,
           ${report.devices ? JSON.stringify(report.devices) : null}::jsonb,
+          ${report.presenceDue ? JSON.stringify(report.presenceDue) : null}::jsonb,
           ${leaseSql(ttlMs)}, ${report.online})
         on conflict (id) do update set
           grant_id = excluded.grant_id, protocol = excluded.protocol, name = excluded.name,
           platform = excluded.platform, agents = excluded.agents,
           devices = coalesce(excluded.devices, parlor_chat_hosts.devices),
+          presence_due = coalesce(excluded.presence_due, parlor_chat_hosts.presence_due),
           online_until = excluded.online_until,
           announced_online = excluded.announced_online
         where parlor_chat_hosts.owner_id = excluded.owner_id
@@ -884,7 +888,7 @@ export const sqlChatStore: ChatStore = {
   async listHosts(db, owner) {
     return query(
       db,
-      sql`select id, grant_id, protocol, name, platform, agents, devices,
+      sql`select id, grant_id, protocol, name, platform, agents, devices, presence_due,
           online_until > now() as online
         from parlor_chat_hosts
         where owner_id = ${owner.userId} and scope = ${owner.scope}
@@ -898,11 +902,13 @@ export const sqlChatStore: ChatStore = {
           platform: z.string(),
           agents: z.array(agentInfoSchema),
           devices: z.array(z.string()).nullable(),
+          presence_due: z.record(z.string(), z.number()).nullable(),
           online: z.boolean(),
         })
-        .transform(({ grant_id, devices, ...host }) => ({
+        .transform(({ grant_id, devices, presence_due, ...host }) => ({
           ...host,
           ...(devices ? { devices } : {}),
+          ...(presence_due ? { presenceDue: presence_due } : {}),
           grantId: grant_id,
         })),
     );

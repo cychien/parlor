@@ -37,7 +37,7 @@ import {
   UnrevokedGrant,
 } from "./pairing.js";
 import type { HostPaths } from "./paths.js";
-import { DEV_POLICY, loadPolicy, type RemotePolicy } from "./policy.js";
+import { DEV_POLICY, loadPolicy, presenceDueAt, type RemotePolicy } from "./policy.js";
 import type { SessionPool } from "./pool.js";
 import { type LocalPrompter, printable } from "./prompter.js";
 import { compareVersions, RELEASE_KEY, signedRelease } from "./release.js";
@@ -298,18 +298,25 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
     return state;
   };
 
-  const pinnedDevices = async (state: LinkState) =>
-    state.link.grant.dev
-      ? undefined
-      : (await deps.trust.list(state.link.grant.appOrigin)).map(
-          (device) => device.deviceId,
-        );
+  const pinnedDevices = async (state: LinkState) => {
+    if (state.link.grant.dev) return {};
+    const [pinned, policy] = await Promise.all([
+      deps.trust.list(state.link.grant.appOrigin),
+      loadPolicy(paths.policy, deps.policy),
+    ]);
+    const presenceDue: Record<string, number> = {};
+    for (const device of pinned) {
+      const due = presenceDueAt(policy, device);
+      if (due !== undefined) presenceDue[device.deviceId] = due;
+    }
+    return { devices: pinned.map((device) => device.deviceId), presenceDue };
+  };
 
   const report = async (state: LinkState) => {
     const reported = state.link.api.calls.call("hostReport", {
       online: true,
       agents,
-      devices: await pinnedDevices(state),
+      ...(await pinnedDevices(state)),
     });
     const timeout = new Promise<never>((_, reject) =>
       setTimeout(

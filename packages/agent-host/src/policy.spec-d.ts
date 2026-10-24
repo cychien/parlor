@@ -5,10 +5,15 @@ import type { FoldStep } from "./fold.js";
 import type { approvalFor, DEFAULT_POLICY, RemotePolicy } from "./policy.js";
 
 test("the policy has only the computer's own switches: no app setting, no vouching", () => {
-  expectTypeOf<keyof RemotePolicy>().toEqualTypeOf<"deviceApproval" | "answers">();
+  expectTypeOf<keyof RemotePolicy>().toEqualTypeOf<
+    "deviceApproval" | "answers" | "promptPresence"
+  >();
   expectTypeOf<RemotePolicy["deviceApproval"]>().toEqualTypeOf<"local" | "off">();
   expectTypeOf<RemotePolicy["answers"]>().toEqualTypeOf<
     "presence" | "computer" | "off"
+  >();
+  expectTypeOf<RemotePolicy["promptPresence"]>().toEqualTypeOf<
+    { readonly maxAgeHours: number } | "off" | undefined
   >();
 });
 
