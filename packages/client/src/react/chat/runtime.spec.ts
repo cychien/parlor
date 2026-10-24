@@ -1281,15 +1281,119 @@ describe("createChatRuntime device signatures", () => {
     expect(d.signAnswer).not.toHaveBeenCalled();
   });
 
-  it("says the presence check was cancelled when the user declines it", async () => {
+  it("says Face ID or Touch ID was cancelled when the user declines it", async () => {
     const d = device();
     d.signAnswer.mockRejectedValueOnce(new DOMException("no", "NotAllowedError"));
     const h = setup({ auth: d.source, open: async () => asking("presence") });
     h.runtime.start();
     await vi.waitFor(() => expect(h.runtime.get().items).toHaveLength(2));
     await expect(h.runtime.answer("turn_1.1", "yes")).rejects.toThrow();
-    expect(h.runtime.get().error).toBe("The presence check was cancelled.");
+    expect(h.runtime.get().error).toBe("Face ID or Touch ID was cancelled.");
     expect(answerCalls(h)).toEqual([]);
+  });
+
+  describe("D4: a computer that wants this device to confirm it is the user again", () => {
+    const presenceSnapshot = (due: number) => ({
+      ...snapshot(),
+      hosts: [{ ...claudeOnMac(), presenceDue: { [deviceId]: due } }],
+    });
+    const linked = (d: ReturnType<typeof device>) => ({
+      ...d.source,
+      linkState: async () => ({ deviceId, vouched: true, pairing: false }),
+    });
+
+    it("says so before sending, then signs the prompt with Face ID or Touch ID", async () => {
+      const d = device();
+      d.signPrompt.mockResolvedValue(signature("user"));
+      const h = setup({
+        auth: linked(d),
+        open: async () => presenceSnapshot(Date.now() - 1),
+      });
+      h.runtime.start();
+      await vi.waitFor(() => expect(h.runtime.get().presenceDue).toBe(true));
+      h.runtime.setDraft("deploy it");
+      await h.runtime.send();
+      expect(d.signPrompt).toHaveBeenCalledWith(expect.anything(), { presence: true });
+      const send = h.calls.find((c) => c.name === "send")!.input as {
+        prompt: { signed: ItemSignature };
+      };
+      expect(send.prompt.signed.signature.presence).toBe("user");
+    });
+
+    it("asks 10 minutes before the computer's deadline, and not earlier", async () => {
+      const d = device();
+      const h = setup({
+        auth: linked(d),
+        open: async () => presenceSnapshot(Date.now() + 10 * 60_000 + 300),
+      });
+      h.runtime.start();
+      await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+      expect(h.runtime.get().presenceDue).toBe(false);
+      await vi.waitFor(() => expect(h.runtime.get().presenceDue).toBe(true), {
+        timeout: 2_000,
+      });
+    });
+
+    it("asks at once after the computer refused this device's last prompt, whatever the clocks say", async () => {
+      const d = device();
+      const refused = (deviceOf: string) => ({
+        ...presenceSnapshot(Date.now() + 5 * 60 * 60_000),
+        page: {
+          ...snapshot().page,
+          items: [
+            {
+              ...logged(1, "item_p", "prompt", "go"),
+              body: {
+                text: "go",
+                agent: { hostId: asId("host", "host_mac"), agentId: "claude" },
+                signed: { ...signature("none"), deviceId: asId("device", deviceOf) },
+              },
+            } as LoggedItem,
+          ],
+          turns: [{ ...turn("turn_1", "failed"), failure: "device_rejected" as const }],
+        },
+      });
+      const mine = setup({ auth: linked(d), open: async () => refused("dev_1") });
+      mine.runtime.start();
+      await vi.waitFor(() => expect(mine.runtime.get().presenceDue).toBe(true));
+      const theirs = setup({ auth: linked(d), open: async () => refused("dev_other") });
+      theirs.runtime.start();
+      await vi.waitFor(() => expect(theirs.runtime.get().status).toBe("idle"));
+      expect(theirs.runtime.get().presenceDue).toBe(false);
+    });
+
+    it("signs without presence for a computer that does not ask, or another device's deadline", async () => {
+      const d = device();
+      const h = setup({
+        auth: linked(d),
+        open: async () => ({
+          ...snapshot(),
+          hosts: [{ ...claudeOnMac(), presenceDue: { dev_other: Date.now() - 1 } }],
+        }),
+      });
+      h.runtime.start();
+      await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+      expect(h.runtime.get().presenceDue).toBe(false);
+      h.runtime.setDraft("plain");
+      await h.runtime.send();
+      expect(d.signPrompt).toHaveBeenCalledWith(expect.anything());
+    });
+
+    it("sends nothing and keeps the draft when Face ID or Touch ID is cancelled", async () => {
+      const d = device();
+      d.signPrompt.mockRejectedValueOnce(new DOMException("no", "NotAllowedError"));
+      const h = setup({
+        auth: linked(d),
+        open: async () => presenceSnapshot(Date.now() - 1),
+      });
+      h.runtime.start();
+      await vi.waitFor(() => expect(h.runtime.get().presenceDue).toBe(true));
+      h.runtime.setDraft("deploy it");
+      await h.runtime.send().catch(() => undefined);
+      expect(h.runtime.get().error).toBe("Face ID or Touch ID was cancelled.");
+      expect(h.calls.some((c) => c.name === "send")).toBe(false);
+      expect(h.runtime.get().draft).toBe("deploy it");
+    });
   });
 
   it("answers again with a new item once the host rejected the first answer", async () => {

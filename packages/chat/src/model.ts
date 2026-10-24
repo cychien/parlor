@@ -26,6 +26,11 @@ export interface HostSummary {
   readonly agents: readonly AgentInfo[];
   /** The devices this computer runs prompts from; absent when it is too old to say. */
   readonly devices?: readonly string[] | undefined;
+  /**
+   * When each of those devices must sign its next prompt with Face ID or Touch ID again
+   * (epoch ms); a device it never asks is missing.
+   */
+  readonly presenceDue?: Readonly<Record<string, number>> | undefined;
 }
 
 export interface AgentInfo {

@@ -200,6 +200,14 @@ const DIFFERENCES: Readonly<
     agreed: true,
     why: "addendum D7: the overlay read at the start of each turn",
   },
+  "agent-host/src/policy.ts RemotePolicy changed": {
+    agreed: true,
+    why: "device linking D4: `promptPresence` asks a linked device for Face ID or Touch ID again after 18 hours; optional, so existing policies still type",
+  },
+  "agent-host/src/policy.ts presenceDueAt added": {
+    agreed: true,
+    why: "device linking D4: when a pinned device's next prompt needs presence, for the turn and for the host's report",
+  },
   "agent-host/src/daemon.ts DaemonDeps changed": {
     agreed: true,
     why: "review of phase 6: `lockToken` names the service.lock the spawning ensureService holds, so the daemon's probe-through-bind takes the lock otherwise",

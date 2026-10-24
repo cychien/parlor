@@ -25,6 +25,10 @@ import { turnContext } from "./context.js";
 import type { LiveRelay } from "./live.js";
 import { type ChatHost, chatAction } from "./party.js";
 import { agentInfoSchema, TURN_FAILURES } from "./rows.js";
+
+const presenceDueSchema = z
+  .record(z.string().min(1).max(64), z.number().int().nonnegative())
+  .refine((due) => Object.keys(due).length <= 256, "At most 256 devices.");
 import type { ChatDb, ChatStore, StoredHost } from "./store.js";
 
 export { CHAT_ACTIVITY_TAG, CHAT_TAG, HOSTS_TAG, HOST_GRANTS_TAG };
@@ -293,6 +297,7 @@ export function hostChatActions(deps: ChatActionDeps) {
         platform: z.string().min(1).max(32),
         agents: z.array(agentInfoSchema).max(32),
         devices: z.array(z.string().min(1).max(64)).max(256).optional(),
+        presenceDue: presenceDueSchema.optional(),
       }),
       writes: [HOSTS_TAG],
       run: async (input, host, ctx): Promise<HostWelcome & { readonly id: string }> => {
@@ -312,6 +317,7 @@ export function hostChatActions(deps: ChatActionDeps) {
           platform: input.platform,
           agents: input.agents,
           devices: input.devices,
+          presenceDue: input.presenceDue,
           online: true,
           ttlMs: 2 * deps.heartbeatMs,
         });
@@ -333,6 +339,7 @@ export function hostChatActions(deps: ChatActionDeps) {
         online: z.boolean(),
         agents: z.array(agentInfoSchema).max(32),
         devices: z.array(z.string().min(1).max(64)).max(256).optional(),
+        presenceDue: presenceDueSchema.optional(),
       }),
       writes: [HOSTS_TAG],
       run: async (
@@ -348,6 +355,7 @@ export function hostChatActions(deps: ChatActionDeps) {
           platform: known.platform,
           agents: input.agents,
           devices: input.devices,
+          presenceDue: input.presenceDue,
           online: input.online,
           ttlMs: 2 * deps.heartbeatMs,
         });

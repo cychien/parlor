@@ -10,6 +10,8 @@ export interface TrustedDevice extends PinnedDevice {
   readonly via: "pairing" | "local" | "vouched";
   /** The linked device whose vouch pinned it. */
   readonly voucher?: string | undefined;
+  /** When it last signed here with Face ID or Touch ID; `approvedAt` until it does. */
+  readonly presenceAt?: number | undefined;
 }
 
 export interface TrustStore {

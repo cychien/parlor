@@ -29,7 +29,11 @@ const config = (...args: string[]) =>
 describe("parlor-host config", () => {
   it("sets where answers count in policy.json and prints the resulting policy", async () => {
     const { stdout } = await config("--answers", "computer");
-    expect(JSON.parse(stdout)).toEqual({ deviceApproval: "local", answers: "computer" });
+    expect(JSON.parse(stdout)).toEqual({
+      deviceApproval: "local",
+      answers: "computer",
+      promptPresence: { maxAgeHours: 18 },
+    });
     expect(JSON.parse(await readFile(policyFile(), "utf8"))).toEqual({
       answers: "computer",
     });
@@ -37,10 +41,12 @@ describe("parlor-host config", () => {
     expect(JSON.parse((await config()).stdout)).toEqual({
       deviceApproval: "local",
       answers: "computer",
+      promptPresence: { maxAgeHours: 18 },
     });
     expect(JSON.parse((await config("--answers", "presence")).stdout)).toEqual({
       deviceApproval: "local",
       answers: "presence",
+      promptPresence: { maxAgeHours: 18 },
     });
   }, 30_000);
 
@@ -52,6 +58,24 @@ describe("parlor-host config", () => {
     });
     expect(JSON.parse(await readFile(policyFile(), "utf8"))).toEqual({
       answers: "computer",
+    });
+  }, 30_000);
+
+  it("sets how many hours a linked device sends before Face ID or Touch ID again, or turns it off", async () => {
+    expect(
+      JSON.parse((await config("--prompt-presence", "8")).stdout).promptPresence,
+    ).toEqual({ maxAgeHours: 8 });
+    expect(
+      JSON.parse((await config("--prompt-presence", "off")).stdout).promptPresence,
+    ).toBe("off");
+    await expect(config("--prompt-presence", "soon")).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining(
+        "--prompt-presence takes a number of hours or off.",
+      ),
+    });
+    expect(JSON.parse(await readFile(policyFile(), "utf8"))).toMatchObject({
+      promptPresence: "off",
     });
   }, 30_000);
 });

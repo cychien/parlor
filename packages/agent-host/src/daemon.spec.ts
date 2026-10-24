@@ -499,6 +499,76 @@ describe("what the daemon enforces on a grant's turns", () => {
   }, 60_000);
 });
 
+describe("a daemon reporting the devices it runs prompts from", () => {
+  it("D4: reports when each device with Face ID or Touch ID must use them again, and none once policy.json turns that off", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pd-"));
+    const paths = hostPaths(join(root, ".parlor", "host"));
+    const app = await stubApp(hostRoutes({ wake: false }));
+    const keys = memoryHostKeys();
+    const grants = fileGrantStore(paths.grants);
+    const trust = fileTrustStore(paths.trust);
+    const signingKey = { kty: "EC", crv: "P-256", x: "x", y: "y" };
+    await trust.pin(app.origin, {
+      deviceId: asId("device", "device-phone"),
+      signingKey,
+      presenceKey: { format: "es256-raw", keyId: "presence", publicKey: signingKey },
+      name: "Chrome on iPhone",
+      platform: "web",
+      approvedAt: 1_000,
+      presenceAt: 5_000,
+      via: "vouched",
+    });
+    await trust.pin(app.origin, {
+      deviceId: asId("device", "device-tab"),
+      signingKey,
+      name: "Chrome on macOS",
+      platform: "web",
+      approvedAt: 2_000,
+      via: "pairing",
+    });
+    const host = createHostDaemon({
+      release: {
+        version: "0.0.0",
+        protocols: { min: 1, max: HOST_PROTOCOL },
+        control: 1,
+      },
+      paths,
+      grants,
+      keys,
+      trust,
+      pool: createSessionPool(paths.sessions),
+      proxy: createMcpProxy("parlor-host"),
+      launcher: acpLauncher(),
+      prompter: { answerHere: async () => undefined, turnStarted: () => undefined },
+      policy: DEFAULT_POLICY,
+    });
+    const lastReport = () => {
+      const reports = app.seen.filter((seen) => seen.path.endsWith("/hostReport"));
+      return reports.length > 0
+        ? (JSON.parse(reports.at(-1)!.body) as Record<string, unknown>)
+        : undefined;
+    };
+    try {
+      await (await keys.create(app.origin)).keep(asId("grant", "host:Phone"));
+      await grants.save(grantFor(app.origin, "Phone", join(root, "Parlor", "phone")));
+      await host.start();
+      await vi.waitFor(() => expect(lastReport()).toBeDefined(), { timeout: 15_000 });
+      expect(lastReport()).toMatchObject({
+        devices: ["device-phone", "device-tab"],
+        presenceDue: { "device-phone": 5_000 + 18 * 3_600_000 },
+      });
+
+      await writeFile(paths.policy, JSON.stringify({ promptPresence: "off" }));
+      await host.connect(app.origin);
+      expect(lastReport()).toMatchObject({ presenceDue: {} });
+    } finally {
+      await host.stop();
+      await app.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
+
 describe("a daemon that is slow to detect its agents", () => {
   async function slowHost() {
     const root = await mkdtemp(join(tmpdir(), "ps-"));

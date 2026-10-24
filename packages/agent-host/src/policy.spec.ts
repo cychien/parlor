@@ -70,19 +70,33 @@ describe("the policy file", () => {
     expect(await changePolicy(file, DEFAULT_POLICY, { answers: "computer" })).toEqual({
       deviceApproval: "local",
       answers: "computer",
+      promptPresence: { maxAgeHours: 18 },
     });
     expect((await stat(file)).mode & 0o777).toBe(0o600);
     expect(JSON.parse(await readFile(file, "utf8"))).toEqual({ answers: "computer" });
     expect(await changePolicy(file, DEFAULT_POLICY, { answers: "presence" })).toEqual(
       DEFAULT_POLICY,
     );
-    await writeFile(file, JSON.stringify({ deviceApproval: "off", answers: "off" }));
+    await writeFile(
+      file,
+      JSON.stringify({ deviceApproval: "off", answers: "off", promptPresence: "off" }),
+    );
     expect(await loadPolicy(file, DEFAULT_POLICY)).toEqual(DEV_POLICY);
+    expect(
+      await changePolicy(file, DEFAULT_POLICY, { promptPresence: { maxAgeHours: 2 } }),
+    ).toEqual({ ...DEV_POLICY, promptPresence: { maxAgeHours: 2 } });
   });
 
   it("keeps the base for a setting it cannot make sense of, and for a file that is not JSON", async () => {
     const file = join(dir, "broken.json");
-    await writeFile(file, JSON.stringify({ deviceApproval: "sometimes", answers: 3 }));
+    await writeFile(
+      file,
+      JSON.stringify({
+        deviceApproval: "sometimes",
+        answers: 3,
+        promptPresence: { maxAgeHours: -1 },
+      }),
+    );
     expect(await loadPolicy(file, DEFAULT_POLICY)).toEqual(DEFAULT_POLICY);
     await writeFile(file, "{not json");
     expect(await loadPolicy(file, DEFAULT_POLICY)).toEqual(DEFAULT_POLICY);

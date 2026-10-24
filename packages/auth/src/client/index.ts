@@ -356,10 +356,13 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
         signingKey,
         presenceKey: registered(presence),
       },
-      signPrompt: async (prompt) => {
+      signPrompt: async (prompt, wanted) => {
         const at = Date.now();
         const statement = await promptStatement(app, prompt, at);
-        const signature = await key.sign(statementBytes(statement), { presence: false });
+        const bytes = statementBytes(statement);
+        const signature = wanted?.presence
+          ? await key.sign(bytes, { presence: true })
+          : await key.sign(bytes, { presence: false });
         await logSigned(statement);
         const secret = hostPairing();
         const pairing = secret && (await pairingProof(secret, id, signingKey));

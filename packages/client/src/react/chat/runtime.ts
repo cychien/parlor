@@ -123,6 +123,11 @@ export interface ChatState {
   readonly error: string | undefined;
   readonly setup: DeviceSetup | undefined;
   readonly link: LinkState;
+  /**
+   * The chosen agent's computer wants this device to confirm it is the user again, so
+   * sending asks for Face ID or Touch ID first.
+   */
+  readonly presenceDue: boolean;
 }
 
 export interface ChatCommands {
@@ -226,10 +231,14 @@ class NeedsDevice extends Error {
   override readonly name = "NeedsDevice";
 }
 
+/** Prompts are signed with presence this long before the computer's deadline, for clock skew. */
+const PRESENCE_MARGIN_MS = 10 * 60_000;
+const LONGEST_TIMEOUT_MS = 2 ** 31 - 1;
+
 const readable = (error: unknown): string => {
   if (error instanceof NeedsDevice) return error.message;
   if (error instanceof Error && error.name === "NotAllowedError") {
-    return "The presence check was cancelled.";
+    return "Face ID or Touch ID was cancelled.";
   }
   if (!(error instanceof ActionError)) return "Could not reach the server.";
   if (error.issues === undefined) return error.message;
@@ -288,12 +297,37 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     | undefined;
   let linkBusy = false;
   let linkError: string | undefined;
+  let presenceTimer: ReturnType<typeof setTimeout> | undefined;
   let setup: DeviceSetup | undefined;
   let afterSetup: (() => Promise<void>) | undefined;
   let explainers = 0;
   const resends = new Map<ItemId, PendingSend>();
   const answerIds = new Map<string, ItemId>();
   const stopIds = new Map<TurnId, ItemId>();
+
+  const refusedLast = (hostId: string, deviceId: string): boolean => {
+    const last = [...turns].reverse().find((turn) => turn.agent.hostId === hostId);
+    if (last?.failure !== "device_rejected") return false;
+    return [...items.values()].some(
+      (item) =>
+        item.turnId === last.turnId &&
+        item.kind === "prompt" &&
+        item.body.signed?.deviceId === deviceId,
+    );
+  };
+
+  /**
+   * When the computer behind `agentKey` wants this device's next prompt signed with presence:
+   * by its report, or now if it refused this device's last prompt, whatever the clocks say.
+   */
+  const presenceDueAt = (agentKey: string): number | undefined => {
+    const deviceId = device?.id ?? linkInfo?.deviceId;
+    if (deviceId === undefined) return undefined;
+    const hostId = agentKey.split("/")[0]!;
+    const due = hosts.find((host) => host.id === hostId)?.presenceDue?.[deviceId];
+    if (due === undefined) return undefined;
+    return refusedLast(hostId, deviceId) ? 0 : due - PRESENCE_MARGIN_MS;
+  };
 
   const choices = (): AgentChoice[] =>
     hosts.flatMap((host) =>
@@ -359,6 +393,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       agents.find((choice) => choice.online && choice.ready) ??
       agents[0];
     const wait = loaded === "yes" && !sending ? waitOf() : undefined;
+    const due = agent && presenceDueAt(agent.key);
     const status: ChatStatus =
       loaded === "failed"
         ? "unavailable"
@@ -391,12 +426,23 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       error: failure,
       setup,
       link: linkOf(),
+      presenceDue: due !== undefined && Date.now() >= due,
     };
+  };
+
+  /** Re-emits once the chosen computer's presence deadline arrives, so the hint shows unprompted. */
+  const watchPresence = () => {
+    clearTimeout(presenceTimer);
+    presenceTimer = undefined;
+    const due = running && state.agent ? presenceDueAt(state.agent.key) : undefined;
+    if (due === undefined || state.presenceDue) return;
+    presenceTimer = setTimeout(emit, Math.min(due - Date.now(), LONGEST_TIMEOUT_MS));
   };
 
   let state = compute();
   const emit = () => {
     state = compute();
+    watchPresence();
     for (const listener of [...listeners]) listener();
   };
 
@@ -600,8 +646,14 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     await action();
   };
 
-  const signPrompt = async (prompt: PromptToSign): Promise<ItemSignature | undefined> =>
-    (await deviceOf())?.signPrompt(prompt);
+  const signPrompt = async (prompt: PromptToSign): Promise<ItemSignature | undefined> => {
+    const own = await deviceOf();
+    if (!own) return undefined;
+    const due = presenceDueAt(`${prompt.agent.hostId}/${prompt.agent.agentId}`);
+    return due !== undefined && Date.now() >= due
+      ? own.signPrompt(prompt, { presence: true })
+      : own.signPrompt(prompt);
+  };
 
   const submit = async (
     attempt: PendingSend,
@@ -921,6 +973,8 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
         channelOpen = false;
         generation += 1;
         clearRetry();
+        clearTimeout(presenceTimer);
+        presenceTimer = undefined;
         detachChannel();
         offTags();
         offResume();
