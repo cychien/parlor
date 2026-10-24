@@ -19,6 +19,7 @@ export {
   type AuthProvider,
   type Delegation,
   type DeviceKeys,
+  type DeviceVouch,
   HOST_GRANTS_TAG,
   type PresenceKey,
   type TurnDelegation,

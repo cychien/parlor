@@ -6,11 +6,15 @@ export interface TrustedDevice extends PinnedDevice {
   readonly name: string;
   readonly platform: string;
   readonly approvedAt: number;
-  readonly via: "pairing" | "local";
+  /** `pairing`: it approved `connect` here; `local`: linked on this computer; `vouched`: a linked device vouched for it. */
+  readonly via: "pairing" | "local" | "vouched";
+  /** The linked device whose vouch pinned it. */
+  readonly voucher?: string | undefined;
 }
 
 export interface TrustStore {
   get(appOrigin: string, deviceId: string): Promise<TrustedDevice | undefined>;
+  list(appOrigin: string): Promise<readonly TrustedDevice[]>;
   pin(appOrigin: string, device: TrustedDevice): Promise<void>;
   forget(appOrigin: string, deviceId?: string): Promise<void>;
 }
@@ -24,6 +28,7 @@ export function fileTrustStore(file: string): TrustStore {
       const devices = (await pins.read())[appOrigin];
       return devices && Object.hasOwn(devices, deviceId) ? devices[deviceId] : undefined;
     },
+    list: async (appOrigin) => Object.values((await pins.read())[appOrigin] ?? {}),
     pin: (appOrigin, device) =>
       pins.change((all) => {
         (all[appOrigin] ??= {})[device.deviceId] = device;

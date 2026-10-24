@@ -3,17 +3,16 @@ import { mkdir } from "node:fs/promises";
 import {
   answerStatement,
   checkPairingProof,
+  deviceCommitment,
+  vouchStatement,
   type PinnedDevice,
   signedPrompt,
   statementBytes,
   verifyStatement,
   type VerifyOutcome,
 } from "@parlor/auth";
-import {
-  canonicalBytes,
-  deviceCode,
-  encodeBase64url,
-} from "@parlor/capabilities/encoding";
+import type { PresenceSignature } from "@parlor/capabilities";
+import { canonicalBytes, encodeBase64url } from "@parlor/capabilities/encoding";
 import type {
   ChatEvent,
   ChatItemBody,
@@ -67,8 +66,9 @@ export interface TurnDeps {
 }
 
 export const PROMPT_MAX_AGE_MS = 10 * 60_000;
+/** A vouch is bound to one device's keys, so it may wait for that device's first prompt. */
+const VOUCH_MAX_AGE_MS = 30 * 24 * 60 * 60_000;
 
-const APPROVAL_TIMEOUT_MS = 5 * 60_000;
 const SIGNAL_POLL_MS = 500;
 const MAX_APPEND_ITEMS = 64;
 const APPEND_RETRY_BASE_MS = 250;
@@ -135,39 +135,6 @@ const fingerprint = (device: Pick<PinnedDevice, "signingKey" | "presenceKey">) =
   encodeBase64url(
     canonicalBytes({ signing: device.signingKey, presence: device.presenceKey ?? null }),
   );
-
-interface SharedApproval {
-  readonly settled: Promise<boolean>;
-  readonly dialog: AbortController;
-  waiters: number;
-}
-
-const approvals = new Map<string, SharedApproval>();
-
-function joinApproval(
-  key: string,
-  start: (signal: AbortSignal) => Promise<boolean>,
-): { readonly settled: Promise<boolean>; leave(): void } {
-  let shared = approvals.get(key);
-  if (!shared) {
-    const dialog = new AbortController();
-    shared = {
-      settled: start(dialog.signal).finally(() => approvals.delete(key)),
-      dialog,
-      waiters: 0,
-    };
-    approvals.set(key, shared);
-  }
-  const joined = shared;
-  joined.waiters += 1;
-  return {
-    settled: joined.settled,
-    leave: () => {
-      joined.waiters -= 1;
-      if (joined.waiters === 0) joined.dialog.abort();
-    },
-  };
-}
 
 function exitDetail(exit: AgentExit): string {
   if (exit.kind === "killed") return "stopped by this computer";
@@ -351,69 +318,6 @@ export async function runTurn(
     return outcome;
   };
 
-  const cancelRequested = async (done: AbortSignal): Promise<"cancelled" | "stopped"> => {
-    while (!done.aborted) {
-      await sleep(SIGNAL_POLL_MS);
-      if (done.aborted) break;
-      try {
-        const batches = await calls.call("hostSignals", {
-          turns: [{ turnId, afterSeq: claimed.prompt.seq }],
-        });
-        if (batches.some((batch) => batch.items.some((item) => item.kind === "cancel"))) {
-          return "cancelled";
-        }
-      } catch {}
-    }
-    return "stopped";
-  };
-
-  const approve = async (
-    device: NonNullable<ClaimedTurn["device"]>,
-    interrupted: Promise<"cancelled" | "stopped">,
-  ) => {
-    const approval = joinApproval(`${origin}\n${device.id}`, async (signal) => {
-      const timeout = AbortSignal.timeout(APPROVAL_TIMEOUT_MS);
-      const allowed = await deps.prompter.approveDevice({
-        appName: grant.appName,
-        account: grant.account,
-        device: { name: device.name, platform: device.platform },
-        code: await deviceCode(device.signingKey),
-        signal: AbortSignal.any([signal, timeout]),
-      });
-      logEvent("device_prompt", {
-        deviceId: device.id,
-        answer: allowed
-          ? "allow"
-          : timeout.aborted
-            ? "timeout"
-            : signal.aborted
-              ? "cancelled"
-              : "deny",
-      });
-      if (!allowed) return false;
-      await deps.trust.pin(origin, {
-        deviceId: device.id,
-        signingKey: device.signingKey,
-        presenceKey: device.presenceKey,
-        name: device.name,
-        platform: device.platform,
-        approvedAt: deps.now(),
-        via: "local",
-      });
-      return true;
-    });
-    try {
-      return await Promise.race([
-        approval.settled.then((allowed): "allowed" | "denied" =>
-          allowed ? "allowed" : "denied",
-        ),
-        interrupted,
-      ]);
-    } finally {
-      approval.leave();
-    }
-  };
-
   type Admission = { readonly device: TrustedDevice } | { readonly outcome: TurnOutcome };
 
   const refuse = async (
@@ -421,6 +325,46 @@ export async function runTurn(
     name: ChatEvent,
     detail?: string,
   ): Promise<Admission> => ({ outcome: await fail(reason, name, detail) });
+
+  /** A vouch counts when a device pinned here signed it with presence, for exactly these keys. */
+  const vouchedFor = async (keys: DeviceKeys): Promise<TrustedDevice | undefined> => {
+    if (!keys.vouches?.length) return undefined;
+    const commitment = await deviceCommitment(
+      origin,
+      keys.id,
+      keys.signingKey,
+      keys.presenceKey?.publicKey,
+    );
+    for (const vouch of keys.vouches) {
+      if (vouch.commitment !== commitment) continue;
+      const voucher = await deps.trust.get(origin, vouch.voucher);
+      if (!voucher?.presenceKey) continue;
+      const outcome = await verifyStatement(
+        {
+          statement: vouchStatement(origin, vouch.voucher, keys.id, commitment, vouch.at),
+          deviceId: voucher.deviceId,
+          signature: vouch.signature as PresenceSignature,
+        },
+        voucher,
+        { requirePresence: true, now: deps.now(), maxAgeMs: VOUCH_MAX_AGE_MS },
+      );
+      logEvent("vouch_verified", { deviceId: keys.id, voucher: vouch.voucher, outcome });
+      if (outcome !== "valid") continue;
+      return {
+        deviceId: keys.id,
+        signingKey: keys.signingKey,
+        presenceKey: keys.presenceKey,
+        name: keys.name,
+        platform: keys.platform,
+        approvedAt: deps.now(),
+        via: "vouched",
+        voucher: vouch.voucher,
+      };
+    }
+    return undefined;
+  };
+
+  const unlinked = `Link this device to use your agents on ${computerName()}: open the Agent sidebar on it.`;
 
   const admit = async (): Promise<Admission> => {
     const signed = await signedPrompt(origin, claimed.prompt);
@@ -487,28 +431,13 @@ export async function runTurn(
       logEvent("device_trusted", { deviceId: keys.id, via: "pairing" });
       return { device };
     }
-    await event("device_pending");
-    const watching = new AbortController();
-    const decision = await approve(
-      keys,
-      Promise.race([
-        cancelRequested(watching.signal),
-        lostPromise.then((): "stopped" => "stopped"),
-      ]),
-    ).finally(() => watching.abort());
-    if (lost) return { outcome: { state: "failed", reason: "host_lost" } };
-    if (decision === "cancelled")
-      return { outcome: await finish({ state: "cancelled" }) };
-    if (decision !== "allowed") return refuse("device_rejected", "device_rejected");
-    return {
-      device: {
-        ...pinned,
-        name: keys.name,
-        platform: keys.platform,
-        approvedAt: deps.now(),
-        via: "local",
-      },
-    };
+    const vouched = await vouchedFor(keys);
+    if (vouched) {
+      await deps.trust.pin(origin, vouched);
+      logEvent("device_trusted", { deviceId: keys.id, via: "vouched" });
+      return { device: vouched };
+    }
+    return refuse("device_rejected", "device_rejected", unlinked);
   };
 
   const proceed = async (device: TrustedDevice | undefined): Promise<TurnOutcome> => {
@@ -709,14 +638,6 @@ export async function runTurn(
         : { kind: "unpinned", device: listed };
     };
 
-    const interrupted = new Promise<"cancelled" | "stopped">((resolve) =>
-      turnOver.signal.addEventListener(
-        "abort",
-        () => resolve(cancelled ? "cancelled" : "stopped"),
-        { once: true },
-      ),
-    );
-
     const deliver = (waiting: Pending, item: LoggedItem<"answer">, verdict: Decided) => {
       const answer =
         verdict.kind === "accepted" ? answerOf(waiting, item.body) : undefined;
@@ -743,16 +664,14 @@ export async function runTurn(
         deliver(waiting, item, verdict);
         return;
       }
-      void approve(verdict.device, interrupted).then((decision) => {
-        if (decision === "cancelled" || decision === "stopped") return;
-        deliver(
-          waiting,
-          item,
-          decision === "allowed"
-            ? { kind: "accepted" }
-            : rejected("This device was not approved on the computer."),
-        );
-      });
+      const vouched = await vouchedFor(verdict.device);
+      if (!vouched) {
+        deliver(waiting, item, rejected(unlinked));
+        return;
+      }
+      await deps.trust.pin(origin, vouched);
+      logEvent("device_trusted", { deviceId: vouched.deviceId, via: "vouched" });
+      deliver(waiting, item, { kind: "accepted" });
     };
 
     let afterSeq = claimed.prompt.seq;

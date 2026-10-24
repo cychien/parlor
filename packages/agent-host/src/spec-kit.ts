@@ -10,9 +10,11 @@ import type { AddressInfo } from "node:net";
 import {
   answerStatement,
   betterAuthProvider,
+  deviceCommitment,
   parlorAuth,
   promptStatement,
   statementBytes,
+  vouchStatement,
 } from "@parlor/auth";
 import {
   type AnswerToSign,
@@ -24,7 +26,12 @@ import { chat } from "@parlor/chat/server";
 import { asId, defineAction } from "@parlor/core";
 import { createRegistry } from "@parlor/core/registry";
 import { createDatabase, type DatabaseHandle } from "@parlor/data";
-import { createServer, type DeviceKeys, type FrameworkServer } from "@parlor/server";
+import {
+  createServer,
+  type DeviceKeys,
+  type DeviceVouch,
+  type FrameworkServer,
+} from "@parlor/server";
 import { betterAuth } from "better-auth";
 import { memoryAdapter } from "better-auth/adapters/memory";
 import { getAuthTables } from "better-auth/db";
@@ -221,6 +228,10 @@ export function memoryTrust(): TrustStore & { readonly pins: () => TrustedDevice
   return {
     pins: () => [...pinned.values()],
     get: async (appOrigin, deviceId) => pinned.get(keyOf(appOrigin, deviceId)),
+    list: async (appOrigin) =>
+      [...pinned.entries()]
+        .filter(([key]) => key.startsWith(`${appOrigin}\n`))
+        .map(([, device]) => device),
     pin: async (appOrigin, device) =>
       void pinned.set(keyOf(appOrigin, device.deviceId), device),
     forget: async (appOrigin, deviceId) => {
@@ -325,6 +336,31 @@ export class TestDevice {
       presence ? "user" : "none",
       at,
     );
+  }
+
+  /** This device's vouch for `device`, signed with its presence key unless `presence` is false. */
+  async vouchFor(
+    app: string,
+    device: DeviceKeys,
+    at: number,
+    options: { readonly presence?: boolean; readonly commitment?: string } = {},
+  ): Promise<DeviceVouch> {
+    const commitment =
+      options.commitment ??
+      (await deviceCommitment(
+        app,
+        device.id,
+        device.signingKey,
+        device.presenceKey?.publicKey,
+      ));
+    const presence = options.presence ?? true;
+    const { signature } = await this.sign(
+      presence ? this.presence : this.signing,
+      statementBytes(vouchStatement(app, this.id, device.id, commitment, at)),
+      presence ? "user" : "none",
+      at,
+    );
+    return { voucher: this.id, commitment, at, signature };
   }
 }
 

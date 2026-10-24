@@ -24,6 +24,8 @@ export interface HostSummary {
   readonly platform: string;
   readonly online: boolean;
   readonly agents: readonly AgentInfo[];
+  /** The devices this computer runs prompts from; absent when it is too old to say. */
+  readonly devices?: readonly string[] | undefined;
 }
 
 export interface AgentInfo {

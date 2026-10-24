@@ -10,6 +10,7 @@ describe("chat migrations", () => {
     expect(CHAT_MIGRATIONS.map((migration) => migration.id)).toEqual([
       "chat/0001_threads",
       "chat/0002_answer_retry",
+      "chat/0003_host_devices",
     ]);
     for (const migration of CHAT_MIGRATIONS) expect(migration.sql).not.toContain("$");
   });
@@ -43,6 +44,7 @@ describe.each(drivers)("applying the chat migrations on $name", (driver) => {
       { id: "auth/0002_revocations_revoked_at" },
       { id: "chat/0001_threads" },
       { id: "chat/0002_answer_retry" },
+      { id: "chat/0003_host_devices" },
     ]);
     expect(
       await rows(

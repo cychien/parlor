@@ -14,8 +14,11 @@ import {
   type ActionClient,
   appOrigin,
   createActionClient,
+  type DeviceLinker,
   type DeviceSource,
   type HostAuthorizer,
+  LinkOnComputer,
+  type PendingLink,
   type SessionDevice,
   type SessionSnapshot,
   type SessionSource,
@@ -27,11 +30,15 @@ import { createAuthClient as createBetterAuthClient } from "better-auth/client";
 import type { AccountActions } from "../account.js";
 import {
   answerStatement,
+  deviceCommitment,
   HOST_PAIRING_FRAGMENT,
+  linkCode,
+  normalizeLinkCode,
   pairingProof,
   promptStatement,
   type Statement,
   statementBytes,
+  vouchStatement,
 } from "../statements.js";
 
 const DEFAULT_BASE_PATH = "/_parlor";
@@ -74,7 +81,8 @@ export class AuthClientError extends Error {
 
 export type DeviceHandle = SessionDevice;
 
-export interface AuthClient extends SessionSource, DeviceSource, HostAuthorizer {
+export interface AuthClient
+  extends SessionSource, DeviceSource, HostAuthorizer, DeviceLinker {
   deviceSetup(): Promise<"needed" | "ready">;
   /** Plug into `createActionClient({ headers })` so every surface carries the session. */
   readonly headers: () => Promise<HeadersInit>;
@@ -369,6 +377,29 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
     };
   };
 
+  const device = async (wanted?: {
+    readonly presence?: boolean;
+  }): Promise<DeviceHandle | undefined> => {
+    const session = current();
+    if (session.status !== "signed-in") return undefined;
+    const known = devices.get(session.user.id);
+    if (known) return known;
+    // The browser that approved `connect` is on the computer, which answers its permission questions.
+    const presence = wanted?.presence ?? hostPairing() === undefined;
+    const enrolling = enroll(session.user, presence).catch((error: unknown) => {
+      if (error instanceof ActionError && error.code === "not_found") return undefined;
+      throw error;
+    });
+    devices.set(session.user.id, enrolling);
+    enrolling.then(
+      (enrolled) => {
+        if (!enrolled) devices.delete(session.user.id);
+      },
+      () => devices.delete(session.user.id),
+    );
+    return enrolling;
+  };
+
   return {
     headers,
     current,
@@ -396,33 +427,91 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
         await (await store)?.set(undefined);
       }
     },
+    linkState: async () => {
+      const pairing = hostPairing() !== undefined;
+      const session = current();
+      if (session.status !== "signed-in") return { vouched: false, pairing };
+      const known = devices.get(session.user.id);
+      const key = options.deviceKey ?? (await keysOfThisPlatform());
+      const silent =
+        known !== undefined ||
+        (key !== undefined && (await key.presenceSetup?.()) !== "needed");
+      const own = silent ? await device() : undefined;
+      if (!own) return { vouched: false, pairing };
+      const listed = await account.call("devices", {});
+      return {
+        deviceId: own.id,
+        vouched: listed.some((entry) => entry.id === own.id && entry.vouched),
+        pairing,
+      };
+    },
+    startLink: async (wanted) => {
+      const own = await device(wanted);
+      if (!own) throw new Error("Sign in on this device first.");
+      const app = appOrigin(baseUrl || undefined);
+      const commitment = await deviceCommitment(
+        app,
+        own.id,
+        own.keys.signingKey,
+        own.keys.presenceKey?.publicKey,
+      );
+      const code = linkCode(commitment);
+      const { expiresAt } = await account.call("startDeviceLink", {
+        device: own.id,
+        code,
+      });
+      return { deviceId: own.id, code, expiresAt };
+    },
+    resolveLink: async (typed): Promise<PendingLink> => {
+      const code = normalizeLinkCode(typed);
+      const found = await account.call("resolveDeviceLink", { code });
+      const commitment = await deviceCommitment(
+        appOrigin(baseUrl || undefined),
+        found.id,
+        found.signingKey,
+        found.presenceKey?.publicKey,
+      );
+      if (linkCode(commitment) !== code) {
+        throw new Error(
+          "The app returned a device whose keys do not match this code, so it was not linked.",
+        );
+      }
+      return { id: found.id, name: found.name, platform: found.platform, commitment };
+    },
+    canVouch: async () => {
+      const session = current();
+      if (session.status !== "signed-in") return false;
+      const known = devices.get(session.user.id);
+      const key = options.deviceKey ?? (await keysOfThisPlatform());
+      if (!known && (await key?.presenceSetup?.()) === "needed") return false;
+      return (await device())?.keys.presenceKey !== undefined;
+    },
+    vouch: async (link) => {
+      const own = await device();
+      const key = options.deviceKey ?? (await keysOfThisPlatform());
+      if (!own?.keys.presenceKey || !key) {
+        throw new LinkOnComputer("This device cannot confirm it is you.");
+      }
+      const app = appOrigin(baseUrl || undefined);
+      const at = Date.now();
+      const statement = vouchStatement(app, own.id, link.id, link.commitment, at);
+      const signature = await key.sign(statementBytes(statement), { presence: true });
+      await account.call("vouchDevice", {
+        device: link.id,
+        voucher: own.id,
+        app,
+        commitment: link.commitment,
+        at,
+        signature,
+      });
+    },
     deviceSetup: async () => {
       const session = current();
       if (session.status !== "signed-in" || devices.has(session.user.id)) return "ready";
       const key = options.deviceKey ?? (await keysOfThisPlatform());
       return (await key?.presenceSetup?.()) === "needed" ? "needed" : "ready";
     },
-    device: async (wanted) => {
-      const session = current();
-      if (session.status !== "signed-in") return undefined;
-      const known = devices.get(session.user.id);
-      if (known) return known;
-      const enrolling = enroll(session.user, wanted?.presence ?? true).catch(
-        (error: unknown) => {
-          if (error instanceof ActionError && error.code === "not_found")
-            return undefined;
-          throw error;
-        },
-      );
-      devices.set(session.user.id, enrolling);
-      enrolling.then(
-        (device) => {
-          if (!device) devices.delete(session.user.id);
-        },
-        () => devices.delete(session.user.id),
-      );
-      return enrolling;
-    },
+    device,
     authorizeHost: async (pairing) => {
       const response = await (options.fetch ?? fetch)(
         `${baseUrl}${basePath}/auth/hosts/authorize`,

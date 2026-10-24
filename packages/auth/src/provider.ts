@@ -43,6 +43,7 @@ import {
   createDeviceRegistry,
   type DeviceRegistry,
   deviceAccountActions,
+  DEVICE_LINKING_MIGRATION,
   DEVICES_MIGRATION,
 } from "./devices.js";
 import { grantIdOf } from "./grants.js";
@@ -324,6 +325,7 @@ export function betterAuthProvider({
       DEVICES_MIGRATION,
       TURN_KEYS_MIGRATION,
       AUDIT_MIGRATION,
+      DEVICE_LINKING_MIGRATION,
     ],
     enforcing: true,
     setup(host: PluginHost) {
@@ -390,8 +392,15 @@ export function betterAuthProvider({
     async device(userId: UserId, deviceId: DeviceId): Promise<DeviceKeys | undefined> {
       const registered = await installed().devices.get(userId, deviceId);
       if (!registered) return undefined;
-      const { id, name, platform, signingKey, presenceKey } = registered;
-      return { id, name, platform, signingKey, presenceKey };
+      const { id, name, platform, signingKey, presenceKey, vouches } = registered;
+      return {
+        id,
+        name,
+        platform,
+        signingKey,
+        presenceKey,
+        ...(vouches ? { vouches } : {}),
+      };
     },
     async account(userId: UserId): Promise<AccountProfile | undefined> {
       const { adapter } = await instance.$context;

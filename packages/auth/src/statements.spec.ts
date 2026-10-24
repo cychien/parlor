@@ -14,6 +14,9 @@ import {
   answerStatement,
   type AnswerStatement,
   checkPairingProof,
+  deviceCommitment,
+  linkCode,
+  normalizeLinkCode,
   pairingProof,
   type PinnedDevice,
   promptStatement,
@@ -69,6 +72,42 @@ async function signedPromptOf(key: TestDeviceKey, statement: PromptStatement) {
 }
 
 const options = { requirePresence: false, now: NOW, maxAgeMs: 10 * MINUTE };
+
+describe("device link codes", () => {
+  const signing = { kty: "EC", crv: "P-256", x: "x1", y: "y1" };
+  const presence = { kty: "EC", crv: "P-256", x: "x2", y: "y2" };
+
+  it("hash the app, the device and both keys, and read as 10 Crockford characters", async () => {
+    const commitment = await deviceCommitment(
+      "https://hello.example/",
+      "d1",
+      signing,
+      presence,
+    );
+    expect(commitment).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(linkCode(commitment)).toMatch(/^[0-9A-HJKMNP-TV-Z]{10}$/);
+    expect(await deviceCommitment("https://hello.example", "d1", signing, presence)).toBe(
+      commitment,
+    );
+    for (const changed of [
+      await deviceCommitment("https://other.example", "d1", signing, presence),
+      await deviceCommitment("https://hello.example", "d2", signing, presence),
+      await deviceCommitment(
+        "https://hello.example",
+        "d1",
+        { ...signing, x: "x3" },
+        presence,
+      ),
+      await deviceCommitment("https://hello.example", "d1", signing, undefined),
+    ]) {
+      expect(changed).not.toBe(commitment);
+    }
+  });
+
+  it("read typed codes the way people type them", () => {
+    expect(normalizeLinkCode(" k7m4-pxoq-ilr ")).toBe("K7M4PX0Q11R");
+  });
+});
 
 describe("pairingProof", () => {
   const secret = encodeBase64url(new Uint8Array(32).map((_, at) => at));

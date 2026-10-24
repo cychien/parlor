@@ -53,5 +53,42 @@ export interface HostAuthorizer {
   authorizeHost(pairing: HostPairing): Promise<string>;
 }
 
-/** What `FrameworkProvider` takes as `auth`; signing and host pairing are optional. */
-export type FrameworkAuth = SessionSource & Partial<DeviceSource & HostAuthorizer>;
+/** A device waiting to be linked, its keys checked against the code it shows. */
+export interface PendingLink {
+  readonly id: string;
+  readonly name: string;
+  readonly platform: string;
+  readonly commitment: string;
+}
+
+/** Thrown by `vouch` on a device with no presence key: the computer itself links it then. */
+export class LinkOnComputer extends Error {
+  override readonly name = "LinkOnComputer";
+}
+
+/** Linking devices: a new one shows a code, a linked one checks it and vouches for it. */
+export interface DeviceLinker {
+  /** Never prompts: a device not created yet reads as none. */
+  linkState(): Promise<{
+    readonly deviceId?: string | undefined;
+    readonly vouched: boolean;
+    /** It approved `connect` on the computer, so its first prompt links it. */
+    readonly pairing: boolean;
+  }>;
+  /** Enrolls this device, with Face ID or Touch ID unless `presence` is false, and shows its code. */
+  startLink(options?: { readonly presence?: boolean }): Promise<{
+    readonly deviceId: string;
+    readonly code: string;
+    readonly expiresAt: string;
+  }>;
+  /** The device showing `code`; throws when the keys the app returns do not match it. */
+  resolveLink(code: string): Promise<PendingLink>;
+  /** Vouches with this device's presence key; throws `LinkOnComputer` when it has none. */
+  vouch(link: PendingLink): Promise<void>;
+  /** Whether this device has a presence key to vouch with; never prompts. */
+  canVouch(): Promise<boolean>;
+}
+
+/** What `FrameworkProvider` takes as `auth`; signing, host pairing and linking are optional. */
+export type FrameworkAuth = SessionSource &
+  Partial<DeviceSource & HostAuthorizer & DeviceLinker>;

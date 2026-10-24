@@ -92,14 +92,13 @@ export function Stop({
   );
 }
 
-function statusText({ status, wait, setup }: ChatState): string {
+function statusText({ status, wait, setup, link }: ChatState): string {
   if (setup?.step === "passkey") return "Waiting for the passkey";
+  if (link.status === "unlinked") return "Link this device to send messages";
   if (wait) {
     return wait.reason === "offline"
       ? `Waiting for ${wait.hostName} to come online`
-      : wait.code
-        ? `Waiting for ${wait.hostName} to approve this device. Check that it shows ${wait.code}.`
-        : `Waiting for ${wait.hostName} to approve this device`;
+      : `Waiting for ${wait.hostName} to approve this device`;
   }
   if (status === "sending") return "Sending...";
   if (status === "running") return "Working...";

@@ -4,9 +4,10 @@ import {
   Chat,
   type ChatItem,
   useChat,
-  useDeviceSetup,
+  useLinkDevice,
+  useSession,
 } from "@parlor/client/react";
-import { type ReactNode, useEffect } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 
 import { ConfirmationCard, focusComposer } from "./confirmation-card.js";
 import { sidebarView } from "./sidebar-view.js";
@@ -23,6 +24,7 @@ export default function AgentSidebar() {
         <PublishThread />
         <div className="space-y-2 border-b border-zinc-200 p-4">
           <Computers />
+          <LinkADevice />
           <Threads />
         </div>
         <Chat.Confirmations className="space-y-2 px-4 pt-4 empty:hidden">
@@ -38,8 +40,7 @@ export default function AgentSidebar() {
         >
           {(item) => <Item item={item} />}
         </Chat.Thread>
-        <DeviceSetupCard />
-        <ApprovalNote />
+        <LinkCard />
         <Composer />
       </div>
     </Chat.Root>
@@ -130,7 +131,7 @@ function Computers() {
         ) : (
           <>
             <p>Run this in a terminal on your computer to chat with its agents here:</p>
-            <code data-testid="connect-command" className="block break-all text-xs">
+            <code data-testid="connect-command" className="block wrap-anywhere text-xs">
               {connect.command}
             </code>
           </>
@@ -181,89 +182,200 @@ function ThreadEmpty() {
   );
 }
 
-function DeviceSetupCard() {
-  const { agent } = useChat();
-  const { setup, setUpDevice, dismissSetup } = useDeviceSetup();
-  if (!setup) return null;
-  const computer = agent?.hostName ?? "your computer";
-  const site = globalThis.location?.hostname ?? "this app";
-  const busy = setup.step === "passkey";
+const NOTE = "mx-4 mb-4 space-y-2 rounded-lg border border-zinc-200 p-3 text-sm";
+
+const formatCode = (code: string) => code.replace(/^(.{4})(.{4})(.{2})$/, "$1-$2-$3");
+
+function useExpired(expiresAt: string | undefined): boolean {
+  const [expiredAt, setExpiredAt] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    if (expiresAt === undefined) return;
+    const timer = setTimeout(
+      () => setExpiredAt(expiresAt),
+      Math.max(0, Date.parse(expiresAt) - Date.now()),
+    );
+    return () => clearTimeout(timer);
+  }, [expiresAt]);
+  return expiresAt !== undefined && expiredAt === expiresAt;
+}
+
+function LinkCard() {
+  const { link, startLink } = useChat();
+  const expired = useExpired(link.status === "unlinked" ? link.expiresAt : undefined);
+  if (link.status !== "unlinked") return null;
+  if (link.code === undefined || expired) {
+    return (
+      <section aria-label="Link this device" className={NOTE}>
+        <p className="font-medium">Link this device</p>
+        <p>
+          To use your agents on {link.hostName} from this device, link it once, the way
+          you link WhatsApp to a new device.
+        </p>
+        {expired ? <p className={META}>That code expired. Show a new one.</p> : null}
+        {link.error ? (
+          <p role="alert" className="text-xs text-red-600">
+            {link.error}
+          </p>
+        ) : null}
+        <div className="flex flex-wrap justify-end gap-2 pt-1">
+          {link.error ? (
+            <button
+              type="button"
+              onClick={() => void startLink({ presence: false })}
+              disabled={link.busy}
+              className={BUTTON}
+            >
+              Link without it
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => void startLink()}
+            disabled={link.busy}
+            className={PRIMARY}
+          >
+            Continue with Face ID or Touch ID
+          </button>
+        </div>
+        <p className={META}>
+          Your messages and data stay in this app. Linking only lets this device send
+          requests to the agents on your computer.
+        </p>
+      </section>
+    );
+  }
   return (
-    <section
-      aria-label="Set up this browser"
-      className="mx-4 mb-4 space-y-2 rounded-lg border border-zinc-200 p-3 text-sm"
-    >
-      {setup.step === "cancelled" ? (
-        <>
-          <p className="font-medium">The passkey was not created</p>
-          <p>
-            Try again, or continue without one. Your agent's permission questions are then
-            answered on {computer}.
-          </p>
-        </>
-      ) : (
-        <>
-          <p className="font-medium">Set up this browser</p>
-          <p>Before your first message, two things happen once:</p>
-          <ul className="list-disc space-y-1 pl-5">
-            <li>
-              Your browser asks to create a passkey for {site}, so you can approve your
-              agent's actions with Touch ID or your device's lock.
-            </li>
-            <li>
-              Unless you connected {computer} from this browser, it asks you to allow this
-              browser.
-            </li>
-          </ul>
-          <p className={META}>
-            Without a passkey, you answer your agent's permission questions on {computer}.
-          </p>
-        </>
-      )}
-      <div className="flex flex-wrap justify-end gap-2 pt-1">
-        <button type="button" onClick={dismissSetup} disabled={busy} className={BUTTON}>
-          Not now
-        </button>
-        <button
-          type="button"
-          onClick={() => void setUpDevice({ passkey: false })}
-          disabled={busy}
-          className={BUTTON}
-        >
-          Skip passkey
-        </button>
-        <button
-          type="button"
-          onClick={() => void setUpDevice({ passkey: true })}
-          disabled={busy}
-          className={PRIMARY}
-        >
-          {setup.step === "cancelled" ? "Try again" : "Continue"}
-        </button>
-      </div>
+    <section aria-label="Link this device" className={NOTE}>
+      <p className="font-medium">Link this device</p>
+      <p>
+        On a device you already use, open the Agent sidebar, choose Link a device, and
+        type:
+      </p>
+      <p
+        data-testid="link-code"
+        className="py-1 text-center font-mono text-2xl font-semibold tracking-widest"
+      >
+        {formatCode(link.code)}
+      </p>
+      <p className={META}>No linked device with you? On {link.hostName}, run:</p>
+      <code className="block rounded bg-zinc-100 p-2 text-xs wrap-anywhere">
+        npx @parlor/agent-host link {globalThis.location?.origin} {link.code}
+      </code>
+      <p className={META}>The code works for 15 minutes.</p>
     </section>
   );
 }
 
-function ApprovalNote() {
-  const { wait } = useChat();
-  if (wait?.reason !== "approval") return null;
+function LinkADevice() {
+  const { available, state, check, confirm, reset } = useLinkDevice();
+  const { agents, link } = useChat();
+  const session = useSession();
+  const [open, setOpen] = useState(false);
+  const [code, setCode] = useState("");
+  if (!available || agents.length === 0 || link.status !== "linked") return null;
+  const computer = agents[0]!.hostName;
+  const account = session.status === "signed-in" ? session.user.email : "your account";
+  const close = () => {
+    reset();
+    setCode("");
+    setOpen(false);
+  };
+  if (!open) {
+    return (
+      <button type="button" onClick={() => setOpen(true)} className={`${BUTTON} w-full`}>
+        Link a device
+      </button>
+    );
+  }
   return (
     <section
-      aria-label="Approve this browser"
-      className="mx-4 mb-4 space-y-1 rounded-lg border border-zinc-200 p-3 text-sm"
+      aria-label="Link a device"
+      className="space-y-2 rounded-lg border border-zinc-200 p-3 text-sm"
     >
-      <p className="font-medium">Approve this browser on {wait.hostName}</p>
-      <p>
-        A dialog on {wait.hostName} asks to allow this browser.
-        {wait.code ? (
-          <>
-            {" "}
-            Allow it if it shows{" "}
-            <span className="font-mono font-semibold tracking-wider">{wait.code}</span>.
-          </>
-        ) : null}
-      </p>
+      {state.step === "confirm" ? (
+        <>
+          <p className="font-medium">Link {state.device.name}?</p>
+          <p>
+            It will be able to send requests to your agents on {computer}, signed in as{" "}
+            {account}. Only link a device you have with you.
+          </p>
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={close} className={BUTTON}>
+              Cancel
+            </button>
+            <button type="button" onClick={() => void confirm()} className={PRIMARY}>
+              Link with Face ID or Touch ID
+            </button>
+          </div>
+        </>
+      ) : state.step === "linking" ? (
+        <p className={META}>Confirm with Face ID or Touch ID…</p>
+      ) : state.step === "linked" ? (
+        <>
+          <p className="font-medium">{state.name} is linked</p>
+          <p>It can use your agents now.</p>
+          <div className="flex justify-end">
+            <button type="button" onClick={close} className={PRIMARY}>
+              Done
+            </button>
+          </div>
+        </>
+      ) : state.step === "on-computer" ? (
+        <>
+          <p className="font-medium">
+            Link {state.device.name} on {computer}
+          </p>
+          <p>This browser cannot confirm with Face ID or Touch ID. On {computer}, run:</p>
+          <code className="block rounded bg-zinc-100 p-2 text-xs wrap-anywhere">
+            {state.command}
+          </code>
+          <div className="flex justify-end">
+            <button type="button" onClick={close} className={BUTTON}>
+              Done
+            </button>
+          </div>
+        </>
+      ) : (
+        <form
+          className="space-y-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void check(code);
+          }}
+        >
+          <p className="font-medium">Link a device</p>
+          <label className="block space-y-1">
+            <span className={META}>The code the new device shows</span>
+            <input
+              name="link-code"
+              value={code}
+              onChange={(event) => setCode(event.target.value)}
+              autoComplete="off"
+              autoCapitalize="characters"
+              spellCheck={false}
+              placeholder="K7M4-PX2Q-8R"
+              className="w-full rounded-md border border-zinc-300 px-3 py-2 font-mono text-sm uppercase tracking-widest"
+            />
+          </label>
+          {state.step === "error" ? (
+            <p role="alert" className="text-xs text-red-600">
+              {state.message}
+            </p>
+          ) : null}
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={close} className={BUTTON}>
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={code.trim() === "" || state.step === "checking"}
+              className={PRIMARY}
+            >
+              {state.step === "checking" ? "Checking…" : "Link"}
+            </button>
+          </div>
+        </form>
+      )}
     </section>
   );
 }

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   canonicalBytes,
-  deviceCode,
   decodeBase64url,
   encodeBase64url,
   enrollmentBytes,
@@ -70,15 +69,5 @@ describe("enrollmentBytes", () => {
         ),
       ).presence,
     ).toBeNull();
-  });
-});
-
-describe("deviceCode", () => {
-  it("is four digits read off the public point, the same with or without the private part", async () => {
-    const key = { kty: "EC", crv: "P-256", x: "x1", y: "y1" };
-    const code = await deviceCode(key);
-    expect(code).toMatch(/^\d{4}$/);
-    expect(await deviceCode({ ...key, d: "private", ext: true })).toBe(code);
-    expect(await deviceCode({ ...key, x: "x2" })).not.toBe(code);
   });
 });

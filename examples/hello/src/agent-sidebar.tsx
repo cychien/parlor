@@ -4,8 +4,10 @@ import {
   Chat,
   type ChatItem,
   useChat,
+  useLinkDevice,
+  useSession,
 } from "@parlor/client/react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { ConfirmationCard, focusComposer } from "./agent-requests.js";
@@ -21,6 +23,7 @@ export default function AgentSidebar({
       <PublishThread />
       {headerActions ? createPortal(<NewChat />, headerActions) : null}
       <Computers />
+      <LinkADevice />
       <Threads />
       <Chat.Confirmations className="requests">
         {(confirmation) =>
@@ -32,6 +35,7 @@ export default function AgentSidebar({
       <Chat.Thread className="thread" empty={<ThreadEmpty />}>
         {(item) => <Item item={item} />}
       </Chat.Thread>
+      <LinkCard />
       <Composer />
     </Chat.Root>
   );
@@ -144,6 +148,177 @@ function Computers() {
       </select>
       {agent?.problem ? <p className="problem">{agent.problem}</p> : null}
     </div>
+  );
+}
+
+const formatCode = (code: string) => code.replace(/^(.{4})(.{4})(.{2})$/, "$1-$2-$3");
+
+function useExpired(expiresAt: string | undefined): boolean {
+  const [expiredAt, setExpiredAt] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    if (expiresAt === undefined) return;
+    const timer = setTimeout(
+      () => setExpiredAt(expiresAt),
+      Math.max(0, Date.parse(expiresAt) - Date.now()),
+    );
+    return () => clearTimeout(timer);
+  }, [expiresAt]);
+  return expiresAt !== undefined && expiredAt === expiresAt;
+}
+
+function LinkCard() {
+  const { link, startLink } = useChat();
+  const expired = useExpired(link.status === "unlinked" ? link.expiresAt : undefined);
+  if (link.status !== "unlinked") return null;
+  if (link.code === undefined || expired) {
+    return (
+      <section
+        className="sidebar-note"
+        aria-label="Link this device"
+        data-state="unlinked"
+      >
+        <p className="sidebar-note-title">Link this device</p>
+        <p>
+          To use your agents on {link.hostName} from this device, link it once, the way
+          you link WhatsApp to a new device.
+        </p>
+        {expired ? <p>That code expired. Show a new one.</p> : null}
+        {link.error ? (
+          <p className="problem" role="alert">
+            {link.error}
+          </p>
+        ) : null}
+        <button
+          type="button"
+          className="primary"
+          onClick={() => void startLink()}
+          disabled={link.busy}
+        >
+          Continue with Face ID or Touch ID
+        </button>
+        {link.error ? (
+          <button
+            type="button"
+            onClick={() => void startLink({ presence: false })}
+            disabled={link.busy}
+          >
+            Link without it
+          </button>
+        ) : null}
+      </section>
+    );
+  }
+  return (
+    <section className="sidebar-note" aria-label="Link this device" data-state="linking">
+      <p className="sidebar-note-title">Link this device</p>
+      <p>
+        On a device you already use, open the Agent sidebar, choose Link a device, and
+        type:
+      </p>
+      <p className="link-code" data-testid="link-code">
+        {formatCode(link.code)}
+      </p>
+      <p>No linked device with you? On {link.hostName}, run:</p>
+      <code className="connect-command">
+        npx @parlor/agent-host link {globalThis.location?.origin} {link.code}
+      </code>
+      <p>The code works for 15 minutes.</p>
+    </section>
+  );
+}
+
+function LinkADevice() {
+  const { available, state, check, confirm, reset } = useLinkDevice();
+  const { agents, link } = useChat();
+  const session = useSession();
+  const [open, setOpen] = useState(false);
+  const [code, setCode] = useState("");
+  if (!available || agents.length === 0 || link.status !== "linked") return null;
+  const computer = agents[0]!.hostName;
+  const account = session.status === "signed-in" ? session.user.email : "your account";
+  const close = () => {
+    reset();
+    setCode("");
+    setOpen(false);
+  };
+  if (!open) {
+    return (
+      <button type="button" className="link-a-device" onClick={() => setOpen(true)}>
+        Link a device
+      </button>
+    );
+  }
+  return (
+    <section className="sidebar-note" aria-label="Link a device">
+      {state.step === "confirm" ? (
+        <>
+          <p className="sidebar-note-title">Link {state.device.name}?</p>
+          <p>
+            It will be able to send requests to your agents on {computer}, signed in as{" "}
+            {account}. Only link a device you have with you.
+          </p>
+          <button type="button" className="primary" onClick={() => void confirm()}>
+            Link with Face ID or Touch ID
+          </button>
+          <button type="button" onClick={close}>
+            Cancel
+          </button>
+        </>
+      ) : state.step === "linking" ? (
+        <p>Confirm with Face ID or Touch ID…</p>
+      ) : state.step === "linked" ? (
+        <>
+          <p className="sidebar-note-title">{state.name} is linked</p>
+          <button type="button" className="primary" onClick={close}>
+            Done
+          </button>
+        </>
+      ) : state.step === "on-computer" ? (
+        <>
+          <p className="sidebar-note-title">
+            Link {state.device.name} on {computer}
+          </p>
+          <p>This browser cannot confirm with Face ID or Touch ID. On {computer}, run:</p>
+          <code className="connect-command">{state.command}</code>
+          <button type="button" onClick={close}>
+            Done
+          </button>
+        </>
+      ) : (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void check(code);
+          }}
+        >
+          <p className="sidebar-note-title">Link a device</p>
+          <input
+            name="link-code"
+            aria-label="The code the new device shows"
+            value={code}
+            onChange={(event) => setCode(event.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="K7M4-PX2Q-8R"
+          />
+          {state.step === "error" ? (
+            <p className="problem" role="alert">
+              {state.message}
+            </p>
+          ) : null}
+          <button
+            type="submit"
+            className="primary"
+            disabled={code.trim() === "" || state.step === "checking"}
+          >
+            {state.step === "checking" ? "Checking…" : "Link"}
+          </button>
+          <button type="button" onClick={close}>
+            Cancel
+          </button>
+        </form>
+      )}
+    </section>
   );
 }
 

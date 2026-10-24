@@ -35,14 +35,28 @@ export interface AnswerStatement {
   readonly at: number;
 }
 
-export type Statement = PromptStatement | AnswerStatement;
+/** A linked device's word that the device behind `commitment` is the user's. */
+export interface VouchStatement {
+  readonly v: 1;
+  readonly kind: "vouch";
+  readonly app: string;
+  readonly voucher: string;
+  readonly device: string;
+  /** `deviceCommitment` of the new device's keys, as the voucher checked it. */
+  readonly commitment: string;
+  readonly at: number;
+}
+
+export type Statement = PromptStatement | AnswerStatement | VouchStatement;
 
 export interface Signed<S extends Statement> {
   readonly statement: S;
   readonly deviceId: DeviceId;
   readonly signature: S extends AnswerStatement
     ? DeviceSignature | PresenceSignature
-    : DeviceSignature;
+    : S extends VouchStatement
+      ? PresenceSignature
+      : DeviceSignature;
 }
 
 /** A device key the verifier pinned itself, never one that travelled with the statement. */
@@ -127,6 +141,77 @@ export async function signedPrompt(
 
 export function statementBytes(statement: Statement): Uint8Array {
   return canonicalBytes(statement);
+}
+
+const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+export const LINK_CODE_LENGTH = 10;
+
+/**
+ * What a new device shows to be linked: a hash of its keys, so whoever links it checks the
+ * keys the backend hands over are the ones this device holds.
+ */
+export async function deviceCommitment(
+  app: string,
+  deviceId: string,
+  signingKey: JsonWebKey,
+  presenceKey: JsonWebKey | undefined,
+): Promise<string> {
+  const point = (key: JsonWebKey) => ({ crv: key.crv, kty: key.kty, x: key.x, y: key.y });
+  return digestOf(
+    canonicalBytes({
+      v: 1,
+      kind: "device",
+      app: new URL(app).origin,
+      deviceId,
+      signing: point(signingKey),
+      presence: presenceKey ? point(presenceKey) : null,
+    }),
+  );
+}
+
+/** The commitment's first 50 bits in Crockford base32, short enough to type. */
+export function linkCode(commitment: string): string {
+  const bytes = decodeBase64url(commitment);
+  let bits = 0n;
+  for (let index = 0; index < 7; index += 1) bits = (bits << 8n) | BigInt(bytes[index]!);
+  bits >>= 6n;
+  let code = "";
+  for (let index = 0; index < LINK_CODE_LENGTH; index += 1) {
+    code = CROCKFORD[Number(bits & 31n)]! + code;
+    bits >>= 5n;
+  }
+  return code;
+}
+
+/** Upper case, no separators, the letters Crockford reads as digits mapped back. */
+export function normalizeLinkCode(typed: string): string {
+  return typed
+    .toUpperCase()
+    .replace(/[\s-]/g, "")
+    .replace(/O/g, "0")
+    .replace(/[IL]/g, "1");
+}
+
+export function formatLinkCode(code: string): string {
+  return `${code.slice(0, 4)}-${code.slice(4, 8)}-${code.slice(8)}`;
+}
+
+export function vouchStatement(
+  app: string,
+  voucher: string,
+  device: string,
+  commitment: string,
+  at: number,
+): VouchStatement {
+  return {
+    v: 1,
+    kind: "vouch",
+    app: new URL(app).origin,
+    voucher,
+    device,
+    commitment,
+    at,
+  };
 }
 
 /** The fragment Parlor Host's loopback redirect carries back to the browser that approved `connect`. */

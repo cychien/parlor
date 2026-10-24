@@ -34,7 +34,9 @@ Wraps the app: `client` (the action client), `router` (the TanStack router) and,
 - `useAgentConfirmations()`: the agent calls waiting for the user's approval.
 - `useAgentActivity()`: what the agent is doing in the app right now.
 - `useChat()`: the sidebar's state and commands; `status` is `"unavailable"` when the server has no chat.
-- `useDeviceSetup()`: for a card that explains setting up a browser. While it is mounted, the first prompt on a browser that would create a passkey waits in `setup` until the user calls `setUpDevice({ passkey })` or `dismissSetup()`. Without it, the first prompt opens the browser's passkey prompt directly.
+- `useChat().link` and `startLink()`: whether this device may send (`linked`, `checking`, or `unlinked` with the `code` it shows once `startLink` made one). Send stays disabled until it is linked.
+- `useLinkDevice()`: for **Link a device** on a linked device: `check(code)` finds the device and checks its keys against the code, `confirm()` vouches for it with Face ID or Touch ID; a device without a passkey gets the `parlor-host link` command instead.
+- `useDeviceSetup()`: deprecated; the link card replaces it. For a card that explains setting up a browser. While it is mounted, the first prompt on a browser that would create a passkey waits in `setup` until the user calls `setUpDevice({ passkey })` or `dismissSetup()`. Without it, the first prompt opens the browser's passkey prompt directly.
 
 ## Chat primitives
 

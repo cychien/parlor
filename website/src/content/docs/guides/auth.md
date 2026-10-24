@@ -29,7 +29,7 @@ When it cannot edit a file safely, for example a `server.ts` that builds its opt
 ## After sign-in
 
 - Each user has their own scope, so every action that filters by `ctx.scope` shows each user only their rows. Rows created before sign-in belong to the scope `"default"`, which no signed-in user sees.
-- The sidebar connects each user's own computer: it shows `npx @parlor/agent-host connect <app url>`, which pairs that computer with the signed-in account after one approval in the browser. The browser that approves is trusted right away; any other browser or device is approved once on the computer, with a four-digit code both show.
+- The sidebar connects each user's own computer: it shows `npx @parlor/agent-host connect <app url>`, which pairs that computer with the signed-in account after one approval in the browser, and trusts that browser. Every other browser or phone links once: it shows a code that a linked device types under **Link a device** and confirms with Face ID or Touch ID, or that the computer accepts with `npx @parlor/agent-host link`. The code is a hash of the new device's keys, so neither a stolen password nor the app's own server can link a device, and the computer never asks on its own.
 - MCP clients sign in through OAuth. See [Agents](/guides/agents/).
 
 ## Production

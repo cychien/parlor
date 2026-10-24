@@ -126,6 +126,110 @@ async function signedIn(
   return { auth, calls };
 }
 
+describe("linking a device", () => {
+  async function secondDevice(
+    key = new TestDeviceKey(),
+    answer?: (request: Request) => Response | undefined,
+    email = "alice@example.com",
+  ) {
+    const { auth } = client(key, answer);
+    await auth.signIn({ email, password: PASSWORD });
+    await settled(auth);
+    return auth;
+  }
+
+  it("A4: a new device shows a code, a linked one checks and vouches for it, and the new one sees it", async () => {
+    const { auth: laptop } = await signedIn(new TestDeviceKey());
+    await laptop.device();
+    const phone = await secondDevice();
+    expect(await phone.linkState()).toMatchObject({ vouched: false, pairing: false });
+    const started = await phone.startLink();
+    expect(started.code).toMatch(/^[0-9A-HJKMNP-TV-Z]{10}$/);
+    const pending = await laptop.resolveLink(
+      `${started.code.slice(0, 4).toLowerCase()}-${started.code.slice(4)}`,
+    );
+    expect(pending).toMatchObject({ id: started.deviceId, platform: "web" });
+    expect(await laptop.canVouch()).toBe(true);
+    await laptop.vouch(pending);
+    expect(await phone.linkState()).toEqual({
+      deviceId: started.deviceId,
+      vouched: true,
+      pairing: false,
+    });
+    const session = laptop.current();
+    if (session.status !== "signed-in") throw new Error("signed out");
+    const asHostSees = await app.provider.device!(
+      asId("user", session.user.id),
+      asId("device", started.deviceId),
+    );
+    expect(asHostSees?.vouches).toEqual([
+      expect.objectContaining({
+        voucher: (await laptop.device())!.id,
+        commitment: pending.commitment,
+      }),
+    ]);
+    await expect(laptop.resolveLink(started.code)).rejects.toThrow(/No device of yours/);
+  });
+
+  it("A3: refuses to vouch when the keys the app returns do not match the code", async () => {
+    const other = await new TestDeviceKey().publicKeys({
+      rpId: "hello.example",
+      userId: "u",
+      userName: "u",
+      challenge: new Uint8Array([1]),
+    });
+    let token: string | undefined;
+    const laptop = createAuthClient({
+      baseUrl: ORIGIN,
+      deviceKey: new TestDeviceKey(),
+      session: {
+        get: async () => token,
+        set: async (next) => {
+          token = next;
+        },
+      },
+      fetch: async (input, init) => {
+        const request = new Request(input, init);
+        if (request.method === "POST") request.headers.set("origin", "tauri://localhost");
+        const response = await server.fetch(request);
+        if (!new URL(request.url).pathname.endsWith("/resolveDeviceLink"))
+          return response;
+        const body = (await response.json()) as { data: Record<string, unknown> };
+        return Response.json({
+          ...body,
+          data: { ...body.data, signingKey: other.signing.publicKey },
+        });
+      },
+    });
+    await laptop.signUp({
+      name: "Alice",
+      email: "alice@example.com",
+      password: PASSWORD,
+    });
+    await settled(laptop);
+    await laptop.device();
+    const phone = await secondDevice();
+    const { code } = await phone.startLink();
+    await expect(laptop.resolveLink(code)).rejects.toThrow(/do not match this code/);
+    expect(await phone.linkState()).toMatchObject({ vouched: false });
+  });
+
+  it("S6: another account cannot find the code, and a device with no presence key cannot vouch", async () => {
+    const { auth: laptop } = await signedIn(new TestDeviceKey(false));
+    await laptop.device();
+    const phone = await secondDevice();
+    const { code, deviceId } = await phone.startLink();
+    const { auth: bob } = client(new TestDeviceKey());
+    await bob.signUp({ name: "Bob", email: "bob@example.com", password: PASSWORD });
+    await settled(bob);
+    await expect(bob.resolveLink(code)).rejects.toThrow(/No device of yours/);
+    expect(await laptop.canVouch()).toBe(false);
+    const pending = await laptop.resolveLink(code);
+    expect(pending.id).toBe(deviceId);
+    await expect(laptop.vouch(pending)).rejects.toMatchObject({ name: "LinkOnComputer" });
+  });
+});
+
 describe("the auth client's device", () => {
   it("is nothing while nobody is signed in", async () => {
     const { auth } = client(new TestDeviceKey());
