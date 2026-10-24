@@ -1525,6 +1525,24 @@ describe("createChatRuntime linking this device", () => {
     await vi.waitFor(() => expect(h.runtime.get().link).toEqual({ status: "linked" }));
   });
 
+  it("drops the code it showed once that device is removed, so linking starts over", async () => {
+    const l = linker({ vouched: false, pairing: false });
+    const h = setup({ auth: l.source, open: async () => reporting(["dev_laptop"]) });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().link.status).toBe("unlinked"));
+    await h.runtime.startLink();
+    expect(h.runtime.get().link).toMatchObject({ code: "K7M4PX2Q8R" });
+    l.set({ vouched: false, pairing: false });
+    h.tags(["parlor_auth_devices", "dev_new"]);
+    await vi.waitFor(() =>
+      expect(h.runtime.get().link).toMatchObject({
+        status: "unlinked",
+        code: undefined,
+        qr: undefined,
+      }),
+    );
+  });
+
   it("is linked when a computer runs its prompts, or when it approved connect there", async () => {
     for (const state of [
       { deviceId: "dev_laptop", vouched: false, pairing: false },

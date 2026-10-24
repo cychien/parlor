@@ -27,6 +27,7 @@ import { verifyEs256 } from "./es256.js";
 import {
   LINK_CODE_LENGTH,
   normalizeLinkCode,
+  removeStatement,
   verifyStatement,
   vouchStatement,
 } from "./statements.js";
@@ -129,6 +130,10 @@ export interface ConnectedDevice {
   readonly createdAt: string;
   /** A linked device vouched for it; the computer pins it on its first prompt. */
   readonly vouched: boolean;
+  /** It is showing a link code now. */
+  readonly linking: boolean;
+  /** The device whose vouch linked it last. */
+  readonly linkedBy?: string | undefined;
 }
 
 /** A device waiting to be linked, as the one linking it checks it against the code. */
@@ -191,6 +196,8 @@ interface DeviceListRow {
   readonly platform: string;
   readonly created_at: string | Date;
   readonly vouched: boolean;
+  readonly linking: boolean;
+  readonly linked_by: string | null;
 }
 
 function databaseOf(host: PluginHost): DataProvider {
@@ -276,7 +283,9 @@ export function deviceAccountActions(deps: DeviceActionDeps) {
         const user = signedIn(ctx);
         const rows = rowsOf<DeviceListRow>(
           await (databaseOf(deps.host).read() as Database).execute(sql`
-            select id, name, platform, created_at, jsonb_array_length(vouches) > 0 as vouched
+            select id, name, platform, created_at, jsonb_array_length(vouches) > 0 as vouched,
+              coalesce(link_expires_at > ${new Date().toISOString()}, false) as linking,
+              vouches -> -1 ->> 'voucher' as linked_by
             from parlor_auth_devices
             where user_id = ${user.userId} and revoked_at is null order by created_at, id`),
         );
@@ -287,6 +296,8 @@ export function deviceAccountActions(deps: DeviceActionDeps) {
           current: row.id === user.deviceId,
           createdAt: isoOf(row.created_at),
           vouched: row.vouched,
+          linking: row.linking,
+          ...(row.linked_by ? { linkedBy: row.linked_by } : {}),
         }));
       },
     }),
@@ -490,8 +501,57 @@ export function deviceAccountActions(deps: DeviceActionDeps) {
         return { id: input.device };
       },
     }),
+    removeDevice: defineAction({
+      description:
+        "Remove a device, confirmed with this device's presence key; no computer accepts its signatures afterwards.",
+      input: z.object({
+        device: z.string().min(1),
+        actor: z.string().min(1),
+        app: z.string().url(),
+        at: z.number(),
+        signature: deviceSignature,
+      }),
+      run: async (input, ctx): Promise<{ readonly id: string }> => {
+        const user = signedIn(ctx);
+        const actor = await deps.registry.get(user.userId, asId("device", input.actor));
+        if (!actor?.presenceKey) {
+          throw new ActionError(
+            "forbidden",
+            "Only a linked device that can confirm it is you can remove a device.",
+          );
+        }
+        const outcome = await verifyStatement(
+          {
+            statement: removeStatement(input.app, input.actor, input.device, input.at),
+            deviceId: actor.id,
+            signature: input.signature as never,
+          },
+          {
+            deviceId: actor.id,
+            signingKey: actor.signingKey,
+            presenceKey: actor.presenceKey,
+          },
+          { requirePresence: true, now: Date.now(), maxAgeMs: VOUCH_MAX_AGE_MS },
+        );
+        if (outcome !== "valid") throw invalid("This confirmation did not check out.");
+        const removed = rowsOf<{ readonly id: string }>(
+          await databaseOf(deps.host).transaction((handle) =>
+            (handle as Database).execute(sql`
+              update parlor_auth_devices set revoked_at = now(), link_code = null
+              where id = ${input.device} and user_id = ${user.userId} and revoked_at is null
+              returning id`),
+          ),
+        );
+        if (removed.length === 0) {
+          throw new ActionError("not_found", `No device ${input.device}`);
+        }
+        await deps.host.announce(ctx.scope, [[DEVICES_TAG, input.device]]);
+        return { id: input.device };
+      },
+    }),
     revokeDevice: defineAction({
-      description: "Remove a device; no computer accepts its signatures afterwards.",
+      description:
+        "Deprecated: use removeDevice, which a linked device confirms. Remove a device; no computer accepts its signatures afterwards.",
       input: z.object({ id: z.string().min(1) }),
       run: async ({ id }, ctx): Promise<{ readonly id: string }> => {
         const user = signedIn(ctx);

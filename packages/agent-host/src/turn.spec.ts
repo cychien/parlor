@@ -868,7 +868,12 @@ describe("runTurn trusting the device that sent the prompt", () => {
     const laptop = await TestDevice.create("device-laptop", "Chrome on macOS", "web");
     const trust = memoryTrust();
     await trust.pin(APP, pinOf(laptop));
-    const run = harness(undefined, { trust, policy });
+    const linked: { appName: string; device: string }[] = [];
+    const run = harness(undefined, {
+      trust,
+      policy,
+      prompter: { deviceLinked: (input) => linked.push(input) },
+    });
     const keys = {
       ...phone.keys,
       vouches: [await laptop.vouchFor(APP, phone.keys, Date.now())],
@@ -890,6 +895,7 @@ describe("runTurn trusting the device that sent the prompt", () => {
       voucher: laptop.id,
       signingKey: phone.keys.signingKey,
     });
+    expect(linked).toEqual([{ appName: grant.appName, device: "Chrome on iPhone" }]);
   });
 
   it("A3: refuses a vouch from an unpinned device, without presence, for other keys, or forged", async () => {

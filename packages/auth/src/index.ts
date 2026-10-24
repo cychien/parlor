@@ -85,6 +85,8 @@ export {
   type PinnedDevice,
   promptStatement,
   type PromptStatement,
+  removeStatement,
+  type RemoveStatement,
   type Signed,
   checkPairingProof,
   deviceCommitment,

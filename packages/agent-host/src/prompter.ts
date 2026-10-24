@@ -18,6 +18,8 @@ export interface LocalPrompter {
     readonly agent: string;
     readonly preview: string;
   }): void;
+  /** Passive: a device was linked to the agents here. */
+  deviceLinked?(input: { readonly appName: string; readonly device: string }): void;
 }
 
 const UNPRINTABLE = /[\p{Cc}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
@@ -56,6 +58,11 @@ export function terminalPrompter(): LocalPrompter {
         `${printable(agent)} for ${printable(appName)} asks: ${printable(question)}\n${menu}\nChoice: `,
       );
       return choices[Number(answer?.trim()) - 1]?.id;
+    },
+    deviceLinked: ({ appName, device }) => {
+      process.stdout.write(
+        `${printable(device)} was linked to your agents for ${printable(appName)}.\n`,
+      );
     },
     turnStarted: ({ appName, device, agent, preview }) => {
       process.stdout.write(
@@ -124,6 +131,21 @@ export function macDialogPrompter(): LocalPrompter {
         signal,
       );
       return choices.find((choice) => clipped(choice.label) === label)?.id;
+    },
+    deviceLinked: ({ appName, device }) => {
+      void osascript(
+        [
+          "on run argv",
+          `display notification (item 2 of argv) with title "${DIALOG_TITLE}" subtitle (item 1 of argv)`,
+          "end run",
+        ],
+        [
+          clipped(`${device} was linked`),
+          clipped(
+            `It can use your agents for ${appName}. Not you? Remove it under Devices in the app's Agent sidebar.`,
+          ),
+        ],
+      );
     },
     turnStarted: ({ appName, device, agent, preview }) => {
       void osascript(

@@ -36,6 +36,7 @@ import {
   normalizeLinkCode,
   pairingProof,
   promptStatement,
+  removeStatement,
   type Statement,
   statementBytes,
   vouchStatement,
@@ -439,11 +440,12 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
       const own = silent ? await device() : undefined;
       if (!own) return { vouched: false, pairing };
       const listed = await account.call("devices", {});
-      return {
-        deviceId: own.id,
-        vouched: listed.some((entry) => entry.id === own.id && entry.vouched),
-        pairing,
-      };
+      const listing = listed.find((entry) => entry.id === own.id);
+      if (!listing) {
+        devices.delete(session.user.id);
+        return { vouched: false, pairing };
+      }
+      return { deviceId: own.id, vouched: listing.vouched, pairing };
     },
     startLink: async (wanted) => {
       const own = await device(wanted);
@@ -490,6 +492,38 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
         commitment,
         code: linkCode(commitment),
       };
+    },
+    listDevices: async () => {
+      const session = current();
+      if (session.status !== "signed-in") return [];
+      const own = devices.has(session.user.id) ? await device() : undefined;
+      const listed = await account.call("devices", {});
+      return listed.map((entry) => ({ ...entry, current: entry.id === own?.id }));
+    },
+    removeDevice: async (id) => {
+      const own = await device();
+      const key = options.deviceKey ?? (await keysOfThisPlatform());
+      if (!own?.keys.presenceKey || !key) {
+        throw new LinkOnComputer("This device cannot confirm it is you.");
+      }
+      const app = appOrigin(baseUrl || undefined);
+      const at = Date.now();
+      const signature = await key.sign(
+        statementBytes(removeStatement(app, own.id, id, at)),
+        {
+          presence: true,
+        },
+      );
+      await account.call("removeDevice", {
+        device: id,
+        actor: own.id,
+        app,
+        at,
+        signature,
+      });
+      const session = current();
+      if (id === own.id && session.status === "signed-in")
+        devices.delete(session.user.id);
     },
     canVouch: async () => {
       const session = current();

@@ -4,6 +4,7 @@ import {
   Chat,
   type ChatItem,
   useChat,
+  useDevices,
   useLinkDevice,
   useSession,
 } from "@parlor/client/react";
@@ -24,8 +25,9 @@ export default function AgentSidebar() {
       <div className="flex min-h-0 flex-1 flex-col">
         <PublishThread />
         <div className="space-y-2 border-b border-zinc-200 p-4">
+          <LinkedNotices />
           <Computers />
-          <LinkADevice />
+          <DeviceTools />
           <Threads />
         </div>
         <Chat.Confirmations className="space-y-2 px-4 pt-4 empty:hidden">
@@ -224,9 +226,23 @@ function LinkQr({ value }: { readonly value: string }) {
   );
 }
 
+/** No other device can vouch yet, as far as the computers report, so the computer must link this one. */
+function useOnlyDevice(): boolean {
+  const { hosts } = useChat();
+  const { devices } = useDevices();
+  const self = devices?.find((device) => device.current)?.id;
+  const reporting = hosts.filter((host) => host.devices !== undefined);
+  return (
+    devices !== undefined &&
+    reporting.length > 0 &&
+    reporting.every((host) => host.devices!.every((id) => id === self))
+  );
+}
+
 function LinkCard() {
   const { link, startLink } = useChat();
   const expired = useExpired(link.status === "unlinked" ? link.expiresAt : undefined);
+  const onlyDevice = useOnlyDevice();
   if (link.status !== "unlinked") return null;
   if (link.code === undefined || expired) {
     return (
@@ -269,6 +285,22 @@ function LinkCard() {
       </section>
     );
   }
+  const command = `npx @parlor/agent-host link ${globalThis.location?.origin} ${link.code}`;
+  if (onlyDevice) {
+    return (
+      <section aria-label="Link this device" className={NOTE}>
+        <p className="font-medium">Link this device</p>
+        <p>
+          No other device is linked yet, so link this one from {link.hostName}. Run this
+          in a terminal on it:
+        </p>
+        <code className="block rounded bg-zinc-100 p-2 text-xs wrap-anywhere">
+          {command}
+        </code>
+        <p className={META}>The code works for 15 minutes.</p>
+      </section>
+    );
+  }
   return (
     <section aria-label="Link this device" className={NOTE}>
       <p className="font-medium">Link this device</p>
@@ -285,34 +317,59 @@ function LinkCard() {
       </p>
       <p className={META}>No linked device with you? On {link.hostName}, run:</p>
       <code className="block rounded bg-zinc-100 p-2 text-xs wrap-anywhere">
-        npx @parlor/agent-host link {globalThis.location?.origin} {link.code}
+        {command}
       </code>
       <p className={META}>The code works for 15 minutes.</p>
     </section>
   );
 }
 
-function LinkADevice() {
-  const { available, state, check, confirm, reset } = useLinkDevice();
+function DeviceTools() {
   const { agents, link } = useChat();
+  const linking = useLinkDevice();
+  const devices = useDevices();
+  const [panel, setPanel] = useState<"link" | "devices" | undefined>(undefined);
+  if (agents.length === 0 || link.status !== "linked") return null;
+  const close = () => setPanel(undefined);
+  if (panel === "link") return <LinkADevice onClose={close} />;
+  if (panel === "devices") return <Devices onClose={close} />;
+  if (!linking.available && !devices.available) return null;
+  return (
+    <div className="flex gap-2">
+      {linking.available ? (
+        <button
+          type="button"
+          onClick={() => setPanel("link")}
+          className={`${BUTTON} flex-1`}
+        >
+          Link a device
+        </button>
+      ) : null}
+      {devices.available ? (
+        <button
+          type="button"
+          onClick={() => setPanel("devices")}
+          className={`${BUTTON} flex-1`}
+        >
+          Devices
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function LinkADevice({ onClose }: { readonly onClose: () => void }) {
+  const { state, check, confirm, reset } = useLinkDevice();
+  const { agents } = useChat();
   const session = useSession();
-  const [open, setOpen] = useState(false);
   const [code, setCode] = useState("");
-  if (!available || agents.length === 0 || link.status !== "linked") return null;
-  const computer = agents[0]!.hostName;
+  const computer = agents[0]?.hostName ?? "your computer";
   const account = session.status === "signed-in" ? session.user.email : "your account";
   const close = () => {
     reset();
     setCode("");
-    setOpen(false);
+    onClose();
   };
-  if (!open) {
-    return (
-      <button type="button" onClick={() => setOpen(true)} className={`${BUTTON} w-full`}>
-        Link a device
-      </button>
-    );
-  }
   return (
     <section
       aria-label="Link a device"
@@ -406,6 +463,202 @@ function LinkADevice() {
   );
 }
 
+const shortDate = (at: string) =>
+  new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+
+function Devices({ onClose }: { readonly onClose: () => void }) {
+  const { devices, removal, remove, reset } = useDevices();
+  const { hosts } = useChat();
+  const [confirming, setConfirming] = useState<string | undefined>(undefined);
+  const reporting = hosts.filter((host) => host.devices !== undefined);
+  const nameOf = (id: string | undefined) =>
+    devices?.find((device) => device.id === id)?.name;
+  const close = () => {
+    reset();
+    onClose();
+  };
+  return (
+    <section
+      aria-label="Devices"
+      className="space-y-2 rounded-lg border border-zinc-200 p-3 text-sm"
+    >
+      <div className="flex items-center justify-between">
+        <p className="font-medium">Devices</p>
+        <button type="button" onClick={close} className={META}>
+          Close
+        </button>
+      </div>
+      {devices === undefined ? (
+        <p className={META}>Loading…</p>
+      ) : (
+        <ul className="divide-y divide-zinc-100">
+          {devices.map((device) => {
+            const linkedHere = reporting.some((host) =>
+              host.devices!.includes(device.id),
+            );
+            const from = nameOf(device.linkedBy);
+            const busy = removal.step === "removing" && removal.id === device.id;
+            return (
+              <li key={device.id} className="space-y-1 py-2">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="wrap-anywhere">
+                      {device.name}
+                      {device.current ? (
+                        <span className={`${META} ml-1`}>This device</span>
+                      ) : null}
+                    </p>
+                    <p className={META}>
+                      {from
+                        ? `Linked from ${from}`
+                        : `Added ${shortDate(device.createdAt)}`}
+                      {reporting.length > 0 && !linkedHere ? " · Not linked" : ""}
+                    </p>
+                  </div>
+                  {confirming === device.id ? null : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        reset();
+                        setConfirming(device.id);
+                      }}
+                      className={BUTTON}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+                {confirming === device.id ? (
+                  removal.step === "on-computer" && removal.id === device.id ? (
+                    <>
+                      <p>
+                        This browser cannot confirm with Face ID or Touch ID. On your
+                        computer, run:
+                      </p>
+                      <code className="block rounded bg-zinc-100 p-2 text-xs wrap-anywhere">
+                        {removal.command}
+                      </code>
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => setConfirming(undefined)}
+                          className={BUTTON}
+                        >
+                          Done
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p>
+                        {device.current
+                          ? "Remove this device? It will need to be linked again to use your agents."
+                          : `Remove ${device.name}? It will no longer be able to use your agents.`}
+                      </p>
+                      {removal.step === "error" && removal.id === device.id ? (
+                        <p role="alert" className="text-xs text-red-600">
+                          {removal.message}
+                        </p>
+                      ) : null}
+                      <div className="flex justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            reset();
+                            setConfirming(undefined);
+                          }}
+                          className={BUTTON}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void remove(device.id)}
+                          className={PRIMARY}
+                        >
+                          {busy
+                            ? "Confirm with Face ID or Touch ID…"
+                            : "Remove with Face ID or Touch ID"}
+                        </button>
+                      </div>
+                    </>
+                  )
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function LinkedNotices() {
+  const { linked, removal, remove, dismiss } = useDevices();
+  if (linked.length === 0) return null;
+  return (
+    <div className="space-y-2">
+      {linked.map((device) => {
+        const failed =
+          (removal.step === "error" || removal.step === "on-computer") &&
+          removal.id === device.id
+            ? removal
+            : undefined;
+        return (
+          <div
+            key={device.id}
+            role="status"
+            className="space-y-2 rounded-lg bg-zinc-900 p-3 text-sm text-white"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <p className="min-w-0 wrap-anywhere">
+                {device.name} was linked to your agents.
+              </p>
+              <div className="flex shrink-0 gap-2">
+                <button
+                  type="button"
+                  disabled={removal.step === "removing"}
+                  onClick={() =>
+                    void remove(device.id).then((removed) => {
+                      if (removed) dismiss(device.id);
+                    })
+                  }
+                  className="rounded-md px-2 py-1 text-zinc-300 hover:text-white"
+                >
+                  Remove
+                </button>
+                <button
+                  type="button"
+                  onClick={() => dismiss(device.id)}
+                  className="rounded-md bg-white px-2 py-1 font-medium text-zinc-900"
+                >
+                  OK
+                </button>
+              </div>
+            </div>
+            {failed?.step === "error" ? (
+              <p role="alert" className="text-xs text-red-300">
+                {failed.message}
+              </p>
+            ) : failed?.step === "on-computer" ? (
+              <>
+                <p className="text-xs">
+                  This browser cannot confirm with Face ID or Touch ID. On your computer,
+                  run:
+                </p>
+                <code className="block rounded bg-zinc-800 p-2 text-xs wrap-anywhere">
+                  {failed.command}
+                </code>
+              </>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function Composer() {
   const { error, draft } = useChat();
   const problem = isPromptTooLong(draft) ? PROMPT_LIMIT_MESSAGE : error;
@@ -447,7 +700,7 @@ const TOOL_STATE = {
 } as const;
 
 const EVENTS = {
-  device_rejected: "This device was not approved",
+  device_rejected: "This device is not linked",
   agent_started: "Agent started",
   agent_exited: "Agent exited",
   agent_switched: "Switched agent",

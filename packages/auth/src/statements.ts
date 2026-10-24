@@ -47,14 +47,28 @@ export interface VouchStatement {
   readonly at: number;
 }
 
-export type Statement = PromptStatement | AnswerStatement | VouchStatement;
+/** A linked device's word, with presence, that `device` should no longer use the user's agents. */
+export interface RemoveStatement {
+  readonly v: 1;
+  readonly kind: "remove";
+  readonly app: string;
+  readonly actor: string;
+  readonly device: string;
+  readonly at: number;
+}
+
+export type Statement =
+  | PromptStatement
+  | AnswerStatement
+  | VouchStatement
+  | RemoveStatement;
 
 export interface Signed<S extends Statement> {
   readonly statement: S;
   readonly deviceId: DeviceId;
   readonly signature: S extends AnswerStatement
     ? DeviceSignature | PresenceSignature
-    : S extends VouchStatement
+    : S extends VouchStatement | RemoveStatement
       ? PresenceSignature
       : DeviceSignature;
 }
@@ -212,6 +226,15 @@ export function vouchStatement(
     commitment,
     at,
   };
+}
+
+export function removeStatement(
+  app: string,
+  actor: string,
+  device: string,
+  at: number,
+): RemoveStatement {
+  return { v: 1, kind: "remove", app: new URL(app).origin, actor, device, at };
 }
 
 /** The fragment Parlor Host's loopback redirect carries back to the browser that approved `connect`. */
