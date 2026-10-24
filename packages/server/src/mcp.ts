@@ -28,8 +28,32 @@ export interface McpOptions<T extends ActionMap> {
   readonly runner: ActionRunner;
   readonly name?: string | undefined;
   readonly version?: string | undefined;
+  /**
+   * Which app these tools belong to, told to every MCP client, so an agent connected to
+   * several Parlor apps keeps them apart.
+   */
+  readonly app?:
+    | { readonly name: string; readonly description?: string | undefined }
+    | undefined;
   readonly agentUi?: AgentUi | undefined;
   readonly callers?: CallerResolver | undefined;
+}
+
+/** The public origin first, then the one `parlor dev` serves the app on, then the request's. */
+function appOrigin(request: Request | undefined): string | undefined {
+  const configured = process.env.PARLOR_ORIGIN || process.env.PARLOR_WEB_ORIGIN;
+  if (configured) return new URL(configured).origin;
+  return request ? new URL(request.url).origin : undefined;
+}
+
+export function appIdentity(
+  app: McpOptions<ActionMap>["app"],
+  origin: string | undefined,
+): string {
+  const where = origin ? ` at ${origin}` : "";
+  const what = app?.description ? ` ${app.description.trim()}` : "";
+  const who = app ? app.name : "this app";
+  return `These tools belong to ${who}${where}.${what} They act only on ${who}, as the signed-in user; any other app's tools are a separate server.`;
 }
 
 function toolResult(result: unknown): CallToolResult {
@@ -166,7 +190,8 @@ export function createMcpHandler<T extends ActionMap>(
     runner,
     agentUi,
     callers,
-    name = "parlor",
+    app,
+    name = app?.name ?? "parlor",
     version = "0.0.0",
   } = options;
 
@@ -185,8 +210,16 @@ export function createMcpHandler<T extends ActionMap>(
     );
 
   const factory = (ctx: McpRequestContext) => {
-    const instructions = agentUi?.instructions("mcp");
-    const server = new McpServer({ name, version }, instructions ? { instructions } : {});
+    const instructions = [
+      appIdentity(app, appOrigin(ctx.requestInfo)),
+      agentUi?.instructions("mcp"),
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    const server = new McpServer(
+      { name, version, ...(app ? { title: app.name } : {}) },
+      { instructions },
+    );
     server.server.setNotificationHandler("notifications/cancelled", (notification) => {
       const { requestId, reason } = notification.params;
       if (ctx.requestInfo && requestId !== undefined)

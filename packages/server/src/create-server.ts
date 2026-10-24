@@ -322,7 +322,22 @@ export function createServer<T extends ActionMap>(
   }
 
   if (mcp !== false) {
-    const handler = createMcpHandler({ actions, runner, agentUi, callers, ...mcp });
+    const mcpApp = appName
+      ? {
+          name: appName,
+          ...(process.env.PARLOR_APP_DESCRIPTION
+            ? { description: process.env.PARLOR_APP_DESCRIPTION }
+            : {}),
+        }
+      : undefined;
+    const handler = createMcpHandler({
+      actions,
+      runner,
+      agentUi,
+      callers,
+      app: mcpApp,
+      ...mcp,
+    });
     const guardMcp = guard(callers, "mcp");
     app.all(`${basePath}/mcp`, async (event) => {
       try {

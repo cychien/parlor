@@ -8,4 +8,18 @@ describe("appServerEnv", () => {
     const config = parseConfig({ app: { id: "dev.parlor.test", name: "Test" } });
     expect(appServerEnv(config)).toEqual({ PARLOR_APP_NAME: "Test" });
   });
+
+  it("adds the app's description under PARLOR_APP_DESCRIPTION when it has one", () => {
+    const config = parseConfig({
+      app: {
+        id: "dev.parlor.test",
+        name: "Course Admin",
+        description: "Courses and lessons.",
+      },
+    });
+    expect(appServerEnv(config)).toEqual({
+      PARLOR_APP_NAME: "Course Admin",
+      PARLOR_APP_DESCRIPTION: "Courses and lessons.",
+    });
+  });
 });
