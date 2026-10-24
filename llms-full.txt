@@ -1,0 +1,1496 @@
+# Getting started
+
+You need Node.js 24 or later and one of pnpm, npm, yarn or bun. The examples use pnpm; every command has the same shape with the others (`npm run dev`, `npx parlor ...`).
+
+## Create the app
+
+```sh
+pnpm create parlor my-app
+cd my-app
+```
+
+`create-parlor` asks only for the name, installs the dependencies and makes the first git commit. Pass `--yes` to accept every default without a prompt, for example from a script or an agent.
+
+## Run it
+
+```sh
+pnpm dev
+```
+
+Open the `Local:` URL it prints, `http://localhost:5173` unless that port is taken. The page is a todo list. Add a todo to see it work.
+
+`pnpm dev` runs three things: the server with your actions on port 3000, the web app on port 5173, and a small host that lets the coding agents on this computer reach the app. A port another program holds moves to the next free one, and `pnpm dev` says so.
+
+## Let the agent use it
+
+Press **Agent** in the header. The sidebar lists the coding agents installed on this computer, such as Claude Code or Codex. Pick one and send:
+
+```text
+Add a todo called Buy milk
+```
+
+The agent calls the app's `addTodo` action, and the list updates without a reload. Actions marked `confirm: true`, such as `deleteTodo`, ask you to approve the call in the sidebar first.
+
+## Add an action
+
+Actions live in `actions/`. Add one that clears the finished todos, in a new file `actions/clear-done.ts`:
+
+```ts
+import { defineAction } from "@parlor/core";
+import { and, eq } from "drizzle-orm";
+import { z } from "zod";
+
+import { todos } from "../schema/index.js";
+
+export const clearDone = defineAction({
+  description: "Delete every todo that is done.",
+  input: z.object({}),
+  writes: [todos],
+  run: async (_, { db, scope }) => {
+    const removed = await db
+      .delete(todos)
+      .where(and(eq(todos.scope, scope), eq(todos.done, true)))
+      .returning();
+    return { removed: removed.length };
+  },
+});
+```
+
+Then register it in `actions/index.ts`: import it at the top with the other imports, and add `clearDone` to the object passed to `createRegistry`, next to the actions already there:
+
+```ts
+import { createRegistry } from "@parlor/core/registry";
+
+import { clearDone } from "./clear-done.js";
+
+export const registry = createRegistry({
+  clearDone,
+});
+```
+
+Now call it from the page. Create `src/clear-done.tsx`:
+
+```tsx
+import { useActionMutation } from "@parlor/client/react";
+
+export function ClearDone() {
+  const clear = useActionMutation("clearDone");
+  return (
+    <button
+      type="button"
+      onClick={() => clear.mutate({})}
+      className="text-sm text-zinc-500 hover:text-zinc-900"
+    >
+      Clear done
+    </button>
+  );
+}
+```
+
+and render it in `src/routes/index.tsx`, below the list: import it with `import { ClearDone } from "../clear-done.js";` and add `<ClearDone />` after the closing `</ul>`. Check a todo, then press **Clear done**.
+
+The agent sees the new action too: ask it to "clear the finished todos". `writes: [todos]` is what refreshes the list for every open page when the action runs.
+
+## Add sign-in
+
+`parlor add auth` edits your files, so it first asks for a clean git tree: then everything it changes shows up as one diff you can review. Commit what you have, then run it:
+
+```sh
+git add -A
+git commit -m "Add clearDone"
+pnpm parlor add auth
+```
+
+This installs `@parlor/auth`, adds a sign-in page, wires the server and the client, and generates the migration. Restart `pnpm dev`, create an account, and each user now sees only their own todos. The todos you added before signing in belong to the scope `"default"`, which no signed-in user sees, so the list starts empty.
+
+With sign-in, the sidebar shows a command that connects your computer to your account:
+
+```sh
+npx @parlor/agent-host connect http://localhost:5173
+```
+
+Run it, press **Connect** in the browser tab it opens, and the tab returns to the app, ready to chat.
+
+To use your agents from another browser or your phone, link it once: it shows a QR code and a short code. Scan the QR with a phone you already use, or type the code under **Link a device** in a browser you already use, then confirm with Face ID or Touch ID. With no linked device at hand, run the `npx @parlor/agent-host link ...` command it shows on your computer.
+
+## Next
+
+- [Actions](/parlor/guides/actions/): inputs, reads and writes, confirmation, errors.
+- [The agent sidebar](/parlor/guides/agent-sidebar/): how the sidebar works and how to change it.
+- [Targets](/parlor/guides/targets/): the same app on macOS, iOS and Android.
+- [Deploy](/parlor/guides/deploy/): build the server and the web app for production.
+- [Migrating an existing app](/parlor/guides/migrating/): port an app's data, users, logic and pages, step by step.
+
+# Actions
+
+An action is a typed server function. You define it once with `defineAction`, and Parlor serves it to every caller:
+
+- the app's own UI, through `useActionQuery` and `useActionMutation`
+- the agent in the sidebar, as a tool
+- external agents such as Claude Code, over MCP at `/_parlor/mcp`
+- anything else, as `POST /_parlor/actions/<name>`
+
+All of them run the same `run` function with the same input validation, so there is no second API to keep in sync.
+
+## Define an action
+
+```ts
+import { defineAction } from "@parlor/core";
+import { createRegistry } from "@parlor/core/registry";
+import { eq } from "drizzle-orm";
+import { z } from "zod";
+
+import { notes } from "./schema.js";
+
+export const registry = createRegistry({
+  listNotes: defineAction({
+    description: "List the notes.",
+    input: z.object({}),
+    reads: [notes],
+    run: (_, { db, scope }) => db.select().from(notes).where(eq(notes.scope, scope)),
+  }),
+  addNote: defineAction({
+    description: "Add a note.",
+    input: z.object({ body: z.string().min(1).describe("The text of the note") }),
+    writes: [notes],
+    run: async ({ body }, { db, scope }) => {
+      const [note] = await db
+        .insert(notes)
+        .values({ id: crypto.randomUUID(), scope, body })
+        .returning();
+      return note;
+    },
+  }),
+});
+```
+
+- `description` is what an agent reads to decide when to call the action. Write it for a reader who sees nothing else.
+- `input` is a zod schema. Field descriptions (`.describe(...)`) become the tool's parameter docs.
+- `run` gets the parsed input and a context: `db`, `scope`, `principal` (who is calling) and `source` (`ui`, `agent`, `mcp` or `http`).
+
+## Scope every row
+
+`ctx.scope` is the partition the caller may see. Without sign-in every caller is in the scope `"default"`; with sign-in each user has their own. Give every table a `scope` column and filter every query by it, as above. That one rule is what keeps one user's data away from another user and from another user's agent.
+
+## Reads and writes keep pages fresh
+
+`reads: [notes]` says the action reads the `notes` table; `writes: [notes]` says it changes it. When a write runs, from the UI, the sidebar or MCP, every open page that holds a query reading `notes` refetches it. This is how a todo the agent adds shows up in your list without a reload.
+
+A read can also name rows instead of whole tables, for an action that reads one item:
+
+```ts
+import { defineAction } from "@parlor/core";
+import { z } from "zod";
+
+export const getNote = defineAction({
+  description: "Get one note.",
+  input: z.object({ id: z.string() }),
+  reads: ({ id }) => [["notes", id]],
+  run: ({ id }) => ({ id }),
+});
+```
+
+## Ask before an agent changes things
+
+```ts
+import { defineAction } from "@parlor/core";
+import { z } from "zod";
+
+export const deleteNote = defineAction({
+  description: "Delete a note.",
+  input: z.object({ id: z.string() }),
+  writes: ["notes"],
+  confirm: true,
+  run: ({ id }) => ({ id }),
+});
+```
+
+`confirm: true` makes every call from an agent wait until the user approves it in the app. Calls from the app's own UI never ask.
+
+## Errors
+
+Throw an `ActionError` with a code the caller can act on:
+
+```ts
+import { ActionError } from "@parlor/core";
+
+export function missing(id: string): never {
+  throw new ActionError("not_found", `No note ${id}`);
+}
+```
+
+You throw `not_found`, `invalid_input`, `unauthenticated`, `forbidden` or `internal`. Parlor itself answers `declined`, `confirmation_timeout` and `confirmation_unavailable` for a `confirm: true` action the user did not approve. Any other thrown error reaches the caller as `internal` with the message `Internal error`.
+
+## Serve the registry
+
+`server.ts` passes the registry to `createServer`:
+
+```ts
+import { createDatabase } from "@parlor/data";
+import { createServer } from "@parlor/server";
+
+import { registry } from "./actions.js";
+
+const database = await createDatabase({ migrationsFolder: "migrations" });
+
+export default createServer({ actions: registry, database });
+```
+
+See [Pages and hooks](/parlor/guides/pages-and-hooks/) to call actions from React, and [Agents](/parlor/guides/agents/) for MCP.
+
+# The agent sidebar
+
+A new app has an **Agent** button in its header. It opens a sidebar where you chat with a coding agent installed on your own computer, Claude Code or Codex, and that agent operates the app through its actions.
+
+## How it connects
+
+- In development, `parlor dev` starts **Parlor Host** beside the server. It finds the agents installed on this computer and offers them to the sidebar. There is nothing to sign in to or pair.
+- The agent runs on your computer, with your own subscription. When it calls an app tool, the call goes to the app's actions under your scope, and any `confirm: true` action waits for you in the sidebar.
+- The page tells the agent where you are: the current route's `staticData.description` and the views on screen (see below), so a prompt such as "check off the first one" has a referent.
+
+After `parlor add auth`, each user connects their own computer instead: the sidebar shows a command such as `npx @parlor/agent-host connect http://localhost:5173`, which pairs that computer with the signed-in account. See [Auth](/parlor/guides/auth/).
+
+In a production build without sign-in, chat is unavailable: `useChat().status` is `"unavailable"`, and the template's sidebar says so. `parlor build` warns about it.
+
+## The files are yours
+
+The sidebar is ordinary code in your project, copied in when the app was created:
+
+| File                              | What it is                                                                                                                                    |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/agent/agent-button.tsx`      | The header button, the sidebar panel, Escape handling, the pending-approval badge                                                             |
+| `src/agent/agent-sidebar.tsx`     | The chat: agent picker, conversations, approvals, messages, composer, and the card that explains the passkey before a browser's first message |
+| `src/agent/confirmation-card.tsx` | The card that asks you to approve an action                                                                                                   |
+| `src/agent/views.ts`              | The `agentPanel` view the agent can read                                                                                                      |
+| `src/header-actions.tsx`          | Where the button is mounted                                                                                                                   |
+
+It is built from the unstyled primitives in `@parlor/client/react` (`Chat.Root`, `Chat.Thread`, `Chat.Composer`, `Chat.Confirmations` and friends) and styled with Tailwind. Change the markup, the classes or the copy freely; `parlor add agent` puts it back on a project that removed it.
+
+## Views: what the agent can see
+
+A view describes a piece of UI to the agent. Define it with a schema:
+
+```ts
+import { defineAgentView } from "@parlor/client";
+import * as z from "zod/mini";
+
+export const notePanel = defineAgentView({
+  name: "notePanel",
+  description: "The note being edited. Read-only.",
+  schema: z.object({ title: z.string(), words: z.number() }),
+});
+```
+
+Then bind it where the UI renders, with `useAgentView(view, { get })`, and attach the returned `ref` to the element. While the element is on screen, the agent reads its current value. List the views a route shows in its `staticData.views`.
+
+Two options make a view more than something to read. `keyed: true` is for a list's rows: bind each row with `key` set to the id your actions take, and "delete this one" resolves to that id. `writable: true` with a `set` in the binding lets the agent fill a form for the user, who submits it. The template's todo page does both, with a `todo` view per row and a `newTodo` view on the New todo field; start from it.
+
+# Agents
+
+Every action is also an MCP tool. The server speaks MCP over streamable HTTP at `/_parlor/mcp`, next to the actions, so any MCP client can use the app the way the UI does.
+
+## Connect Claude Code
+
+With `pnpm dev` running:
+
+```sh
+claude mcp add --transport http my-app http://localhost:5173/_parlor/mcp
+```
+
+Then ask Claude Code to "list my todos" or "add a todo called Ship it". Each tool is an action: its name, its `description` and its input schema come from `defineAction`.
+
+Without sign-in, MCP calls run in the scope `"default"`, the same rows the UI shows. After `parlor add auth`, the server is an OAuth authorization server: an MCP client discovers it through `/.well-known/oauth-protected-resource`, opens the app's sign-in page, and every call then runs as that user, in that user's scope. Claude Code runs this flow itself (`claude mcp login my-app`).
+
+## Several apps in one agent
+
+A user may connect one agent to many Parlor apps, and to the same app twice, in production and on `localhost`. Each server introduces itself: its MCP server name and title are the app's `app.name`, and its instructions begin with which app the tools belong to, at which origin, with `app.description` when the config has one:
+
+> These tools belong to Course Admin at https://courses.example.com. Courses, lessons and their copy. They act only on Course Admin, as the signed-in user; any other app's tools are a separate server.
+
+The origin is `PARLOR_ORIGIN` in production, the web origin under `parlor dev`. Give the connection a clear name too (`claude mcp add --transport http course-admin …`), so "put this copy into Course Admin's React course" leaves the agent no doubt.
+
+## What agents can and cannot do
+
+- An agent calls exactly the actions the app defines, with the same validation as the UI.
+- An action marked `confirm: true` waits until a person approves the call in the app.
+- `ctx.source` is `"mcp"` for an external agent and `"agent"` for the sidebar's agent, so an action can tell who is calling.
+
+## Plain HTTP
+
+The same actions answer `POST /_parlor/actions/<name>` with a JSON body:
+
+```sh
+curl -X POST http://localhost:5173/_parlor/actions/listTodos \
+  -H 'content-type: application/json' -d '{}'
+```
+
+The response is `{ "data": ..., "tags": [...] }`, or `{ "error": { "code", "message" } }` with a matching HTTP status.
+
+# Auth
+
+```sh
+pnpm parlor add auth
+```
+
+`parlor add auth` turns the default app into a multi-user app with email and password sign-in, built on [Better Auth](https://www.better-auth.com). It refuses to run on uncommitted changes, so its edits show up as one reviewable diff; pass `--no-git-check` to skip that.
+
+## What it changes
+
+| File                                   | Change                                                                                         |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `auth.ts`                              | New: `createAuth(database)`, the Better Auth instance behind `parlorAuth()`                    |
+| `schema/auth.ts`                       | New: `export * from "@parlor/auth/schema"`, the user, session, account and verification tables |
+| `src/auth/*`, `src/routes/sign-in.tsx` | New: the browser client, the sign-in gate, the sign-out button, the sign-in page               |
+| `server.ts`                            | `auth: createAuth(database)` passed to `createServer`                                          |
+| `src/main.tsx`                         | The action client sends the session; `FrameworkProvider` gets `auth`                           |
+| `src/routes/__root.tsx`                | The layout is wrapped in `withSignIn`                                                          |
+| `migrations/0001_auth.sql`             | The auth tables                                                                                |
+| `.env.example`                         | `PARLOR_ORIGIN` and `BETTER_AUTH_SECRET`                                                       |
+
+It installs `@parlor/auth` at the framework's version and `better-auth` at the version `@parlor/auth` pins. If anything fails, it restores `package.json` and the lockfile and changes no file. A second run prints `auth is already added. Nothing changed.`
+
+When it cannot edit a file safely, for example a `server.ts` that builds its options elsewhere, it changes nothing and prints the exact code to add by hand. Make that change and run the command again.
+
+## After sign-in
+
+- Each user has their own scope, so every action that filters by `ctx.scope` shows each user only their rows. Rows created before sign-in belong to the scope `"default"`, which no signed-in user sees.
+- The sidebar connects each user's own computer: it shows `npx @parlor/agent-host connect <app url>`, which pairs that computer with the signed-in account after one approval in the browser, and trusts that browser. Every other browser or phone links once: it shows a QR code and a short code. A linked phone scans the QR with its camera, which opens the app's `/link` page, or a linked device types the code under **Link a device**; either way it confirms with Face ID or Touch ID. The computer can also accept it with `npx @parlor/agent-host link`. Whenever another device links one, the linked devices show it with a **Remove** button and the computer posts a notification. **Devices** in the sidebar lists the account's devices; removing one takes Face ID or Touch ID on a linked device, and on the computer `npx @parlor/agent-host devices <app url>` lists them and `--remove <id>` unlinks one. The code is a hash of the new device's keys, so neither a stolen password nor the app's own server can link a device, and the computer never asks on its own.
+- A linked device with Face ID or Touch ID confirms it is still the user's every 18 hours: once that long has passed since its last check, the composer says "Sending will ask for Face ID or Touch ID", and the next message asks for it. A phone left unlocked on a desk stops working for a thief by the next day. The computer enforces it, whatever the app says, and sets the interval with `npx @parlor/agent-host config --prompt-presence <hours>`, or turns it off with `--prompt-presence off`. A browser on the computer itself, which has no passkey, is never asked.
+- The computer that runs the agents must be a Mac for now: `npx @parlor/agent-host connect` refuses on Windows and Linux before it pairs, because Parlor Host keeps its keys in the macOS Keychain. `parlor dev` works on every platform, and the app itself, with its sidebar, runs in any browser and on iPhone.
+- MCP clients sign in through OAuth. See [Agents](/parlor/guides/agents/).
+
+## Production
+
+Set two environment variables on the server:
+
+- `PARLOR_ORIGIN`: the public origin the app is served from, such as `https://todos.example.com`.
+- `BETTER_AUTH_SECRET`: a random secret that signs sessions. Generate one with `openssl rand -base64 32`.
+
+## Sign-in in one step
+
+`pnpm create parlor my-app --add auth` creates the app with sign-in already added.
+
+# Data
+
+Parlor apps keep data in PostgreSQL through Drizzle ORM. In development nothing needs installing: `createDatabase()` runs PGlite, an embedded PostgreSQL, in `.parlor/pglite`. In production set `DATABASE_URL` and the same code talks to a real PostgreSQL server.
+
+## Tables
+
+Tables live in `schema/`:
+
+```ts
+import { boolean, index, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+
+export const todos = pgTable(
+  "todos",
+  {
+    id: text("id").primaryKey(),
+    scope: text("scope").notNull().default("default"),
+    title: text("title").notNull(),
+    done: boolean("done").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("todos_scope_created_at_idx").on(table.scope, table.createdAt)],
+);
+```
+
+Every table has a `scope` column, and every action filters by `ctx.scope`. See [Actions](/parlor/guides/actions/#scope-every-row).
+
+## Migrations
+
+After changing `schema/`, generate a migration and commit it:
+
+```sh
+pnpm db:generate
+```
+
+That runs `parlor db generate`, which writes SQL into `migrations/`. `parlor db generate --name add-notes` names the file instead of using a random suffix.
+
+`createDatabase({ migrationsFolder: "migrations" })` applies pending migrations when the server starts, so `pnpm dev` and a deployed server are always up to date. `pnpm db:migrate` (`parlor db migrate`) applies them without starting the server.
+
+## The database handle
+
+```ts
+import { createDatabase } from "@parlor/data";
+
+const database = await createDatabase({ migrationsFolder: "migrations" });
+// database.db is the Drizzle instance; pass the handle to createServer.
+```
+
+| Option             | Default                    | Meaning                                                             |
+| ------------------ | -------------------------- | ------------------------------------------------------------------- |
+| `url`              | `process.env.DATABASE_URL` | A PostgreSQL connection string. When set, PGlite is not used.       |
+| `dataDir`          | `.parlor/pglite`           | Where PGlite keeps its files. `memory://` keeps nothing, for tests. |
+| `migrationsFolder` | none                       | Apply the migrations in this folder on start.                       |
+
+In an action, `ctx.db` is that Drizzle instance, typed once `@parlor/data` is imported anywhere in the project.
+
+## Tests
+
+The template's `actions/todos.spec.ts` runs the real server on an in-memory database:
+
+```ts
+import { createActionClient } from "@parlor/client";
+import type { ActionsOf } from "@parlor/core/registry";
+import { createRegistry } from "@parlor/core/registry";
+import { createDatabase } from "@parlor/data";
+import { createServer } from "@parlor/server";
+
+const registry = createRegistry({});
+const database = await createDatabase({ dataDir: "memory://" });
+const server = createServer({ actions: registry, database });
+export const app = createActionClient<ActionsOf<typeof registry>>({
+  baseUrl: "http://app.test",
+  fetch: (input, init) => server.fetch(new Request(input, init)),
+});
+```
+
+# Deploy
+
+```sh
+pnpm build
+```
+
+`parlor build` writes the web app and a server that serves it, the actions and MCP, in one output. It runs on [Nitro](https://nitro.build). Deploy it as one long-lived server, `node-server` or `bun`; serverless platforms are [not supported yet](#serverless-is-not-supported-yet).
+
+## Presets
+
+| Preset                                                                | Where                                                    |
+| --------------------------------------------------------------------- | -------------------------------------------------------- |
+| `node-server`                                                         | any machine with Node.js; the default                    |
+| `bun`                                                                 | a Bun server                                             |
+| `vercel`, `netlify`, `cloudflare-module`, `aws-lambda`, `deno-deploy` | not supported yet; `parlor build` warns when you use one |
+
+Pick one with `parlor build --preset vercel`, or `deploy.preset` in `parlor.config.ts`. On Vercel, Netlify and Cloudflare Pages the preset is detected from the build environment. `parlor deploy` builds and runs the platform's deploy.
+
+For `node-server`, `parlor build` prints where it wrote the server; start it with `node <that folder>/server/index.mjs`.
+
+## Serverless is not supported yet
+
+Parlor's agent features need a server that holds a connection to each open page. Serverless functions cannot, so on those presets the parts that make the app agent-operable stop working:
+
+| Feature                                            | One `node-server` or `bun` | Serverless                     |
+| -------------------------------------------------- | -------------------------- | ------------------------------ |
+| Pages, actions, data, MCP tools for actions        | works                      | works                          |
+| Pages refreshing when data changes                 | instantly, over a stream   | by polling every few seconds   |
+| Agents reading and using the screen (`ui_*` tools) | works                      | always "the app is not open"   |
+| `confirm: true` actions called by an agent         | ask the user in the app    | always fail, without running   |
+| The agent sidebar's replies                        | stream as they are written | appear whole, up to ~17 s late |
+
+Run one instance. Several `node-server` instances behind a load balancer share data and live updates, but the screen tools, approvals and reply streaming only reach pages connected to the same instance.
+
+## Environment
+
+| Variable             | When                                                 |
+| -------------------- | ---------------------------------------------------- |
+| `DATABASE_URL`       | always in production: a PostgreSQL connection string |
+| `PARLOR_ORIGIN`      | with sign-in: the public origin                      |
+| `BETTER_AUTH_SECRET` | with sign-in: the session signing secret             |
+
+Migrations run when the server starts.
+
+## The agent sidebar in production
+
+The sidebar needs sign-in in production, because each user connects their own computer to their own account. Without `parlor add auth`, `parlor build` prints a warning and the sidebar shows that the agent is unavailable; the rest of the app works.
+
+# Migrating an existing app
+
+This guide moves an existing app (a REST or GraphQL backend with a web frontend) onto Parlor. It is written for the person doing the port and for the coding agent they hand it to. **Agents: follow the steps in order. If the app needs anything under [Not supported yet](#not-supported-yet), stop and ask the person before writing a workaround.**
+
+Every example comes from a real port: a course back office whose old system had bcrypt passwords, an admin role and a payment webhook.
+
+## 1. Take stock
+
+Write down what the old app does before changing anything, and map each item:
+
+| In the old app                                     | In Parlor                                                                                              |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| REST or GraphQL endpoints, controllers, services   | actions in `actions/`, one per thing a user or agent can do ([step 5](#5-move-the-logic-into-actions)) |
+| Database tables                                    | Drizzle tables in `schema/`, each with a `scope` column ([step 4](#4-describe-the-tables))             |
+| Users, passwords, sessions                         | `--add auth` (Better Auth, email and password) ([step 6](#6-bring-the-users))                          |
+| Roles, admin flags, permissions                    | a table and a check at the top of each action ([step 5](#roles))                                       |
+| Pages and client routing                           | files in `src/routes/` ([step 8](#8-rebuild-the-pages))                                                |
+| `fetch`, axios or React Query calls to the backend | `useActionQuery` and `useActionMutation`                                                               |
+| WebSockets or polling to keep pages fresh          | nothing to port: `reads` and `writes` refresh pages                                                    |
+| Webhooks and callbacks from other services         | a server plugin route ([step 9](#9-webhooks-and-scheduled-work))                                       |
+| Cron jobs                                          | a server plugin timer ([step 9](#9-webhooks-and-scheduled-work))                                       |
+| API keys and secrets                               | environment variables, read on the server only ([step 10](#10-configuration-and-secrets))              |
+
+## Not supported yet
+
+Parlor cannot do these yet. If the old app depends on one, decide with the person before porting it, and do not build a substitute inside the app:
+
+- **Storing uploaded files on the server**, such as images or attachments. The `files` capability lets a page pick and save files on the device; there is no server storage.
+- **Server-side rendering for public pages that need SEO.** A Parlor app is a single-page app.
+- **Serverless hosting.** Deploy one `node-server` or `bun` server; see [Deploy](/parlor/guides/deploy/).
+- **Background work spread over several server instances.** A plugin's timer runs in every process.
+- **Sign-in other than email and password.** Better Auth has other methods, set in `auth.ts`, but Parlor has not verified them.
+
+## 2. Create the project
+
+```sh
+pnpm create parlor my-app --add auth
+cd my-app
+pnpm add -D tsx
+```
+
+Leave the old app running, so you can compare behavior. `tsx` runs the one-off import scripts in [step 7](#7-import-the-data).
+
+## 3. Decide the scope
+
+Every table has a `scope` column, and every action reads and writes only rows of the caller's scope. Pick what a scope is before writing tables:
+
+- **One per user** (the default after `--add auth`): each user sees only their own rows, as in a notes app.
+- **One shared organization**: every signed-in user works on the same data, as in a school's back office. Roles decide who may change what.
+- **One per organization**: users belong to an organization, and the scope is that organization's id.
+
+For one shared organization, resolve every request to the same scope in `server.ts`:
+
+```ts
+import { createDatabase } from "@parlor/data";
+import { createServer } from "@parlor/server";
+
+import { registry } from "./actions/index.js";
+
+const database = await createDatabase({ migrationsFolder: "migrations" });
+
+/** One school: every signed-in user works in the same data. */
+const SCHOOL = "school";
+
+export default createServer({
+  actions: registry,
+  database,
+  scope: () => SCHOOL,
+});
+```
+
+For one scope per organization, `scope` receives the request and the caller and may be async: look up the caller's organization with `userOf(principal)` from `@parlor/core`, and return its id. Each user's agent sidebar, chats and computers stay private to that user whatever the scope is.
+
+## 4. Describe the tables
+
+Port each table to Drizzle in `schema/`, add `scope`, and export it from `schema/index.ts`. Keep the old column names with `text("old_name")` if other systems read the database. Use text ids; imported rows keep their old id with a prefix.
+
+```ts
+import {
+  index,
+  integer,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+} from "drizzle-orm/pg-core";
+
+export const courses = pgTable(
+  "courses",
+  {
+    id: text("id").primaryKey(),
+    scope: text("scope").notNull(),
+    title: text("title").notNull(),
+    description: text("description").notNull().default(""),
+    priceCents: integer("price_cents").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("courses_scope_idx").on(table.scope)],
+);
+
+export const staff = pgTable(
+  "staff",
+  {
+    scope: text("scope").notNull(),
+    userId: text("user_id").notNull(),
+    role: text("role", { enum: ["admin", "teacher"] }).notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.scope, table.userId] })],
+);
+```
+
+Then run `pnpm db:generate` and commit the migration it writes.
+
+## 5. Move the logic into actions
+
+Turn each endpoint, or each thing a user does, into an action. The UI, external agents over MCP, the sidebar's agent and plain HTTP will all call it.
+
+- Filter every query by `ctx.scope`.
+- Declare `reads` and `writes` with the tables, so open pages refresh after a change, whoever made it.
+- Validate input with zod; a bad request then answers `invalid_input`.
+- Throw `ActionError` for the other failures the old API returned: `not_found` for 404, `forbidden` for 403, `unauthenticated` for 401.
+- Write `description` for an agent that has never seen the app: what the action does, and where its ids come from.
+- Mark destructive actions `confirm: true`, so an agent's call waits for the person to approve it.
+
+### Roles
+
+Keep roles in a table, and check them at the top of the actions that need them:
+
+```ts
+import { ActionError, type ActionContext, userOf } from "@parlor/core";
+import { and, eq } from "drizzle-orm";
+
+import { staff } from "../schema/index.js";
+
+/** Throws `forbidden` unless the caller is staff in this scope with one of `roles`. */
+export async function requireStaff(
+  ctx: ActionContext,
+  roles: readonly ("admin" | "teacher")[] = ["admin", "teacher"],
+) {
+  const userId = userOf(ctx.principal);
+  const [member] = userId
+    ? await ctx.db
+        .select()
+        .from(staff)
+        .where(and(eq(staff.scope, ctx.scope), eq(staff.userId, userId)))
+    : [];
+  if (!member || !roles.includes(member.role)) {
+    throw new ActionError("forbidden", "Only staff can do that.");
+  }
+  return member;
+}
+```
+
+```ts
+import { ActionError, defineAction } from "@parlor/core";
+import { and, eq } from "drizzle-orm";
+import { z } from "zod";
+
+import { courses } from "../schema/index.js";
+import { requireStaff } from "./access.js";
+
+export const updateCourse = defineAction({
+  description: "Change a course's title or description (its marketing copy). Staff only.",
+  input: z.object({
+    id: z.string().describe("The course id, from listCourses"),
+    title: z.string().trim().min(1).optional(),
+    description: z
+      .string()
+      .optional()
+      .describe("The course description shown to students"),
+  }),
+  writes: [courses],
+  run: async ({ id, ...change }, ctx) => {
+    await requireStaff(ctx);
+    const [course] = await ctx.db
+      .update(courses)
+      .set(change)
+      .where(and(eq(courses.id, id), eq(courses.scope, ctx.scope)))
+      .returning();
+    if (!course) throw new ActionError("not_found", `No course ${id}`);
+    return course;
+  },
+});
+```
+
+Register each action in `actions/index.ts`.
+
+## 6. Bring the users
+
+Imported users go into Better Auth's `user` table, and their passwords into its `account` table: `providerId` is `"credential"`, `accountId` is the user's id, and `password` is the old hash, unchanged ([step 7](#7-import-the-data) does this).
+
+New passwords use Better Auth's own hash. Teach `auth.ts` to also check the old format, here bcrypt (`pnpm add bcryptjs`):
+
+```typescript
+import { betterAuthProvider, parlorAuth } from "@parlor/auth";
+import type { DatabaseHandle } from "@parlor/data";
+import bcrypt from "bcryptjs";
+import { betterAuth } from "better-auth";
+import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { hashPassword, verifyPassword } from "better-auth/crypto";
+
+import * as schema from "./schema/index.js";
+
+export function createAuth(database: DatabaseHandle) {
+  const options = parlorAuth({
+    appName: process.env.PARLOR_APP_NAME ?? "Parlor App",
+    signInPage: "/sign-in",
+    emailAndPassword: {
+      enabled: true,
+      password: {
+        hash: hashPassword,
+        // Imported users keep their bcrypt hash until they change their password.
+        verify: ({ hash, password }) =>
+          hash.startsWith("$2")
+            ? bcrypt.compare(password, hash)
+            : verifyPassword({ hash, password }),
+      },
+    },
+  });
+  return betterAuthProvider({
+    instance: betterAuth({
+      ...options,
+      database: drizzleAdapter(database.db, { provider: "pg", schema }),
+    }),
+  });
+}
+```
+
+Use the same pattern for another hash format with its library. If the old hashes cannot be verified at all, import the users without a password and have them reset it. Old sessions do not carry over, so every user signs in once.
+
+## 7. Import the data
+
+Write the import as a script, never as an action: actions are open to agents and to HTTP. Read the old app's export, write it with Drizzle, and make it safe to run twice:
+
+```ts
+// pnpm exec tsx scripts/import-legacy.ts legacy/export.json
+import { readFileSync } from "node:fs";
+
+import { createDatabase } from "@parlor/data";
+
+import { account, courses, staff, user } from "../schema/index.js";
+
+interface LegacyExport {
+  readonly users: readonly {
+    id: number;
+    name: string;
+    email: string;
+    password_hash: string;
+    role: "admin" | "teacher" | null;
+    created_at: string;
+  }[];
+  readonly courses: readonly {
+    id: number;
+    title: string;
+    body: string;
+    price: number;
+    created_at: string;
+  }[];
+}
+
+/** The scope server.ts resolves every request to. */
+const SCOPE = "school";
+
+const legacy = JSON.parse(readFileSync(process.argv[2]!, "utf8")) as LegacyExport;
+const database = await createDatabase({ migrationsFolder: "migrations" });
+
+await database.transaction(async (tx) => {
+  for (const old of legacy.users) {
+    const id = `legacy-user-${old.id}`;
+    const createdAt = new Date(old.created_at);
+    await tx
+      .insert(user)
+      .values({
+        id,
+        name: old.name,
+        email: old.email.toLowerCase(),
+        emailVerified: true,
+        createdAt,
+        updatedAt: createdAt,
+      })
+      .onConflictDoNothing();
+    await tx
+      .insert(account)
+      .values({
+        id: `legacy-account-${old.id}`,
+        userId: id,
+        accountId: id,
+        providerId: "credential",
+        password: old.password_hash,
+        createdAt,
+        updatedAt: createdAt,
+      })
+      .onConflictDoNothing();
+    if (old.role) {
+      await tx
+        .insert(staff)
+        .values({ scope: SCOPE, userId: id, role: old.role })
+        .onConflictDoNothing();
+    }
+  }
+  for (const old of legacy.courses) {
+    await tx
+      .insert(courses)
+      .values({
+        id: `course-${old.id}`,
+        scope: SCOPE,
+        title: old.title,
+        description: old.body,
+        priceCents: old.price,
+        createdAt: new Date(old.created_at),
+      })
+      .onConflictDoNothing();
+  }
+});
+
+console.log(
+  `Imported ${legacy.users.length} users and ${legacy.courses.length} courses.`,
+);
+await database.close();
+```
+
+`createDatabase` opens the same database the server uses: the local PGlite files in development, `DATABASE_URL` in production. PGlite allows one process at a time, so stop `pnpm dev` before running the script locally. For production, run it once with `DATABASE_URL` set to the production database.
+
+## 8. Rebuild the pages
+
+- One file per page in `src/routes/`, for example `src/routes/courses.$courseId.tsx` for `/courses/:courseId`.
+- Read with `useActionQuery("listCourses", {})`, and change data with `useActionMutation("updateCourse")`. Never call `fetch` for app data.
+- Give each page a `staticData.description`, so agents know what it is for.
+- Expose what the page shows as agent views: a `keyed` view per row (keyed by the id your actions take) and a `writable` view per form. Agents can then resolve "this course" and fill a form for the user to submit. The template's todo page shows both; see [The agent sidebar](/parlor/guides/agent-sidebar/).
+
+## 9. Webhooks and scheduled work
+
+Anything that is not a person or an agent calling the app, such as a payment provider's webhook or a nightly job, goes in a server plugin, installed in `server.ts` with `plugins: [...]`.
+
+A plugin route is served at `/_parlor/<plugin name><path>`. A `public` route has no session, so check the caller yourself, for example by verifying a signature. After writing, announce the tables you changed, so open pages refresh:
+
+```ts
+import { createHmac, timingSafeEqual } from "node:crypto";
+
+import type { DatabaseHandle } from "@parlor/data";
+import type { ServerPlugin } from "@parlor/server";
+
+import { enrollments } from "../schema/index.js";
+
+const signed = (body: string, signature: string, secret: string) => {
+  const expected = Buffer.from(createHmac("sha256", secret).update(body).digest("hex"));
+  const given = Buffer.from(signature);
+  return given.length === expected.length && timingSafeEqual(given, expected);
+};
+
+/** The payment provider's webhook, at POST /_parlor/payments/webhook. */
+export function payments(options: {
+  readonly database: DatabaseHandle;
+  readonly scope: string;
+  readonly secret: string | undefined;
+}): ServerPlugin {
+  const { database, scope, secret } = options;
+  return {
+    name: "payments",
+    setup: (host) => ({
+      routes: [
+        {
+          method: "POST",
+          path: "/webhook",
+          access: "public",
+          async handle(request) {
+            const body = await request.text();
+            const signature = request.headers.get("x-signature") ?? "";
+            if (!secret || !signed(body, signature, secret)) {
+              return new Response("Bad signature", { status: 401 });
+            }
+            const paid = JSON.parse(body) as {
+              courseId: string;
+              email: string;
+              paidAt: string;
+            };
+            await database.transaction(async (tx) => {
+              await tx.insert(enrollments).values({
+                id: crypto.randomUUID(),
+                scope,
+                courseId: paid.courseId,
+                email: paid.email,
+                paidAt: new Date(paid.paidAt),
+              });
+              await host.announce(scope, [["enrollments"]], tx);
+            });
+            return Response.json({ received: true });
+          },
+        },
+      ],
+    }),
+  };
+}
+```
+
+A scheduled job is a timer in a plugin's `setup`. Wait for `host.ready()` (the tables exist then), and stop the timer in `close`:
+
+```ts
+import type { DatabaseHandle } from "@parlor/data";
+import type { ServerPlugin } from "@parlor/server";
+import { lt } from "drizzle-orm";
+
+import { todos } from "../schema/index.js";
+
+/** Every hour, drop todos older than 90 days. */
+export function cleanup({
+  database,
+}: {
+  readonly database: DatabaseHandle;
+}): ServerPlugin {
+  return {
+    name: "cleanup",
+    setup(host) {
+      const run = async () => {
+        await host.ready?.();
+        const cutoff = new Date(Date.now() - 90 * 24 * 3_600_000);
+        await database.db.delete(todos).where(lt(todos.createdAt, cutoff));
+      };
+      const timer = setInterval(() => void run().catch(console.error), 3_600_000);
+      timer.unref();
+      return { close: () => clearInterval(timer) };
+    },
+  };
+}
+```
+
+The timer runs in every server process, which is right for the one instance Parlor supports.
+
+## 10. Configuration and secrets
+
+- Read secrets with `process.env` only in server code: actions, plugins, `auth.ts`, `server.ts`. Never read them in `src/`, which ships to the browser.
+- `parlor dev` does not read `.env` files. Set variables in the shell that starts it, for example `PAYMENTS_SECRET=whsec_test pnpm dev`.
+- In production, set them on the host, next to `DATABASE_URL`, `PARLOR_ORIGIN` and `BETTER_AUTH_SECRET` ([Deploy](/parlor/guides/deploy/)).
+
+## 11. Check the port
+
+- `pnpm typecheck` and `pnpm test` pass. Test each action as `actions/todos.spec.ts` does.
+- An imported user signs in with their old password, and a wrong password is refused.
+- Each role can do exactly what it could before. In the course example, a student is refused `updateCourse` and a teacher is refused `listEnrollments`.
+- Every row of the inventory from [step 1](#1-take-stock) works in the app.
+- An agent connected over MCP ([Agents](/parlor/guides/agents/)) can do one task in each area, such as "put this copy into the React course".
+- `pnpm build` prints no warning.
+
+# Pages and hooks
+
+The web app is one React app with TanStack Router file routes. Every file in `src/routes/` is a page; `src/routes/__root.tsx` is the shell around them. `parlor dev`, `parlor build` and `parlor typegen` regenerate `src/routeTree.gen.ts` from that folder, so routes stay typed. Commit the generated file.
+
+## Type the actions once
+
+`src/parlor.d.ts` tells the client which actions exist, so hook names and inputs are checked:
+
+```ts
+import type { ActionsOf } from "@parlor/core/registry";
+
+import type { registry } from "../actions/index.js";
+
+declare module "@parlor/client" {
+  interface Register {
+    actions: ActionsOf<typeof registry>;
+  }
+}
+```
+
+## Read with useActionQuery
+
+```tsx
+import { useActionMutation, useActionQuery } from "@parlor/client/react";
+
+export function Notes() {
+  const notes = useActionQuery("listNotes", {});
+  const add = useActionMutation("addNote");
+  return (
+    <section>
+      <ul>
+        {notes.data?.map((note) => (
+          <li key={note.id}>{note.body}</li>
+        ))}
+      </ul>
+      <button type="button" onClick={() => add.mutate({ body: "New note" })}>
+        Add
+      </button>
+    </section>
+  );
+}
+```
+
+`useActionQuery(name, input, options?)` is a TanStack Query `useQuery` whose data is the action's return value. `useActionMutation(name, options?)` is a `useMutation`. Both accept the usual TanStack Query options.
+
+You never refetch by hand. When any caller runs an action that `writes` what a query `reads`, the query refetches, in this tab and in every other one.
+
+## The provider
+
+`src/main.tsx` creates the action client and wraps the router in `FrameworkProvider`:
+
+```tsx
+import { createActionClient } from "@parlor/client";
+import { FrameworkProvider } from "@parlor/client/react";
+import { createRouter, RouterProvider } from "@tanstack/react-router";
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+
+import { routeTree } from "./routeTree.gen.js";
+
+const client = createActionClient();
+const router = createRouter({ routeTree });
+
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <FrameworkProvider client={client} router={router}>
+      <RouterProvider router={router} />
+    </FrameworkProvider>
+  </StrictMode>,
+);
+```
+
+Never call `fetch` for app data: the action client carries the session, the caller's identity and the sync that keeps pages fresh.
+
+## Tell agents what a page is
+
+Each route can describe itself for the agent:
+
+```tsx
+import { createFileRoute } from "@tanstack/react-router";
+
+export const Route = createFileRoute("/")({
+  staticData: { description: "The note list: add a note or delete one." },
+  component: () => null,
+});
+```
+
+The sidebar's agent receives the current page's description, so "delete the second one" has a referent. Agents also get every page's path, description, `$params` and the search params its `validateSearch` schema takes, so they can open any page with `ui_navigate`. See [The agent sidebar](/parlor/guides/agent-sidebar/).
+
+# Styling
+
+New apps use Tailwind CSS v4. `src/app.css` imports it, and `parlor.config.ts` adds its Vite plugin:
+
+```ts
+import { defineConfig } from "@parlor/config";
+import tailwindcss from "@tailwindcss/vite";
+
+export default defineConfig({
+  app: { id: "com.example.myapp", name: "My App" },
+  vite: { plugins: [tailwindcss()] },
+});
+```
+
+## The vite field
+
+There is no `vite.config.ts` in a Parlor app: the CLI owns the Vite config for the web, desktop and mobile builds. The `vite` field of `parlor.config.ts` is merged into it, so any Vite plugin or option works the same on every target.
+
+- Your plugins run after Parlor's.
+- Objects merge, and Parlor's own values win: `root`, `base`, `configFile`, `build.outDir`, `build.emptyOutDir`, `server.port` and `server.strictPort` are ignored with a warning. Set the port with `web.port` instead.
+- A `vite.config.ts` in the project is never read; `parlor dev` warns when it finds one.
+
+## Without Tailwind
+
+Remove `@tailwindcss/vite` from the `vite` field and `@import "tailwindcss"` from `src/app.css`, then use any CSS you like: plain CSS files, CSS modules, or another Vite plugin. The framework's chat primitives in `@parlor/client/react` ship no styles.
+
+# Targets
+
+One app runs on every target. The web build is the base; the native targets wrap the same React app in a native shell.
+
+```sh
+pnpm parlor dev --target mac      # also windows, linux
+pnpm parlor dev --target ios      # also android
+```
+
+| Target                    | Shell                             | Needs                                           |
+| ------------------------- | --------------------------------- | ----------------------------------------------- |
+| `web`                     | the browser, installable as a PWA | nothing                                         |
+| `mac`, `windows`, `linux` | Tauri                             | Rust (`rustup`), and the platform's build tools |
+| `ios`                     | Capacitor                         | macOS with Xcode                                |
+| `android`                 | Capacitor                         | the Android SDK                                 |
+
+`--device <name>` picks a simulator or device for iOS and Android. A desktop target can only be built on its own operating system.
+
+To try several targets at once, name them together:
+
+```sh
+pnpm parlor dev --target web,mac
+```
+
+They share one server and one database, and the native ones act as the web app's origin, so connecting your computer once serves all of them, as in production. Each project runs one `parlor dev` at a time: a second one stops and names the one already running, because both would open the same database.
+
+Generated native projects live in `.parlor/`. Never edit them; they are rewritten on every run.
+
+## What changes per platform
+
+Nothing in your app code. Platform features such as notifications, deep links or a secure session store are capabilities with one interface and an adapter per platform. Ask for one with `useCapability`, and check `available` instead of checking the platform. See the [capabilities reference](/parlor/reference/capabilities/).
+
+## Desktop settings
+
+`parlor.config.ts` has a `desktop` section: `width` and `height` of the window, and `agentHost: true` to bundle Parlor Host in the app so the agent sidebar can reach the agents on the user's computer.
+
+## Building
+
+```sh
+pnpm parlor build --target mac
+```
+
+writes the app bundle; `--target ios` and `--target android` sync the native project, which you open in Xcode or Android Studio to sign and ship.
+
+# Parlor
+
+import { Card, CardGrid } from "@astrojs/starlight/components";
+
+<CardGrid>
+  <Card title="Actions are the API" icon="puzzle">
+    Write business logic once with `defineAction`. The same definition is a React hook, an
+    HTTP endpoint and an MCP tool.
+  </Card>
+  <Card title="An agent in the sidebar" icon="comment">
+    New apps ship a sidebar that drives the coding agent on your computer, Claude Code or
+    Codex, with no setup.
+  </Card>
+  <Card title="One source, many apps" icon="laptop">
+    `parlor dev --target mac` opens the same app as a desktop window. iOS and Android use
+    the same code.
+  </Card>
+  <Card title="Grows with commands" icon="add-document">
+    `parlor add auth` adds sign-in by editing your files, and tells you exactly what to
+    change by hand when it cannot.
+  </Card>
+</CardGrid>
+
+# @parlor/auth
+
+```sh
+pnpm parlor add auth
+```
+
+`parlor add auth` installs and wires this package; see [Auth](/parlor/guides/auth/). These are the entries it uses.
+
+## @parlor/auth
+
+```ts
+import { parlorAuth } from "@parlor/auth";
+```
+
+Better Auth options with what Parlor needs added: the base path under `/_parlor/auth`, the shell origins, OAuth for MCP clients, and host pairing for the sidebar.
+
+```ts
+import { betterAuthProvider } from "@parlor/auth";
+```
+
+Turns a Better Auth instance into the provider `createServer({ auth })` takes.
+
+## @parlor/auth/client
+
+```ts
+import { createAuthClient } from "@parlor/auth/client";
+```
+
+The browser client: `signIn`, `signUp`, `signOut`, `headers` for the action client, and the session `FrameworkProvider` reads. Errors are `AuthClientError`.
+
+## @parlor/auth/schema
+
+The Better Auth tables for `parlorAuth()`'s defaults, so an app's `schema/auth.ts` is `export * from "@parlor/auth/schema";`. Apps that change Better Auth's options generate their own with the Better Auth CLI instead.
+
+# @parlor/capabilities
+
+```sh
+pnpm add @parlor/capabilities
+```
+
+A capability is what a browser cannot always do: notifications, files, deep links, a secure session store, a device key. Each has one interface and an adapter per platform, picked at build time, so app code never checks the platform.
+
+```ts
+import { notifications, resolveCapability } from "@parlor/capabilities";
+
+const handle = await resolveCapability(notifications);
+if (handle.available) {
+  await handle.api.request();
+  await handle.api.show("Saved", { body: "Your note is saved." });
+}
+```
+
+```ts
+import { resolveCapability } from "@parlor/capabilities";
+```
+
+`available: false` carries a `reason`; render a fallback instead of an error. In React, `useCapability(notifications)` from `@parlor/client/react` does the same.
+
+| Capability      | What                                                                         |
+| --------------- | ---------------------------------------------------------------------------- |
+| `notifications` | permission, request, show                                                    |
+| `files`         | let the user pick files, and save a file where they choose                   |
+| `deepLink`      | receive the links that open the app through `app.scheme`                     |
+| `sessionStore`  | keep the session token: a cookie on the web, a secure store in native shells |
+| `deviceKey`     | a signing key bound to this device                                           |
+
+## Files
+
+```ts
+import { files, resolveCapability } from "@parlor/capabilities";
+
+const handle = await resolveCapability(files);
+if (handle.available) {
+  const [picked] = await handle.api.pick({ accept: ["image/*", ".pdf"] });
+  if (picked) console.log(picked.name, picked.type, picked.size, await picked.bytes());
+  await handle.api.save("a,b\n1,2\n", { name: "export.csv", type: "text/csv" });
+}
+```
+
+`pick` resolves with the chosen files, or an empty list when the user cancels; each has `name`, `type` (`""` when unknown), `size`, `bytes()` and `text()`. `save` resolves `"saved"` or `"cancelled"`.
+
+| Where  | `pick`                                       | `save`                                                     |
+| ------ | -------------------------------------------- | ---------------------------------------------------------- |
+| Web    | the browser's file chooser                   | the save dialog where the browser has one, else a download |
+| macOS  | the native open dialog, filtered by `accept` | the native save dialog                                     |
+| iPhone | the system picker: photos, camera, Files     | the share sheet, with Save to Files                        |
+
+`defineCapability` defines a new one from its adapters.
+
+# @parlor/chat
+
+```sh
+pnpm add @parlor/chat
+```
+
+```ts
+import { chat } from "@parlor/chat/server";
+```
+
+Install it as a plugin: `createServer({ actions, database, plugins: [chat()] })`. It adds the chat's tables, actions and routes: threads, prompts, the agents' replies and their approvals, and the channel that streams them to the page.
+
+Chat needs an auth provider that can mint turn tokens. In development `parlor dev` installs one. In production, add sign-in with `parlor add auth`; without it the server still starts, chat serves nothing, and the client reports `useChat().status` as `"unavailable"`.
+
+The client side is in [`@parlor/client/react`](/parlor/reference/client-react/). `@parlor/chat` holds the shared types (`AgentRef`, `ThreadSummary`, `ChatItemBody`) and `@parlor/chat/testing` a fake host for tests.
+
+# @parlor/cli
+
+```sh
+pnpm add -D @parlor/cli
+```
+
+Run the commands through the package manager: `pnpm parlor <command>`, `npx parlor <command>`.
+
+| Command                                                                   | What it does                                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `parlor dev [--target <t>] [--port <p>] [--device <d>] [--no-agent-host]` | runs the server, the web app and, without sign-in, the agent host; `--target` is `web`, `mac`, `windows`, `linux`, `ios` or `android`, or several joined by commas (`web,mac`) sharing one server; a busy server or web port moves to the next free one; one `parlor dev` per project at a time |
+| `parlor build [--target <t>] [--preset <p>]`                              | builds for a target; the web target builds the server for a deploy preset, and warns that serverless presets are not supported yet; see [Deploy](/parlor/guides/deploy/)                                                                                                                        |
+| `parlor deploy [--preset <p>]`                                            | builds and deploys the server to its platform                                                                                                                                                                                                                                                   |
+| `parlor db generate [--name <n>]`                                         | writes a SQL migration from `schema/`                                                                                                                                                                                                                                                           |
+| `parlor db migrate`                                                       | applies pending migrations                                                                                                                                                                                                                                                                      |
+| `parlor add <addon...> [--dry-run] [--no-install] [--no-git-check]`       | adds `auth` or `agent` by editing the project's files; see [Auth](/parlor/guides/auth/)                                                                                                                                                                                                         |
+| `parlor typegen`                                                          | writes `src/routeTree.gen.ts` without starting Vite                                                                                                                                                                                                                                             |
+
+## parlor add
+
+- It refuses a project with uncommitted changes so its edits are one diff; `--no-git-check` skips that.
+- `--dry-run` prints the files it would create and change.
+- `--no-install` writes the files and prints the install command plus a second `parlor add` that finishes the generated files.
+- When it cannot edit a file safely it changes nothing, exits 1, and prints the code to add by hand.
+
+## Generated files
+
+Everything under `.parlor/` is generated: the database in development, the native projects, the build output. Never edit it; add it to `.gitignore`.
+
+# @parlor/client
+
+```sh
+pnpm add @parlor/client @tanstack/react-query @tanstack/react-router
+```
+
+```ts
+import { createActionClient } from "@parlor/client";
+```
+
+The browser's only way to reach the server. Without options it calls the page's own origin, or `server.url` in a native shell. `headers` adds headers to every call (the auth client's session); `baseUrl` and `fetch` point it elsewhere, for example at `server.fetch` in tests.
+
+`client.call(name, input)` returns an action's data; `client.invoke(name, input)` returns `{ data, tags }`.
+
+## Register
+
+Augment `Register` once so names and inputs are typed everywhere:
+
+```ts
+import type { ActionsOf } from "@parlor/core/registry";
+
+import type { registry } from "./actions.js";
+
+declare module "@parlor/client" {
+  interface Register {
+    actions: ActionsOf<typeof registry>;
+  }
+}
+```
+
+## Agent views
+
+```ts
+import { defineAgentView } from "@parlor/client";
+```
+
+Describes a piece of UI the agent can read; bind it with `useAgentView` from [`@parlor/client/react`](/parlor/reference/client-react/).
+
+Also exported: `appOrigin`, `generateClientId`, `createPluginClient` (a typed client for a plugin's actions), and the session interfaces an auth client implements (`SessionSource`, `SessionSnapshot`, `FrameworkAuth`).
+
+# @parlor/client/react
+
+```ts
+import { useActionQuery } from "@parlor/client/react";
+```
+
+```ts
+import { useActionMutation } from "@parlor/client/react";
+```
+
+TanStack Query's `useQuery` and `useMutation` over actions. Queries refetch when any caller runs an action that writes what they read. See [Pages and hooks](/parlor/guides/pages-and-hooks/).
+
+```ts
+import { FrameworkProvider } from "@parlor/client/react";
+```
+
+Wraps the app: `client` (the action client), `router` (the TanStack router) and, with sign-in, `auth` (the auth client from `@parlor/auth/client`).
+
+## Sessions and capabilities
+
+- `useSession()`: `{ status: "loading" | "signed-in" | "signed-out" | "anonymous", user? }`.
+- `useCapability(definition)`: resolves a capability from `@parlor/capabilities` on the current platform; `{ available: true, api }` or `{ available: false, reason }`.
+- `useActionClient()`: the client from the provider.
+
+## Agents
+
+- `useAgentView(view, { get })`: exposes a view to the agent while its element is on screen; attach the returned `ref`.
+- `useAgentConfirmations()`: the agent calls waiting for the user's approval.
+- `useAgentActivity()`: what the agent is doing in the app right now.
+- `useChat()`: the sidebar's state and commands; `status` is `"unavailable"` when the server has no chat.
+- `useChat().link` and `startLink()`: whether this device may send (`linked`, `checking`, or `unlinked`). Send stays disabled until it is linked. Once `startLink` made a code, `unlinked` carries the `code`, the `qr` URL a linked phone's camera opens (`<app>/link#d=<device>&c=<commitment>`; the fragment never reaches a server, so render it with any QR library), and the `command` that links it on the computer instead. When the code runs out it is dropped and `expired` is true until the next `startLink`. `onlyComputer` is true while no other device is linked, so only `command` can link this one.
+- `useChat().hasOlder` and `loadOlder()`: the thread has items before the first one shown, and reads the next earlier page; `moreThreads` and `loadMoreThreads()` do the same for the conversation list past its first 200. `loadingOlder` is set while either reads.
+- `useChat().presenceDue`: the chosen agent's computer wants this device to confirm it is the user again (every 18 hours by default), so the next send asks for Face ID or Touch ID first; `Chat.Status` says so. A cancelled check leaves the draft and sets `error`.
+- `useLinkDevice()`: for **Link a device** on a linked device: `check(code)` finds the device and checks its keys against the code (or `check({ deviceId, commitment })`, from a scanned QR, against the whole commitment), `confirm()` vouches for it with Face ID or Touch ID; a device without a passkey gets the `parlor-host link` command instead.
+- `useDevices()`: the account's `devices` (read again whenever one is added, linked or removed), the ones another device `linked` while the page was open for a notice (`dismiss(id)` hides one), and `remove(id)`, which confirms with Face ID or Touch ID and answers whether it removed the device. `removal` says what removing is doing; a device without a passkey gets the `parlor-host devices --remove` command instead.
+- `useDeviceSetup()`: deprecated; the link card replaces it. For a card that explains setting up a browser. While it is mounted, the first prompt on a browser that would create a passkey waits in `setup` until the user calls `setUpDevice({ passkey })` or `dismissSetup()`. Without it, the first prompt opens the browser's passkey prompt directly.
+
+## Chat primitives
+
+Unstyled components the template's sidebar is built from, under the `Chat` namespace: `Chat.Root`, `Chat.Thread`, `Chat.LoadOlder`, `Chat.Confirmations`, `Chat.Composer`, `Chat.Input`, `Chat.Send`, `Chat.Stop`, `Chat.Status`, `Chat.Ask`, `Chat.AskForm` and `Chat.AskChoice`. A thread first shows its last 200 items; `Chat.Thread`'s `older` row, such as `<Chat.LoadOlder />`, appears while earlier ones remain, and reading them keeps the user's place. See [The agent sidebar](/parlor/guides/agent-sidebar/).
+
+# @parlor/config
+
+```sh
+pnpm add -D @parlor/config
+```
+
+```ts
+import { defineConfig } from "@parlor/config";
+```
+
+`parlor.config.ts` default-exports `defineConfig({...})`. Every field but `app.id` and `app.name` has a default.
+
+| Field                                                  | Default                      | Meaning                                                                      |
+| ------------------------------------------------------ | ---------------------------- | ---------------------------------------------------------------------------- |
+| `app.id`                                               | required                     | reverse DNS, such as `com.example.todos`; the bundle id of native builds     |
+| `app.name`                                             | required                     | the window and tab title                                                     |
+| `app.description`, `app.version`, `app.scheme`         | none, `0.1.0`, none          | metadata; `scheme` is the deep-link URL scheme                               |
+| `server.entry`                                         | `server.ts`                  | the module that default-exports `createServer(...)`                          |
+| `server.port`                                          | `3000`                       | the server's port in development, or the next free one                       |
+| `server.url`                                           | none                         | the public server origin native shells call                                  |
+| `server.sync.transport`                                | by preset                    | `sse` or `poll`                                                              |
+| `web.port`                                             | `5173`                       | the web app's port in development, or the next free one                      |
+| `web.pwa`, `web.themeColor`, `web.backgroundColor`     | `true`, `#ffffff`, `#ffffff` | the installable web app                                                      |
+| `web.routeTree`, `web.csp`                             | `src/routeTree.gen.ts`, none | the generated route tree; extra CSP sources                                  |
+| `desktop.width`, `desktop.height`, `desktop.agentHost` | `1024`, `768`, none          | the desktop window; bundle Parlor Host                                       |
+| `database.schema`, `database.migrations`               | `schema`, `migrations`       | where tables and migrations live                                             |
+| `deploy.preset`                                        | detected                     | the build preset; see [Deploy](/parlor/guides/deploy/)                       |
+| `vite`                                                 | none                         | Vite options merged into every build; see [Styling](/parlor/guides/styling/) |
+
+## @parlor/config/tsconfig
+
+The strict compiler options every Parlor app uses. A project's `tsconfig.json` extends it:
+
+```json
+{
+  "extends": "@parlor/config/tsconfig",
+  "compilerOptions": { "noEmit": true, "types": ["node", "vite/client"] },
+  "include": ["*.ts", "actions", "schema", "src"]
+}
+```
+
+`loadParlorConfig`, `parseConfig`, `parlorConfigSchema` and `ConfigError` are what the CLI uses to read the file.
+
+# @parlor/core
+
+```sh
+pnpm add @parlor/core zod
+```
+
+The shared vocabulary of a Parlor app, with no runtime dependencies beyond zod. Both the server and the client import it.
+
+## @parlor/core
+
+```ts
+import { defineAction } from "@parlor/core";
+```
+
+Defines an action. The config takes `description`, `input` (a zod schema), `run(input, ctx)`, and optionally `reads`, `writes`, `notifies`, `confirm` and `public`. `notifies: "user"` sends its writes only to the caller's own tabs and computers instead of everyone in the scope, for data that belongs to one user of a shared scope. See [Actions](/parlor/guides/actions/).
+
+```ts
+import { ActionError } from "@parlor/core";
+```
+
+The error an action throws to answer with a code: `not_found`, `invalid_input`, `unauthenticated`, `forbidden`, `internal`, or one of the confirmation codes the framework uses.
+
+`ActionContext` is the second argument of `run`: `scope`, `source` (`"ui" | "agent" | "mcp" | "http"`), `principal`, `db` and `signal`.
+
+Also exported: `asId` and the branded id types, `ANONYMOUS`, `isAuthenticated`, `userOf` and the principal types, `tableName`, `readTagsFor`, `writeTagsFor`, `tagsOverlap` (how reads and writes match), and `SHELL_ORIGINS` (the origins of the native shells).
+
+## @parlor/core/registry
+
+```ts
+import { createRegistry } from "@parlor/core/registry";
+```
+
+Collects actions under their names. `ActionsOf<typeof registry>` is the action map type the client registers in `src/parlor.d.ts`.
+
+# create-parlor
+
+```sh
+pnpm create parlor my-app
+npm create parlor@latest my-app
+yarn create parlor my-app
+bun create parlor my-app
+```
+
+It asks only for the project name, then writes the app, installs its dependencies with the package manager that ran it, and makes the first git commit.
+
+| Option                                     | Meaning                                                                   |
+| ------------------------------------------ | ------------------------------------------------------------------------- |
+| `-y, --yes`                                | take every default and never prompt; the name defaults to `my-parlor-app` |
+| `--package-manager <npm\|pnpm\|yarn\|bun>` | override the detected package manager                                     |
+| `--add <auth\|agent>`                      | run `parlor add` after the install; repeatable                            |
+| `--no-install`                             | skip the install                                                          |
+| `--no-git`                                 | skip the first commit                                                     |
+| `--dry-run`                                | list the files and write nothing                                          |
+
+Without a terminal, for example from an agent or CI, pass the name or `--yes`; otherwise it exits 1 and prints the command to run.
+
+## The app it creates
+
+| Path                     | What                                                            |
+| ------------------------ | --------------------------------------------------------------- |
+| `actions/`               | the actions, and a test that runs them on an in-memory database |
+| `schema/`, `migrations/` | the tables and their migrations                                 |
+| `src/routes/`            | the pages                                                       |
+| `src/agent/`             | the agent sidebar, yours to change                              |
+| `parlor.config.ts`       | the app's name, id and Vite options                             |
+| `AGENTS.md`              | what a coding agent needs to know to work on the app            |
+
+# @parlor/data
+
+```sh
+pnpm add @parlor/data drizzle-orm
+```
+
+```ts
+import { createDatabase } from "@parlor/data";
+```
+
+Opens the app's database: PostgreSQL at `url` (default `process.env.DATABASE_URL`), else PGlite in `dataDir` (default `.parlor/pglite`; `memory://` keeps nothing). With `migrationsFolder` it applies pending migrations before it resolves.
+
+The handle has `db` (the Drizzle instance), `driver` (`"pglite"` or `"node-postgres"`), `transaction(run)`, `migrate(folder)` and `close()`. Importing `@parlor/data` anywhere in the project types `ctx.db` in every action as that Drizzle instance.
+
+`resolveDatabaseUrl(env)` returns the URL `createDatabase` would use. See [Data](/parlor/guides/data/).
+
+# @parlor/server
+
+```sh
+pnpm add @parlor/server
+```
+
+```ts
+import { createServer } from "@parlor/server";
+```
+
+`createServer` returns a server with a web-standard `fetch(request)` and `close()`. `server.ts` default-exports it; `parlor dev` serves it with srvx and `parlor build` wraps it for every deploy preset.
+
+| Option                           | Meaning                                                                                                                                                                              |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `actions`                        | the registry from `createRegistry`                                                                                                                                                   |
+| `database`                       | the handle from `createDatabase`; needed for sync and for plugins with tables                                                                                                        |
+| `auth`                           | an auth provider, such as the one `parlor add auth` writes. Leave the key out to run without sign-in; a key whose value is `undefined` is a startup error when `chat()` is installed |
+| `plugins`                        | framework features with their own routes and tables, such as `chat()` from `@parlor/chat/server`                                                                                     |
+| `scope`                          | how a caller maps to a scope; the default is the user's id, or `"default"`                                                                                                           |
+| `basePath`                       | where the framework routes live; `/_parlor`                                                                                                                                          |
+| `cors`, `mcp`, `sync`, `agentUi` | options of those surfaces                                                                                                                                                            |
+
+## Routes it serves
+
+| Path                           | What                                          |
+| ------------------------------ | --------------------------------------------- |
+| `POST /_parlor/actions/<name>` | an action over HTTP                           |
+| `/_parlor/mcp`                 | every action as an MCP tool (streamable HTTP) |
+| `GET /_parlor/manifest`        | the actions and their schemas                 |
+| `/_parlor/sync/*`              | the live-update channel                       |
+| `/.well-known/oauth-*`         | OAuth discovery, with an auth provider        |
+
+## For plugin authors
+
+`pluginRoute`, the `ServerPlugin` and `PluginHost` types, `AuthFailure`, `requireAccess` and `requireSurface` build a plugin like `chat()`. `devAuth()` is the provider `parlor dev` installs when the app has none.

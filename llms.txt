@@ -1,0 +1,29 @@
+# Parlor
+
+> Parlor is a TypeScript framework for apps that agents can operate: every action is a UI hook, an HTTP endpoint and an MCP tool, and one React app ships to web, desktop and mobile.
+
+## Docs
+
+- [Getting started](https://cychien.github.io/parlor/getting-started.md): Create an app, run it, let the agent use it, add an action, then add sign-in.
+- [Actions](https://cychien.github.io/parlor/guides/actions.md): Business logic written once and served as a React hook, an HTTP endpoint and an MCP tool.
+- [The agent sidebar](https://cychien.github.io/parlor/guides/agent-sidebar.md): How the sidebar reaches the coding agents on your computer, and how to change it.
+- [Agents](https://cychien.github.io/parlor/guides/agents.md): Let external agents such as Claude Code use the app over MCP.
+- [Auth](https://cychien.github.io/parlor/guides/auth.md): Add sign-in with parlor add auth, and what it changes.
+- [Data](https://cychien.github.io/parlor/guides/data.md): Drizzle tables, migrations, and the database in development and production.
+- [Deploy](https://cychien.github.io/parlor/guides/deploy.md): Build the server and the web app for production.
+- [Migrating an existing app](https://cychien.github.io/parlor/guides/migrating.md): Port an app to Parlor step by step, with its data, users, logic, pages, webhooks and jobs, and what Parlor does not support yet.
+- [Pages and hooks](https://cychien.github.io/parlor/guides/pages-and-hooks.md): File-based routes, and the hooks that call actions from React.
+- [Styling](https://cychien.github.io/parlor/guides/styling.md): Tailwind CSS v4, and other Vite plugins through the vite field.
+- [Targets](https://cychien.github.io/parlor/guides/targets.md): Run the same app as a macOS, Windows or Linux window, or on iOS and Android.
+- [Parlor](https://cychien.github.io/parlor/index.md): Build an app once for web, desktop and mobile, and let agents do everything its UI can.
+- [@parlor/auth](https://cychien.github.io/parlor/reference/auth.md): Better Auth for Parlor, its browser client and its tables.
+- [@parlor/capabilities](https://cychien.github.io/parlor/reference/capabilities.md): One interface per platform feature, with a web, a Capacitor and a Tauri adapter.
+- [@parlor/chat](https://cychien.github.io/parlor/reference/chat.md): The server half of the agent sidebar.
+- [@parlor/cli](https://cychien.github.io/parlor/reference/cli.md): parlor dev, build, deploy, db, add and typegen.
+- [@parlor/client](https://cychien.github.io/parlor/reference/client.md): The action client, the action Register, and agent views.
+- [@parlor/client/react](https://cychien.github.io/parlor/reference/client-react.md): FrameworkProvider, the action hooks, sessions, capabilities and the chat primitives.
+- [@parlor/config](https://cychien.github.io/parlor/reference/config.md): parlor.config.ts, its fields, and @parlor/config/tsconfig.
+- [@parlor/core](https://cychien.github.io/parlor/reference/core.md): defineAction, the action registry, ActionError, principals and ids.
+- [create-parlor](https://cychien.github.io/parlor/reference/create-parlor.md): Create a new Parlor app.
+- [@parlor/data](https://cychien.github.io/parlor/reference/data.md): createDatabase, PGlite in development and PostgreSQL in production.
+- [@parlor/server](https://cychien.github.io/parlor/reference/server.md): createServer and the HTTP, MCP and sync surfaces it serves.
