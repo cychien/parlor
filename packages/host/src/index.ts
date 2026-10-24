@@ -1,9 +1,12 @@
 export {
   buildServer,
+  devWranglerConfig,
+  type DevWranglerConfig,
   hostRootDir,
   type ServerBuildOptions,
   type ServerBuildResult,
   SYNC_TRANSPORT_ENV,
+  type UnavailableDurableObject,
 } from "./build.js";
 export {
   type EntryOptions,

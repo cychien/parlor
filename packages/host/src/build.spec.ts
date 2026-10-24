@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { ConfigError, parseConfig } from "@parlor/config";
 import { describe, expect, it } from "vitest";
 
-import { buildServer, withServerMigration } from "./build.js";
+import { buildServer, devWranglerConfig, withServerMigration } from "./build.js";
 import { hostEntrySource } from "./entry.js";
 
 describe("hostEntrySource", () => {
@@ -539,5 +539,90 @@ describe("withServerMigration", () => {
   it("keeps the app's order once the app lists it", () => {
     const later = { tag: "v2_cache", new_sqlite_classes: ["Cache"] };
     expect(withServerMigration([fridge, server, later])).toEqual([fridge, server, later]);
+  });
+});
+
+describe("devWranglerConfig", () => {
+  const app = { id: "dev.parlor.media", name: "Media" };
+
+  it("declares the app's own bindings and vars with the build's name and compatibility", () => {
+    const config = parseConfig({
+      app,
+      deploy: {
+        preset: "cloudflare-durable",
+        cloudflare: {
+          wrangler: {
+            r2_buckets: [{ binding: "MEDIA", bucket_name: "media" }],
+            send_email: [{ name: "MAIL" }],
+            vars: { REGION: "eu" },
+          },
+        },
+      },
+    });
+    expect(devWranglerConfig(config, "2026-10-01")).toEqual({
+      wrangler: {
+        name: "dev-parlor-media",
+        compatibility_date: "2026-10-01",
+        compatibility_flags: ["nodejs_compat"],
+        r2_buckets: [{ binding: "MEDIA", bucket_name: "media" }],
+        send_email: [{ name: "MAIL" }],
+        vars: { REGION: "eu" },
+        durable_objects: { bindings: [] },
+      },
+      unavailable: [{ binding: "PARLOR_SERVER", className: "ParlorServer" }],
+    });
+  });
+
+  it("keeps the app's name, date and flags, and drops what only a deployment uses", () => {
+    const config = parseConfig({
+      app,
+      deploy: {
+        cloudflare: {
+          wrangler: {
+            name: "media-prod",
+            main: "src/index.ts",
+            compatibility_date: "2026-06-01",
+            compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"],
+            migrations: [{ tag: "v1", new_sqlite_classes: ["Fridge"] }],
+          },
+        },
+      },
+    });
+    const { wrangler } = devWranglerConfig(config, "2026-10-01");
+    expect(wrangler).toMatchObject({
+      name: "media-prod",
+      compatibility_date: "2026-06-01",
+      compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"],
+    });
+    expect(wrangler).not.toHaveProperty("main");
+    expect(wrangler).not.toHaveProperty("migrations");
+  });
+
+  it("binds Durable Objects of other Workers and reports the ones this Worker defines", () => {
+    const config = parseConfig({
+      app,
+      deploy: {
+        cloudflare: {
+          wrangler: {
+            durable_objects: {
+              bindings: [
+                { name: "FRIDGE", class_name: "Fridge" },
+                { name: "ROOMS", class_name: "Room", script_name: "chat" },
+                { name: "SELF", class_name: "Cache", script_name: "dev-parlor-media" },
+              ],
+            },
+          },
+        },
+      },
+    });
+    const { wrangler, unavailable } = devWranglerConfig(config);
+    expect(wrangler.durable_objects).toEqual({
+      bindings: [{ name: "ROOMS", class_name: "Room", script_name: "chat" }],
+    });
+    expect(unavailable).toEqual([
+      { binding: "PARLOR_SERVER", className: "ParlorServer" },
+      { binding: "FRIDGE", className: "Fridge" },
+      { binding: "SELF", className: "Cache" },
+    ]);
   });
 });
