@@ -26,6 +26,22 @@ export function manifestFromModule(app: UiAppInfo, module: unknown): ManifestBui
   return buildUiManifest(app, (module as { routeTree?: unknown } | undefined)?.routeTree);
 }
 
+const STYLE_IMPORT = /\.(?:css|less|sass|scss|styl|stylus|pcss|postcss|sss)(?:\?|$)/;
+const EMPTY_STYLE = "\0parlor-empty-style";
+
+/**
+ * The manifest needs route modules, never their stylesheets, and Vite's CSS plugin cannot
+ * run outside a build (8.3.5 throws), so every style import loads as an empty module.
+ */
+function withoutStyles(): Plugin {
+  return {
+    name: "parlor:manifest-without-styles",
+    enforce: "pre",
+    resolveId: (source) => (STYLE_IMPORT.test(source) ? EMPTY_STYLE : undefined),
+    load: (id) => (id === EMPTY_STYLE ? "export default {};" : undefined),
+  };
+}
+
 const STACK_FILE = /(?:\(|at )((?:file:\/\/)?\/[^\s()]+?):\d+:\d+\)?$/;
 
 function throwingFile(error: unknown): string | undefined {
@@ -144,8 +160,14 @@ export function agentManifest(options: AgentManifestOptions): Plugin {
       if (this.environment.mode !== "build" || this.environment.name !== "client") return;
       const loaded = await loadRouteTree(
         async (entry) =>
-          (await runnerImport(entry, { root, configFile: false, logLevel: "error" }))
-            .module,
+          (
+            await runnerImport(entry, {
+              root,
+              configFile: false,
+              logLevel: "error",
+              plugins: [withoutStyles()],
+            })
+          ).module,
       );
       if (!loaded.ok) {
         logger?.warn(

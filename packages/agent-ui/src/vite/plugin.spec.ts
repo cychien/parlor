@@ -79,6 +79,29 @@ describe("agentManifest", () => {
     );
   }, 30_000);
 
+  it("writes the manifest when route modules import stylesheets, which Node never needs", async () => {
+    const root = await fixture("Settings.");
+    await writeFile(join(root, "src", "app.css"), "body { color: red; }\n");
+    await writeFile(join(root, "src", "card.module.css"), ".card { color: blue; }\n");
+    await writeFile(
+      join(root, "src", "routeTree.gen.ts"),
+      `import "./app.css";\nimport card from "./card.module.css";\nvoid card;\n${routeTree("Settings.")}`,
+    );
+    const warn = vi.fn();
+    await build({
+      root,
+      configFile: false,
+      logLevel: "silent",
+      customLogger: loggerWith(warn),
+      plugins: [agentManifest({ app })],
+      build: { outDir: join(root, "dist"), write: false },
+    });
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("Building without the agent UI manifest"),
+    );
+    expect((await manifestOf(root)).routes).toHaveLength(3);
+  }, 30_000);
+
   it("fails the build when two different views share a name", async () => {
     const root = await fixture("Settings.", true);
     await expect(
