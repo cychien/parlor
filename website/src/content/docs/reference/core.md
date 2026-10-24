@@ -16,7 +16,7 @@ import { defineAction } from "@parlor/core";
 //       ^?
 ```
 
-Defines an action. The config takes `description`, `input` (a zod schema), `run(input, ctx)`, and optionally `reads`, `writes`, `confirm` and `public`. See [Actions](/parlor/guides/actions/).
+Defines an action. The config takes `description`, `input` (a zod schema), `run(input, ctx)`, and optionally `reads`, `writes`, `notifies`, `confirm` and `public`. `notifies: "user"` sends its writes only to the caller's own tabs and computers instead of everyone in the scope, for data that belongs to one user of a shared scope. See [Actions](/parlor/guides/actions/).
 
 ```ts
 import { ActionError } from "@parlor/core";

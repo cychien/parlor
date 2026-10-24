@@ -46,6 +46,7 @@ export function chatAction<P extends Party, I extends z.ZodType, O>(
 ): ActionDefinition<I, O> {
   const { run, ...rest } = config;
   return defineAction<I, O>({
+    notifies: "user",
     ...rest,
     run: (input, ctx) =>
       run(input, partyOf(party, ctx.principal, ctx.scope, enforcing), ctx),

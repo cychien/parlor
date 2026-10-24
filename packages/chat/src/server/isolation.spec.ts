@@ -178,4 +178,30 @@ describe.each(drivers)("chat isolation on $name", (driver) => {
     ).toBe(404);
     expect((await app.action("bob-host", "hostClaim", {})).status).toBe(404);
   });
+
+  it("wakes only the user's own tabs and computers when two users share a scope", async () => {
+    await app.server.close();
+    await resetDatabase(handle);
+    app = serveChat(handle, { scope: () => "acme" });
+    const heard = async (token: string) => {
+      const response = await app.server.fetch(
+        new Request("http://app.test/_parlor/sync?since=", {
+          headers: { authorization: `Bearer ${token}` },
+        }),
+      );
+      const { events } = (await response.json()) as { events: { tags: unknown[] }[] };
+      return events.flatMap((event) => event.tags);
+    };
+    await app.action("alice-host", "hostHello", hello("Alice's Mac"));
+    await app.action("alice-host", "hostReport", { online: true, agents: [] });
+    await send("alice", "t-alice", "u1", "mac");
+    await app.action("alice", "userActive", {});
+
+    const alice = await heard("alice");
+    expect(alice).toContainEqual(["parlor_chat", "t-alice"]);
+    expect(alice).toContainEqual(["parlor_chat_activity"]);
+    expect(await heard("alice-host")).toContainEqual(["parlor_chat", "t-alice"]);
+    expect(await heard("bob")).toEqual([]);
+    expect(await heard("bob-host")).toEqual([]);
+  });
 });

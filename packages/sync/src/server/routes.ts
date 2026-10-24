@@ -23,6 +23,11 @@ export interface SyncRouteOptions {
   readonly data: DataProvider;
   readonly hub: SyncHub;
   readonly scope: (request: Request) => string | Promise<string>;
+  /**
+   * The caller's own stream inside its scope, for events only its user should hear (an
+   * action with `notifies: "user"`); read and pushed alongside the scope's.
+   */
+  readonly audience?: ((request: Request) => string | Promise<string>) | undefined;
   readonly transport?: SyncTransport | undefined;
   readonly pollIntervalMs?: number | undefined;
   readonly keepAliveMs?: number | undefined;
@@ -57,6 +62,11 @@ function batch(events: SyncEvent[], since: string): SyncBatch {
 
 export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
   const { basePath, data, hub, scope } = options;
+  const streamsOf = async (request: Request): Promise<readonly string[]> => {
+    const own = await scope(request);
+    const audience = await options.audience?.(request);
+    return audience === undefined || audience === own ? [own] : [own, audience];
+  };
   const transport: SyncTransport =
     options.transport ?? transportFromEnv() ?? (hub.canPush ? "sse" : "poll");
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
@@ -76,7 +86,7 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
     const since = String(getQuery(event).since ?? "");
     const events = await readSyncEvents(
       db(),
-      await scope(event.req),
+      await streamsOf(event.req),
       decodeCursor(since),
     );
     event.res.headers.set("cache-control", "no-store");
@@ -84,7 +94,8 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
   });
 
   app.get(`${basePath}/sync/stream`, async (event: H3Event) => {
-    const currentScope = await scope(event.req);
+    const streams = await streamsOf(event.req);
+    const currentScope = streams[0]!;
     const authority = await options.authority?.(event.req);
     const sinceParam = String(getQuery(event).since ?? "");
     await hub.start();
@@ -94,13 +105,15 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
       send({ events: [syncEvent], cursor: encodeCursor(cursorOf(syncEvent)) });
 
     let arrivedDuringCatchUp: SyncEvent[] | undefined = [];
-    const unsubscribe = hub.subscribe(
-      currentScope,
-      (syncEvent) => {
-        if (arrivedDuringCatchUp) arrivedDuringCatchUp.push(syncEvent);
-        else sendLive(syncEvent);
-      },
-      () => void stream.close(),
+    const unsubscribes = streams.map((name) =>
+      hub.subscribe(
+        name,
+        (syncEvent) => {
+          if (arrivedDuringCatchUp) arrivedDuringCatchUp.push(syncEvent);
+          else sendLive(syncEvent);
+        },
+        () => void stream.close(),
+      ),
     );
     const keepAlive = setInterval(
       () => void stream.pushComment("keep-alive"),
@@ -117,7 +130,7 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
       ended.abort();
       clearInterval(keepAlive);
       revoked?.removeEventListener("abort", closeRevoked);
-      unsubscribe();
+      for (const unsubscribe of unsubscribes) unsubscribe();
       for (const disconnect of disconnects) disconnect();
     };
     stream.onClosed(detach);
@@ -147,18 +160,16 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
       );
     }
     const since = decodeCursor(sinceParam);
-    const missed = await readSyncEvents(db(), currentScope, since).catch(
-      (error: unknown) => {
-        detach();
-        throw error;
-      },
-    );
+    const missed = await readSyncEvents(db(), streams, since).catch((error: unknown) => {
+      detach();
+      throw error;
+    });
     if (missed.length > 0) send(batch(missed, sinceParam));
     const last = missed.at(-1);
     const caughtUpTo = last ? cursorOf(last) : since;
-    const pending = arrivedDuringCatchUp.filter(
-      (syncEvent) => compareCursors(cursorOf(syncEvent), caughtUpTo) > 0,
-    );
+    const pending = arrivedDuringCatchUp
+      .filter((syncEvent) => compareCursors(cursorOf(syncEvent), caughtUpTo) > 0)
+      .sort((a, b) => compareCursors(cursorOf(a), cursorOf(b)));
     arrivedDuringCatchUp = undefined;
     for (const syncEvent of pending) sendLive(syncEvent);
     const body = await stream.send();

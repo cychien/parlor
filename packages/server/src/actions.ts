@@ -194,10 +194,10 @@ export function createActionRunner<T extends ActionMap>(
           : undefined,
         onWrite:
           sync && database
-            ? async ({ tags, tx }) => {
+            ? async ({ action, tags, tx }) => {
                 if (tags.length === 0) return;
                 await recordSyncEvent(tx as SyncDatabase, {
-                  scope: resolvedScope,
+                  scope: action.notifies === "user" ? caller.audience : resolvedScope,
                   tags,
                   source: client,
                 });

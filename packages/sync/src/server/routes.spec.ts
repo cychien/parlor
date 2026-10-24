@@ -26,6 +26,11 @@ beforeAll(async () => {
     data: handle,
     hub,
     scope: (request) => request.headers.get("x-org") ?? "default",
+    audience: (request) => {
+      const org = request.headers.get("x-org") ?? "default";
+      const user = request.headers.get("x-user");
+      return user ? `${org}/${user}` : org;
+    },
     keepAliveMs: 50,
   });
 }, 30_000);
@@ -97,6 +102,44 @@ describe("sync routes", () => {
       )
       .then((r) => r.json());
     expect(other.events).toEqual([]);
+  });
+
+  it("adds the caller's own audience to the scope, and never another user's", async () => {
+    const shared = await handle.transaction((tx) =>
+      recordSyncEvent(tx, { scope: "team", tags: [["tasks", "1"]] }),
+    );
+    const mine = await handle.transaction((tx) =>
+      recordSyncEvent(tx, { scope: "team/alice", tags: [["chat", "a"]] }),
+    );
+    await handle.transaction((tx) =>
+      recordSyncEvent(tx, { scope: "team/bob", tags: [["chat", "b"]] }),
+    );
+    const polled = await app
+      .fetch(
+        new Request("http://app.test/_parlor/sync?since=", {
+          headers: { "x-org": "team", "x-user": "alice" },
+        }),
+      )
+      .then((r) => r.json());
+    expect(polled.events.map((e: { id: string }) => e.id)).toEqual([shared.id, mine.id]);
+
+    const response = await app.fetch(
+      new Request(
+        `http://app.test/_parlor/sync/stream?since=${mine.version}.${mine.id}`,
+        {
+          headers: { "x-org": "team", "x-user": "alice" },
+        },
+      ),
+    );
+    const live = await handle.transaction((tx) =>
+      recordSyncEvent(tx, { scope: "team/alice", tags: [["chat", "live"]] }),
+    );
+    await handle.transaction((tx) =>
+      recordSyncEvent(tx, { scope: "team/bob", tags: [["chat", "not-mine"]] }),
+    );
+    const frames = await readFrames(response.body!, 2);
+    expect(frames[1]).toContain(live.id);
+    expect(frames.join("")).not.toContain("not-mine");
   });
 
   it("streams a handshake, missed events, then live events for the scope", async () => {

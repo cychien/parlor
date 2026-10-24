@@ -8,7 +8,8 @@ export function audienceOf(scope: string, principal: Principal | undefined): str
   return userAudience(scope, userOf(principal));
 }
 
-function userAudience(scope: string, userId: UserId | undefined): string {
+/** `audienceOf` for a known user: the sync stream only that user's tabs and computers hear. */
+export function userAudience(scope: string, userId: UserId | undefined): string {
   return userId === undefined || userId === DEV_USER_ID
     ? scope
     : `${scope}\u001f${userId}`;

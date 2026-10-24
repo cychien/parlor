@@ -45,8 +45,9 @@ export interface ChatActionDeps {
    * provider do so outside it, because a provider may read through another connection
    * (PGlite has one, and the transaction holds it).
    */
+  /** Runs `work` in one transaction and wakes only `owner`'s tabs and computers. */
   readonly transact: <T>(
-    scope: string,
+    owner: ChatOwner,
     work: (tx: ChatDb) => Promise<Written<T>>,
   ) => Promise<T>;
   /** Commits the lapsed leases and liveness of `owner`, with the sync events they owe. */
@@ -172,7 +173,7 @@ export function userChatActions(deps: ChatActionDeps) {
           (candidate) => candidate.id === input.prompt.agent.hostId,
         );
         if (!host) throw new ActionError("not_found", "Computer not found");
-        return deps.transact(ctx.scope, async (tx) => {
+        return deps.transact(user, async (tx) => {
           await deps.store.appendUserItems(tx, user, {
             threadId: input.threadId,
             turnId: input.turnId,
@@ -195,7 +196,7 @@ export function userChatActions(deps: ChatActionDeps) {
     answer: chatAction("user", enforcing, {
       description: "Answer the agent's permission prompt or question.",
       input: z.object({ threadId, turnId, itemId, answer: chatItemBodies.answer.body }),
-      run: async (input, user, ctx): Promise<{ readonly id: string }> => {
+      run: async (input, user): Promise<{ readonly id: string }> => {
         const { signed } = input.answer;
         if (signed && deps.auth.device) {
           const device = await deps.auth.device(user.userId, signed.deviceId);
@@ -203,7 +204,7 @@ export function userChatActions(deps: ChatActionDeps) {
             throw new ActionError("forbidden", "This device cannot answer.");
           }
         }
-        return deps.transact(ctx.scope, async (tx) => {
+        return deps.transact(user, async (tx) => {
           await deps.store.appendUserItems(tx, user, {
             threadId: input.threadId,
             turnId: input.turnId,
@@ -371,7 +372,7 @@ export function hostChatActions(deps: ChatActionDeps) {
         const db = dbOf(ctx);
         await requireWelcome(host, db);
         await deps.reconcile(host);
-        const claimed = await deps.transact(ctx.scope, async (tx) => {
+        const claimed = await deps.transact(host, async (tx) => {
           const taken = await deps.store.claimTurn(tx, host, host.host, deps.leaseMs);
           if (!taken) throw new ActionError("not_found", "No turn is waiting.");
           return { result: taken, threadId: taken.id };
@@ -400,7 +401,7 @@ export function hostChatActions(deps: ChatActionDeps) {
           return { ...claimed, device, context, token };
         } catch (error) {
           await deps
-            .transact(ctx.scope, async (tx) => {
+            .transact(host, async (tx) => {
               const released = await deps.store.releaseClaim(
                 tx,
                 host,
@@ -456,7 +457,7 @@ export function hostChatActions(deps: ChatActionDeps) {
         readonly token: ClaimedTurn["token"];
       }> => {
         await requireWelcome(host, dbOf(ctx));
-        const appended = await deps.transact(ctx.scope, async (tx) => {
+        const appended = await deps.transact(host, async (tx) => {
           const result = await deps.store.appendHostItems(
             tx,
             host,
@@ -486,7 +487,7 @@ export function hostChatActions(deps: ChatActionDeps) {
       }),
       run: async (input, host, ctx): Promise<{ readonly id: string }> => {
         await requireWelcome(host, dbOf(ctx));
-        const finished = await deps.transact(ctx.scope, async (tx) => {
+        const finished = await deps.transact(host, async (tx) => {
           const result = await deps.store.finishTurn(
             tx,
             host,

@@ -1,3 +1,4 @@
+import { userAudience } from "@parlor/agent-ui/server";
 import type { Tag } from "@parlor/core";
 import { REVOCATION_HORIZON_MS, type ServerPlugin } from "@parlor/server";
 
@@ -117,11 +118,12 @@ export function chat(options: ChatOptions = {}): ServerPlugin {
       }
       const relay = (options.relay ?? inProcessRelay)();
       const db = () => database.read() as ChatDb;
-      const transact: ChatActionDeps["transact"] = (scope, work) =>
+      const ownStream = (owner: ChatOwner) => userAudience(owner.scope, owner.userId);
+      const transact: ChatActionDeps["transact"] = (owner, work) =>
         database.transaction(async (tx) => {
           const { result, threadId } = await work(tx as ChatDb);
           if (threadId !== undefined)
-            await host.announce(scope, [[CHAT_TAG, threadId]], tx);
+            await host.announce(ownStream(owner), [[CHAT_TAG, threadId]], tx);
           return result;
         });
       const heartbeatMs = DEFAULT_HEARTBEAT_MS;
@@ -133,7 +135,7 @@ export function chat(options: ChatOptions = {}): ServerPlugin {
               ...change.threads.map((threadId) => [CHAT_TAG, threadId]),
               ...change.hosts.map((hostId) => [HOSTS_TAG, hostId]),
             ];
-            await host.announce(change.scope, tags, tx);
+            await host.announce(ownStream(change), tags, tx);
           }
         });
       };
@@ -177,7 +179,8 @@ export function chat(options: ChatOptions = {}): ServerPlugin {
           relay,
           heartbeatMs,
           reconcile,
-          announceHost: (scope, hostId) => host.announce(scope, [[HOSTS_TAG, hostId]]),
+          announceHost: (owner, hostId) =>
+            host.announce(ownStream(owner), [[HOSTS_TAG, hostId]]),
         }),
         channel: relay.channel,
         close: () => {
