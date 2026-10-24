@@ -538,12 +538,15 @@ export async function runTurn(
         text: fresh && !session.resumed ? `${claimed.context}\n\n${text}` : text,
       },
     ];
-    deps.prompter.turnStarted({
-      appName: grant.appName,
-      device: device?.name ?? claimed.device?.name ?? "the app",
-      agent: profile.name,
-      preview: text.slice(0, 80),
-    });
+    const fromThisComputer = grant.dev === true || device?.via === "pairing";
+    if (!fromThisComputer) {
+      deps.prompter.turnStarted({
+        appName: grant.appName,
+        device: device?.name ?? claimed.device?.name ?? "the app",
+        agent: profile.name,
+        preview: text.slice(0, 80),
+      });
+    }
 
     const turnOver = new AbortController();
     const cancel = () => {
