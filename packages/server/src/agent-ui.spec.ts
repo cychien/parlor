@@ -592,6 +592,40 @@ describe("agent UI over MCP", () => {
     );
   });
 
+  it("says which app its tools belong to, so an agent connected to several apps keeps them apart", async () => {
+    vi.stubEnv("PARLOR_APP_NAME", "Course Admin");
+    vi.stubEnv("PARLOR_APP_DESCRIPTION", "Courses, lessons and their copy.");
+    vi.stubEnv("PARLOR_ORIGIN", "https://courses.example.com/admin");
+    try {
+      const target = createServer({ actions, database: lend(database) });
+      closers.push(() => target.close());
+      const client = await mcp(target);
+      expect(client.getServerVersion()).toMatchObject({
+        name: "Course Admin",
+        title: "Course Admin",
+      });
+      expect(client.getInstructions()?.split("\n\n")[0]).toBe(
+        "These tools belong to Course Admin at https://courses.example.com. Courses, lessons and their copy. They act only on Course Admin, as the signed-in user; any other app's tools are a separate server.",
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("names the origin it was reached on when no app name or public origin is set", async () => {
+    vi.stubEnv("PARLOR_ORIGIN", "");
+    vi.stubEnv("PARLOR_WEB_ORIGIN", "");
+    try {
+      const client = await mcp();
+      expect(client.getServerVersion()?.name).toBe("parlor");
+      expect(client.getInstructions()).toMatch(
+        /^These tools belong to this app at http:\/\/app\.test\./,
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("answers no_client without an error when no app is open", async () => {
     const result = await (await mcp()).callTool({ name: "ui_screen", arguments: {} });
     expect(result.isError).toBeFalsy();
