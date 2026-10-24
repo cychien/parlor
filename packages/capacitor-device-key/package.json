@@ -2,14 +2,14 @@
   "name": "@parlor/capacitor-device-key",
   "version": "0.1.0",
   "description": "Capacitor plugins for the device key and the session store, backed by the iOS keystore",
-  "license": "MIT",
   "homepage": "https://cychien.github.io/parlor",
+  "bugs": "https://github.com/cychien/parlor/issues",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/cychien/parlor.git",
     "directory": "packages/capacitor-device-key"
   },
-  "bugs": "https://github.com/cychien/parlor/issues",
   "files": [
     "dist",
     "ios",
@@ -17,14 +17,16 @@
   ],
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./package.json": "./package.json"
   },
   "publishConfig": {
     "exports": {
       ".": {
         "types": "./dist/index.d.ts",
         "import": "./dist/index.js"
-      }
+      },
+      "./package.json": "./package.json"
     }
   },
   "scripts": {
