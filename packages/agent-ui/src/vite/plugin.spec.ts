@@ -102,6 +102,30 @@ describe("agentManifest", () => {
     expect((await manifestOf(root)).routes).toHaveLength(3);
   }, 30_000);
 
+  it("writes the manifest when route modules import through the app's resolve.alias", async () => {
+    const root = await fixture("Settings.");
+    await mkdir(join(root, "shared"), { recursive: true });
+    await writeFile(join(root, "shared", "copy.ts"), 'export const HOME = "Home.";\n');
+    await writeFile(
+      join(root, "src", "routeTree.gen.ts"),
+      `import { HOME } from "@shared/copy";\nvoid HOME;\n${routeTree("Settings.")}`,
+    );
+    const warn = vi.fn();
+    await build({
+      root,
+      configFile: false,
+      logLevel: "silent",
+      customLogger: loggerWith(warn),
+      resolve: { alias: { "@shared": join(root, "shared") } },
+      plugins: [agentManifest({ app })],
+      build: { outDir: join(root, "dist"), write: false },
+    });
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("Building without the agent UI manifest"),
+    );
+    expect((await manifestOf(root)).routes).toHaveLength(3);
+  }, 30_000);
+
   it("fails the build when two different views share a name", async () => {
     const root = await fixture("Settings.", true);
     await expect(
