@@ -64,7 +64,8 @@ export type ConnectOption =
 /**
  * `waiting`: a prompt waits for a computer, which `ChatState.wait` names: one that must
  * still approve this device, or one that is offline while the prompt queues.
- * `unavailable`: this backend has no chat, or the first read failed and is being retried.
+ * `unavailable`: this backend has no chat, this user may not use it, or the first read
+ * failed and is being retried; `ChatState.unavailable` says which.
  */
 export type ChatStatus =
   | "loading"
@@ -73,6 +74,15 @@ export type ChatStatus =
   | "waiting"
   | "running"
   | "unavailable";
+
+/**
+ * Why chat is `unavailable`: `forbidden` when the app's chat `access` refuses this user,
+ * so the agent should not show at all; `not_found` when the server has no chat;
+ * `unauthenticated` when nobody is signed in; `error` while a failed read is retried.
+ */
+export interface ChatUnavailable {
+  readonly reason: "forbidden" | "not_found" | "unauthenticated" | "error";
+}
 
 export interface ChatWait {
   readonly reason: "offline" | "approval";
@@ -117,6 +127,8 @@ export interface ChatState {
   readonly status: ChatStatus;
   /** Set exactly while `status` is `waiting`; approval wins when both reasons hold. */
   readonly wait: ChatWait | undefined;
+  /** Set exactly while `status` is `unavailable`. */
+  readonly unavailable: ChatUnavailable | undefined;
   readonly thread: ThreadSummary | undefined;
   readonly threads: readonly ThreadSummary[];
   /** Older threads exist past `threads`; `loadMoreThreads` reads them. */
@@ -221,6 +233,14 @@ const UNFIXABLE_BY_RETRY: ReadonlySet<string> = new Set([
 const retryable = (error: unknown) =>
   !(error instanceof ActionError && UNFIXABLE_BY_RETRY.has(error.code));
 
+const unavailableBecause = (error: unknown): ChatUnavailable["reason"] =>
+  error instanceof ActionError &&
+  (error.code === "forbidden" ||
+    error.code === "not_found" ||
+    error.code === "unauthenticated")
+    ? error.code
+    : "error";
+
 type StaleRead = "lists" | "hosts";
 
 interface PendingSend {
@@ -300,6 +320,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
   let dirty = false;
   const staleReads = new Set<StaleRead>();
   let unfixable = false;
+  let unavailable: ChatUnavailable | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let retryDelay = READ_RETRY_BASE_MS;
   let lastPing: number | undefined;
@@ -435,6 +456,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     return {
       status,
       wait,
+      unavailable: loaded === "failed" ? unavailable : undefined,
       thread,
       threads: [
         ...threads,
@@ -1117,7 +1139,12 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     if (lastPing !== undefined && now - lastPing < ACTIVITY_PING_MS) return;
     lastPing = now;
     calls.call("userActive", {}).catch((error: unknown) => {
-      if (error instanceof ActionError && error.code === "not_found") pingRefused = true;
+      if (
+        error instanceof ActionError &&
+        (error.code === "not_found" || error.code === "forbidden")
+      ) {
+        pingRefused = true;
+      }
     });
   }
 
@@ -1128,6 +1155,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     } catch (error) {
       if (running) {
         loaded = "failed";
+        unavailable = { reason: unavailableBecause(error) };
         unfixable = !retryable(error);
         if (!unfixable) scheduleRetry();
       }

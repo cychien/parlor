@@ -113,7 +113,13 @@ function statusText({ status, wait, setup, link, presenceDue }: ChatState): stri
 export function Status({ children, ...props }: ComponentProps<"p">): ReactNode {
   const state = useChatState("Chat.Status");
   return (
-    <p role="status" {...props} data-status={state.status} data-wait={state.wait?.reason}>
+    <p
+      role="status"
+      {...props}
+      data-status={state.status}
+      data-wait={state.wait?.reason}
+      data-unavailable={state.unavailable?.reason}
+    >
       {children ?? statusText(state)}
     </p>
   );
