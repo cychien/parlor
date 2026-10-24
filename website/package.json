@@ -8,7 +8,8 @@
     "build": "node scripts/sample-paths.ts && node scripts/check-samples.ts && astro build",
     "preview": "astro preview",
     "typecheck": "astro sync && tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "deploy:pages": "sh scripts/deploy-pages.sh"
   },
   "dependencies": {
     "@astrojs/starlight": "0.42.6",
