@@ -1611,7 +1611,11 @@ describe("createChatRuntime linking this device", () => {
         status: "unlinked",
         hostName: "Alice's Mac",
         code: undefined,
+        qr: undefined,
+        command: undefined,
         expiresAt: undefined,
+        expired: false,
+        onlyComputer: false,
         busy: false,
         error: undefined,
       }),
@@ -1622,11 +1626,64 @@ describe("createChatRuntime linking this device", () => {
       status: "unlinked",
       code: "K7M4PX2Q8R",
       qr: "https://hello.test/link#d=dev_new&c=c0mm1tment",
+      command: "npx @parlor/agent-host link https://hello.test K7M4PX2Q8R",
       expiresAt: "2026-10-24T10:15:00.000Z",
+      expired: false,
     });
     l.set({ deviceId: "dev_new", vouched: true, pairing: false });
     h.tags(["parlor_auth_devices", "dev_new"]);
     await vi.waitFor(() => expect(h.runtime.get().link).toEqual({ status: "linked" }));
+  });
+
+  it("drops the code once it runs out and says so, until a new one is shown", async () => {
+    const soon = () => new Date(Date.now() + 200).toISOString();
+    const l = linker(
+      { vouched: false, pairing: false },
+      vi.fn(async () => ({
+        deviceId: "dev_new",
+        code: "K7M4PX2Q8R",
+        commitment: "c0mm1tment",
+        expiresAt: soon(),
+      })),
+    );
+    const h = setup({ auth: l.source, open: async () => reporting(["dev_laptop"]) });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().link.status).toBe("unlinked"));
+    await h.runtime.startLink();
+    expect(h.runtime.get().link).toMatchObject({ code: "K7M4PX2Q8R", expired: false });
+    await vi.waitFor(() =>
+      expect(h.runtime.get().link).toMatchObject({
+        code: undefined,
+        qr: undefined,
+        command: undefined,
+        expired: true,
+      }),
+    );
+    await h.runtime.startLink();
+    expect(h.runtime.get().link).toMatchObject({ code: "K7M4PX2Q8R", expired: false });
+  });
+
+  it("says only the computer can link this device while no other device is linked", async () => {
+    const l = linker({ deviceId: "dev_new", vouched: false, pairing: false });
+    const alone = setup({ auth: l.source, open: async () => reporting([]) });
+    alone.runtime.start();
+    await vi.waitFor(() =>
+      expect(alone.runtime.get().link).toMatchObject({
+        status: "unlinked",
+        onlyComputer: true,
+      }),
+    );
+    const accompanied = setup({
+      auth: l.source,
+      open: async () => reporting(["dev_laptop"]),
+    });
+    accompanied.runtime.start();
+    await vi.waitFor(() =>
+      expect(accompanied.runtime.get().link).toMatchObject({
+        status: "unlinked",
+        onlyComputer: false,
+      }),
+    );
   });
 
   it("drops the code it showed once that device is removed, so linking starts over", async () => {
