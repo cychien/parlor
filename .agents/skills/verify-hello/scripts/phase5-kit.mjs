@@ -243,89 +243,40 @@ export function watchDialogs(host) {
   };
 }
 
-const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
 /**
- * `Allow {deviceName} to use your agents?` then `{deviceName} sent a message from {appName} as
- * {email} and wants your agents on {hostName} to run it. It shows the code {code}.`
+ * Links `browser` to the host the way a user does from the computer: its sidebar's link card
+ * shows a code after `Continue with Face ID or Touch ID` (the profile's virtual authenticator
+ * answers), and `npx @parlor/agent-host link <app> <code>` accepts it with `y`. Saves the card
+ * and the terminal as `{label}.*`; the host pins the browser on its next prompt.
  */
-export function deviceApproval(dialog, hostName, email) {
-  const pattern = new RegExp(
-    `Allow (.+) to use your agents\\?\\s+\\1 sent a message from (.+) as ${escapeRegExp(email)} and wants your agents on ${escapeRegExp(hostName)} to run it\\. It shows the code (\\d{4})\\.`,
-  );
-  for (const text of dialog?.texts ?? []) {
-    const match = text.trim().match(pattern);
-    if (match) return { deviceName: match[1], appName: match[2], code: match[3], text };
-  }
-  return undefined;
-}
-
-/**
- * Waits for this host's device approval dialog naming `email`, saves its text and a screenshot
- * as `{label}.dialog.*`, and presses `answer` (`Allow` or `Don't allow`).
- */
-export async function answerDeviceDialog(
-  check,
-  host,
-  { hostName, email = "alice@example.com", answer = "Allow", label, ms = 60_000 },
-) {
-  return waitFor(
-    () =>
-      withDialogLock(async () => {
-        const dialog = await findDialog(host, (d) =>
-          Boolean(deviceApproval(d, hostName, email)),
-        );
-        if (!dialog) return undefined;
-        const approval = deviceApproval(dialog, hostName, email);
-        await screenshotDialog(check, dialog.pid, `${label}.dialog.png`);
-        check.save(`${label}.dialog.json`, { ...dialog, approval });
-        const answeredAt = await clickDialog(dialog.pid, answer);
-        return { ...dialog, approval, answeredAt };
-      }),
-    ms,
-    300,
-  );
-}
-
-/**
- * Sends `text` from the browser and waits for the turn to settle, allowing this device in the
- * host's approval dialog when one appears (a device's first prompt). Returns the dialog seen.
- */
-export async function sendApproving(
+export async function linkBrowser(
   check,
   session,
-  text,
-  { prompts, ms = 90_000, label, email = "alice@example.com", browser = session.browser },
+  { browser = session.browser, label = "link", ms = 60_000 } = {},
 ) {
-  const sentAt = await browser.send(text);
-  let dialog;
-  let pending = false;
-  const settled = await browser.waitSettled({
-    prompts,
-    ms,
-    label,
-    onPoll: async () => {
-      if (dialog || pending) return;
-      await withDialogLock(async () => {
-        const found = (
-          await Promise.all(
-            dialogProcesses(session.host.home).map((p) => readDialog(p.pid)),
-          )
-        ).find((d) => d && deviceApproval(d, session.hostName, email));
-        if (!found) return;
-        pending = true;
-        await screenshotDialog(check, found.pid, `${label}.dialog.png`);
-        const approval = deviceApproval(found, session.hostName, email);
-        check.save(`${label}.dialog.json`, { ...found, approval });
-        dialog = {
-          ...found,
-          approval,
-          answeredAt: await clickDialog(found.pid, "Allow"),
-        };
-      });
-    },
-  });
-  return { sentAt, settled, dialog };
+  const code = await browser.page(`async (L) => {
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const card = () => document.querySelector('section[aria-label="Link this device"]');
+    for (let i = 0; i < 80 && !card(); i++) await wait(250);
+    [...(card()?.querySelectorAll("button") ?? [])]
+      .find((b) => b.textContent.includes("Continue with Face ID"))
+      ?.click();
+    for (let i = 0; i < 80 && !document.querySelector('[data-testid="link-code"]'); i++) await wait(250);
+    return document.querySelector('[data-testid="link-code"]')?.textContent.trim() ?? null;
+  }`);
+  await browser.screenshot(`${label}.card.png`);
+  if (!code) throw new Error(`${label}: the sidebar showed no link code`);
+  const terminal = session.host.terminal(label, ["link", session.host.info.urls.web, code]);
+  const asked = await terminal.waitFor(/\[y\/N\]/, ms);
+  if (asked) terminal.send("y\n");
+  const linked = await terminal.waitFor(/Linked (.+?)\. It can use your agents now\./, ms);
+  await terminal.waitExit(ms);
+  terminal.save();
+  check.save(`${label}.json`, { code, asked: Boolean(asked), linked: linked?.[1] ?? null });
+  if (!linked) {
+    throw new Error(`${label}: the host never linked ${code}:\n${terminal.text.slice(-1500)}`);
+  }
+  return { code, device: linked[1], terminal };
 }
 
 const b64url = (bytes) => Buffer.from(bytes).toString("base64url");
