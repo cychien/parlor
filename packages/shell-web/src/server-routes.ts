@@ -3,6 +3,8 @@ import { request, type ServerResponse } from "node:http";
 import { pagePattern, UNROUTED_HEADER, type UiManifest } from "@parlor/agent-ui";
 import type { Connect, Plugin } from "vite";
 
+import { renderInDev, sendResponse } from "./ssr.js";
+
 export type PageMatcher = (path: string) => boolean;
 
 export function pageMatcher(manifest: () => UiManifest | undefined): PageMatcher {
@@ -46,15 +48,42 @@ function forward(
   req.pipe(upstream);
 }
 
+export interface ServerRoutesOptions {
+  /** Renders a page route's document on the server first, as a build with `web.ssr` does. */
+  readonly render?: boolean | undefined;
+}
+
 /**
  * Vite answers what it has a file or module for. Every other request goes to the app's
  * server, as in a build, except a browser's request for a page route's document.
  */
-export function serverRoutes(port: number, isPage: PageMatcher): Plugin {
+export function serverRoutes(
+  port: number,
+  isPage: PageMatcher,
+  options: ServerRoutesOptions = {},
+): Plugin {
   return {
     name: "parlor:server-routes",
     apply: "serve",
     configureServer: (server) => () => {
+      const renderPage = async (
+        req: Connect.IncomingMessage,
+        res: ServerResponse,
+        url: string,
+        fallback: () => void,
+      ) => {
+        try {
+          const page = await renderInDev(server, port, url, req.headers);
+          if (page) return await sendResponse(page, res);
+        } catch (error) {
+          if (error instanceof Error) server.ssrFixStacktrace(error);
+          server.config.logger.error(
+            `[parlor] Rendering ${url} on the server failed, so it is served without: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
+          );
+          if (res.headersSent) return void res.end();
+        }
+        fallback();
+      };
       server.middlewares.use((req, res, next) => {
         const url = req.originalUrl ?? req.url ?? "/";
         const path = url.split("?")[0] ?? "/";
@@ -65,7 +94,10 @@ export function serverRoutes(port: number, isPage: PageMatcher): Plugin {
           req.url = "/index.html";
           next();
         };
-        if (document && isPage(path)) return serveDocument();
+        if (document && isPage(path)) {
+          if (options.render) return void renderPage(req, res, url, serveDocument);
+          return serveDocument();
+        }
         forward(req, res, port, url, document ? serveDocument : undefined);
       });
     },

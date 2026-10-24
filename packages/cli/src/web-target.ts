@@ -2,10 +2,11 @@ import type { LoadedConfig } from "@parlor/config";
 import {
   buildServer,
   PresetError,
+  renderConditionsFor,
   resolvePreset,
   type ServerBuildResult,
 } from "@parlor/host";
-import { buildWeb, startWebDev } from "@parlor/shell-web";
+import { buildRender, buildWeb, startWebDev } from "@parlor/shell-web";
 
 import { CliError } from "./errors.js";
 import { serverlessWarning } from "./serverless-warning.js";
@@ -24,8 +25,12 @@ export async function buildWebAndServer(
   console.log(`web build written to ${outDir}`);
   try {
     const { preset, reason } = resolvePreset(options.preset, loaded.config.deploy.preset);
+    const render = loaded.config.web.ssr
+      ? await buildRender(loaded, { conditions: renderConditionsFor(preset) })
+      : undefined;
+    if (render) console.log(`server render build written to ${render}`);
     console.log(`building server for ${preset} (${reason})`);
-    const result = await buildServer(loaded, { preset });
+    const result = await buildServer(loaded, { preset, render });
     console.log(
       `server build written to ${result.outputDir} (sync: ${result.syncTransport})`,
     );

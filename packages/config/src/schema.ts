@@ -55,6 +55,11 @@ export const parlorConfigSchema = z.object({
       backgroundColor: z.string().default("#ffffff"),
       routeTree: z.string().optional(),
       csp: z.partialRecord(z.enum(CSP_DIRECTIVES), z.array(z.string())).optional(),
+      /**
+       * Renders routes with `ssr: true` on the server, on web only. `app` is the module whose
+       * default export builds the app for an action client, so the server builds one per request.
+       */
+      ssr: z.object({ app: z.string() }).optional(),
     })
     .prefault({}),
   desktop: z

@@ -9,6 +9,7 @@ export {
   type EntryOptions,
   hostEntrySource,
   INDEX_HTML_PLACEHOLDER,
+  type RenderEntryOptions,
   UI_MANIFEST_PLACEHOLDER,
 } from "./entry.js";
 export {
@@ -18,6 +19,7 @@ export {
   isDeployPreset,
   nitroPresetFor,
   PresetError,
+  renderConditionsFor,
   resolvePreset,
   syncTransportFor,
 } from "./presets.js";

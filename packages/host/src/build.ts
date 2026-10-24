@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 
 import { pagePattern, UI_MANIFEST_FILE, type UiManifest } from "@parlor/agent-ui";
 import { appServerEnv, GENERATED_DIR, type LoadedConfig } from "@parlor/config";
-import { appCsp, serializeCsp, webOutDir } from "@parlor/shell-web";
+import { appCsp, extendCsp, serializeCsp, webOutDir } from "@parlor/shell-web";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import { build, copyPublicAssets, createNitro, prepare } from "nitro/builder";
 import type { NitroConfig } from "nitro/types";
@@ -16,7 +16,9 @@ import {
   durableServerSource,
   hostEntrySource,
   INDEX_HTML_PLACEHOLDER,
+  NONCE_PLACEHOLDER,
   PAGE_ROUTES_PLACEHOLDER,
+  type RenderEntryOptions,
   UI_MANIFEST_PLACEHOLDER,
 } from "./entry.js";
 import { type DeployPreset, nitroPresetFor, syncTransportFor } from "./presets.js";
@@ -31,6 +33,8 @@ export interface ServerBuildOptions {
   readonly preset: DeployPreset;
   readonly basePath?: string | undefined;
   readonly compatibilityDate?: NitroConfig["compatibilityDate"] | undefined;
+  /** The server render module `buildRender` wrote, for an app with `web.ssr`. */
+  readonly render?: string | undefined;
 }
 
 export interface ServerBuildResult {
@@ -55,10 +59,12 @@ function pageRoutesSource(manifest: Pick<UiManifest, "routes"> | undefined): str
 async function staticFileRules(
   webDir: string,
   headers: Record<string, string>,
+  ignored: readonly string[],
 ): Promise<NonNullable<NitroConfig["routeRules"]>> {
   const entries = await readdir(webDir, { withFileTypes: true }).catch(() => []);
   const rules: NonNullable<NitroConfig["routeRules"]> = {};
   for (const entry of entries) {
+    if (ignored.includes(entry.name)) continue;
     rules[entry.isDirectory() ? `/${entry.name}/**` : `/${entry.name}`] = { headers };
     if (entry.name === "index.html") rules["/"] = { headers };
   }
@@ -82,7 +88,19 @@ export async function buildServer(
     (text) => JSON.parse(text) as UiManifest,
     () => undefined,
   );
-  const contentSecurityPolicy = serializeCsp(appCsp(config, {}));
+  const policy = appCsp(config, {});
+  const contentSecurityPolicy = serializeCsp(policy);
+  const render: RenderEntryOptions | undefined = options.render
+    ? {
+        module: options.render,
+        contentSecurityPolicy: serializeCsp(
+          extendCsp(policy, { "script-src": [`'nonce-${NONCE_PLACEHOLDER}'`] }),
+        ),
+      }
+    : undefined;
+
+  // With server rendering, every document goes through the entry, `/` included.
+  const ignoredAssets = render ? ["index.html"] : [];
 
   await mkdir(hostRoot, { recursive: true });
   const serverEntry = join(rootDir, config.server.entry);
@@ -97,9 +115,10 @@ export async function buildServer(
       ? cloudflareEntrySource({
           basePath,
           contentSecurityPolicy,
+          render,
           locationHint: config.deploy.cloudflare?.locationHint,
         })
-      : hostEntrySource({ serverEntry, basePath, contentSecurityPolicy }),
+      : hostEntrySource({ serverEntry, basePath, contentSecurityPolicy, render }),
   );
   await writeFile(join(hostRoot, ".gitignore"), "*\n");
 
@@ -109,10 +128,21 @@ export async function buildServer(
     serverEntry: entryPath,
     ...(cloudflare ? { cloudflare: cloudflare.nitro } : {}),
     compatibilityDate: options.compatibilityDate ?? DEFAULT_COMPATIBILITY_DATE,
-    publicAssets: [{ dir: webOutDir(rootDir), baseURL: "/", fallthrough: true }],
-    routeRules: await staticFileRules(webOutDir(rootDir), {
-      "content-security-policy": contentSecurityPolicy,
-    }),
+    publicAssets: [
+      {
+        dir: webOutDir(rootDir),
+        baseURL: "/",
+        fallthrough: true,
+        ...(render
+          ? { ignore: ignoredAssets.map((name) => join(webOutDir(rootDir), name)) }
+          : {}),
+      },
+    ],
+    routeRules: await staticFileRules(
+      webOutDir(rootDir),
+      { "content-security-policy": contentSecurityPolicy },
+      ignoredAssets,
+    ),
     traceDeps: [...TRACED_DEPENDENCIES],
     replace: {
       [INDEX_HTML_PLACEHOLDER]: JSON.stringify(indexHtml),
