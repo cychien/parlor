@@ -6,7 +6,9 @@ import { GENERATED_DIR, type LoadedConfig, type ParlorConfig } from "@parlor/con
 
 export const CAPACITOR_PLUGINS = [
   "@capacitor/app",
+  "@capacitor/filesystem",
   "@capacitor/local-notifications",
+  "@capacitor/share",
 ] as const;
 
 /** The native plugin behind the `deviceKey` capability and the Keychain `sessionStore`. */

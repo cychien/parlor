@@ -23,6 +23,7 @@ export type {
   PairingDevice,
   PairingPresenceKey,
 } from "./local-agent-host/interface.js";
+export * from "./files/index.js";
 export * from "./notifications/index.js";
 export { detectPlatform, type Platform } from "./runtime.js";
 export * from "./session-store/index.js";

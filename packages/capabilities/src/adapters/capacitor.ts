@@ -2,6 +2,8 @@ import { capacitorDeepLink } from "../deep-link/capacitor.js";
 import { webDeepLink } from "../deep-link/web.js";
 import { capacitorDeviceKey } from "../device-key/capacitor.js";
 import { webDeviceKey } from "../device-key/web.js";
+import { capacitorFiles } from "../files/capacitor.js";
+import { webFiles } from "../files/web.js";
 import { capacitorLocalAgentHost } from "../local-agent-host/capacitor.js";
 import { webLocalAgentHost } from "../local-agent-host/web.js";
 import { capacitorNotifications } from "../notifications/capacitor.js";
@@ -16,4 +18,5 @@ export const platformAdapters: PlatformAdapters = {
   sessionStore: [capacitorSessionStore(), webSessionStore()],
   deviceKey: [capacitorDeviceKey(), webDeviceKey()],
   localAgentHost: [capacitorLocalAgentHost(), webLocalAgentHost()],
+  files: [capacitorFiles(), webFiles()],
 };

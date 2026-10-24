@@ -92,24 +92,34 @@ describe("desktop.agentHost", () => {
     });
   });
 
-  it("registers the Keychain session and device key commands in every app, with no sidecar or dialog without it", () => {
+  it("registers the Keychain commands and the dialog and fs plugins for files in every app, with no sidecar without it", () => {
     const files = tauriProjectFiles(config);
     const cargo = files["src-tauri/Cargo.toml"]!;
     expect(cargo).toMatch(/parlor-shell = \{ path = ".*shell-desktop\/rust" \}/);
-    expect(cargo).not.toContain("tauri-plugin-dialog");
+    expect(cargo).toContain('tauri-plugin-dialog = "2"');
+    expect(cargo).toContain('tauri-plugin-fs = "2"');
     const lib = files["src-tauri/src/lib.rs"]!;
     expect(libRs(config)).toBe(lib);
     expect(lib.match(/parlor_shell::parlor_\w+,/g)).toEqual(SHELL_COMMANDS);
-    expect(lib).not.toContain("tauri_plugin_dialog");
+    expect(lib).toContain(".plugin(tauri_plugin_dialog::init())");
+    expect(lib).toContain(".plugin(tauri_plugin_fs::init())");
     expect(lib).not.toContain("parlor_shell::setup");
     expect(lib).not.toContain("parlor_host_");
     expect(JSON.parse(files["src-tauri/capabilities/default.json"]!).permissions).toEqual(
-      ["core:default", "notification:default", "deep-link:default"],
+      [
+        "core:default",
+        "notification:default",
+        "deep-link:default",
+        "dialog:default",
+        "fs:allow-read-file",
+        "fs:allow-write-file",
+        "fs:allow-stat",
+      ],
     );
     expect(JSON.stringify(tauriConfig(config))).not.toMatch(/parlor-host|externalBin/);
   });
 
-  it("adds the dialog plugin, the sidecar launch and the host commands on top", () => {
+  it("adds the sidecar launch and the host commands on top", () => {
     const files = tauriProjectFiles(withHost);
     const cargo = files["src-tauri/Cargo.toml"]!;
     expect(cargo).toContain('tauri-plugin-dialog = "2"');
@@ -192,7 +202,7 @@ describe("prepareTauriProject", () => {
     const conf = await readFile(join(projectDir, "src-tauri", "tauri.conf.json"), "utf8");
     expect(conf).not.toMatch(/parlor-host|externalBin/);
     const lib = await readFile(join(projectDir, "src-tauri", "src", "lib.rs"), "utf8");
-    expect(lib).not.toMatch(/parlor_host_|parlor_shell::setup|tauri_plugin_dialog/);
+    expect(lib).not.toMatch(/parlor_host_|parlor_shell::setup/);
     expect(lib).toContain("parlor_shell::parlor_session_get,");
   });
 
