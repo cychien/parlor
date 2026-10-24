@@ -23,7 +23,7 @@ import { betterAuthProvider } from "@parlor/auth";
 //       ^?
 ```
 
-Turns a Better Auth instance into the provider `createServer({ auth })` takes.
+Turns Better Auth into the provider `createServer({ auth })` takes. Pass `options`, the options for `betterAuth()`, and the provider creates the instance on the first request: Better Auth queries the database as soon as it exists, which runtimes such as Cloudflare's forbid while the app loads. Passing a ready `instance` still works on `node-server` and `bun`.
 
 ## @parlor/auth/client
 
