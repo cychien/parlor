@@ -35,6 +35,7 @@
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
+    "bcryptjs": "^3.0.3",
     "better-auth": "1.7.7",
     "create-parlor": "workspace:*",
     "drizzle-orm": "^0.45.4",

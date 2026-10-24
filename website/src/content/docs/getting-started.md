@@ -171,3 +171,4 @@ To use your agents from another browser or your phone, link it once: it shows a 
 - [The agent sidebar](/parlor/guides/agent-sidebar/): how the sidebar works and how to change it.
 - [Targets](/parlor/guides/targets/): the same app on macOS, iOS and Android.
 - [Deploy](/parlor/guides/deploy/): build the server and the web app for production.
+- [Migrating an existing app](/parlor/guides/migrating/): port an app's data, users, logic and pages, step by step.
