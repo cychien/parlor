@@ -226,7 +226,7 @@ function macKeychain(service: string): SecretStore {
   };
 }
 
-/** macOS Keychain, libsecret or Windows Credential Manager. */
+/** The macOS Keychain; other platforms are refused before pairing (`unsupportedHostPlatform`). */
 export function keychainHostKeys(service: string): HostKeys {
   return keysIn(macKeychain(service));
 }

@@ -35,3 +35,13 @@ const PLATFORMS: Readonly<Record<string, string>> = {
 export function platformName(): string {
   return PLATFORMS[process.platform] ?? process.platform;
 }
+
+/** Why this computer cannot connect to an app yet; undefined on macOS. */
+export function unsupportedHostPlatform(
+  platform: NodeJS.Platform = process.platform,
+): string | undefined {
+  if (platform === "darwin") return undefined;
+  const name =
+    ({ win32: "Windows", linux: "Linux" } as const)[platform as string] ?? platform;
+  return `Parlor Host connects to apps from macOS only for now; ${name} is not supported yet, because it keeps its keys in the macOS Keychain. \`parlor dev\` works on every platform.`;
+}

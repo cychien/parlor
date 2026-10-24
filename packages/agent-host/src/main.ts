@@ -148,6 +148,12 @@ const link = defineCommand({
     },
   },
   async run({ args }) {
+    const { unsupportedHostPlatform } = await import("./naming.js");
+    const unsupported = unsupportedHostPlatform();
+    if (unsupported) {
+      fail(unsupported);
+      return;
+    }
     const [kit, { linkDevice }, { askYesNo }, { computerName }] = await Promise.all([
       host(),
       import("./link-device.js"),
@@ -243,8 +249,16 @@ const connect = defineCommand({
   meta: { name: "connect", description: "Connect this computer to a Parlor app" },
   args: { url: { type: "positional", required: true, description: "The app's URL" } },
   async run({ args }) {
-    const [kit, { pair, UnrevokedGrant }, { computerName, platformName }] =
-      await Promise.all([host(), import("./pairing.js"), import("./naming.js")]);
+    const [
+      kit,
+      { pair, UnrevokedGrant },
+      { computerName, platformName, unsupportedHostPlatform },
+    ] = await Promise.all([host(), import("./pairing.js"), import("./naming.js")]);
+    const unsupported = unsupportedHostPlatform();
+    if (unsupported) {
+      fail(unsupported);
+      return;
+    }
     const origin = new URL(args.url).origin;
     const paths = kit.hostPaths();
     const grants = kit.fileGrantStore(paths.grants);
