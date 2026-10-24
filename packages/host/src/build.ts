@@ -3,7 +3,12 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { UI_MANIFEST_FILE } from "@parlor/agent-ui";
-import { appServerEnv, GENERATED_DIR, type LoadedConfig } from "@parlor/config";
+import {
+  appServerEnv,
+  ConfigError,
+  GENERATED_DIR,
+  type LoadedConfig,
+} from "@parlor/config";
 import { appCsp, serializeCsp, webOutDir } from "@parlor/shell-web";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import { build, copyPublicAssets, createNitro, prepare } from "nitro/builder";
@@ -168,12 +173,20 @@ async function prepareDurable(
   hostRoot: string,
   serverEntry: string,
 ): Promise<DurableBuild> {
+  const workerExports = config.deploy.cloudflare?.exports;
+  const workerExportsPath = workerExports ? join(rootDir, workerExports) : undefined;
+  if (workerExportsPath && !existsSync(workerExportsPath)) {
+    throw new ConfigError(
+      `deploy.cloudflare.exports names ${workerExports}, which does not exist in ${rootDir}`,
+    );
+  }
   const exportsPath = join(hostRoot, "exports.cloudflare.mjs");
   await writeFile(
     exportsPath,
     durableServerSource({
       serverEntry,
       connectionScopes: installed(rootDir, "@parlor/data"),
+      workerExports: workerExportsPath,
     }),
   );
   const own = (config.deploy.cloudflare?.wrangler ?? {}) as WranglerConfig;

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { parseConfig } from "@parlor/config";
+import { ConfigError, parseConfig } from "@parlor/config";
 import { describe, expect, it } from "vitest";
 
 import { buildServer, withServerMigration } from "./build.js";
@@ -423,6 +423,105 @@ describe("buildServer for cloudflare-durable", () => {
       child.kill();
     }
   }, 180_000);
+});
+
+describe("buildServer for cloudflare-durable with the app's own Worker exports", () => {
+  it("exports the app's Durable Object classes from the Worker", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "parlor-host-cf-exports-"));
+    await writeFile(
+      join(rootDir, "worker.ts"),
+      [
+        'import { DurableObject } from "cloudflare:workers";',
+        "export class Fridge extends DurableObject {",
+        "  #opened = 0;",
+        "  fetch() { return Response.json({ opened: ++this.#opened }); }",
+        "}",
+      ].join("\n"),
+    );
+    await writeFile(
+      join(rootDir, "server.ts"),
+      [
+        'import { env } from "cloudflare:workers";',
+        "export default {",
+        "  fetch: () => env.FRIDGE.get(env.FRIDGE.idFromName('kitchen')).fetch('https://fridge/'),",
+        "};",
+      ].join("\n"),
+    );
+    const config = parseConfig({
+      app: { id: "dev.parlor.hostcfexports", name: "Host" },
+      deploy: {
+        cloudflare: {
+          exports: "worker.ts",
+          wrangler: {
+            durable_objects: { bindings: [{ name: "FRIDGE", class_name: "Fridge" }] },
+            migrations: [{ tag: "v1", new_sqlite_classes: ["Fridge"] }],
+          },
+        },
+      },
+    });
+
+    const result = await buildServer(
+      { config, rootDir, configFile: "parlor.config.ts" },
+      { preset: "cloudflare-durable" },
+    );
+    const port = await freePort();
+    const child = spawn(
+      process.execPath,
+      [
+        wranglerBin(),
+        "dev",
+        "--config",
+        join(result.outputDir, "server", "wrangler.json"),
+        "--port",
+        String(port),
+        "--ip",
+        "127.0.0.1",
+      ],
+      {
+        env: { ...process.env, CI: "1", WRANGLER_SEND_METRICS: "false" },
+        stdio: "ignore",
+      },
+    );
+    try {
+      const open = async () => {
+        for (let i = 0; i < 200; i++) {
+          try {
+            const response = await fetch(`http://127.0.0.1:${port}/_parlor/fridge`);
+            if (response.ok) return (await response.json()) as Record<string, unknown>;
+          } catch {}
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        throw new Error("wrangler dev did not start");
+      };
+      await expect(open()).resolves.toEqual({ opened: 1 });
+      await expect(open()).resolves.toEqual({ opened: 2 });
+    } finally {
+      child.kill();
+    }
+  }, 180_000);
+
+  it("names a missing exports module", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "parlor-host-cf-exports-"));
+    await writeFile(
+      join(rootDir, "server.ts"),
+      "export default { fetch: () => new Response() };",
+    );
+    const config = parseConfig({
+      app: { id: "dev.parlor.hostcfexports", name: "Host" },
+      deploy: { cloudflare: { exports: "worker.ts" } },
+    });
+
+    await expect(
+      buildServer(
+        { config, rootDir, configFile: "parlor.config.ts" },
+        { preset: "cloudflare-durable" },
+      ),
+    ).rejects.toThrow(
+      new ConfigError(
+        `deploy.cloudflare.exports names worker.ts, which does not exist in ${rootDir}`,
+      ),
+    );
+  });
 });
 
 describe("withServerMigration", () => {
