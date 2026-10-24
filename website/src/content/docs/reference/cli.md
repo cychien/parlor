@@ -19,6 +19,10 @@ Run the commands through the package manager: `pnpm parlor <command>`, `npx parl
 | `parlor add <addon...> [--dry-run] [--no-install] [--no-git-check]`       | adds `auth` or `agent` by editing the project's files; see [Auth](/parlor/guides/auth/)                                                                                                                                                                                                         |
 | `parlor typegen`                                                          | writes `src/routeTree.gen.ts` without starting Vite                                                                                                                                                                                                                                             |
 
+## parlor dev
+
+- With the `cloudflare-durable` preset, the server reaches the app's Cloudflare bindings through `cloudflare:workers`, emulated by Wrangler, which the app adds as a devDependency. Vars and secrets come from `.dev.vars`. See [Deploy](/parlor/guides/deploy/#in-development).
+
 ## parlor add
 
 - It refuses a project with uncommitted changes so its edits are one diff; `--no-git-check` skips that.
