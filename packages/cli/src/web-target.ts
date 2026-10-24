@@ -8,6 +8,7 @@ import {
 import { buildWeb, startWebDev } from "@parlor/shell-web";
 
 import { CliError } from "./errors.js";
+import { serverlessWarning } from "./serverless-warning.js";
 import { onShutdown } from "./shutdown.js";
 import type { BuildOptions, TargetHandler } from "./targets.js";
 
@@ -28,6 +29,8 @@ export async function buildWebAndServer(
     console.log(
       `server build written to ${result.outputDir} (sync: ${result.syncTransport})`,
     );
+    const warning = serverlessWarning(result.syncTransport);
+    if (warning) console.warn(warning);
     return result;
   } catch (error) {
     if (error instanceof PresetError) throw new CliError(error.message, { cause: error });
