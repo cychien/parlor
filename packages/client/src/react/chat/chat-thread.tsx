@@ -10,11 +10,13 @@ import {
   useRef,
 } from "react";
 
-import { useChatState } from "./context.js";
+import { useChatRuntime, useChatState } from "./context.js";
 
 export interface ChatThreadProps extends Omit<ComponentProps<"ol">, "children"> {
   readonly children: (item: ChatItem<AgentConfirmation>) => ReactNode;
   readonly empty?: ReactNode;
+  /** The first row while the thread has earlier items, such as a `Chat.LoadOlder`. */
+  readonly older?: ReactNode;
 }
 
 const NEAR_END_PX = 24;
@@ -26,10 +28,22 @@ const flag = (value: boolean) => (value ? "true" : "false");
  * streamed reply keeps its row when its durable twin lands. Stays scrolled to the end
  * while the user is there and never steals focus; `data-status` mirrors the chat status.
  */
-export function Thread({ children, empty, ref, onScroll, ...props }: ChatThreadProps) {
-  const { items, status } = useChatState("Chat.Thread");
+export function Thread({
+  children,
+  empty,
+  older,
+  ref,
+  onScroll,
+  ...props
+}: ChatThreadProps) {
+  const { items, status, hasOlder } = useChatState("Chat.Thread");
   const list = useRef<HTMLOListElement | null>(null);
   const atEnd = useRef(true);
+  const anchor = useRef<{ readonly first?: string | undefined; readonly height: number }>(
+    {
+      height: 0,
+    },
+  );
   const attach = useCallback(
     (element: HTMLOListElement | null) => {
       list.current = element;
@@ -51,12 +65,24 @@ export function Thread({ children, empty, ref, onScroll, ...props }: ChatThreadP
   };
   useLayoutEffect(() => {
     const element = list.current;
-    if (element && atEnd.current) element.scrollTop = element.scrollHeight;
+    if (!element) return;
+    const first = items[0]?.id;
+    const before = anchor.current;
+    if (atEnd.current) element.scrollTop = element.scrollHeight;
+    else if (
+      before.first !== undefined &&
+      first !== before.first &&
+      items.some((item) => item.id === before.first)
+    ) {
+      element.scrollTop += element.scrollHeight - before.height;
+    }
+    anchor.current = { first, height: element.scrollHeight };
   });
 
   return (
     <Fragment>
       <ol role="log" {...props} ref={attach} onScroll={track} data-status={status}>
+        {hasOlder && older !== undefined ? <li data-kind="older">{older}</li> : null}
         {items.map((item) => (
           <li
             key={item.id}
@@ -75,5 +101,29 @@ export function Thread({ children, empty, ref, onScroll, ...props }: ChatThreadP
       </ol>
       {items.length === 0 ? empty : null}
     </Fragment>
+  );
+}
+
+/** `type="button"`; rendered only while the thread has earlier items, which it reads. */
+export function LoadOlder({ children, onClick, ...props }: ComponentProps<"button">) {
+  const runtime = useChatRuntime("Chat.LoadOlder");
+  const { hasOlder, loadingOlder } = useChatState("Chat.LoadOlder");
+  if (!hasOlder) return null;
+  return (
+    <button
+      type="button"
+      disabled={loadingOlder}
+      {...props}
+      onClick={(event) => {
+        onClick?.(event);
+        if (!event.defaultPrevented) {
+          runtime.loadOlder().catch((error: unknown) => {
+            console.error("[parlor] The chat could not do that:", error);
+          });
+        }
+      }}
+    >
+      {children ?? (loadingOlder ? "Loading…" : "Show earlier messages")}
+    </button>
   );
 }

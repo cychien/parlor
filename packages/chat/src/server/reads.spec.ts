@@ -2,6 +2,7 @@ import type { DatabaseHandle } from "@parlor/data";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { LoggedItem } from "../items.js";
+import type { ThreadHistory, ThreadList } from "../model.js";
 import type { ChatSnapshot } from "../model.js";
 import {
   agentRef,
@@ -95,6 +96,56 @@ describe("reading the chat", () => {
     const all = (await open({ threadId: "t1" })).page;
     expect(all.items).toHaveLength(3);
     expect(all.hasMore).toBe(false);
+  });
+
+  it("pages back through a thread's earlier items with their turns, until none remain", async () => {
+    await send("t1", "u1", "one");
+    await finish("u1", "first answer");
+    await send("t1", "u2", "two");
+    await finish("u2", "second answer");
+    const history = async (beforeSeq: number) =>
+      data(
+        await app.action("alice", "history", { threadId: "t1", beforeSeq, limit: 2 }),
+      ) as ThreadHistory;
+    const newer = await history(4);
+    expect(newer.items.map((item) => [item.seq, item.kind])).toEqual([
+      [2, "reply"],
+      [3, "prompt"],
+    ]);
+    expect(newer.turns.map((turn) => [turn.turnId, turn.state])).toEqual([
+      ["u1", "done"],
+      ["u2", "done"],
+    ]);
+    expect(newer.hasMore).toBe(true);
+    const oldest = await history(2);
+    expect(oldest.items.map((item) => item.seq)).toEqual([1]);
+    expect(oldest.turns.map((turn) => turn.turnId)).toEqual(["u1"]);
+    expect(oldest.hasMore).toBe(false);
+    expect(
+      (await app.action("bob", "history", { threadId: "t1", beforeSeq: 4 })).status,
+    ).toBe(404);
+  });
+
+  it("lists threads past the first page, newest first, without repeating one", async () => {
+    for (const id of ["t1", "t2", "t3"]) {
+      await send(id, `${id}-u`, id);
+      await finish(`${id}-u`, "ok");
+    }
+    const [newest, middle] = (await open({})).threads;
+    const before = async (thread: { updatedAt: number; id: string }) =>
+      data(
+        await app.action("alice", "threadsBefore", {
+          before: { updatedAt: thread.updatedAt, id: thread.id },
+          limit: 1,
+        }),
+      ) as ThreadList;
+    const second = await before(newest!);
+    expect(second.threads.map((thread) => thread.id)).toEqual([middle!.id]);
+    expect(second.hasMore).toBe(true);
+    const third = await before(second.threads[0]!);
+    expect(third.threads.map((thread) => thread.id)).toEqual(["t1"]);
+    expect(third.hasMore).toBe(false);
+    expect((await open({})).moreThreads).toBeUndefined();
   });
 
   it("returns the items after a sequence number", async () => {

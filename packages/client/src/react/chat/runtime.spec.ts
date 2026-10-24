@@ -7,6 +7,8 @@ import type {
 import type {
   AnswerToSign,
   ChatSnapshot,
+  ThreadHistory,
+  ThreadList,
   HostSummary,
   ItemSignature,
   LoggedItem,
@@ -104,6 +106,8 @@ function setup(
     transport?: "sse" | "poll";
     hidden?: () => boolean;
     hosts?: () => HostSummary[];
+    history?: (input: { threadId: string; beforeSeq: number }) => ThreadHistory;
+    threadsBefore?: (input: { before: { updatedAt: number; id: string } }) => ThreadList;
   } = {},
 ) {
   let negotiatedTransport = options.transport;
@@ -117,6 +121,8 @@ function setup(
     cancel: (input: { threadId: string }) => ({ id: input.threadId }),
     answer: (input: { threadId: string }) => ({ id: input.threadId }),
     userActive: () => ({ ok: true }),
+    history: options.history ?? (() => ({ items: [], turns: [], hasMore: false })),
+    threadsBefore: options.threadsBefore ?? (() => ({ threads: [], hasMore: false })),
   };
   const call = vi.fn(async (name: string, input: unknown) => {
     calls.push({ name, input });
@@ -1741,6 +1747,72 @@ describe("createChatRuntime linking this device", () => {
     });
     await h.runtime.startLink({ presence: false });
     expect(h.runtime.get().link).toMatchObject({ code: "K7M4PX2Q8R", error: undefined });
+  });
+});
+
+describe("createChatRuntime earlier pages", () => {
+  const prompt = (seq: number, turnId: string) =>
+    logged(seq, `p${seq}`, "prompt", `ask ${seq}`, turnId);
+  const reply = (seq: number, turnId: string) =>
+    logged(seq, `r${seq}`, "reply", `answer ${seq}`, turnId);
+
+  it("reads a thread's earlier items while there are more, keeping their turns across a refresh", async () => {
+    const history = vi.fn((input: { beforeSeq: number }) =>
+      input.beforeSeq === 3
+        ? {
+            items: [prompt(1, "turn_0"), reply(2, "turn_0")],
+            turns: [turn("turn_0", "done")],
+            hasMore: false,
+          }
+        : { items: [], turns: [], hasMore: false },
+    );
+    const h = setup({
+      open: async () =>
+        snapshot({
+          items: [prompt(3, "turn_1"), reply(4, "turn_1")],
+          turns: [turn("turn_1", "running")],
+          hasMore: true,
+        }),
+      history,
+    });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().hasOlder).toBe(true));
+    await h.runtime.loadOlder();
+    expect(history).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: "thr_1", beforeSeq: 3 }),
+    );
+    expect(h.runtime.get()).toMatchObject({ hasOlder: false, loadingOlder: false });
+    expect(h.runtime.get().items.filter((item) => item.kind === "prompt")).toHaveLength(
+      2,
+    );
+
+    h.tags(["parlor_chat", "thr_1"]);
+    await vi.waitFor(() =>
+      expect(h.calls.filter((call) => call.name === "open").length).toBeGreaterThan(1),
+    );
+    const first = h.runtime.get().items.find((item) => item.id === "p1");
+    expect(first).toMatchObject({ state: "done" });
+    expect(h.runtime.get().hasOlder).toBe(false);
+  });
+
+  it("lists older threads past the first page until none remain", async () => {
+    const older = { ...thread("thr_old"), updatedAt: 0 };
+    const threadsBefore = vi.fn(() => ({ threads: [older], hasMore: false }));
+    const h = setup({
+      open: async () => ({ ...snapshot(), moreThreads: true }),
+      threadsBefore,
+    });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().moreThreads).toBe(true));
+    await h.runtime.loadMoreThreads();
+    expect(threadsBefore).toHaveBeenCalledWith(
+      expect.objectContaining({ before: { updatedAt: 1, id: "thr_1" } }),
+    );
+    expect(h.runtime.get().threads.map((summary) => summary.id)).toEqual([
+      "thr_1",
+      "thr_old",
+    ]);
+    expect(h.runtime.get().moreThreads).toBe(false);
   });
 });
 

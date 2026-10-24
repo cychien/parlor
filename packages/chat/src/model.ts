@@ -103,8 +103,23 @@ export interface ThreadPage {
 
 export interface ChatSnapshot {
   readonly threads: readonly ThreadSummary[];
+  /** `threads` was cut at its limit; `threadsBefore` reads on from its last one. */
+  readonly moreThreads?: boolean | undefined;
   readonly hosts: readonly HostSummary[];
   readonly page: ThreadPage;
+}
+
+/** What `history` returns: earlier items of a thread, oldest first, with their turns. */
+export interface ThreadHistory {
+  readonly items: readonly LoggedItem[];
+  readonly turns: readonly TurnStatus[];
+  readonly hasMore: boolean;
+}
+
+/** What `threadsBefore` returns: the next older threads, newest first. */
+export interface ThreadList {
+  readonly threads: readonly ThreadSummary[];
+  readonly hasMore: boolean;
 }
 
 /** The device's keys as the account has them; the host compares them with its own pins. */

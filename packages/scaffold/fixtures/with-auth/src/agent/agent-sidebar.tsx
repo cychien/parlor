@@ -40,6 +40,7 @@ export default function AgentSidebar() {
         <Chat.Thread
           className="flex-1 space-y-3 overflow-y-auto p-4"
           empty={<ThreadEmpty />}
+          older={<Chat.LoadOlder className={`mx-auto block ${BUTTON}`} />}
         >
           {(item) => <Item item={item} />}
         </Chat.Thread>
@@ -60,36 +61,56 @@ function PublishThread() {
 }
 
 function Threads() {
-  const { threads, thread, openThread, newThread } = useChat();
+  const {
+    threads,
+    thread,
+    openThread,
+    newThread,
+    moreThreads,
+    loadMoreThreads,
+    loadingOlder,
+  } = useChat();
   if (threads.length === 0) return null;
   return (
-    <div className="flex gap-2">
-      <select
-        name="thread"
-        aria-label="Conversation"
-        value={thread?.id ?? ""}
-        onChange={(event) => openThread(event.target.value)}
-        className="min-w-0 flex-1 rounded-md border border-zinc-300 px-2 py-1 text-sm"
-      >
-        {thread ? null : (
-          <option value="" disabled>
-            New conversation
-          </option>
-        )}
-        {threads.map((choice) => (
-          <option key={choice.id} value={choice.id}>
-            {choice.title}
-          </option>
-        ))}
-      </select>
-      <button
-        type="button"
-        disabled={thread === undefined}
-        onClick={newThread}
-        className={BUTTON}
-      >
-        New chat
-      </button>
+    <div className="space-y-1">
+      <div className="flex gap-2">
+        <select
+          name="thread"
+          aria-label="Conversation"
+          value={thread?.id ?? ""}
+          onChange={(event) => openThread(event.target.value)}
+          className="min-w-0 flex-1 rounded-md border border-zinc-300 px-2 py-1 text-sm"
+        >
+          {thread ? null : (
+            <option value="" disabled>
+              New conversation
+            </option>
+          )}
+          {threads.map((choice) => (
+            <option key={choice.id} value={choice.id}>
+              {choice.title}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          disabled={thread === undefined}
+          onClick={newThread}
+          className={BUTTON}
+        >
+          New chat
+        </button>
+      </div>
+      {moreThreads ? (
+        <button
+          type="button"
+          disabled={loadingOlder}
+          onClick={() => void loadMoreThreads()}
+          className={META}
+        >
+          Show older conversations
+        </button>
+      ) : null}
     </div>
   );
 }

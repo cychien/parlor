@@ -15,6 +15,8 @@ export function useChat(): ChatState & ChatCommands {
       stop: runtime.stop,
       answer: runtime.answer,
       resend: runtime.resend,
+      loadOlder: runtime.loadOlder,
+      loadMoreThreads: runtime.loadMoreThreads,
       choose: runtime.choose,
       openThread: runtime.openThread,
       newThread: runtime.newThread,

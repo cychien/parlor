@@ -81,6 +81,8 @@ describe("chat() setup", () => {
     expect(runtime.actions?.names()).toEqual([
       "open",
       "items",
+      "history",
+      "threadsBefore",
       "hosts",
       "send",
       "answer",

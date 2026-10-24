@@ -45,6 +45,9 @@ const baseState: ChatState = {
   setup: undefined,
   link: { status: "linked" },
   presenceDue: false,
+  moreThreads: false,
+  hasOlder: false,
+  loadingOlder: false,
 };
 
 function fakeRuntime(initial: Partial<ChatState> = {}) {
@@ -63,6 +66,7 @@ function fakeRuntime(initial: Partial<ChatState> = {}) {
     answer: vi.fn(async () => {}),
     choose: vi.fn(),
     openThread: vi.fn(),
+    loadOlder: vi.fn(async () => {}),
   } satisfies ChatRuntime;
   function set(next: Partial<ChatState>) {
     state = { ...state, ...next };
@@ -131,6 +135,32 @@ describe("Chat.Thread", () => {
       ["turn_1.2", "reply", "false", "true", "Done."],
     ]);
     expect(screen.getByRole("log").dataset.status).toBe("running");
+  });
+
+  it("puts the older row first while the thread has earlier items, and reads them on click", () => {
+    const { runtime, set } = fakeRuntime({
+      items: [reply("turn_1.1", "Latest")],
+      hasOlder: true,
+    });
+    mount(
+      runtime,
+      <Chat.Thread older={<Chat.LoadOlder />}>
+        {(item) => <span>{"text" in item ? item.text : ""}</span>}
+      </Chat.Thread>,
+    );
+    const rows = screen.getAllByRole("listitem");
+    expect(rows.map((row) => row.dataset.kind)).toEqual(["older", "reply"]);
+    fireEvent.click(screen.getByRole("button", { name: "Show earlier messages" }));
+    expect(runtime.loadOlder).toHaveBeenCalledOnce();
+    set({ loadingOlder: true });
+    expect(screen.getByRole("button", { name: "Loading…" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    set({ hasOlder: false, loadingOlder: false });
+    expect(screen.getAllByRole("listitem").map((row) => row.dataset.kind)).toEqual([
+      "reply",
+    ]);
   });
 
   it("keeps a row mounted when its open reply becomes the persisted twin", () => {

@@ -24,6 +24,8 @@ export type {
   OpenItem,
   OpenTurn,
   PromptToSign,
+  ThreadHistory,
+  ThreadList,
   ThreadPage,
   ThreadSummary,
   TurnFailure,
