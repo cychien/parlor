@@ -1,14 +1,14 @@
 {
   "name": "@parlor/core",
   "version": "0.1.0",
-  "license": "MIT",
   "homepage": "https://cychien.github.io/parlor",
+  "bugs": "https://github.com/cychien/parlor/issues",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/cychien/parlor.git",
     "directory": "packages/core"
   },
-  "bugs": "https://github.com/cychien/parlor/issues",
   "files": [
     "dist"
   ],

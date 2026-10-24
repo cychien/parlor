@@ -2,14 +2,14 @@
   "name": "create-parlor",
   "version": "0.1.0",
   "description": "Create a Parlor app: pnpm create parlor, npm create parlor, yarn create parlor, bun create parlor",
-  "license": "MIT",
   "homepage": "https://cychien.github.io/parlor",
+  "bugs": "https://github.com/cychien/parlor/issues",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/cychien/parlor.git",
     "directory": "packages/create-parlor"
   },
-  "bugs": "https://github.com/cychien/parlor/issues",
   "bin": {
     "create-parlor": "./bin/create-parlor-dev.mjs"
   },
