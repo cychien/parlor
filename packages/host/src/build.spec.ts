@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { parseConfig } from "@parlor/config";
 import { describe, expect, it } from "vitest";
 
-import { buildServer } from "./build.js";
+import { buildServer, withServerMigration } from "./build.js";
 import { hostEntrySource } from "./entry.js";
 
 describe("hostEntrySource", () => {
@@ -423,4 +423,22 @@ describe("buildServer for cloudflare-durable", () => {
       child.kill();
     }
   }, 180_000);
+});
+
+describe("withServerMigration", () => {
+  const server = { tag: "parlor-server-v1", new_sqlite_classes: ["ParlorServer"] };
+  const fridge = { tag: "v1_fridge", new_sqlite_classes: ["Fridge"] };
+
+  it("adds the server's migration to an app with none", () => {
+    expect(withServerMigration([])).toEqual([server]);
+  });
+
+  it("appends it after the app's own, never before a tag a deployment already applied", () => {
+    expect(withServerMigration([fridge])).toEqual([fridge, server]);
+  });
+
+  it("keeps the app's order once the app lists it", () => {
+    const later = { tag: "v2_cache", new_sqlite_classes: ["Cache"] };
+    expect(withServerMigration([fridge, server, later])).toEqual([fridge, server, later]);
+  });
 });

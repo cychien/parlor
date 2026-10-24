@@ -144,6 +144,25 @@ function installed(rootDir: string, name: string): boolean {
   }
 }
 
+/**
+ * Wrangler applies Durable Object migrations as an append-only log, after the last tag a
+ * deployment applied. An app with its own migrations lists ours where it first deployed.
+ */
+export function withServerMigration(
+  migrations: NonNullable<WranglerConfig["migrations"]>,
+): NonNullable<WranglerConfig["migrations"]> {
+  const declared = migrations.some((migration) =>
+    [migration.new_classes, migration.new_sqlite_classes].some((classes) =>
+      classes?.includes(DURABLE_SERVER_CLASS),
+    ),
+  );
+  if (declared) return migrations;
+  return [
+    ...migrations,
+    { tag: "parlor-server-v1", new_sqlite_classes: [DURABLE_SERVER_CLASS] },
+  ];
+}
+
 async function prepareDurable(
   { config, rootDir }: Pick<LoadedConfig, "config" | "rootDir">,
   hostRoot: string,
@@ -173,10 +192,7 @@ async function prepareDurable(
             ...(own.durable_objects?.bindings ?? []),
           ],
         },
-        migrations: [
-          { tag: "parlor-server-v1", new_sqlite_classes: [DURABLE_SERVER_CLASS] },
-          ...(own.migrations ?? []),
-        ],
+        migrations: withServerMigration(own.migrations ?? []),
       },
     },
   };

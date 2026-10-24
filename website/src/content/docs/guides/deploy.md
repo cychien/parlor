@@ -35,6 +35,7 @@ pnpm parlor deploy
 - Set `DATABASE_URL` as a secret: any PostgreSQL that accepts connections from Cloudflare, such as Neon. If it is a pooled endpoint, also set `DATABASE_DIRECT_URL` to the direct one, which LISTEN needs.
 - The migrations are embedded in the build and run before the server's first request.
 - Put the Durable Object near the database with `deploy.cloudflare.locationHint` in `parlor.config.ts`, and add the app's own bindings, such as R2, under `deploy.cloudflare.wrangler`.
+- Wrangler applies Durable Object migrations in order, after the last one a deployment applied. Without migrations of its own, the app gets Parlor's `{ tag: "parlor-server-v1", new_sqlite_classes: ["ParlorServer"] }` at the end of the list; once it lists its own, include that entry where it was first deployed.
 - Nothing may do I/O, set a timer or draw random values while `server.ts` loads: workerd forbids it. `createDatabase` and `betterAuthProvider({ options })` wait for the first request; a plugin starts its timers in `start()`.
 
 ## Serverless is not supported yet
