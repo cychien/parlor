@@ -16,7 +16,8 @@
   "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",
-    "./react": "./src/react/index.ts"
+    "./react": "./src/react/index.ts",
+    "./router": "./src/router/index.ts"
   },
   "publishConfig": {
     "exports": {
@@ -27,6 +28,10 @@
       "./react": {
         "types": "./dist/react/index.d.ts",
         "import": "./dist/react/index.js"
+      },
+      "./router": {
+        "types": "./dist/router/index.d.ts",
+        "import": "./dist/router/index.js"
       }
     }
   },
@@ -58,7 +63,7 @@
     "zod": "catalog:"
   },
   "peerDependencies": {
-    "@tanstack/react-query": ">=5",
+    "@tanstack/react-query": ">=5.102",
     "@tanstack/react-router": ">=1.170",
     "react": ">=19",
     "react-dom": ">=19"

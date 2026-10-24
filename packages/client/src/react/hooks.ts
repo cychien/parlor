@@ -1,19 +1,21 @@
 import type { ActionError, ActionInput, ActionOutput } from "@parlor/core";
 import {
-  hashKey,
   type UseMutationOptions,
   type UseMutationResult,
   type UseQueryOptions,
   type UseQueryResult,
+  type UseSuspenseQueryOptions,
+  type UseSuspenseQueryResult,
   useMutation,
   useQuery,
   useQueryClient,
+  useSuspenseQuery,
 } from "@tanstack/react-query";
 
-import { ACTION_QUERY_PREFIX, actionQueryKey } from "../query-keys.js";
+import { ACTION_QUERY_PREFIX } from "../query-keys.js";
 import type { RegisteredActions } from "../register.js";
+import { type ActionQueryContext, actionQueryOptions } from "./action-query.js";
 import { useFramework } from "./provider.js";
-import { actionRetry } from "./retry.js";
 
 type Actions = RegisteredActions;
 type Name = keyof Actions & string;
@@ -28,19 +30,34 @@ export function useActionQuery<K extends Name>(
   input: ActionInput<Actions[K]>,
   options?: ActionQueryOptions<K>,
 ): UseQueryResult<ActionOutput<Actions[K]>, ActionError> {
-  const { client, readTags } = useFramework();
-  const queryClient = useQueryClient();
-  const queryKey = actionQueryKey(name, input);
   return useQuery({
+    ...actionQueryOptions(useActionQueryContext(), name, input),
     ...options,
-    retry: options?.retry ?? actionRetry(queryClient.getDefaultOptions().queries?.retry),
-    queryKey,
-    queryFn: async ({ signal }) => {
-      const envelope = await client.invoke(name, input, { signal });
-      readTags.record(hashKey(queryKey), envelope.tags);
-      return envelope.data;
-    },
   });
+}
+
+export type ActionSuspenseQueryOptions<K extends Name> = Omit<
+  UseSuspenseQueryOptions<ActionOutput<Actions[K]>, ActionError>,
+  "queryKey" | "queryFn"
+>;
+
+/**
+ * `useActionQuery` as a TanStack Query `useSuspenseQuery`: `data` is always there. It suspends
+ * until the action answers, unless a route `loader` already ran `ensureActionQueryData`.
+ */
+export function useActionSuspenseQuery<K extends Name>(
+  name: K,
+  input: ActionInput<Actions[K]>,
+  options?: ActionSuspenseQueryOptions<K>,
+): UseSuspenseQueryResult<ActionOutput<Actions[K]>, ActionError> {
+  return useSuspenseQuery({
+    ...actionQueryOptions(useActionQueryContext(), name, input),
+    ...options,
+  });
+}
+
+function useActionQueryContext(): ActionQueryContext {
+  return { client: useFramework().client, queryClient: useQueryClient() };
 }
 
 export type ActionMutationOptions<K extends Name> = Omit<

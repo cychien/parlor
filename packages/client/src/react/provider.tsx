@@ -18,7 +18,7 @@ import type { RegisteredActions } from "../register.js";
 import type { FrameworkAuth, SessionSnapshot, SessionSource } from "../session.js";
 import { createAgentUiRuntime } from "./agent-ui/runtime.js";
 import { type FrameworkSync, SyncBridge } from "./sync-bridge.js";
-import { invalidateForEvents, ReadTagRegistry } from "./sync.js";
+import { invalidateForEvents, type ReadTagRegistry, readTagsOf } from "./sync.js";
 
 interface FrameworkContextValue {
   readonly client: ActionClient<RegisteredActions>;
@@ -33,6 +33,7 @@ const FrameworkContext = createContext<FrameworkContextValue | null>(null);
 
 export interface FrameworkProviderProps {
   readonly client: ActionClient<RegisteredActions>;
+  /** Defaults to the router's `context.queryClient`, so loaders and hooks share one cache. */
   readonly queryClient?: QueryClient | undefined;
   readonly sync?: boolean | undefined;
   readonly router?: AnyRouter | undefined;
@@ -53,6 +54,13 @@ const NO_SESSION: SessionSource = {
 
 function identityOf(session: SessionSnapshot): string {
   return session.status === "signed-in" ? `user:${session.user.id}` : session.status;
+}
+
+function routerQueryClient(router: AnyRouter | undefined): QueryClient | undefined {
+  const context: unknown = router?.options.context;
+  if (typeof context !== "object" || context === null || !("queryClient" in context))
+    return undefined;
+  return context.queryClient instanceof QueryClient ? context.queryClient : undefined;
 }
 
 /** Counts changes of the signed-in user after the first settled answer. */
@@ -87,12 +95,14 @@ export function FrameworkProvider({
   auth,
   children,
 }: FrameworkProviderProps) {
-  const [ownQueryClient] = useState(() => queryClient ?? new QueryClient());
+  const [ownQueryClient] = useState(
+    () => queryClient ?? routerQueryClient(router) ?? new QueryClient(),
+  );
   const [value] = useState<FrameworkContextValue>(() => {
     const bridge = new SyncBridge();
     return {
       client,
-      readTags: new ReadTagRegistry(),
+      readTags: readTagsOf(ownQueryClient),
       agentUi: createAgentUiRuntime({ client, queryClient: ownQueryClient, router }),
       auth,
       sync: bridge,
@@ -106,10 +116,9 @@ export function FrameworkProvider({
     if (appliedEpoch.current === epoch) return;
     appliedEpoch.current = epoch;
     void ownQueryClient.resetQueries();
+    void router?.invalidate();
     value.agentUi.reset();
-  }, [epoch, ownQueryClient, value]);
-
-  useEffect(() => value.readTags.attach(ownQueryClient), [value, ownQueryClient]);
+  }, [epoch, ownQueryClient, router, value]);
 
   useEffect(() => value.agentUi.start(), [value]);
 
