@@ -1,4 +1,5 @@
 import { lstat, mkdtemp, readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -6,6 +7,7 @@ import { parseConfig } from "@parlor/config";
 import { describe, expect, it } from "vitest";
 
 import {
+  CAPACITOR_PLUGINS,
   capacitorConfig,
   capacitorProjectFiles,
   DEVICE_KEY_PLUGIN,
@@ -68,5 +70,14 @@ describe("DEVICE_KEY_PLUGIN", () => {
     const files = capacitorProjectFiles(config);
     const pkg = JSON.parse(files["package.json"]!);
     expect(pkg.dependencies[DEVICE_KEY_PLUGIN.package]).toBe("*");
+  });
+});
+
+describe("the native plugins Capacitor links", () => {
+  it("each resolves <name>/package.json, as `cap sync` does to find it, or the app ships without it", () => {
+    const fromShell = createRequire(import.meta.url);
+    for (const name of [...CAPACITOR_PLUGINS, DEVICE_KEY_PLUGIN.package]) {
+      expect(() => fromShell.resolve(`${name}/package.json`), name).not.toThrow();
+    }
   });
 });
