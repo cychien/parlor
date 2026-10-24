@@ -156,19 +156,6 @@ function Computers() {
 
 const formatCode = (code: string) => code.replace(/^(.{4})(.{4})(.{2})$/, "$1-$2-$3");
 
-function useExpired(expiresAt: string | undefined): boolean {
-  const [expiredAt, setExpiredAt] = useState<string | undefined>(undefined);
-  useEffect(() => {
-    if (expiresAt === undefined) return;
-    const timer = setTimeout(
-      () => setExpiredAt(expiresAt),
-      Math.max(0, Date.parse(expiresAt) - Date.now()),
-    );
-    return () => clearTimeout(timer);
-  }, [expiresAt]);
-  return expiresAt !== undefined && expiredAt === expiresAt;
-}
-
 function LinkQr({ value }: { readonly value: string }) {
   const { size, path } = useMemo(() => {
     const qr = encode(value, { border: 2 });
@@ -190,25 +177,10 @@ function LinkQr({ value }: { readonly value: string }) {
   );
 }
 
-/** No other device can vouch yet, as far as the computers report, so the computer must link this one. */
-function useOnlyDevice(): boolean {
-  const { hosts } = useChat();
-  const { devices } = useDevices();
-  const self = devices?.find((device) => device.current)?.id;
-  const reporting = hosts.filter((host) => host.devices !== undefined);
-  return (
-    devices !== undefined &&
-    reporting.length > 0 &&
-    reporting.every((host) => host.devices!.every((id) => id === self))
-  );
-}
-
 function LinkCard() {
   const { link, startLink } = useChat();
-  const expired = useExpired(link.status === "unlinked" ? link.expiresAt : undefined);
-  const onlyDevice = useOnlyDevice();
   if (link.status !== "unlinked") return null;
-  if (link.code === undefined || expired) {
+  if (link.code === undefined) {
     return (
       <section
         className="sidebar-note"
@@ -220,7 +192,7 @@ function LinkCard() {
           To use your agents on {link.hostName} from this device, link it once, the way
           you link WhatsApp to a new device.
         </p>
-        {expired ? <p>That code expired. Show a new one.</p> : null}
+        {link.expired ? <p>That code expired. Show a new one.</p> : null}
         {link.error ? (
           <p className="problem" role="alert">
             {link.error}
@@ -246,8 +218,7 @@ function LinkCard() {
       </section>
     );
   }
-  const command = `npx @parlor/agent-host link ${globalThis.location?.origin} ${link.code}`;
-  if (onlyDevice) {
+  if (link.onlyComputer) {
     return (
       <section
         className="sidebar-note"
@@ -259,7 +230,7 @@ function LinkCard() {
           No other device is linked yet, so link this one from {link.hostName}. Run this
           in a terminal on it:
         </p>
-        <code className="connect-command">{command}</code>
+        <code className="connect-command">{link.command}</code>
         <p>The code works for 15 minutes.</p>
       </section>
     );
@@ -276,7 +247,7 @@ function LinkCard() {
         {formatCode(link.code)}
       </p>
       <p>No linked device with you? On {link.hostName}, run:</p>
-      <code className="connect-command">{command}</code>
+      <code className="connect-command">{link.command}</code>
       <p>The code works for 15 minutes.</p>
     </section>
   );

@@ -93,7 +93,13 @@ export type LinkState =
       readonly code?: string | undefined;
       /** What a linked phone's camera opens to link this device: `<app>/link#d=…&c=…`. */
       readonly qr?: string | undefined;
+      /** What to run on the computer to link this device there instead, while `code` is shown. */
+      readonly command?: string | undefined;
       readonly expiresAt?: string | undefined;
+      /** The code shown last ran out; `startLink` shows a new one. */
+      readonly expired: boolean;
+      /** No other device is linked yet to link this one, so only the computer can, with `command`. */
+      readonly onlyComputer: boolean;
       readonly busy: boolean;
       readonly error?: string | undefined;
     };
@@ -297,6 +303,8 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     | undefined;
   let linkBusy = false;
   let linkError: string | undefined;
+  let linkExpired = false;
+  let linkTimer: ReturnType<typeof setTimeout> | undefined;
   let presenceTimer: ReturnType<typeof setTimeout> | undefined;
   let setup: DeviceSetup | undefined;
   let afterSetup: (() => Promise<void>) | undefined;
@@ -361,12 +369,16 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     ) {
       return LINKED;
     }
+    const listing = hosts.filter((host) => host.devices !== undefined);
     return {
       status: "unlinked",
       hostName: reporting[0]!.name,
       code: linking?.code,
       qr: linking?.qr,
+      command: linking && `npx @parlor/agent-host link ${deps.appOrigin} ${linking.code}`,
       expiresAt: linking?.expiresAt,
+      expired: linkExpired,
+      onlyComputer: listing.every((host) => host.devices!.every((id) => id === deviceId)),
       busy: linkBusy,
       error: linkError,
     };
@@ -877,6 +889,19 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
           qr: `${deps.appOrigin}/link#${new URLSearchParams({ d: started.deviceId, c: started.commitment })}`,
           expiresAt: started.expiresAt,
         };
+        linkExpired = false;
+        clearTimeout(linkTimer);
+        linkTimer = setTimeout(
+          () => {
+            linking = undefined;
+            linkExpired = true;
+            emit();
+          },
+          Math.min(
+            Math.max(0, Date.parse(started.expiresAt) - Date.now()),
+            LONGEST_TIMEOUT_MS,
+          ),
+        );
         linkInfo = {
           vouched: false,
           pairing: false,
@@ -975,6 +1000,8 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
         clearRetry();
         clearTimeout(presenceTimer);
         presenceTimer = undefined;
+        clearTimeout(linkTimer);
+        linkTimer = undefined;
         detachChannel();
         offTags();
         offResume();
