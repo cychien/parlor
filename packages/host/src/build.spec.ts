@@ -312,6 +312,52 @@ function wranglerBin(): string {
   return join(dirname(manifest), bin.wrangler);
 }
 
+/** Runs a cloudflare-durable build on `wrangler dev` and fetches `path` once the Worker answers. */
+async function fetchOnWrangler(outputDir: string, path: string): Promise<Response> {
+  const port = await freePort();
+  const child = spawn(
+    process.execPath,
+    [
+      wranglerBin(),
+      "dev",
+      "--config",
+      join(outputDir, "server", "wrangler.json"),
+      "--port",
+      String(port),
+      "--ip",
+      "127.0.0.1",
+    ],
+    {
+      env: { ...process.env, CI: "1", WRANGLER_SEND_METRICS: "false" },
+      stdio: "ignore",
+    },
+  );
+  try {
+    for (let i = 0; i < 200; i++) {
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}${path}`);
+        return new Response(await response.arrayBuffer(), response);
+      } catch {}
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    throw new Error("wrangler dev did not start");
+  } finally {
+    child.kill();
+  }
+}
+
+async function writePackage(
+  rootDir: string,
+  name: string,
+  files: Record<string, string>,
+): Promise<void> {
+  const dir = join(rootDir, "node_modules", name);
+  await mkdir(dir, { recursive: true });
+  for (const [file, contents] of Object.entries(files)) {
+    await writeFile(join(dir, file), contents);
+  }
+}
+
 describe("buildServer for cloudflare-durable", () => {
   it("serves documents from the Worker and runs the app in one Durable Object", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "parlor-host-cf-"));
@@ -422,6 +468,56 @@ describe("buildServer for cloudflare-durable", () => {
     } finally {
       child.kill();
     }
+  }, 180_000);
+
+  it("starts an app whose dependencies require Node built-ins and load JSON lazily", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "parlor-host-cf-deps-"));
+    await writePackage(rootDir, "requires-builtins", {
+      "package.json": JSON.stringify({ name: "requires-builtins", main: "index.js" }),
+      "index.js": [
+        'const process = require("node:process");',
+        'const path = require("path");',
+        'exports.describe = () => `${typeof process.env} ${path.join("a", "b")}`;',
+      ].join("\n"),
+    });
+    await writePackage(rootDir, "lazy-json", {
+      "package.json": JSON.stringify({
+        name: "lazy-json",
+        exports: { "./one.json": "./one.json", "./two.json": "./two.json" },
+      }),
+      "one.json": JSON.stringify({ $id: "one", meta: { n: 1 } }),
+      "two.json": JSON.stringify({ $id: "two", meta: { n: 2 } }),
+    });
+    await writeFile(
+      join(rootDir, "server.ts"),
+      [
+        'import { describe } from "requires-builtins";',
+        "await Promise.resolve();",
+        "const LOADERS = {",
+        '  one: async () => (await import("lazy-json/one.json")).default,',
+        '  two: async () => (await import("lazy-json/two.json")).default,',
+        "};",
+        "export default {",
+        "  fetch: async () => Response.json({ builtins: describe(), json: [await LOADERS.one(), await LOADERS.two()] }),",
+        "};",
+      ].join("\n"),
+    );
+    const config = parseConfig({ app: { id: "dev.parlor.hostcfdeps", name: "Deps" } });
+
+    const result = await buildServer(
+      { config, rootDir, configFile: "parlor.config.ts" },
+      { preset: "cloudflare-durable" },
+    );
+    const response = await fetchOnWrangler(result.outputDir, "/_parlor/deps");
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      builtins: "object a/b",
+      json: [
+        { $id: "one", meta: { n: 1 } },
+        { $id: "two", meta: { n: 2 } },
+      ],
+    });
   }, 180_000);
 });
 

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { nitroPresetFor, resolvePreset, syncTransportFor } from "./presets.js";
+import {
+  nitroPresetFor,
+  resolvePreset,
+  runsOnWorkerd,
+  syncTransportFor,
+} from "./presets.js";
 
 describe("resolvePreset", () => {
   it("prefers the flag, then config, then CI env, then node-server", () => {
@@ -47,5 +52,14 @@ describe("nitroPresetFor", () => {
     expect(nitroPresetFor("cloudflare-durable")).toBe("cloudflare-module");
     expect(nitroPresetFor("cloudflare-module")).toBe("cloudflare-module");
     expect(nitroPresetFor("node-server")).toBe("node-server");
+  });
+});
+
+describe("runsOnWorkerd", () => {
+  it("names the presets whose server runs on Cloudflare's workerd", () => {
+    expect(runsOnWorkerd("cloudflare-module")).toBe(true);
+    expect(runsOnWorkerd("cloudflare-durable")).toBe(true);
+    expect(runsOnWorkerd("node-server")).toBe(false);
+    expect(runsOnWorkerd("deno-deploy")).toBe(false);
   });
 });
