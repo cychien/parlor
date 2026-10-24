@@ -14,4 +14,4 @@ import type { FakeAgentScript } from "@parlor/agent-host/testing";
 export const script: FakeAgentScript = { steps: {}, fallback: "echo" };
 ```
 
-Docs: https://parlor.dev/guides/agent-sidebar/
+Docs: https://cychien.github.io/parlor/guides/agent-sidebar/

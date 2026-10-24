@@ -16,7 +16,7 @@ import { defineAction } from "@parlor/core";
 //       ^?
 ```
 
-Defines an action. The config takes `description`, `input` (a zod schema), `run(input, ctx)`, and optionally `reads`, `writes`, `confirm` and `public`. See [Actions](/guides/actions/).
+Defines an action. The config takes `description`, `input` (a zod schema), `run(input, ctx)`, and optionally `reads`, `writes`, `confirm` and `public`. See [Actions](/parlor/guides/actions/).
 
 ```ts
 import { ActionError } from "@parlor/core";

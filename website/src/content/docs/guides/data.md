@@ -25,7 +25,7 @@ export const todos = pgTable(
 );
 ```
 
-Every table has a `scope` column, and every action filters by `ctx.scope`. See [Actions](/guides/actions/#scope-every-row).
+Every table has a `scope` column, and every action filters by `ctx.scope`. See [Actions](/parlor/guides/actions/#scope-every-row).
 
 ## Migrations
 

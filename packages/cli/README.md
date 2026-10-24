@@ -17,4 +17,4 @@ import { defineConfig } from "@parlor/config";
 export default defineConfig({ app: { id: "com.example.todos", name: "Todos" } });
 ```
 
-Docs: https://parlor.dev/reference/cli/
+Docs: https://cychien.github.io/parlor/reference/cli/

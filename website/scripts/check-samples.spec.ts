@@ -14,8 +14,8 @@ test("a README link into the docs must name a page", () => {
   const slugs = new Set(["", "guides/actions"]);
   expect(
     brokenDocsLinks(
-      "See https://parlor.dev/guides/actions/#errors, https://parlor.dev/llms.txt and https://parlor.dev/guides/missing/.",
+      "See https://cychien.github.io/parlor/guides/actions/#errors, https://cychien.github.io/parlor/llms.txt and https://cychien.github.io/parlor/guides/missing/.",
       slugs,
     ),
-  ).toEqual(["https://parlor.dev/guides/missing/"]);
+  ).toEqual(["https://cychien.github.io/parlor/guides/missing/"]);
 });

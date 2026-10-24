@@ -8,4 +8,4 @@ import { INITIAL_CURSOR, SYNC_PROTOCOL_VERSION } from "@parlor/sync";
 console.log(SYNC_PROTOCOL_VERSION, INITIAL_CURSOR);
 ```
 
-Docs: https://parlor.dev/guides/deploy/
+Docs: https://cychien.github.io/parlor/guides/deploy/

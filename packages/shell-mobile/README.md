@@ -8,4 +8,4 @@ import { CAPACITOR_CONDITION } from "@parlor/shell-mobile";
 console.log(CAPACITOR_CONDITION);
 ```
 
-Docs: https://parlor.dev/guides/targets/
+Docs: https://cychien.github.io/parlor/guides/targets/

@@ -18,12 +18,14 @@ test("llms.txt links every page, as Markdown", () => {
         body: "",
       },
     ],
-    new URL("https://parlor.dev/"),
+    new URL("https://cychien.github.io/parlor/"),
     "Parlor docs",
   );
-  expect(index).toContain("- [Getting started](https://parlor.dev/getting-started.md)\n");
   expect(index).toContain(
-    "- [Actions](https://parlor.dev/guides/actions.md): Business logic",
+    "- [Getting started](https://cychien.github.io/parlor/getting-started.md)\n",
+  );
+  expect(index).toContain(
+    "- [Actions](https://cychien.github.io/parlor/guides/actions.md): Business logic",
   );
 });
 

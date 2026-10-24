@@ -31,7 +31,7 @@ Generated native projects live in `.parlor/`. Never edit them; they are rewritte
 
 ## What changes per platform
 
-Nothing in your app code. Platform features such as notifications, deep links or a secure session store are capabilities with one interface and an adapter per platform. Ask for one with `useCapability`, and check `available` instead of checking the platform. See the [capabilities reference](/reference/capabilities/).
+Nothing in your app code. Platform features such as notifications, deep links or a secure session store are capabilities with one interface and an adapter per platform. Ask for one with `useCapability`, and check `available` instead of checking the platform. See the [capabilities reference](/parlor/reference/capabilities/).
 
 ## Desktop settings
 

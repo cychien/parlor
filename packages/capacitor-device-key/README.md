@@ -8,4 +8,4 @@ import { ParlorSessionStore } from "@parlor/capacitor-device-key";
 console.log(typeof ParlorSessionStore);
 ```
 
-Docs: https://parlor.dev/reference/capabilities/
+Docs: https://cychien.github.io/parlor/reference/capabilities/

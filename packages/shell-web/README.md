@@ -8,4 +8,4 @@ import { FRAMEWORK_VITE_KEYS } from "@parlor/shell-web";
 console.log(FRAMEWORK_VITE_KEYS);
 ```
 
-Docs: https://parlor.dev/guides/styling/
+Docs: https://cychien.github.io/parlor/guides/styling/

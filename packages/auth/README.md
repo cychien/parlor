@@ -23,4 +23,4 @@ export const auth = betterAuthProvider({
 });
 ```
 
-Docs: https://parlor.dev/guides/auth/
+Docs: https://cychien.github.io/parlor/guides/auth/

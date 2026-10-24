@@ -7,7 +7,7 @@ description: Better Auth for Parlor, its browser client and its tables.
 pnpm parlor add auth
 ```
 
-`parlor add auth` installs and wires this package; see [Auth](/guides/auth/). These are the entries it uses.
+`parlor add auth` installs and wires this package; see [Auth](/parlor/guides/auth/). These are the entries it uses.
 
 ## @parlor/auth
 

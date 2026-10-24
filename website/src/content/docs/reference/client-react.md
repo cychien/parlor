@@ -13,7 +13,7 @@ import { useActionMutation } from "@parlor/client/react";
 //       ^?
 ```
 
-TanStack Query's `useQuery` and `useMutation` over actions. Queries refetch when any caller runs an action that writes what they read. See [Pages and hooks](/guides/pages-and-hooks/).
+TanStack Query's `useQuery` and `useMutation` over actions. Queries refetch when any caller runs an action that writes what they read. See [Pages and hooks](/parlor/guides/pages-and-hooks/).
 
 ```ts
 import { FrameworkProvider } from "@parlor/client/react";
@@ -42,4 +42,4 @@ Wraps the app: `client` (the action client), `router` (the TanStack router) and,
 
 ## Chat primitives
 
-Unstyled components the template's sidebar is built from, under the `Chat` namespace: `Chat.Root`, `Chat.Thread`, `Chat.Confirmations`, `Chat.Composer`, `Chat.Input`, `Chat.Send`, `Chat.Stop`, `Chat.Status`, `Chat.Ask`, `Chat.AskForm` and `Chat.AskChoice`. See [The agent sidebar](/guides/agent-sidebar/).
+Unstyled components the template's sidebar is built from, under the `Chat` namespace: `Chat.Root`, `Chat.Thread`, `Chat.Confirmations`, `Chat.Composer`, `Chat.Input`, `Chat.Send`, `Chat.Stop`, `Chat.Status`, `Chat.Ask`, `Chat.AskForm` and `Chat.AskChoice`. See [The agent sidebar](/parlor/guides/agent-sidebar/).

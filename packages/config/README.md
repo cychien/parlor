@@ -14,4 +14,4 @@ export default defineConfig({
 });
 ```
 
-`tsconfig.json`: `{ "extends": "@parlor/config/tsconfig" }`. Docs: https://parlor.dev/reference/config/
+`tsconfig.json`: `{ "extends": "@parlor/config/tsconfig" }`. Docs: https://cychien.github.io/parlor/reference/config/

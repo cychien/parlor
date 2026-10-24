@@ -21,4 +21,4 @@ export default createServer({
 });
 ```
 
-New apps include it. Docs: https://parlor.dev/guides/agent-sidebar/
+New apps include it. Docs: https://cychien.github.io/parlor/guides/agent-sidebar/

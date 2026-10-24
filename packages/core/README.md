@@ -20,4 +20,4 @@ export const registry = createRegistry({
 });
 ```
 
-Start a new app with `pnpm create parlor`. Docs: https://parlor.dev/guides/actions/
+Start a new app with `pnpm create parlor`. Docs: https://cychien.github.io/parlor/guides/actions/

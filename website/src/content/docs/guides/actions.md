@@ -132,4 +132,4 @@ const database = await createDatabase({ migrationsFolder: "migrations" });
 export default createServer({ actions: registry, database });
 ```
 
-See [Pages and hooks](/guides/pages-and-hooks/) to call actions from React, and [Agents](/guides/agents/) for MCP.
+See [Pages and hooks](/parlor/guides/pages-and-hooks/) to call actions from React, and [Agents](/parlor/guides/agents/) for MCP.
