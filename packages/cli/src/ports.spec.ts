@@ -18,10 +18,13 @@ function hold(port: number, host: string): Promise<number> {
   });
 }
 
+/** Below every OS's ephemeral range, so ports the suite's other connections get never land in it. */
+const RUN_FLOOR = 10_000;
+const RUN_SPAN = 20_000;
+
 async function freeRun(length: number): Promise<number> {
   for (;;) {
-    const start = await hold(0, "127.0.0.1");
-    await new Promise<void>((resolve) => held.pop()?.close(() => resolve()));
+    const start = RUN_FLOOR + Math.floor(Math.random() * (RUN_SPAN - length));
     let all = true;
     for (let port = start; port < start + length && all; port += 1) {
       all = await isPortFree(port);
