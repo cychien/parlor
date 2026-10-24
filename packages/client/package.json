@@ -17,7 +17,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./react": "./src/react/index.ts",
-    "./router": "./src/router/index.ts"
+    "./router": "./src/router/index.ts",
+    "./ssr": "./src/ssr/index.ts"
   },
   "publishConfig": {
     "exports": {
@@ -32,6 +33,10 @@
       "./router": {
         "types": "./dist/router/index.d.ts",
         "import": "./dist/router/index.js"
+      },
+      "./ssr": {
+        "types": "./dist/ssr/index.d.ts",
+        "import": "./dist/ssr/index.js"
       }
     }
   },
