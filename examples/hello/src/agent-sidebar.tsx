@@ -4,6 +4,7 @@ import {
   Chat,
   type ChatItem,
   useChat,
+  useDevices,
   useLinkDevice,
   useSession,
 } from "@parlor/client/react";
@@ -23,6 +24,7 @@ export default function AgentSidebar({
     <Chat.Root>
       <PublishThread />
       {headerActions ? createPortal(<NewChat />, headerActions) : null}
+      <LinkedNotices />
       <Computers />
       <LinkADevice />
       <Threads />
@@ -188,9 +190,23 @@ function LinkQr({ value }: { readonly value: string }) {
   );
 }
 
+/** No other device can vouch yet, as far as the computers report, so the computer must link this one. */
+function useOnlyDevice(): boolean {
+  const { hosts } = useChat();
+  const { devices } = useDevices();
+  const self = devices?.find((device) => device.current)?.id;
+  const reporting = hosts.filter((host) => host.devices !== undefined);
+  return (
+    devices !== undefined &&
+    reporting.length > 0 &&
+    reporting.every((host) => host.devices!.every((id) => id === self))
+  );
+}
+
 function LinkCard() {
   const { link, startLink } = useChat();
   const expired = useExpired(link.status === "unlinked" ? link.expiresAt : undefined);
+  const onlyDevice = useOnlyDevice();
   if (link.status !== "unlinked") return null;
   if (link.code === undefined || expired) {
     return (
@@ -230,6 +246,24 @@ function LinkCard() {
       </section>
     );
   }
+  const command = `npx @parlor/agent-host link ${globalThis.location?.origin} ${link.code}`;
+  if (onlyDevice) {
+    return (
+      <section
+        className="sidebar-note"
+        aria-label="Link this device"
+        data-state="linking"
+      >
+        <p className="sidebar-note-title">Link this device</p>
+        <p>
+          No other device is linked yet, so link this one from {link.hostName}. Run this
+          in a terminal on it:
+        </p>
+        <code className="connect-command">{command}</code>
+        <p>The code works for 15 minutes.</p>
+      </section>
+    );
+  }
   return (
     <section className="sidebar-note" aria-label="Link this device" data-state="linking">
       <p className="sidebar-note-title">Link this device</p>
@@ -242,11 +276,65 @@ function LinkCard() {
         {formatCode(link.code)}
       </p>
       <p>No linked device with you? On {link.hostName}, run:</p>
-      <code className="connect-command">
-        npx @parlor/agent-host link {globalThis.location?.origin} {link.code}
-      </code>
+      <code className="connect-command">{command}</code>
       <p>The code works for 15 minutes.</p>
     </section>
+  );
+}
+
+function LinkedNotices() {
+  const { linked, removal, remove, dismiss } = useDevices();
+  if (linked.length === 0) return null;
+  return (
+    <>
+      {linked.map((device) => {
+        const failed =
+          (removal.step === "error" || removal.step === "on-computer") &&
+          removal.id === device.id
+            ? removal
+            : undefined;
+        return (
+          <div key={device.id} className="sidebar-note linked-notice" role="status">
+            <p className="sidebar-note-title">{device.name} was linked</p>
+            <p>It can use your agents now. Not you? Remove it.</p>
+            {failed?.step === "error" ? (
+              <p className="problem" role="alert">
+                {failed.message}
+              </p>
+            ) : failed?.step === "on-computer" ? (
+              <>
+                <p>
+                  This browser cannot confirm with Face ID or Touch ID. On your computer,
+                  run:
+                </p>
+                <code className="connect-command">{failed.command}</code>
+              </>
+            ) : null}
+            <span className="row-actions">
+              <button
+                type="button"
+                className="danger"
+                disabled={removal.step === "removing"}
+                onClick={() =>
+                  void remove(device.id).then((removed) => {
+                    if (removed) dismiss(device.id);
+                  })
+                }
+              >
+                Remove
+              </button>
+              <button
+                type="button"
+                className="primary"
+                onClick={() => dismiss(device.id)}
+              >
+                OK
+              </button>
+            </span>
+          </div>
+        );
+      })}
+    </>
   );
 }
 
@@ -489,7 +577,7 @@ const TOOL_STATE = {
 } as const;
 
 const EVENTS = {
-  device_rejected: "This device was not approved",
+  device_rejected: "This device is not linked",
   agent_started: "Agent started",
   agent_exited: "Agent exited",
   agent_switched: "Switched agent",
