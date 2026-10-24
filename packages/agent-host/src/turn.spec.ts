@@ -973,6 +973,36 @@ describe("runTurn trusting the device that sent the prompt", () => {
     });
   });
 
+  it("notifies this computer of a turn from a linked device, never from a browser on this computer", async () => {
+    const tab = await TestDevice.create("device-tab", "Chrome on macOS", "web");
+    const phone = await TestDevice.create("device-phone", "Chrome on iPhone", "web");
+    const trust = memoryTrust();
+    await trust.pin(APP, { ...pinOf(tab), via: "pairing" });
+    await trust.pin(APP, { ...pinOf(phone), via: "vouched" });
+    const started = vi.fn();
+    const thread = asId("thread", "t-notify");
+    for (const [device, text] of [
+      [tab, "from-the-tab"],
+      [phone, "from-the-phone"],
+    ] as const) {
+      const run = harness(undefined, {
+        trust,
+        policy,
+        prompter: { turnStarted: started },
+      });
+      const turn = await signedClaim(device, thread, text);
+      expect(await runTurn(turn, run.deps)).toMatchObject({ state: "done" });
+    }
+    expect(started.mock.calls).toEqual([
+      [
+        expect.objectContaining({
+          device: "Chrome on iPhone",
+          preview: "from-the-phone",
+        }),
+      ],
+    ]);
+  });
+
   it("refuses as for any unlinked device when the pairing proof is for another device or secret", async () => {
     const device = await TestDevice.create();
     const other = await TestDevice.create();

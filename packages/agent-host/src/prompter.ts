@@ -11,7 +11,7 @@ export interface LocalPrompter {
     readonly choices: readonly { readonly id: string; readonly label: string }[];
     readonly signal?: AbortSignal | undefined;
   }): Promise<string | undefined>;
-  /** Passive: a remote turn started here. */
+  /** Passive: a turn from another device started here; none for a browser on this computer. */
   turnStarted(input: {
     readonly appName: string;
     readonly device: string;
