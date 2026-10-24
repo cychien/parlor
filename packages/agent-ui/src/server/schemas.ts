@@ -13,7 +13,7 @@ export const uiOpInputs = {
     search: z
       .record(z.string(), z.unknown())
       .optional()
-      .describe("Search params for the page."),
+      .describe("Search params for the page, as its entry in the list names them."),
     replace: z
       .boolean()
       .optional()

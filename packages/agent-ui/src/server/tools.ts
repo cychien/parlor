@@ -1,6 +1,11 @@
 import { z } from "zod";
 
-import { routeHref, type RouteEntry, type UiManifest } from "../manifest.js";
+import {
+  type JsonSchema,
+  routeHref,
+  type RouteEntry,
+  type UiManifest,
+} from "../manifest.js";
 import {
   type AgentOrigin,
   type ClientSummary,
@@ -89,11 +94,35 @@ function viewCatalog(manifest: UiManifest | undefined): string {
   return `\n\nViews this app can show:\n${lines.join("\n")}`;
 }
 
+function typeOf(schema: JsonSchema | undefined): string {
+  if (!schema) return "value";
+  if (Array.isArray(schema.enum))
+    return schema.enum.map((value) => JSON.stringify(value)).join(" | ");
+  if ("const" in schema) return JSON.stringify(schema.const);
+  const union = (schema.anyOf ?? schema.oneOf) as JsonSchema[] | undefined;
+  if (Array.isArray(union)) return union.map(typeOf).join(" | ");
+  if (schema.type === "array")
+    return `${typeOf(schema.items as JsonSchema | undefined)}[]`;
+  return typeof schema.type === "string" ? schema.type : "value";
+}
+
+/** `filter?: "all" | "done", page?: number`: what a page's search params take. */
+function searchOf(search: JsonSchema | undefined): string | undefined {
+  const properties = search?.properties as Record<string, JsonSchema> | undefined;
+  if (!properties || Object.keys(properties).length === 0) return undefined;
+  const required = new Set(Array.isArray(search?.required) ? search.required : []);
+  return Object.entries(properties)
+    .map(([name, schema]) => `${name}${required.has(name) ? "" : "?"}: ${typeOf(schema)}`)
+    .join(", ");
+}
+
 function routeCatalog(manifest: UiManifest | undefined): string {
   if (!manifest || manifest.routes.length === 0) return "";
   const lines = manifest.routes.map((route) => {
     const parts = [`- ${route.path}`];
     if (route.description) parts.push(` - ${sentence(route.description)}`);
+    const search = searchOf(route.search);
+    if (search) parts.push(` Search: ${search}.`);
     if (route.views.length > 0) parts.push(` Views: ${route.views.join(", ")}.`);
     return parts.join("");
   });

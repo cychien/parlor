@@ -50,7 +50,21 @@ const uiManifest = {
   app: { id: "dev.parlor.test", name: "Test" },
   routes: [
     { path: "/", description: "Home with tasks.", params: [], views: ["task"] },
-    { path: "/settings", description: "App settings.", params: [], views: [] },
+    {
+      path: "/settings",
+      description: "App settings.",
+      params: [],
+      search: {
+        type: "object",
+        properties: {
+          tab: { type: "string", enum: ["profile", "devices"] },
+          page: { type: "number" },
+          tags: { type: "array", items: { type: "string" } },
+        },
+        required: ["tab"],
+      },
+      views: [],
+    },
     {
       path: "/tasks/$taskId",
       description: "One task.",
@@ -280,7 +294,9 @@ describe("agent UI over MCP", () => {
       "- task (keyed): A task row; the key is the task id.",
     );
     expect(uiNavigate?.description).toContain("- / - Home with tasks. Views: task.");
-    expect(uiNavigate?.description).toContain("- /settings - App settings.");
+    expect(uiNavigate?.description).toContain(
+      '- /settings - App settings. Search: tab: "profile" | "devices", page?: number, tags?: string[].',
+    );
     expect(uiNavigate?.description).toContain(
       "- /tasks/$taskId - One task. Views: task.",
     );
