@@ -39,9 +39,17 @@ export interface PluginRuntime {
   readonly routes?: readonly AnyPluginRoute[] | undefined;
   /** Called once per action call on every surface after it settles, whatever the outcome. */
   audit?(record: ActionAudit): void;
+  /**
+   * Who may use the plugin. Everyone else gets `forbidden` from its actions and signed-in
+   * routes and never joins its channel. Absent admits whoever those surfaces admit.
+   */
+  allows?(caller: PluginCaller): boolean | Promise<boolean>;
   /** Runs before `close()` awaits in-flight requests, so it must end what it holds open. */
   close?(): void | Promise<void>;
 }
+
+/** Who is asking: enough to look the user up, with no request to read. */
+export type PluginCaller = Pick<Caller, "principal" | "scope">;
 
 export interface ActionAudit {
   readonly at: number;
@@ -99,6 +107,11 @@ export interface PluginHost {
   /** `createServer` got an `auth` key whose value is undefined: a sign-in setup that failed to configure. */
   readonly authMisconfigured?: boolean;
   callerOf(request: Request): Promise<Caller>;
+  /**
+   * Whether the installed plugin `name` admits `caller`, for a plugin that serves another
+   * one (auth pairs computers for chat). True when it is not installed or has no policy.
+   */
+  allows?(plugin: string, caller: PluginCaller): Promise<boolean>;
   /**
    * Resolves once the database holds every plugin's tables. Work a plugin starts on its own,
    * such as a timer, waits for it; request handlers need not, as the server awaits it first.

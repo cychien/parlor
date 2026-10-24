@@ -54,6 +54,7 @@ export {
   type AnyPluginRoute,
   type ConfirmationAnswer,
   type Migration,
+  type PluginCaller,
   type PluginHost,
   type PluginRoute,
   pluginRoute,
