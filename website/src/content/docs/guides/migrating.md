@@ -395,7 +395,9 @@ await database.close();
 
 Anything that is not a person or an agent calling the app, such as a payment provider's webhook or a nightly job, goes in a server plugin, installed in `server.ts` with `plugins: [...]`.
 
-A plugin route is served at `/_parlor/<plugin name><path>`. A `public` route has no session, so check the caller yourself, for example by verifying a signature. After writing, announce the tables you changed, so open pages refresh:
+A plugin route is served at `/_parlor/<plugin name><path>`. When its URL is already set somewhere you cannot change, such as the webhook and return URLs configured at a payment provider, add `absolute: true` and the route is served at exactly `path`. A browser sent to an absolute `GET` route reaches the route, not the app's page, and the server refuses to start if a page route also matches that path.
+
+A `public` route has no session, so check the caller yourself, for example by verifying a signature. After writing, announce the tables you changed, so open pages refresh:
 
 ```ts
 // @filename: schema/index.ts
@@ -422,7 +424,7 @@ const signed = (body: string, signature: string, secret: string) => {
   return given.length === expected.length && timingSafeEqual(given, expected);
 };
 
-/** The payment provider's webhook, at POST /_parlor/payments/webhook. */
+/** The payment provider's webhook, at the URL the old app gave it. */
 export function payments(options: {
   readonly database: DatabaseHandle;
   readonly scope: string;
@@ -435,7 +437,8 @@ export function payments(options: {
       routes: [
         {
           method: "POST",
-          path: "/webhook",
+          path: "/api/payment/webhook",
+          absolute: true,
           access: "public",
           async handle(request) {
             const body = await request.text();

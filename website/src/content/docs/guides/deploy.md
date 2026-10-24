@@ -24,7 +24,7 @@ For `node-server`, `parlor build` prints where it wrote the server; start it wit
 
 ## Cloudflare
 
-`cloudflare-durable` builds a Worker that serves the web app and hands every other request to one Durable Object, which runs the server exactly as `node-server` does: one instance, holding each open page's stream, the agent's screen tools, approvals and streamed replies.
+`cloudflare-durable` builds a Worker that serves the web app's files and its pages' documents and hands every other request to one Durable Object, which runs the server exactly as `node-server` does: one instance, holding each open page's stream, the agent's screen tools, approvals and streamed replies.
 
 Set `deploy.preset` to `cloudflare-durable` in `parlor.config.ts`, then build and deploy with Wrangler:
 
