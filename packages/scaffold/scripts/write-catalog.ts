@@ -18,8 +18,10 @@ export function workspaceCatalog(yaml: string): Readonly<Record<string, string>>
 }
 
 export function renderCatalogModule(catalog: Readonly<Record<string, string>>): string {
+  const key = (name: string) =>
+    /^[A-Za-z_$][\w$]*$/.test(name) ? name : JSON.stringify(name);
   const entries = Object.entries(catalog).map(
-    ([name, range]) => `  ${JSON.stringify(name)}: ${JSON.stringify(range)},`,
+    ([name, range]) => `  ${key(name)}: ${JSON.stringify(range)},`,
   );
   return `/** Generated from the \`catalog\` in the repo's \`pnpm-workspace.yaml\` by \`scripts/write-catalog.ts\`; \`catalog.spec.ts\` fails when they differ. */
 export const CATALOG: Readonly<Record<string, string>> = {
