@@ -1,7 +1,14 @@
-import { useActionMutation, useActionQuery, useAgentView } from "@parlor/client/react";
+import {
+  ensureActionQueryData,
+  useActionMutation,
+  useActionQuery,
+  useActionSuspenseQuery,
+  useAgentView,
+} from "@parlor/client/react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
 
+import { routeErrors } from "../route-errors.js";
 import { newTask as newTaskView, task as taskView } from "../views.js";
 
 export const Route = createFileRoute("/")({
@@ -10,6 +17,8 @@ export const Route = createFileRoute("/")({
       "Home: a greeting, the New task form (title and notes, the user presses Add), and the task list, oldest first, to check off tasks.",
     views: [newTaskView, taskView],
   },
+  loader: ({ context }) => ensureActionQueryData(context, "listTasks", {}),
+  onError: routeErrors,
   component: Home,
 });
 
@@ -36,7 +45,7 @@ function Home() {
 }
 
 function Tasks() {
-  const list = useActionQuery("listTasks", {});
+  const { data: tasks } = useActionSuspenseQuery("listTasks", {});
   const toggle = useActionMutation("toggleTask");
 
   return (
@@ -44,7 +53,7 @@ function Tasks() {
       <h2>Tasks</h2>
       <NewTaskForm />
       <ul data-testid="tasks" className="tasks">
-        {(list.data ?? []).map((task) => (
+        {tasks.map((task) => (
           <TaskRow
             key={task.id}
             task={task}
