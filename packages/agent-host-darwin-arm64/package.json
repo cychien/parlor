@@ -1,7 +1,15 @@
 {
   "name": "@parlor/agent-host-darwin-arm64",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "The prebuilt Parlor Host for macOS on Apple silicon",
+  "license": "MIT",
+  "homepage": "https://cychien.github.io/parlor",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cychien/parlor.git",
+    "directory": "packages/agent-host-darwin-arm64"
+  },
+  "bugs": "https://github.com/cychien/parlor/issues",
   "files": [
     "bin"
   ],

@@ -1,6 +1,14 @@
 {
   "name": "@parlor/host",
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "license": "MIT",
+  "homepage": "https://cychien.github.io/parlor",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cychien/parlor.git",
+    "directory": "packages/host"
+  },
+  "bugs": "https://github.com/cychien/parlor/issues",
   "files": [
     "dist"
   ],
