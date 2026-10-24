@@ -35,7 +35,11 @@ export default function AgentSidebar({
           ) : null
         }
       </Chat.Confirmations>
-      <Chat.Thread className="thread" empty={<ThreadEmpty />}>
+      <Chat.Thread
+        className="thread"
+        empty={<ThreadEmpty />}
+        older={<Chat.LoadOlder className="load-older" />}
+      >
         {(item) => <Item item={item} />}
       </Chat.Thread>
       <LinkCard />
@@ -64,7 +68,8 @@ function NewChat() {
 }
 
 function Threads() {
-  const { threads, thread, openThread } = useChat();
+  const { threads, thread, openThread, moreThreads, loadMoreThreads, loadingOlder } =
+    useChat();
   if (threads.length === 0) return null;
   return (
     <div className="picker">
@@ -85,6 +90,16 @@ function Threads() {
           </option>
         ))}
       </select>
+      {moreThreads ? (
+        <button
+          type="button"
+          className="text-button"
+          disabled={loadingOlder}
+          onClick={() => void loadMoreThreads()}
+        >
+          Show older conversations
+        </button>
+      ) : null}
     </div>
   );
 }

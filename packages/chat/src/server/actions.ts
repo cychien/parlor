@@ -15,6 +15,8 @@ import type {
   AgentInfo,
   ChatOwner,
   ChatSnapshot,
+  ThreadHistory,
+  ThreadList,
   ClaimedTurn,
   HostSummary,
   TurnSignals,
@@ -29,7 +31,12 @@ import { agentInfoSchema, TURN_FAILURES } from "./rows.js";
 const presenceDueSchema = z
   .record(z.string().min(1).max(64), z.number().int().nonnegative())
   .refine((due) => Object.keys(due).length <= 256, "At most 256 devices.");
-import type { ChatDb, ChatStore, StoredHost } from "./store.js";
+import {
+  type ChatDb,
+  type ChatStore,
+  type StoredHost,
+  THREAD_LIST_LIMIT,
+} from "./store.js";
 
 export { CHAT_ACTIVITY_TAG, CHAT_TAG, HOSTS_TAG, HOST_GRANTS_TAG };
 
@@ -135,6 +142,7 @@ export function userChatActions(deps: ChatActionDeps) {
         });
         return {
           threads,
+          ...(threads.length >= THREAD_LIST_LIMIT ? { moreThreads: true } : {}),
           hosts: hosts.map(summaryOf),
           page: { ...page, open: streaming },
         };
@@ -146,6 +154,37 @@ export function userChatActions(deps: ChatActionDeps) {
       reads: (input) => [[CHAT_TAG, input.threadId]],
       run: (input, user, ctx): Promise<LoggedItem[]> =>
         deps.store.readItemsAfter(dbOf(ctx), user, input.threadId, input.afterSeq),
+    }),
+    history: chatAction("user", enforcing, {
+      description:
+        "A thread's items before a sequence number, oldest first, with their turns; hasMore while older ones remain.",
+      input: z.object({
+        threadId,
+        beforeSeq: z.number().int().min(1),
+        limit: z.number().int().min(1).max(500).default(200),
+      }),
+      reads: (input) => [[CHAT_TAG, input.threadId]],
+      run: async (input, user, ctx): Promise<ThreadHistory> => {
+        const read = deps.store.readItemsBefore?.bind(deps.store);
+        if (!read)
+          throw new ActionError("not_found", "This chat store keeps no history.");
+        return read(dbOf(ctx), user, input.threadId, input.beforeSeq, input.limit);
+      },
+    }),
+    threadsBefore: chatAction("user", enforcing, {
+      description:
+        "The user's threads updated before a thread, newest first, for the list past what open returned.",
+      input: z.object({
+        before: z.object({ updatedAt: z.number().int().min(0), id: threadId }),
+        limit: z.number().int().min(1).max(500).default(200),
+      }),
+      reads: [CHAT_TAG],
+      run: async (input, user, ctx): Promise<ThreadList> => {
+        const list = deps.store.listThreadsBefore?.bind(deps.store);
+        if (!list)
+          throw new ActionError("not_found", "This chat store keeps no history.");
+        return list(dbOf(ctx), user, input.before, input.limit);
+      },
     }),
     hosts: chatAction("user", enforcing, {
       description: "The user's computers and the agents on them.",

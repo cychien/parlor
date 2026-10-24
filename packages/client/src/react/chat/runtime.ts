@@ -119,7 +119,13 @@ export interface ChatState {
   readonly wait: ChatWait | undefined;
   readonly thread: ThreadSummary | undefined;
   readonly threads: readonly ThreadSummary[];
+  /** Older threads exist past `threads`; `loadMoreThreads` reads them. */
+  readonly moreThreads: boolean;
   readonly items: readonly ChatItem<AgentConfirmation>[];
+  /** The thread has items before the first one shown; `loadOlder` reads them. */
+  readonly hasOlder: boolean;
+  /** Set while `loadOlder` or `loadMoreThreads` reads. */
+  readonly loadingOlder: boolean;
   readonly hosts: readonly HostSummary[];
   readonly agents: readonly AgentChoice[];
   readonly agent: AgentChoice | undefined;
@@ -143,6 +149,10 @@ export interface ChatCommands {
   stop(): Promise<void>;
   /** Sends a prompt again as a new turn in its thread, signed anew. */
   resend(promptItemId: string): Promise<void>;
+  /** Reads the thread's next earlier page while `hasOlder`. */
+  loadOlder(): Promise<void>;
+  /** Reads the next older threads while `moreThreads`. */
+  loadMoreThreads(): Promise<void>;
   /** A `presence` ask triggers the OS prompt first; a `computer` ask refuses. */
   answer(
     askId: string,
@@ -263,6 +273,10 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
   let loaded: "no" | "yes" | "failed" = "no";
   let thread: ThreadSummary | undefined;
   let threads: readonly ThreadSummary[] = [];
+  let olderThreads: readonly ThreadSummary[] = [];
+  let moreThreads = false;
+  let hasOlder = false;
+  let loadingOlder = false;
   let hosts: readonly HostSummary[] = [];
   let items = new Map<string, LoggedItem>();
   let turns: readonly TurnStatus[] = [];
@@ -422,7 +436,15 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       status,
       wait,
       thread,
-      threads,
+      threads: [
+        ...threads,
+        ...olderThreads.filter(
+          (older) => !threads.some((shown) => shown.id === older.id),
+        ),
+      ],
+      moreThreads,
+      hasOlder,
+      loadingOlder,
       items: foldThread({
         items: [...items.values()].sort(bySeq),
         open: [...open.turns.values()],
@@ -471,8 +493,24 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
   }) => {
     items = new Map(items);
     for (const item of page.items) items.set(item.id, item);
-    if (page.turns) turns = page.turns;
+    if (page.turns) {
+      const fresh = new Map(page.turns.map((turn) => [turn.turnId, turn]));
+      turns = [...turns.filter((turn) => !fresh.has(turn.turnId)), ...page.turns];
+    }
     open = pruneOpen(open, items, turns);
+  };
+
+  const oldestSeq = (): number | undefined =>
+    items.size === 0
+      ? undefined
+      : Math.min(...[...items.values()].map((item) => item.seq));
+
+  const takeThreads = (snapshot: {
+    readonly threads: readonly ThreadSummary[];
+    readonly moreThreads?: boolean | undefined;
+  }) => {
+    threads = snapshot.threads;
+    if (olderThreads.length === 0) moreThreads = snapshot.moreThreads === true;
   };
 
   const load = async (target: ThreadId | undefined) => {
@@ -480,12 +518,19 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     const snapshot = await calls.call("open", target ? { threadId: target } : {});
     if (epoch !== generation) return;
     staleReads.clear();
-    threads = snapshot.threads;
+    takeThreads(snapshot);
     hosts = snapshot.hosts;
     const page = startedNew && target === undefined ? undefined : snapshot.page;
     thread = page?.thread;
     threadId = page?.thread?.id ?? target;
-    if (page) absorb(page);
+    if (page) {
+      const oldest = oldestSeq();
+      absorb(page);
+      const first = page.items[0];
+      if (oldest === undefined || (first !== undefined && first.seq <= oldest)) {
+        hasOlder = page.hasMore;
+      }
+    }
     open = mergeSnapshot(open, channelOpen && page ? page.open : []);
     const replay = beforeLoad;
     beforeLoad = [];
@@ -502,7 +547,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     const epoch = generation;
     const fresh = await calls.call("open", {});
     if (epoch !== generation || threadId !== undefined) return;
-    threads = fresh.threads;
+    takeThreads(fresh);
     hosts = fresh.hosts;
     emit();
   };
@@ -716,6 +761,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     thread = undefined;
     items = new Map();
     turns = [];
+    hasOlder = false;
     open = NO_OPEN_TURNS;
     beforeLoad = [];
     pendingSend = undefined;
@@ -773,6 +819,47 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
           if (draft.trim() === prompt) draft = "";
         }),
       );
+    },
+    async loadOlder() {
+      const target = threadId;
+      const before = oldestSeq();
+      if (target === undefined || before === undefined || !hasOlder || loadingOlder)
+        return;
+      const epoch = generation;
+      loadingOlder = true;
+      emit();
+      try {
+        await reporting(async () => {
+          const older = await calls.call("history", {
+            threadId: target,
+            beforeSeq: before,
+          });
+          if (epoch !== generation) return;
+          absorb(older);
+          hasOlder = older.hasMore;
+        });
+      } finally {
+        loadingOlder = false;
+        emit();
+      }
+    },
+    async loadMoreThreads() {
+      const last = olderThreads.at(-1) ?? threads.at(-1);
+      if (!last || !moreThreads || loadingOlder) return;
+      loadingOlder = true;
+      emit();
+      try {
+        await reporting(async () => {
+          const next = await calls.call("threadsBefore", {
+            before: { updatedAt: last.updatedAt, id: last.id },
+          });
+          olderThreads = [...olderThreads, ...next.threads];
+          moreThreads = next.hasMore;
+        });
+      } finally {
+        loadingOlder = false;
+        emit();
+      }
     },
     async resend(promptItemId) {
       const prompt = state.items.find(

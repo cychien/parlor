@@ -29,6 +29,7 @@ import type {
   ThreadSummary,
   TurnOutcome,
   TurnSignals,
+  TurnStatus,
 } from "../model.js";
 import {
   agentInfoSchema,
@@ -71,6 +72,22 @@ export interface StreamTurn extends TurnHolder {
 }
 
 /** What one reconciliation changed in a scope, for the sync events it must emit. */
+export interface OlderItems {
+  readonly items: readonly LoggedItem[];
+  readonly turns: readonly TurnStatus[];
+  readonly hasMore: boolean;
+}
+
+export interface ThreadCursor {
+  readonly updatedAt: number;
+  readonly id: ThreadId;
+}
+
+export interface OlderThreads {
+  readonly threads: readonly ThreadSummary[];
+  readonly hasMore: boolean;
+}
+
 export interface Lapsed extends ChatOwner {
   readonly threads: readonly ThreadId[];
   readonly hosts: readonly HostId[];
@@ -90,6 +107,21 @@ export interface ChatStore {
     threadId: ThreadId | undefined,
     limit: number,
   ): Promise<Omit<ThreadPage, "open">>;
+  /** Items before `beforeSeq`, oldest first, with their turns; `hasMore` while older ones remain. */
+  readItemsBefore?(
+    db: ChatDb,
+    owner: ChatOwner,
+    threadId: ThreadId,
+    beforeSeq: number,
+    limit: number,
+  ): Promise<OlderItems>;
+  /** Threads updated before `before`, newest first, after the ones `listThreads` returned. */
+  listThreadsBefore?(
+    db: ChatDb,
+    owner: ChatOwner,
+    before: ThreadCursor,
+    limit: number,
+  ): Promise<OlderThreads>;
   readItemsAfter(
     db: ChatDb,
     owner: ChatOwner,
@@ -218,7 +250,7 @@ const ITEM_COLUMNS = sql`id, thread_id, turn_id, seq, kind, body, ${ms("created_
 const ITEM_COLUMNS_OF_I = sql`i.id, i.thread_id, i.turn_id, i.seq, i.kind, i.body, ${ms("i.created_at")} as at`;
 const THREAD_COLUMNS = sql`id, title, host_id, agent_id, last_seq, ${ms("updated_at")} as updated_at`;
 
-const THREAD_LIST_LIMIT = 200;
+export const THREAD_LIST_LIMIT = 200;
 const TITLE_CHARS = 80;
 const TERMINAL_STATES: ReadonlySet<string> = new Set(["done", "failed", "cancelled"]);
 
@@ -563,6 +595,45 @@ async function lockRunningTurn(
 const leaseSql = (leaseMs: number) =>
   sql`now() + ${leaseMs}::float8 * interval '1 millisecond'`;
 
+async function requireThread(db: ChatDb, owner: ChatOwner, threadId: ThreadId) {
+  const [thread] = await query(
+    db,
+    sql`select id from parlor_chat_threads
+      where id = ${threadId} and owner_id = ${owner.userId} and scope = ${owner.scope}`,
+    z.object({ id: z.string() }),
+  );
+  if (!thread) throw threadMissing();
+}
+
+/** The turns that `items`, a run of consecutive seqs, belong to. */
+async function turnsOf(
+  db: ChatDb,
+  threadId: ThreadId,
+  items: readonly LoggedItem[],
+): Promise<TurnStatus[]> {
+  const first = items[0];
+  const last = items.at(-1);
+  if (!first || !last) return [];
+  const turns = await query(
+    db,
+    sql`select id, thread_id, host_id, agent_id, state,
+        coalesce(state = 'running' and lease_until < now(), false) as lapsed,
+        case when state = 'failed' then outcome->>'reason' end as failure
+      from parlor_chat_turns
+      where thread_id = ${threadId}
+        and id in (select turn_id from parlor_chat_items
+          where thread_id = ${threadId} and seq between ${first.seq} and ${last.seq})
+      order by created_at, id`,
+    turnRow,
+  );
+  return turns.map((turn) => ({
+    turnId: turn.id,
+    state: turn.lapsed ? "failed" : turn.state,
+    agent: { hostId: turn.host_id, agentId: turn.agent_id },
+    failure: turn.lapsed ? "host_lost" : (turn.failure ?? undefined),
+  }));
+}
+
 export const sqlChatStore: ChatStore = {
   async listThreads(db, owner) {
     const rows = await query(
@@ -595,31 +666,47 @@ export const sqlChatStore: ChatStore = {
     );
     const hasMore = rows.length > limit;
     const items = rows.slice(0, limit).reverse().map(toLoggedItem);
-    const first = items[0];
-    const turns = first
-      ? await query(
-          db,
-          sql`select id, thread_id, host_id, agent_id, state,
-              coalesce(state = 'running' and lease_until < now(), false) as lapsed,
-              case when state = 'failed' then outcome->>'reason' end as failure
-            from parlor_chat_turns
-            where thread_id = ${row.id}
-              and id in (select turn_id from parlor_chat_items
-                where thread_id = ${row.id} and seq >= ${first.seq})
-            order by created_at, id`,
-          turnRow,
-        )
-      : [];
     return {
       thread: toThreadSummary(row),
       items,
-      turns: turns.map((turn) => ({
-        turnId: turn.id,
-        state: turn.lapsed ? "failed" : turn.state,
-        agent: { hostId: turn.host_id, agentId: turn.agent_id },
-        failure: turn.lapsed ? "host_lost" : (turn.failure ?? undefined),
-      })),
+      turns: await turnsOf(db, row.id, items),
       hasMore,
+    };
+  },
+
+  async readItemsBefore(db, owner, threadId, beforeSeq, limit) {
+    const rows = await query(
+      db,
+      sql`select ${ITEM_COLUMNS_OF_I} from parlor_chat_items i
+        join parlor_chat_threads t on t.id = i.thread_id
+        where t.id = ${threadId} and t.owner_id = ${owner.userId} and t.scope = ${owner.scope}
+          and i.seq < ${beforeSeq}
+        order by i.seq desc limit ${limit + 1}`,
+      itemRow,
+    );
+    if (rows.length === 0) await requireThread(db, owner, threadId);
+    const items = rows.slice(0, limit).reverse().map(toLoggedItem);
+    return {
+      items,
+      turns: await turnsOf(db, threadId, items),
+      hasMore: rows.length > limit,
+    };
+  },
+
+  async listThreadsBefore(db, owner, before, limit) {
+    const updated = ms("updated_at");
+    const rows = await query(
+      db,
+      sql`select ${THREAD_COLUMNS} from parlor_chat_threads
+        where owner_id = ${owner.userId} and scope = ${owner.scope}
+          and (${updated} < ${before.updatedAt}
+            or (${updated} = ${before.updatedAt} and id < ${before.id}))
+        order by updated_at desc, id desc limit ${limit + 1}`,
+      threadRow,
+    );
+    return {
+      threads: rows.slice(0, limit).map(toThreadSummary),
+      hasMore: rows.length > limit,
     };
   },
 
@@ -633,15 +720,7 @@ export const sqlChatStore: ChatStore = {
         order by i.seq`,
       itemRow,
     );
-    if (rows.length === 0) {
-      const [thread] = await query(
-        db,
-        sql`select id from parlor_chat_threads
-          where id = ${threadId} and owner_id = ${owner.userId} and scope = ${owner.scope}`,
-        z.object({ id: z.string() }),
-      );
-      if (!thread) throw threadMissing();
-    }
+    if (rows.length === 0) await requireThread(db, owner, threadId);
     return rows.map(toLoggedItem);
   },
 
