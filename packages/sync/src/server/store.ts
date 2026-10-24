@@ -103,17 +103,22 @@ interface EventRow {
   source: string | null;
 }
 
+/** One scope's events, or several streams' merged on the shared version order. */
 export async function readSyncEvents(
   db: SyncDatabase,
-  scope: string,
+  scope: string | readonly string[],
   since: SyncCursor,
   limit: number = MAX_BATCH,
 ): Promise<SyncEvent[]> {
+  const scopes = typeof scope === "string" ? [scope] : scope;
   const found = await rows<EventRow>(
     db.execute(sql`
       select id, version, tags, source
         from sync_events
-       where scope = ${scope}
+       where scope in (${sql.join(
+         scopes.map((one) => sql`${one}`),
+         sql`, `,
+       )})
          and (version > ${since.version} or (version = ${since.version} and id > ${since.id}))
        order by version asc, id asc
        limit ${limit}`),

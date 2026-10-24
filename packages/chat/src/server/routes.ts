@@ -17,7 +17,7 @@ export interface ChatRouteDeps {
   readonly relay: LiveRelay;
   readonly heartbeatMs: number;
   readonly reconcile: (owner: ChatOwner) => Promise<void>;
-  readonly announceHost: (scope: string, hostId: HostId) => Promise<void>;
+  readonly announceHost: (owner: ChatOwner, hostId: HostId) => Promise<void>;
 }
 
 const streamBatch = z.object({
@@ -113,7 +113,7 @@ export function chatRoutes(deps: ChatRouteDeps): readonly AnyPluginRoute[] {
           principal,
           2 * deps.heartbeatMs,
         );
-        if (returned) await deps.announceHost(owner.scope, principal.hostId);
+        if (returned) await deps.announceHost(owner, principal.hostId);
         await deps.reconcile(owner).catch((error: unknown) => {
           console.warn("[parlor] chat: reconciling lapsed turns failed:", error);
         });

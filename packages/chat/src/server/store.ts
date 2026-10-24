@@ -10,6 +10,7 @@ import {
   type ItemId,
   type ThreadId,
   type TurnId,
+  type UserId,
 } from "@parlor/core";
 import { type SQL, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
@@ -70,8 +71,7 @@ export interface StreamTurn extends TurnHolder {
 }
 
 /** What one reconciliation changed in a scope, for the sync events it must emit. */
-export interface Lapsed {
-  readonly scope: string;
+export interface Lapsed extends ChatOwner {
   readonly threads: readonly ThreadId[];
   readonly hosts: readonly HostId[];
 }
@@ -471,10 +471,11 @@ async function lapsedFor(db: ChatDb, owner: ChatOwner | undefined): Promise<bool
 }
 
 async function expireLapsed(tx: ChatDb, owner: ChatOwner | undefined): Promise<Lapsed[]> {
-  const changes = new Map<string, { threads: ThreadId[]; hosts: HostId[] }>();
-  const changed = (scope: string) => {
-    let change = changes.get(scope);
-    if (!change) changes.set(scope, (change = { threads: [], hosts: [] }));
+  const changes = new Map<string, Lapsed & { threads: ThreadId[]; hosts: HostId[] }>();
+  const changed = (scope: string, userId: UserId) => {
+    const key = `${scope}\u0000${userId}`;
+    let change = changes.get(key);
+    if (!change) changes.set(key, (change = { scope, userId, threads: [], hosts: [] }));
     return change;
   };
   const lapsed = await query(
@@ -511,17 +512,19 @@ async function expireLapsed(tx: ChatDb, owner: ChatOwner | undefined): Promise<L
         body: { event: "host_lost" } satisfies ChatItemBody<"event">,
       })),
     );
-    changed(scope).threads.push(threadId);
+    changed(scope, userId).threads.push(threadId);
   }
   const offline = await query(
     tx,
     sql`update parlor_chat_hosts set announced_online = false
       where announced_online and online_until <= now() ${ownedBy(owner)}
-      returning id, scope`,
-    z.object({ id: idSchema("host"), scope: z.string() }),
+      returning id, scope, owner_id`,
+    z.object({ id: idSchema("host"), scope: z.string(), owner_id: idSchema("user") }),
   );
-  for (const { id, scope } of offline) changed(scope).hosts.push(id);
-  return [...changes].map(([scope, change]) => ({ scope, ...change }));
+  for (const { id, scope, owner_id: userId } of offline) {
+    changed(scope, userId).hosts.push(id);
+  }
+  return [...changes.values()];
 }
 
 async function lockRunningTurn(

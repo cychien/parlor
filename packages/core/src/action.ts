@@ -52,6 +52,11 @@ export interface ActionConfig<TInput extends z.ZodType, TOutput> {
   readonly reads?: ReadTags<z.output<TInput>> | undefined;
   readonly writes?: readonly TagSource[] | undefined;
   /**
+   * Whose clients its `writes` wake: everyone in the scope (the default), or only the
+   * caller's own user, with their tabs and computers, when the scope is shared.
+   */
+  readonly notifies?: "scope" | "user" | undefined;
+  /**
    * Ask the user to approve each call from an agent (source `mcp` or `agent`) in the app
    * before it runs. Calls from the app's own UI and plain HTTP never ask. With an enforcing
    * auth provider the source comes from the caller's credential, so this is a boundary;
