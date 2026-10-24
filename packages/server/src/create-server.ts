@@ -194,9 +194,12 @@ export function createServer<T extends ActionMap>(
   let prepared: Promise<void> | undefined;
   const ready = () =>
     (prepared ??= (async () => {
-      if (!database) return;
-      if (syncEnabled) await ensureSyncTables(database.read() as SyncDatabase);
-      await applyMigrations(database, installed);
+      if (database) {
+        await database.prepare?.();
+        if (syncEnabled) await ensureSyncTables(database.read() as SyncDatabase);
+        await applyMigrations(database, installed);
+      }
+      for (const { runtime } of runtimes) runtime.start?.();
     })());
   const callers = createCallerResolver(auth, scope, ready);
   const host: PluginHost = {
