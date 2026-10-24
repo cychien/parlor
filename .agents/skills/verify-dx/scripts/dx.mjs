@@ -109,7 +109,10 @@ async function publish(args) {
     const target = join(stage, "packages", dir);
     cpSync(join(REPO, "packages", dir), target, {
       recursive: true,
-      filter: (source) => !/[/\\](node_modules|\.parlor)$/.test(source),
+      // A release build leaves a 128 MB signed host in bin/, past Verdaccio's body limit.
+      filter: (source) =>
+        !/[/\\](node_modules|\.parlor)$/.test(source) &&
+        !/agent-host-darwin-arm64[/\\]bin$/.test(source),
     });
     writeFileSync(
       join(target, "package.json"),
