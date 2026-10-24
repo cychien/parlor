@@ -11,11 +11,11 @@ pnpm build
 
 ## Presets
 
-| Preset | Where |
-| --- | --- |
-| `node-server` | any machine with Node.js; the default |
-| `bun` | a Bun server |
-| `vercel`, `netlify`, `cloudflare-module`, `aws-lambda`, `deno-deploy` | those platforms |
+| Preset                                                                | Where                                 |
+| --------------------------------------------------------------------- | ------------------------------------- |
+| `node-server`                                                         | any machine with Node.js; the default |
+| `bun`                                                                 | a Bun server                          |
+| `vercel`, `netlify`, `cloudflare-module`, `aws-lambda`, `deno-deploy` | those platforms                       |
 
 Pick one with `parlor build --preset vercel`, or `deploy.preset` in `parlor.config.ts`. On Vercel, Netlify and Cloudflare Pages the preset is detected from the build environment. `parlor deploy` builds and runs the platform's deploy.
 
@@ -27,11 +27,11 @@ Pages refresh when data changes through a sync channel. On long-lived servers (`
 
 ## Environment
 
-| Variable | When |
-| --- | --- |
-| `DATABASE_URL` | always in production: a PostgreSQL connection string |
-| `PARLOR_ORIGIN` | with sign-in: the public origin |
-| `BETTER_AUTH_SECRET` | with sign-in: the session signing secret |
+| Variable             | When                                                 |
+| -------------------- | ---------------------------------------------------- |
+| `DATABASE_URL`       | always in production: a PostgreSQL connection string |
+| `PARLOR_ORIGIN`      | with sign-in: the public origin                      |
+| `BETTER_AUTH_SECRET` | with sign-in: the session signing secret             |
 
 Migrations run when the server starts.
 

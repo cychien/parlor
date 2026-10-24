@@ -19,13 +19,13 @@ In a production build without sign-in, chat is unavailable: `useChat().status` i
 
 The sidebar is ordinary code in your project, copied in when the app was created:
 
-| File | What it is |
-| --- | --- |
-| `src/agent/agent-button.tsx` | The header button, the sidebar panel, Escape handling, the pending-approval badge |
-| `src/agent/agent-sidebar.tsx` | The chat: agent picker, conversations, approvals, messages, composer, and the card that explains the passkey before a browser's first message |
-| `src/agent/confirmation-card.tsx` | The card that asks you to approve an action |
-| `src/agent/views.ts` | The `agentPanel` view the agent can read |
-| `src/header-actions.tsx` | Where the button is mounted |
+| File                              | What it is                                                                                                                                    |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/agent/agent-button.tsx`      | The header button, the sidebar panel, Escape handling, the pending-approval badge                                                             |
+| `src/agent/agent-sidebar.tsx`     | The chat: agent picker, conversations, approvals, messages, composer, and the card that explains the passkey before a browser's first message |
+| `src/agent/confirmation-card.tsx` | The card that asks you to approve an action                                                                                                   |
+| `src/agent/views.ts`              | The `agentPanel` view the agent can read                                                                                                      |
+| `src/header-actions.tsx`          | Where the button is mounted                                                                                                                   |
 
 It is built from the unstyled primitives in `@parlor/client/react` (`Chat.Root`, `Chat.Thread`, `Chat.Composer`, `Chat.Confirmations` and friends) and styled with Tailwind. Change the markup, the classes or the copy freely; `parlor add agent` puts it back on a project that removed it.
 

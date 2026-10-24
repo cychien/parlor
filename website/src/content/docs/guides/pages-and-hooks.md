@@ -51,6 +51,7 @@ export const registry = createRegistry({
 // @filename: register.ts
 import "@parlor/client";
 import type { ActionsOf } from "@parlor/core/registry";
+
 import type { registry } from "./actions/index.js";
 declare module "@parlor/client" {
   interface Register {

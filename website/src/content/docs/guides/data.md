@@ -48,11 +48,11 @@ const database = await createDatabase({ migrationsFolder: "migrations" });
 // database.db is the Drizzle instance; pass the handle to createServer.
 ```
 
-| Option | Default | Meaning |
-| --- | --- | --- |
-| `url` | `process.env.DATABASE_URL` | A PostgreSQL connection string. When set, PGlite is not used. |
-| `dataDir` | `.parlor/pglite` | Where PGlite keeps its files. `memory://` keeps nothing, for tests. |
-| `migrationsFolder` | none | Apply the migrations in this folder on start. |
+| Option             | Default                    | Meaning                                                             |
+| ------------------ | -------------------------- | ------------------------------------------------------------------- |
+| `url`              | `process.env.DATABASE_URL` | A PostgreSQL connection string. When set, PGlite is not used.       |
+| `dataDir`          | `.parlor/pglite`           | Where PGlite keeps its files. `memory://` keeps nothing, for tests. |
+| `migrationsFolder` | none                       | Apply the migrations in this folder on start.                       |
 
 In an action, `ctx.db` is that Drizzle instance, typed once `@parlor/data` is imported anywhere in the project.
 
