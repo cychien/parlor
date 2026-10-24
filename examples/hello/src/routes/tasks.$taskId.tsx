@@ -1,6 +1,12 @@
-import { useActionMutation, useActionQuery, useAgentView } from "@parlor/client/react";
+import {
+  ensureActionQueryData,
+  useActionMutation,
+  useActionSuspenseQuery,
+  useAgentView,
+} from "@parlor/client/react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 
+import { routeErrors } from "../route-errors.js";
 import { task as taskView } from "../views.js";
 
 export const Route = createFileRoute("/tasks/$taskId")({
@@ -9,7 +15,11 @@ export const Route = createFileRoute("/tasks/$taskId")({
       "One task: its title, notes and whether it is done, with a Delete task button.",
     views: [taskView],
   },
+  loader: ({ context, params }) =>
+    ensureActionQueryData(context, "getTask", { id: params.taskId }),
+  onError: routeErrors,
   component: TaskDetail,
+  notFoundComponent: TaskNotFound,
 });
 
 function TaskDetail() {
@@ -18,26 +28,27 @@ function TaskDetail() {
   const remove = useActionMutation("deleteTask", {
     onSuccess: () => navigate({ to: "/" }),
   });
-  const task = useActionQuery(
+  const { data: task } = useActionSuspenseQuery(
     "getTask",
     { id: taskId },
-    { enabled: !remove.isPending && !remove.isSuccess },
+    { subscribed: !remove.isPending && !remove.isSuccess },
   );
 
-  if (!task.data) {
-    return (
-      <article>
-        <h1>{task.error?.message || "..."}</h1>
-        <BackLink />
-      </article>
-    );
-  }
   return (
     <LoadedTask
-      task={task.data}
+      task={task}
       deleting={remove.isPending}
-      onDelete={() => remove.mutate({ id: task.data.id })}
+      onDelete={() => remove.mutate({ id: task.id })}
     />
+  );
+}
+
+function TaskNotFound() {
+  return (
+    <article>
+      <h1>Task not found</h1>
+      <BackLink />
+    </article>
   );
 }
 

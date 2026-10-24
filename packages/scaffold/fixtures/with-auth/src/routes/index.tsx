@@ -1,5 +1,10 @@
 import { defineAgentView } from "@parlor/client";
-import { useActionMutation, useActionQuery, useAgentView } from "@parlor/client/react";
+import {
+  ensureActionQueryData,
+  useActionMutation,
+  useActionSuspenseQuery,
+  useAgentView,
+} from "@parlor/client/react";
 import { createFileRoute } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
 import * as z from "zod/mini";
@@ -23,6 +28,7 @@ export const Route = createFileRoute("/")({
     description: "The todo list: add a todo, check it off, or delete it.",
     views: [newTodoView, todoView],
   },
+  loader: ({ context }) => ensureActionQueryData(context, "listTodos", {}),
   component: Todos,
 });
 
@@ -33,16 +39,15 @@ interface Todo {
 }
 
 function Todos() {
-  const list = useActionQuery("listTodos", {});
+  const { data: todos } = useActionSuspenseQuery("listTodos", {});
   const toggle = useActionMutation("toggleTodo");
   const remove = useActionMutation("deleteTodo");
-  const todos = list.data ?? [];
 
   return (
     <section className="space-y-6">
       <h1 className="text-2xl font-semibold tracking-tight">Todos</h1>
       <NewTodo />
-      {list.data && todos.length === 0 ? (
+      {todos.length === 0 ? (
         <p className="text-sm text-zinc-500">
           Nothing yet. Add a todo, or ask the agent to.
         </p>

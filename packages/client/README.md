@@ -18,4 +18,6 @@ export function Health() {
 }
 ```
 
+`@parlor/client/router` gives TanStack Router loaders the same cache, so a page can load its data before it renders and links can preload it.
+
 In an app, register the actions once in `src/parlor.d.ts` so names and inputs are typed. Docs: https://cychien.github.io/parlor/guides/pages-and-hooks/

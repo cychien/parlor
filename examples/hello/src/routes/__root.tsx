@@ -1,7 +1,8 @@
 import type { AgentActivityKind, AgentActivityState } from "@parlor/client/react";
 import { Chat, useAgentConfirmations, useSession } from "@parlor/client/react";
+import type { ParlorRouterContext } from "@parlor/client/router";
 import {
-  createRootRoute,
+  createRootRouteWithContext,
   Link,
   Navigate,
   Outlet,
@@ -13,7 +14,7 @@ import { auth } from "../auth.js";
 import { allCardsVisible, useSidebarView } from "../sidebar-view.js";
 import { agentPanel } from "../views.js";
 
-export const Route = createRootRoute({
+export const Route = createRootRouteWithContext<ParlorRouterContext>()({
   staticData: {
     description: "The app shell: navigation to every page.",
     views: [agentPanel],

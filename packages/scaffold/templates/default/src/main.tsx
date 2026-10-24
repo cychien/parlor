@@ -1,13 +1,14 @@
 import { createActionClient } from "@parlor/client";
 import { FrameworkProvider } from "@parlor/client/react";
-import { createRouter, RouterProvider } from "@tanstack/react-router";
+import { createParlorRouter } from "@parlor/client/router";
+import { RouterProvider } from "@tanstack/react-router";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { routeTree } from "./routeTree.gen.js";
 
 const client = createActionClient();
-const router = createRouter({ routeTree });
+const router = createParlorRouter({ routeTree, client });
 
 declare module "@tanstack/react-router" {
   interface Register {
