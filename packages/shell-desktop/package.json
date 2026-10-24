@@ -35,7 +35,10 @@
   "dependencies": {
     "@parlor/config": "workspace:*",
     "@parlor/shell-web": "workspace:*",
-    "@tauri-apps/cli": "^2.12.1"
+    "@tauri-apps/api": "^2.12.1",
+    "@tauri-apps/cli": "^2.12.1",
+    "@tauri-apps/plugin-deep-link": "^2.6.1",
+    "@tauri-apps/plugin-notification": "^2.5.1"
   },
   "devDependencies": {
     "@types/node": "catalog:",
