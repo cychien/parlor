@@ -45,3 +45,5 @@ export const notePanel = defineAgentView({
 ```
 
 Then bind it where the UI renders, with `useAgentView(view, { get })`, and attach the returned `ref` to the element. While the element is on screen, the agent reads its current value. List the views a route shows in its `staticData.views`.
+
+Two options make a view more than something to read. `keyed: true` is for a list's rows: bind each row with `key` set to the id your actions take, and "delete this one" resolves to that id. `writable: true` with a `set` in the binding lets the agent fill a form for the user, who submits it. The template's todo page does both, with a `todo` view per row and a `newTodo` view on the New todo field; start from it.
