@@ -1,4 +1,5 @@
 import type { ActionMap } from "@parlor/core";
+import { focusManager } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ActionClient } from "../action-client.js";
@@ -10,6 +11,8 @@ import { appServer, createApp, page, render, TEMPLATE } from "./app.testing.js";
 afterEach(() => {
   document.documentElement.innerHTML = "<head></head><body></body>";
   vi.restoreAllMocks();
+  vi.useRealTimers();
+  focusManager.setFocused(undefined);
 });
 
 function fakeClient() {
@@ -76,6 +79,30 @@ describe("mount", () => {
     expect(queryClient.getQueryData(key)).toEqual({ id: "7", title: "Task 7" });
     const hash = queryClient.getQueryCache().find({ queryKey: key })!.queryHash;
     expect(readTagsOf(queryClient).tagsFor(hash)).toEqual([["tasks", "7"]]);
+  });
+
+  it("keeps the server's data however long the page took to arrive, without asking again", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const server = appServer();
+    const response = await render(page("/tasks/7"), {
+      template: TEMPLATE,
+      fetch: server.fetch,
+      nonce: "n",
+    });
+    window.history.replaceState(null, "", "/tasks/7");
+    loadDocument(await response!.text());
+    vi.setSystemTime(Date.now() + 5000);
+    const client = fakeClient();
+    const app = createApp(client, false);
+
+    mount(document.getElementById("root")!, app);
+
+    await vi.waitFor(() => expect(app.router.state.status).toBe("idle"));
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(document.querySelector("h1")?.textContent).toBe("Task 7");
+    expect(client.invoke).not.toHaveBeenCalled();
   });
 
   it("renders from scratch when the server did not render the page", async () => {

@@ -16,6 +16,13 @@ export interface ActionQueryContext {
   readonly queryClient: QueryClient;
 }
 
+/** Sync refetches what a write makes out of date, so action data stays fresh until then. */
+const freshUntilInvalidated = ({
+  state,
+}: {
+  readonly state: { readonly data: unknown; readonly isInvalidated: boolean };
+}) => (state.data === undefined || state.isInvalidated ? 0 : "static");
+
 /**
  * The query `useActionQuery(name, input)` runs, for `queryClient.prefetchQuery`, `useQueries`
  * and the like. It reads the same cache entry and records the same read tags, so sync keeps it fresh.
@@ -34,6 +41,9 @@ export function actionQueryOptions<K extends Name>(
       return envelope.data;
     },
     retry: actionRetry(queryClient.getDefaultOptions().queries?.retry),
+    ...(queryClient.getDefaultOptions().queries?.staleTime === undefined
+      ? { staleTime: freshUntilInvalidated }
+      : {}),
   });
 }
 
@@ -49,6 +59,6 @@ export function ensureActionQueryData<K extends Name>(
 ): Promise<ActionOutput<Actions[K]>> {
   return context.queryClient.query({
     ...actionQueryOptions(context, name, input),
-    staleTime: (query) => (query.state.isInvalidated ? 0 : "static"),
+    staleTime: freshUntilInvalidated,
   });
 }

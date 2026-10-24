@@ -84,6 +84,8 @@ export function Notes() {
 
 You never refetch by hand. When any caller runs an action that `writes` what a query `reads`, the query refetches, in this tab and in every other one.
 
+Until then the data counts as fresh: mounting another component that reads it, focusing the window, reconnecting and hydrating a page the server rendered all use it as it is. To refetch on TanStack Query's own schedule instead, pass `staleTime` to the hook, or give your `QueryClient` a `staleTime` default.
+
 ## Load a page's data in its loader
 
 A route's `loader` can fetch what the page reads before the page renders, so it appears with its data instead of a loading state, and links fetch it while the pointer rests on them. `ensureActionQueryData(context, name, input)` loads an action into the same cache entry `useActionQuery` reads, and `useActionSuspenseQuery` reads it back with `data` always set:

@@ -160,7 +160,7 @@ For a browser's request for an opted-in page, the server:
 
 1. Runs the matched routes' loaders. Their actions run against the app's server in the same deployment, with the page request's `cookie` and `authorization` headers, so they see the same signed-in user as the browser.
 2. Answers a loader's `redirect(...)` with a redirect, and `notFound()` with the route's not-found page and status 404.
-3. Renders the page into `index.html`, with `head()`'s tags in `<head>`, and sends the router's state and the query cache along. The browser starts with that cache, so `useActionSuspenseQuery` has its data at once, and sync keeps it fresh as it does any other query.
+3. Renders the page into `index.html`, with `head()`'s tags in `<head>`, and sends the router's state and the query cache along. The browser starts with that cache, so `useActionSuspenseQuery` has its data at once without asking the server again, however long the page took to arrive, and sync keeps it fresh as it does any other query.
 
 Other headers the browser's action client adds do not reach the server render. Anything a server-rendered page's actions need, such as a pass to a private area, belongs in a cookie.
 
