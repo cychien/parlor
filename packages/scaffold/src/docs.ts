@@ -65,6 +65,8 @@ ${DOCS_URL}/llms.txt (every page, as Markdown) before changing how the app is wi
 - \`.parlor/\` is generated. Never edit it. There is no \`vite.config.ts\`: Vite options go in the
   \`vite\` field of \`parlor.config.ts\`.
 - Add features with \`${pm.exec("parlor", ["add", "<auth|agent>"])}\` instead of wiring them by hand.
+- Porting an existing app into this project? Follow ${DOCS_URL}/guides/migrating/ step by step,
+  and ask the person before working around anything it lists as not supported yet.
 
 ## Commands
 
