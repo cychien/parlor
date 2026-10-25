@@ -40,7 +40,7 @@ const snapshot = {
   },
 };
 
-function fakeClient(options: { chat: boolean; streamFrames?: string[] }) {
+function fakeClient(options: { chat: boolean | "forbidden"; streamFrames?: string[] }) {
   const encoder = new TextEncoder();
   const posts: string[] = [];
   const request = vi.fn(async (path: string, init?: RequestInit) => {
@@ -53,7 +53,7 @@ function fakeClient(options: { chat: boolean; streamFrames?: string[] }) {
       });
     }
     if (path.includes("/sync/stream")) {
-      const capabilities = options.chat ? ["ui", "chat"] : ["ui"];
+      const capabilities = options.chat === true ? ["ui", "chat"] : ["ui"];
       return new Response(
         new ReadableStream<Uint8Array>({
           start(controller) {
@@ -74,6 +74,12 @@ function fakeClient(options: { chat: boolean; streamFrames?: string[] }) {
     if (path.endsWith("/ui")) return new Response(null, { status: 204 });
     if (path.endsWith("/chat/actions/open")) {
       posts.push(String(init?.body));
+      if (options.chat === "forbidden") {
+        return Response.json(
+          { error: { code: "forbidden", message: "This account cannot use chat." } },
+          { status: 403 },
+        );
+      }
       return options.chat
         ? Response.json({ data: snapshot, tags: [] })
         : new Response("Not Found", { status: 404 });
@@ -89,6 +95,7 @@ function Probe() {
   return (
     <div>
       <p data-testid="status">{chat.status}</p>
+      <p data-testid="unavailable">{chat.unavailable?.reason}</p>
       <p data-testid="agents">
         {chat.agents.map((a) => `${a.name} on ${a.hostName}`).join(",")}
       </p>
@@ -152,7 +159,24 @@ describe("Chat.Root", () => {
       expect(screen.getByTestId("status").textContent).toBe("unavailable"),
     );
     act(() => {});
+    expect(screen.getByTestId("unavailable").textContent).toBe("not_found");
     expect(screen.queryAllByRole("listitem")).toEqual([]);
+  });
+
+  it("says the agent is forbidden when the server's chat access refuses the user", async () => {
+    const { client, posts } = fakeClient({ chat: "forbidden" });
+    render(
+      <FrameworkProvider client={client}>
+        <Chat.Root>
+          <Probe />
+        </Chat.Root>
+      </FrameworkProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("unavailable").textContent).toBe("forbidden"),
+    );
+    expect(screen.getByTestId("status").textContent).toBe("unavailable");
+    expect(posts).toHaveLength(1);
   });
 });
 

@@ -10,6 +10,7 @@ import {
   ActionError,
   type ActionErrorCode,
   type ActionMap,
+  ANONYMOUS,
   type DataProvider,
 } from "@parlor/core";
 import type { ActionRegistry } from "@parlor/core/registry";
@@ -41,6 +42,7 @@ import { applyMigrations, checkMigrations } from "./migrations.js";
 import type {
   ActionAudit,
   AnyPluginRoute,
+  PluginCaller,
   PluginHost,
   PluginRuntime,
   ServerPlugin,
@@ -231,6 +233,54 @@ function auditAll(
   };
 }
 
+interface Installed {
+  readonly plugin: ServerPlugin;
+  readonly runtime: PluginRuntime;
+}
+
+async function allowedBy({ runtime }: Installed, caller: PluginCaller): Promise<boolean> {
+  return !runtime.allows || (await runtime.allows(caller));
+}
+
+function admitterOf(installed: Installed) {
+  return async (caller: PluginCaller): Promise<void> => {
+    if (await allowedBy(installed, caller)) return;
+    throw new ActionError(
+      "forbidden",
+      `This account cannot use ${installed.plugin.name}.`,
+    );
+  };
+}
+
+/** Joins a connection to `channel` only once the plugin admits its holder. */
+function gatedChannel(installed: Installed, channel: ServerChannel): ServerChannel {
+  if (!installed.runtime.allows) return channel;
+  return {
+    event: channel.event,
+    connect(connection) {
+      let detach: (() => void) | undefined;
+      let left = false;
+      allowedBy(installed, {
+        principal: connection.principal ?? ANONYMOUS,
+        scope: connection.scope,
+      }).then(
+        (allowed) => {
+          if (allowed && !left && !connection.closed?.aborted) {
+            detach = channel.connect(connection);
+          }
+        },
+        (error: unknown) => {
+          console.error(`[parlor] ${installed.plugin.name}: access check failed:`, error);
+        },
+      );
+      return () => {
+        left = true;
+        detach?.();
+      };
+    },
+  };
+}
+
 function guard(callers: CallerResolver, surface: Surface) {
   return async (request: Request): Promise<Caller> =>
     requireSurface(await callers(request), surface, callers.enforcing);
@@ -286,6 +336,10 @@ export function createServer<T extends ActionMap>(
     ...(auth ? { auth } : {}),
     authMisconfigured: "auth" in options && auth === undefined,
     callerOf: callers,
+    allows: async (name, caller) => {
+      const entry = runtimes.find(({ plugin }) => plugin.name === name);
+      return entry === undefined || (await allowedBy(entry, caller));
+    },
     ready,
     announce: async (target, tags, within) => {
       if (!syncEnabled || !database || tags.length === 0) return;
@@ -299,7 +353,10 @@ export function createServer<T extends ActionMap>(
       );
     },
   };
-  const runtimes = installed.map((plugin) => ({ plugin, runtime: plugin.setup(host) }));
+  const runtimes: Installed[] = installed.map((plugin) => ({
+    plugin,
+    runtime: plugin.setup(host),
+  }));
   const routes = mountRoutes(runtimes, basePath);
   const audit = auditAll(runtimes.map(({ runtime }) => runtime));
   const agentUi =
@@ -309,7 +366,10 @@ export function createServer<T extends ActionMap>(
           ...agentUiOptions,
           audience: async (request) => (await callers(request)).audience,
         });
-  const runnerFor = (registry: ActionRegistry): ActionRunner =>
+  const runnerFor = (
+    registry: ActionRegistry,
+    admit?: (caller: Caller) => Promise<void>,
+  ): ActionRunner =>
     createActionRunner({
       actions: registry,
       scope,
@@ -319,6 +379,7 @@ export function createServer<T extends ActionMap>(
       onClient: agentUi?.touch,
       confirm: agentUi?.confirm,
       audit,
+      admit,
       ready,
     });
   const runner = runnerFor(actions);
@@ -359,15 +420,25 @@ export function createServer<T extends ActionMap>(
     }
   });
 
-  const handleRoute = async (route: AnyPluginRoute, request: Request) => {
+  const handleRoute = async (
+    route: AnyPluginRoute,
+    request: Request,
+    admit: (caller: PluginCaller) => Promise<void>,
+  ) => {
     if (route.access === "public") return route.handle(request);
     const caller = requireAccess(await callers(request), route.access, callers.enforcing);
+    await admit(caller);
     return route.handle(request, caller);
   };
 
-  for (const { plugin, runtime } of runtimes) {
+  const admitters = new Map(
+    runtimes.map((entry) => [entry.plugin.name, admitterOf(entry)]),
+  );
+  for (const entry of runtimes) {
+    const { plugin, runtime } = entry;
     if (runtime.actions) {
-      const pluginRunner = runnerFor(runtime.actions);
+      const admit = admitters.get(plugin.name)!;
+      const pluginRunner = runnerFor(runtime.actions, runtime.allows ? admit : undefined);
       app.post(`${basePath}/${plugin.name}/actions/:name`, async (event) => {
         const name = event.context.params?.name ?? "";
         try {
@@ -388,11 +459,12 @@ export function createServer<T extends ActionMap>(
       });
     }
   }
-  for (const { route, path } of routes) {
+  for (const { plugin, route, path } of routes) {
+    const admit = admitters.get(plugin)!;
     app.on(route.method, path, async (event) => {
       try {
         await ready();
-        return await handleRoute(route, event.req);
+        return await handleRoute(route, event.req, admit);
       } catch (error) {
         return errorResponse(error);
       }
@@ -460,8 +532,8 @@ export function createServer<T extends ActionMap>(
       pollIntervalMs: syncOptions?.pollIntervalMs,
       channels: [
         ...(agentUi ? [agentUi.channel] : []),
-        ...runtimes.flatMap(({ runtime }): ServerChannel[] =>
-          runtime.channel ? [runtime.channel] : [],
+        ...runtimes.flatMap((entry): ServerChannel[] =>
+          entry.runtime.channel ? [gatedChannel(entry, entry.runtime.channel)] : [],
         ),
       ],
       clientId: clientOf,

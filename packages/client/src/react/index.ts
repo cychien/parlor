@@ -18,6 +18,7 @@ export type {
   ChatCommands,
   ChatState,
   ChatStatus,
+  ChatUnavailable,
   ChatWait,
   ConnectOption,
   DeviceSetup,
