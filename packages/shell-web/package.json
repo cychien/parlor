@@ -34,7 +34,6 @@
     "@parlor/config": "workspace:*",
     "@tanstack/router-plugin": "catalog:",
     "@vitejs/plugin-react": "catalog:",
-    "vite": "catalog:",
     "vite-plugin-pwa": "^2.0.0",
     "workbox-build": "^7.4.1",
     "workbox-window": "^7.4.1"
@@ -48,6 +47,10 @@
     "react": "catalog:",
     "react-dom": "catalog:",
     "typescript": "catalog:",
+    "vite": "catalog:",
     "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "vite": "^8.0.0"
   }
 }
