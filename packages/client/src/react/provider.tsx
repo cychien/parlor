@@ -37,8 +37,10 @@ export interface FrameworkProviderProps {
   readonly sync?: boolean | undefined;
   readonly router?: AnyRouter | undefined;
   /**
-   * When the signed-in user changes, cached queries reset and sync reconnects as them. An
-   * auth client that can also sign (`device`) and pair hosts (`authorizeHost`) gives the chat both.
+   * When the signed-in user changes, cached queries reset and sync reconnects as them. Sync
+   * waits for a signed-in or `anonymous` session, and after the server refuses it, for the
+   * session to change. An auth client that can also sign (`device`) and pair hosts
+   * (`authorizeHost`) gives the chat both.
    */
   readonly auth?: FrameworkAuth | undefined;
   readonly children: ReactNode;
@@ -141,7 +143,15 @@ export function FrameworkProvider({
   );
 }
 
-/** One sync connection; remounted with a fresh cursor whenever the signed-in user changes. */
+/** The server refuses a signed-out visitor sync, unless it signs nobody in (`anonymous`). */
+function syncsAs(session: SessionSnapshot | undefined): boolean {
+  return !session || session.status === "signed-in" || session.status === "anonymous";
+}
+
+/**
+ * One sync connection; remounted with a fresh cursor whenever the signed-in user changes. It
+ * runs while the session can sync, and after the server refuses it, until the session changes.
+ */
 function SyncConnection({
   value,
   queryClient,
@@ -150,7 +160,8 @@ function SyncConnection({
   readonly queryClient: QueryClient;
 }) {
   useEffect(() => {
-    const { client } = value;
+    const { client, auth } = value;
+    let refused: SessionSnapshot | undefined;
     const syncClient: SyncClient = createSyncClient({
       request: (path, init) => client.request(path, init),
       basePath: client.basePath,
@@ -163,7 +174,26 @@ function SyncConnection({
       channels: [value.agentUi],
       onNegotiated: (transport) => value.bridge.negotiated(transport),
       onResume: () => value.bridge.resumed(),
+      ...(auth
+        ? {
+            onUnauthorized: () => {
+              refused = auth.current();
+              syncClient.stop();
+            },
+          }
+        : {}),
     });
+    let settled: string | undefined;
+    const follow = () => {
+      const session = auth?.current();
+      if (session?.status === "loading") return;
+      if (session !== refused) refused = undefined;
+      if (session) settled ??= identityOf(session);
+      // The provider remounts this connection for another user.
+      const anotherUser = session !== undefined && identityOf(session) !== settled;
+      if (syncsAs(session) && refused === undefined && !anotherUser) syncClient.start();
+      else syncClient.stop();
+    };
     const reconnectWhenVisible = () => {
       if (globalThis.document?.visibilityState !== "hidden") syncClient.reconnectNow();
     };
@@ -171,8 +201,10 @@ function SyncConnection({
     globalThis.addEventListener?.("online", reconnect);
     globalThis.document?.addEventListener("visibilitychange", reconnectWhenVisible);
     const detach = value.bridge.attach(syncClient);
-    syncClient.start();
+    const unfollow = auth?.subscribe(follow);
+    follow();
     return () => {
+      unfollow?.();
       globalThis.removeEventListener?.("online", reconnect);
       globalThis.document?.removeEventListener("visibilitychange", reconnectWhenVisible);
       syncClient.stop();
