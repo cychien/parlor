@@ -14,6 +14,7 @@ const agentRef = { hostId: asId("host", "host_mac"), agentId: "claude" };
 
 const baseState: ChatState = {
   status: "idle",
+  unavailable: undefined,
   thread: undefined,
   threads: [],
   items: [],

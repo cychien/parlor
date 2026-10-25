@@ -276,8 +276,29 @@ describe("createChatRuntime start", () => {
     });
     h.runtime.start();
     await vi.waitFor(() => expect(h.runtime.get().status).toBe("unavailable"));
+    expect(h.runtime.get().unavailable).toEqual({ reason: "not_found" });
     expect(h.runtime.get().items).toEqual([]);
     expect(h.runtime.get().agents).toEqual([]);
+  });
+
+  it("says the user may not use the agent when the server refuses them", async () => {
+    const h = setup({
+      transport: "poll",
+      open: async () => {
+        throw new ActionError("forbidden", "This account cannot use chat.");
+      },
+    });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("unavailable"));
+    expect(h.runtime.get().unavailable).toEqual({ reason: "forbidden" });
+    expect(h.runtime.get().wait).toBeUndefined();
+  });
+
+  it("leaves the reason unset while chat is available", async () => {
+    const h = setup();
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    expect(h.runtime.get().unavailable).toBeUndefined();
   });
 
   it("offers the install command for adding a computer when the shell cannot host one", async () => {
@@ -2069,8 +2090,22 @@ describe("createChatRuntime degradation", () => {
       await settle();
       await vi.advanceTimersByTimeAsync(120 * SECOND);
       expect(opens(h)).toHaveLength(1);
+      expect(h.runtime.get().unavailable).toEqual({ reason: code });
     },
   );
+
+  it("reports a failed first open as an error while it retries", async () => {
+    const server = flaky(1, finished);
+    const h = setup({ open: server.open });
+    h.runtime.start();
+    await settle();
+    expect(h.runtime.get().status).toBe("unavailable");
+    expect(h.runtime.get().unavailable).toEqual({ reason: "error" });
+    await vi.advanceTimersByTimeAsync(2 * SECOND);
+    await settle();
+    expect(h.runtime.get().status).not.toBe("unavailable");
+    expect(h.runtime.get().unavailable).toBeUndefined();
+  });
 
   it("T7-03 (d) runs no retry after the sidebar unmounts", async () => {
     const server = flaky(Number.POSITIVE_INFINITY, finished);

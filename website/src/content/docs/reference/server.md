@@ -51,3 +51,5 @@ In `parlor dev` and in every build, a request is answered by the first of:
 The app's content security policy goes on its documents and static files. Responses from the server, absolute routes included, keep their own headers.
 
 A plugin's `setup` runs while the app loads, where some runtimes, such as Cloudflare's, allow no I/O and no timers. Start background work, such as an interval, in the runtime's `start()`, which the server calls once when it is ready for its first request.
+
+A plugin's runtime may return `allows(caller)`, sync or async, to decide who may use it from the caller's `principal` and `scope`. The server answers everyone it refuses with `forbidden` on the plugin's actions (audited as a refusal) and on its signed-in routes, and keeps them off its channel; public routes are not asked. A plugin that serves another one asks through `PluginHost.allows(name, caller)`, which is true when that plugin is not installed or sets no policy; `@parlor/auth` does so before pairing a computer for `chat()`.

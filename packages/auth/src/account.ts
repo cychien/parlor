@@ -1,3 +1,4 @@
+import { CHAT_PLUGIN } from "@parlor/chat";
 import {
   ActionError,
   type ActionContext,
@@ -5,7 +6,7 @@ import {
   type UserPrincipal,
 } from "@parlor/core";
 import { type ActionsOf, createRegistry } from "@parlor/core/registry";
-import type { PluginHost } from "@parlor/server";
+import type { PluginCaller, PluginHost } from "@parlor/server";
 import { z } from "zod";
 
 import type { DeviceAccountActions } from "./devices.js";
@@ -59,6 +60,23 @@ export function signedIn(ctx: ActionContext): UserPrincipal {
     throw new ActionError("forbidden", "Only a signed-in user manages the account.");
   }
   return ctx.principal;
+}
+
+/**
+ * Computers and device keys exist only for the chat, so a user its `access` refuses can
+ * pair neither; removing what they already have stays open.
+ */
+export async function chatAllows(
+  host: PluginHost,
+  caller: PluginCaller,
+): Promise<boolean> {
+  return (await host.allows?.(CHAT_PLUGIN, caller)) ?? true;
+}
+
+export const CHAT_REFUSED = "This account cannot use the agent.";
+
+export async function requireChat(host: PluginHost, ctx: ActionContext): Promise<void> {
+  if (!(await chatAllows(host, ctx))) throw new ActionError("forbidden", CHAT_REFUSED);
 }
 
 const scopesOf = (scopes: Grant["scopes"]) =>

@@ -22,6 +22,7 @@ import {
 } from "./create-server.js";
 import {
   type ActionAudit,
+  type PluginCaller,
   type AnyPluginRoute,
   type PluginHost,
   pluginRoute,
@@ -510,6 +511,163 @@ describe("server plugins", () => {
     expect(install([named("demo", "other/0001_x")])).toThrow(/must start with "demo\/"/);
     expect(() => createServer({ actions: appActions, plugins: [named("demo")] })).toThrow(
       /needs a database/,
+    );
+  });
+});
+
+describe("a plugin's allows", () => {
+  function gated(allow: (caller: PluginCaller) => boolean | Promise<boolean>) {
+    const log = { audits: [] as ActionAudit[], asked: [] as string[], joined: 0 };
+    let host: PluginHost | undefined;
+    const plugin: ServerPlugin = {
+      name: "gated",
+      setup: (given) => {
+        host = given;
+        return {
+          actions: createRegistry({
+            ping: defineAction({
+              description: "Ping.",
+              input: z.object({}),
+              run: () => "pong",
+            }),
+          }),
+          routes: [
+            pluginRoute({
+              method: "POST",
+              path: "/beat",
+              access: ["user", "host"],
+              handle: () => Promise.resolve(new Response(null, { status: 204 })),
+            }),
+            {
+              method: "GET",
+              path: "/public",
+              access: "public",
+              handle: () => Promise.resolve(Response.json({ public: true })),
+            },
+          ],
+          channel: {
+            event: "gated",
+            connect: () => {
+              log.joined += 1;
+              return () => {};
+            },
+          },
+          allows: (caller) => {
+            log.asked.push(`${caller.principal.kind}@${caller.scope}`);
+            return allow(caller);
+          },
+          audit: (record) => log.audits.push(record),
+        };
+      },
+    };
+    return { plugin, log, host: () => host! };
+  }
+
+  const userOnly = (caller: PluginCaller) => caller.principal.kind === "user";
+
+  it("refuses the plugin's actions and signed-in routes to whoever it does not allow", async () => {
+    const { plugin, log } = gated(userOnly);
+    const server = serve({
+      auth: testAuth,
+      database: lend(await database()),
+      plugins: [plugin],
+    });
+    const ping = (token?: string) =>
+      call(server, "POST", "/_parlor/gated/actions/ping", token, {});
+    expect(await json(await ping("alice"))).toEqual({
+      status: 200,
+      body: { data: "pong", tags: [] },
+    });
+    expect(await json(await ping("alice-host"))).toEqual({
+      status: 403,
+      body: { error: { code: "forbidden", message: "This account cannot use gated." } },
+    });
+    expect((await call(server, "POST", "/_parlor/gated/beat", "alice")).status).toBe(204);
+    expect(
+      await json(await call(server, "POST", "/_parlor/gated/beat", "alice-host")),
+    ).toMatchObject({ status: 403, body: { error: { code: "forbidden" } } });
+    expect((await call(server, "GET", "/_parlor/gated/public")).status).toBe(200);
+    expect(
+      log.audits.map(({ principal, stage, outcome }) => [principal.kind, stage, outcome]),
+    ).toEqual([
+      ["user", "ran", "ok"],
+      ["host", "refused", "forbidden"],
+    ]);
+  });
+
+  it("checks sign-in before asking the plugin", async () => {
+    const { plugin, log } = gated(() => true);
+    const server = serve({
+      auth: testAuth,
+      database: lend(await database()),
+      plugins: [plugin],
+    });
+    expect(
+      (await call(server, "POST", "/_parlor/gated/actions/ping", undefined, {})).status,
+    ).toBe(401);
+    expect((await call(server, "POST", "/_parlor/gated/beat")).status).toBe(401);
+    expect(
+      (await call(server, "POST", "/_parlor/gated/actions/ping", "alice-agent", {}))
+        .status,
+    ).toBe(403);
+    expect(log.asked).toEqual([]);
+  });
+
+  it("joins a stream to the plugin's channel only when it allows the holder", async () => {
+    let allow = false;
+    const { plugin, log } = gated(() => allow);
+    const server = serve({
+      auth: testAuth,
+      database: lend(await database()),
+      plugins: [plugin],
+    });
+    const open = async () => {
+      const controller = new AbortController();
+      closers.push(() => Promise.resolve(controller.abort()));
+      const response = await server.fetch(
+        new Request("http://app.test/_parlor/sync/stream?since=", {
+          headers: {
+            accept: "text/event-stream",
+            authorization: "Bearer alice",
+            "x-parlor-client": "tab",
+          },
+          signal: controller.signal,
+        }),
+      );
+      const reader = response.body!.getReader();
+      let text = "";
+      while (!text.includes("\n\n"))
+        text += new TextDecoder().decode((await reader.read()).value);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    };
+    await open();
+    expect(log.asked).toEqual(["user@alice"]);
+    expect(log.joined).toBe(0);
+    allow = true;
+    await open();
+    expect(log.joined).toBe(1);
+  });
+
+  it("answers other plugins through the host, and admits everyone for a plugin without a policy", async () => {
+    const { plugin, host } = gated(userOnly);
+    serve({
+      auth: testAuth,
+      database: lend(await database()),
+      plugins: [plugin, { name: "open", setup: () => ({}) }],
+    });
+    const caller = (principal: AuthenticatedPrincipal) => ({
+      principal,
+      scope: "default",
+    });
+    await expect(host().allows!("gated", caller(TOKENS.alice!))).resolves.toBe(true);
+    await expect(host().allows!("gated", caller(TOKENS["alice-host"]!))).resolves.toBe(
+      false,
+    );
+    await expect(host().allows!("open", caller(TOKENS["alice-host"]!))).resolves.toBe(
+      true,
+    );
+    await expect(host().allows!("absent", caller(TOKENS["alice-host"]!))).resolves.toBe(
+      true,
     );
   });
 });

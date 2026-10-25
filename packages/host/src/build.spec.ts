@@ -6,11 +6,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { parseConfig } from "@parlor/config";
+import { ConfigError, parseConfig } from "@parlor/config";
 import { buildRender } from "@parlor/shell-web";
 import { describe, expect, it } from "vitest";
 
-import { buildServer } from "./build.js";
+import { buildServer, devWranglerConfig, withServerMigration } from "./build.js";
 import { hostEntrySource } from "./entry.js";
 import { renderConditionsFor } from "./presets.js";
 
@@ -463,6 +463,208 @@ describe("buildServer for cloudflare-durable", () => {
       child.kill();
     }
   }, 180_000);
+});
+
+describe("buildServer for cloudflare-durable with the app's own Worker exports", () => {
+  it("exports the app's Durable Object classes from the Worker", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "parlor-host-cf-exports-"));
+    await writeFile(
+      join(rootDir, "worker.ts"),
+      [
+        'import { DurableObject } from "cloudflare:workers";',
+        "export class Fridge extends DurableObject {",
+        "  #opened = 0;",
+        "  fetch() { return Response.json({ opened: ++this.#opened }); }",
+        "}",
+      ].join("\n"),
+    );
+    await writeFile(
+      join(rootDir, "server.ts"),
+      [
+        'import { env } from "cloudflare:workers";',
+        "export default {",
+        "  fetch: () => env.FRIDGE.get(env.FRIDGE.idFromName('kitchen')).fetch('https://fridge/'),",
+        "};",
+      ].join("\n"),
+    );
+    const config = parseConfig({
+      app: { id: "dev.parlor.hostcfexports", name: "Host" },
+      deploy: {
+        cloudflare: {
+          exports: "worker.ts",
+          wrangler: {
+            durable_objects: { bindings: [{ name: "FRIDGE", class_name: "Fridge" }] },
+            migrations: [{ tag: "v1", new_sqlite_classes: ["Fridge"] }],
+          },
+        },
+      },
+    });
+
+    const result = await buildServer(
+      { config, rootDir, configFile: "parlor.config.ts" },
+      { preset: "cloudflare-durable" },
+    );
+    const port = await freePort();
+    const child = spawn(
+      process.execPath,
+      [
+        wranglerBin(),
+        "dev",
+        "--config",
+        join(result.outputDir, "server", "wrangler.json"),
+        "--port",
+        String(port),
+        "--ip",
+        "127.0.0.1",
+      ],
+      {
+        env: { ...process.env, CI: "1", WRANGLER_SEND_METRICS: "false" },
+        stdio: "ignore",
+      },
+    );
+    try {
+      const open = async () => {
+        for (let i = 0; i < 200; i++) {
+          try {
+            const response = await fetch(`http://127.0.0.1:${port}/_parlor/fridge`);
+            if (response.ok) return (await response.json()) as Record<string, unknown>;
+          } catch {}
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        throw new Error("wrangler dev did not start");
+      };
+      await expect(open()).resolves.toEqual({ opened: 1 });
+      await expect(open()).resolves.toEqual({ opened: 2 });
+    } finally {
+      child.kill();
+    }
+  }, 180_000);
+
+  it("names a missing exports module", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "parlor-host-cf-exports-"));
+    await writeFile(
+      join(rootDir, "server.ts"),
+      "export default { fetch: () => new Response() };",
+    );
+    const config = parseConfig({
+      app: { id: "dev.parlor.hostcfexports", name: "Host" },
+      deploy: { cloudflare: { exports: "worker.ts" } },
+    });
+
+    await expect(
+      buildServer(
+        { config, rootDir, configFile: "parlor.config.ts" },
+        { preset: "cloudflare-durable" },
+      ),
+    ).rejects.toThrow(
+      new ConfigError(
+        `deploy.cloudflare.exports names worker.ts, which does not exist in ${rootDir}`,
+      ),
+    );
+  });
+});
+
+describe("withServerMigration", () => {
+  const server = { tag: "parlor-server-v1", new_sqlite_classes: ["ParlorServer"] };
+  const fridge = { tag: "v1_fridge", new_sqlite_classes: ["Fridge"] };
+
+  it("adds the server's migration to an app with none", () => {
+    expect(withServerMigration([])).toEqual([server]);
+  });
+
+  it("appends it after the app's own, never before a tag a deployment already applied", () => {
+    expect(withServerMigration([fridge])).toEqual([fridge, server]);
+  });
+
+  it("keeps the app's order once the app lists it", () => {
+    const later = { tag: "v2_cache", new_sqlite_classes: ["Cache"] };
+    expect(withServerMigration([fridge, server, later])).toEqual([fridge, server, later]);
+  });
+});
+
+describe("devWranglerConfig", () => {
+  const app = { id: "dev.parlor.media", name: "Media" };
+
+  it("declares the app's own bindings and vars with the build's name and compatibility", () => {
+    const config = parseConfig({
+      app,
+      deploy: {
+        preset: "cloudflare-durable",
+        cloudflare: {
+          wrangler: {
+            r2_buckets: [{ binding: "MEDIA", bucket_name: "media" }],
+            send_email: [{ name: "MAIL" }],
+            vars: { REGION: "eu" },
+          },
+        },
+      },
+    });
+    expect(devWranglerConfig(config, "2026-10-01")).toEqual({
+      wrangler: {
+        name: "dev-parlor-media",
+        compatibility_date: "2026-10-01",
+        compatibility_flags: ["nodejs_compat"],
+        r2_buckets: [{ binding: "MEDIA", bucket_name: "media" }],
+        send_email: [{ name: "MAIL" }],
+        vars: { REGION: "eu" },
+        durable_objects: { bindings: [] },
+      },
+      unavailable: [{ binding: "PARLOR_SERVER", className: "ParlorServer" }],
+    });
+  });
+
+  it("keeps the app's name, date and flags, and drops what only a deployment uses", () => {
+    const config = parseConfig({
+      app,
+      deploy: {
+        cloudflare: {
+          wrangler: {
+            name: "media-prod",
+            main: "src/index.ts",
+            compatibility_date: "2026-06-01",
+            compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"],
+            migrations: [{ tag: "v1", new_sqlite_classes: ["Fridge"] }],
+          },
+        },
+      },
+    });
+    const { wrangler } = devWranglerConfig(config, "2026-10-01");
+    expect(wrangler).toMatchObject({
+      name: "media-prod",
+      compatibility_date: "2026-06-01",
+      compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"],
+    });
+    expect(wrangler).not.toHaveProperty("main");
+    expect(wrangler).not.toHaveProperty("migrations");
+  });
+
+  it("binds Durable Objects of other Workers and reports the ones this Worker defines", () => {
+    const config = parseConfig({
+      app,
+      deploy: {
+        cloudflare: {
+          wrangler: {
+            durable_objects: {
+              bindings: [
+                { name: "FRIDGE", class_name: "Fridge" },
+                { name: "ROOMS", class_name: "Room", script_name: "chat" },
+                { name: "SELF", class_name: "Cache", script_name: "dev-parlor-media" },
+              ],
+            },
+          },
+        },
+      },
+    });
+    const { wrangler, unavailable } = devWranglerConfig(config);
+    expect(wrangler.durable_objects).toEqual({
+      bindings: [{ name: "ROOMS", class_name: "Room", script_name: "chat" }],
+    });
+    expect(unavailable).toEqual([
+      { binding: "PARLOR_SERVER", className: "ParlorServer" },
+      { binding: "FRIDGE", className: "Fridge" },
+      { binding: "SELF", className: "Cache" },
+    ]);
+  });
 });
 
 const BROWSER_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";

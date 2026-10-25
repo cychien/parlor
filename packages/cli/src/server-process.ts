@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import { appServerEnv, type LoadedConfig, type ParlorConfig } from "@parlor/config";
 
+import type { CloudflareDev } from "./cloudflare/prepare.js";
 import { onShutdown } from "./shutdown.js";
 
 const require = createRequire(import.meta.url);
@@ -73,6 +74,7 @@ export async function untilListening(
 export function startServerProcess(
   { config, rootDir }: LoadedConfig,
   frontends?: readonly string[],
+  cloudflare?: CloudflareDev,
 ): ChildProcess {
   const tsxBin = require.resolve("tsx/cli");
   const runner = new URL("./serve-entry.ts", import.meta.url).pathname.replace(
@@ -82,7 +84,14 @@ export function startServerProcess(
   const entry = join(rootDir, config.server.entry);
   const child = spawn(
     process.execPath,
-    [tsxBin, "watch", "--clear-screen=false", runner, entry],
+    [
+      tsxBin,
+      "watch",
+      "--clear-screen=false",
+      runner,
+      entry,
+      ...(cloudflare ? [`--cloudflare=${JSON.stringify(cloudflare)}`] : []),
+    ],
     {
       cwd: rootDir,
       stdio: "inherit",

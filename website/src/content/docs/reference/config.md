@@ -32,6 +32,7 @@ import { defineConfig } from "@parlor/config";
 | `deploy.preset`                                        | detected                     | the build preset; see [Deploy](/parlor/guides/deploy/)                       |
 | `deploy.cloudflare.locationHint`                       | none                         | where `cloudflare-durable` starts the app's Durable Object, such as `weur`   |
 | `deploy.cloudflare.wrangler`                           | none                         | merged into the generated wrangler config: bindings, worker name             |
+| `deploy.cloudflare.exports`                            | none                         | a module whose named exports the Worker exports, such as Durable Objects     |
 | `vite`                                                 | none                         | Vite options merged into every build; see [Styling](/parlor/guides/styling/) |
 
 ## @parlor/config/tsconfig
