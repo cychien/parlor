@@ -2,7 +2,7 @@ import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { GENERATED_DIR, type LoadedConfig, type ParlorConfig } from "@parlor/config";
+import { generatedDir, type LoadedConfig, type ParlorConfig } from "@parlor/config";
 
 export const CAPACITOR_PLUGINS = [
   "@capacitor/app",
@@ -22,7 +22,7 @@ export interface CapacitorProjectOptions {
 }
 
 export function capacitorProjectDir(rootDir: string): string {
-  return join(rootDir, GENERATED_DIR, "capacitor");
+  return join(generatedDir(rootDir), "capacitor");
 }
 
 export function capacitorConfig(

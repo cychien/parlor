@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { GENERATED_DIR, type LoadedConfig, type ParlorConfig } from "@parlor/config";
+import { generatedDir, type LoadedConfig, type ParlorConfig } from "@parlor/config";
 import { appCsp, extendCsp, serializeCsp } from "@parlor/shell-web";
 
 const ICONS = [
@@ -19,7 +19,7 @@ const AGENT_HOST_SIGNATURE = "parlor-host.sig";
 const SHELL_CRATE_DIR = fileURLToPath(new URL("../rust", import.meta.url));
 
 export function tauriProjectDir(rootDir: string): string {
-  return join(rootDir, GENERATED_DIR, "tauri");
+  return join(generatedDir(rootDir), "tauri");
 }
 
 const TAURI_IPC_SOURCES = ["ipc:", "http://ipc.localhost"];

@@ -79,6 +79,22 @@ describe("agentManifest", () => {
     );
   }, 30_000);
 
+  it("writes the manifest into the generated directory it is given", async () => {
+    const root = await fixture("Settings.");
+    await build({
+      root,
+      configFile: false,
+      logLevel: "silent",
+      plugins: [agentManifest({ app, generatedDir: ".parlor/e2e" })],
+      build: { outDir: join(root, "dist"), write: false },
+    });
+    const written = JSON.parse(
+      await readFile(join(root, ".parlor", "e2e", "ui-manifest.json"), "utf8"),
+    );
+    expect(written.routes.map((r: { path: string }) => r.path)).toContain("/settings");
+    await expect(stat(join(root, ".parlor", "ui-manifest.json"))).rejects.toThrow();
+  }, 30_000);
+
   it("writes the manifest when route modules import stylesheets, which Node never needs", async () => {
     const root = await fixture("Settings.");
     await writeFile(join(root, "src", "app.css"), "body { color: red; }\n");

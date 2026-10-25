@@ -25,6 +25,8 @@ const REGENERATE_DEBOUNCE_MS = 50;
 export interface AgentManifestOptions {
   readonly app: UiAppInfo;
   readonly routeTree?: string | undefined;
+  /** Where the manifest is written, absolute or relative to the root. Defaults to `.parlor`. */
+  readonly generatedDir?: string | undefined;
 }
 
 export function manifestFromModule(app: UiAppInfo, module: unknown): ManifestBuild {
@@ -82,7 +84,8 @@ export function agentManifest(options: AgentManifestOptions): Plugin<AgentManife
   let current: UiManifest | undefined;
 
   const routeTreePath = () => resolve(root, options.routeTree ?? DEFAULT_ROUTE_TREE);
-  const outFile = () => join(root, GENERATED_DIR, UI_MANIFEST_FILE);
+  const generatedDir = () => resolve(root, options.generatedDir ?? GENERATED_DIR);
+  const outFile = () => join(generatedDir(), UI_MANIFEST_FILE);
 
   const write = async (build: ManifestBuild) => {
     current = build.manifest;
@@ -118,7 +121,7 @@ export function agentManifest(options: AgentManifestOptions): Plugin<AgentManife
     const environment = server.environments.ssr;
     if (!environment || !isRunnableDevEnvironment(environment)) return;
     const runner = environment.runner;
-    const generatedDir = join(root, GENERATED_DIR) + sep;
+    const generated = generatedDir() + sep;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let running: Promise<void> = Promise.resolve();
 
@@ -146,7 +149,7 @@ export function agentManifest(options: AgentManifestOptions): Plugin<AgentManife
       timer = setTimeout(generate, REGENERATE_DEBOUNCE_MS);
     };
     const onFile = (file: string) => {
-      if (file.startsWith(generatedDir)) return;
+      if (file.startsWith(generated)) return;
       if (file === routeTreePath() || runner.evaluatedModules.getModulesByFile(file)) {
         schedule();
       }

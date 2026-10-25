@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import type { Writable } from "node:stream";
 
-import { loadParlorConfig } from "@parlor/config";
+import { generatedDir, loadParlorConfig } from "@parlor/config";
 import { createDatabase } from "@parlor/data";
 import { defineCommand } from "citty";
 
@@ -141,7 +141,7 @@ const migrate = defineCommand({
   async run() {
     const { config, rootDir } = await loadParlorConfig();
     const database = await createDatabase({
-      dataDir: join(rootDir, ".parlor", "pglite"),
+      dataDir: join(generatedDir(rootDir), "pglite"),
     });
     try {
       await database.migrate(join(rootDir, config.database.migrations));

@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { GENERATED_DIR } from "@parlor/config";
+import { GENERATED_DIR_ENV, generatedDir } from "@parlor/config";
 
 import { CliError } from "./errors.js";
 
@@ -48,19 +48,20 @@ function running(owner: DevSession): string {
       owner.urls[index] ? `${target} at ${owner.urls[index]}` : target,
     )
     .join(", ");
-  return `parlor dev is already running for this project (${where}, pid ${owner.pid}). A second one would open the same database. Stop it first, or run every target from one: parlor dev --target web,mac.`;
+  return `parlor dev is already running for this project (${where}, pid ${owner.pid}). A second one would open the same database. Stop it first, run every target from one: parlor dev --target web,mac, or give the second its own directory: ${GENERATED_DIR_ENV}=.parlor/second parlor dev.`;
 }
 
 /**
- * Claims the project for this `parlor dev`, so a second one cannot open the same database;
- * a claim whose process is gone is stale. `update` records the URLs once the ports are known.
+ * Claims the run's generated directory for this `parlor dev`, so a second one cannot open the
+ * same database; a claim whose process is gone is stale. `update` records the URLs once the
+ * ports are known.
  */
 export function claimDevSession(
   rootDir: string,
   targets: readonly string[],
   pid: number = process.pid,
 ): { update(urls: readonly string[]): void; release(): void } {
-  const path = join(rootDir, GENERATED_DIR, DEV_SESSION_FILE);
+  const path = join(generatedDir(rootDir), DEV_SESSION_FILE);
   mkdirSync(dirname(path), { recursive: true });
   const write = (urls: readonly string[]) => JSON.stringify({ pid, targets, urls });
   for (let attempt = 0; attempt < 2; attempt += 1) {

@@ -12,7 +12,7 @@ import { createDatabase } from "@parlor/data";
 //       ^?
 ```
 
-Opens the app's database: PostgreSQL at `url` (default `process.env.DATABASE_URL`), else PGlite in `dataDir` (default `.parlor/pglite`; `memory://` keeps nothing). With `migrationsFolder` it applies pending migrations before it resolves.
+Opens the app's database: PostgreSQL at `url` (default `process.env.DATABASE_URL`), else PGlite in `dataDir` (default `pglite` in the generated directory, `.parlor/pglite` unless `PARLOR_GENERATED_DIR` moves it; `memory://` keeps nothing). With `migrationsFolder` it applies pending migrations before it resolves.
 
 The handle has `db` (the Drizzle instance), `client`, `driver` (`"pglite"` or `"node-postgres"`), `transaction(run)`, `migrate(folder)` and `close()`. Importing `@parlor/data` anywhere in the project types `ctx.db` in every action as that Drizzle instance.
 
@@ -22,7 +22,7 @@ The handle has `db` (the Drizzle instance), `client`, `driver` (`"pglite"` or `"
 
 On Cloudflare, `createDatabase` does no I/O: the migrations, embedded in the build, run before the server's first request instead.
 
-`resolveDatabaseUrl(env)` and `resolveDirectUrl(env)` return the URLs `createDatabase` would use. See [Data](/parlor/guides/data/).
+`resolveDatabaseUrl(env)` and `resolveDirectUrl(env)` return the URLs `createDatabase` would use, and `resolvePgliteDir(env)` the PGlite directory. See [Data](/parlor/guides/data/).
 
 ```ts
 import { createConnectionScope } from "@parlor/data";

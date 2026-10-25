@@ -47,4 +47,4 @@ The strict compiler options every Parlor app uses. A project's `tsconfig.json` e
 }
 ```
 
-`loadParlorConfig`, `parseConfig`, `parlorConfigSchema` and `ConfigError` are what the CLI uses to read the file.
+`loadParlorConfig`, `parseConfig`, `parlorConfigSchema` and `ConfigError` are what the CLI uses to read the file. `generatedDir(rootDir, env)` is where a run keeps its generated files: `.parlor`, or the directory `PARLOR_GENERATED_DIR` names.

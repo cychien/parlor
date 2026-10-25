@@ -1,10 +1,10 @@
-import { resolve } from "node:path";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
 import { UI_MANIFEST_FILE } from "@parlor/agent-ui";
 import { fileManifestSource, type UiManifestSource } from "@parlor/agent-ui/server";
-import { GENERATED_DIR } from "@parlor/config";
+import { generatedDir } from "@parlor/config";
 import { serve } from "srvx";
 
 import { registerCloudflareWorkers } from "./cloudflare/loader.js";
@@ -38,7 +38,7 @@ const loaded = (await import(pathToFileURL(entry).href).catch(async (error: unkn
 };
 const handler = loaded.default?.fetch;
 loaded.default?.installUiManifest?.(
-  fileManifestSource(resolve(GENERATED_DIR, UI_MANIFEST_FILE)),
+  fileManifestSource(join(generatedDir(process.cwd()), UI_MANIFEST_FILE)),
 );
 
 if (handler || cloudflare) {
