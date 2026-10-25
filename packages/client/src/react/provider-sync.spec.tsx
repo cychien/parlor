@@ -13,7 +13,7 @@ const written = (version: number, id: string) => ({
   tags: [["tasks", id]],
 });
 
-function serverWith(log: ReturnType<typeof written>[]) {
+function serverWith(log: ReturnType<typeof written>[], resetTo?: string) {
   const streams: string[] = [];
   const invoke = vi.fn(async () => ({
     data: { tasks: log.length },
@@ -38,7 +38,11 @@ function serverWith(log: ReturnType<typeof written>[]) {
         (event.version === Number(version) && event.id > id),
     );
     const frames = ['event: handshake\ndata: {"protocol":1,"capabilities":[]}\n\n'];
-    if (missed.length > 0) {
+    if (resetTo !== undefined) {
+      frames.push(
+        `data: ${JSON.stringify({ events: [], cursor: resetTo, reset: true })}\n\n`,
+      );
+    } else if (missed.length > 0) {
       const last = missed.at(-1)!;
       frames.push(
         `data: ${JSON.stringify({ events: missed, cursor: `${last.version}.${last.id}` })}\n\n`,
@@ -69,8 +73,8 @@ function Tasks() {
   return <output>{query.data ? "loaded" : "loading"}</output>;
 }
 
-async function loadThenConnect(log: ReturnType<typeof written>[]) {
-  const server = serverWith(log);
+async function loadThenConnect(log: ReturnType<typeof written>[], resetTo?: string) {
+  const server = serverWith(log, resetTo);
   const queryClient = new QueryClient();
   await queryClient.fetchQuery(
     actionQueryOptions({ client: server.client, queryClient }, "listTasks", {}),
@@ -105,6 +109,20 @@ describe("the sync stream of a page that already holds data", () => {
     ]);
     expect(streams).toEqual(["41.e"]);
     await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+    view.unmount();
+  });
+});
+
+describe("a sync stream the server resets", () => {
+  it("refetches data older than where the reset leaves the stream", async () => {
+    const { invoke, view } = await loadThenConnect([written(41, "e")], "90.z");
+    await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+    view.unmount();
+  });
+
+  it("keeps data that already reflects where the reset leaves the stream", async () => {
+    const { invoke, view } = await loadThenConnect([written(41, "e")], "41.e");
+    expect(invoke).toHaveBeenCalledTimes(1);
     view.unmount();
   });
 });

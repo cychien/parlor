@@ -42,6 +42,13 @@ export interface SyncClientOptions {
    * shows. Defaults to the start of the retained log.
    */
   readonly startAt?: (() => string) | undefined;
+  /**
+   * The server could not replay every event since the client's cursor: the client fell
+   * more than one batch behind, or behind what the server keeps. Sync continues from
+   * `cursor`, where the client's streams stand now; reread whatever predates it. Without
+   * it, the client is never reset and a poll pages through the backlog.
+   */
+  readonly onReset?: ((cursor: string) => void) | undefined;
   /** Bounds a negotiation or a poll, not the SSE stream. Defaults to 10 s. */
   readonly requestTimeoutMs?: number | undefined;
   /**
@@ -224,19 +231,29 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
   const held = () => (cursor === INITIAL_CURSOR ? "" : encodeCursor(cursor));
   const since = () =>
     cursor === INITIAL_CURSOR ? (options.startAt?.() ?? "") : encodeCursor(cursor);
+  const missedSince = () =>
+    `since=${encodeURIComponent(since())}${options.onReset ? "&reset=1" : ""}`;
+
+  const take = (batch: SyncBatch) => {
+    if (!batch.reset) {
+      accept(batch.events);
+      return;
+    }
+    cursor = decodeCursor(batch.cursor);
+    guarded(() => options.onReset?.(batch.cursor));
+  };
 
   const poll = async (mine: number) => {
     const batch = await withTimeout(async (signal) => {
-      const response = await options.request(
-        `${basePath}/sync?since=${encodeURIComponent(since())}`,
-        { signal },
-      );
+      const response = await options.request(`${basePath}/sync?${missedSince()}`, {
+        signal,
+      });
       if (refused(response)) throw new SyncUnauthorized(response.status);
       if (!response.ok) throw new Error(`sync poll failed with HTTP ${response.status}`);
       return (await response.json()) as SyncBatch;
     });
     if (mine !== epoch) throw new StaleRequest();
-    accept(batch.events);
+    take(batch);
     if (running && negotiated === "poll") resumed();
   };
 
@@ -318,13 +335,10 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     live = current;
     rearm();
     try {
-      const response = await options.request(
-        `${endpoint}?since=${encodeURIComponent(since())}`,
-        {
-          headers: { accept: "text/event-stream" },
-          signal: own.signal,
-        },
-      );
+      const response = await options.request(`${endpoint}?${missedSince()}`, {
+        headers: { accept: "text/event-stream" },
+        signal: own.signal,
+      });
       if (refused(response)) throw new SyncUnauthorized(response.status);
       if (!response.ok || !response.body) {
         throw new Error(`sync stream failed with HTTP ${response.status}`);
@@ -336,7 +350,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
         (frame) => {
           if (frame.event === "message") {
             const batch = JSON.parse(frame.data) as SyncBatch;
-            accept(batch.events);
+            take(batch);
             const parsed = decodeCursor(batch.cursor);
             if (compareCursors(parsed, cursor) > 0) cursor = parsed;
             return;

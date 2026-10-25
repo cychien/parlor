@@ -2,15 +2,16 @@ import { readFile } from "node:fs/promises";
 
 import { asId, type Principal } from "@parlor/core";
 import { createDatabase, type DatabaseHandle } from "@parlor/data";
+import { sql } from "drizzle-orm";
 import { H3 } from "h3";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { ChannelConnection, ServerChannel } from "../channel.js";
 import { createSyncClient } from "../client/sync-client.js";
-import type { SyncBatch } from "../protocol.js";
+import { cursorOf, encodeCursor, type SyncBatch, type SyncEvent } from "../protocol.js";
 import { SyncHub } from "./hub.js";
 import { registerSyncRoutes, type StreamAuthority, transportFromEnv } from "./routes.js";
-import { ensureSyncTables, recordSyncEvent } from "./store.js";
+import { ensureSyncTables, pruneSyncEvents, recordSyncEvent } from "./store.js";
 
 let handle: DatabaseHandle;
 let app: H3;
@@ -218,6 +219,107 @@ describe("sync stream catch-up", () => {
       .flatMap((f) => (JSON.parse(f.slice("data:".length)) as SyncBatch).events)
       .filter((e) => e.id === committed.id);
     expect(delivered).toHaveLength(1);
+  });
+});
+
+describe("sync catch-up beyond what the server can replay", () => {
+  const record = (scope: string, count: number) =>
+    handle.transaction(async (tx) => {
+      const recorded: SyncEvent[] = [];
+      for (let i = 0; i < count; i += 1) {
+        recorded.push(await recordSyncEvent(tx, { scope, tags: [["tasks", `${i}`]] }));
+      }
+      return recorded;
+    });
+  const at = (syncEvent: SyncEvent) => encodeCursor(cursorOf(syncEvent));
+
+  function connect(scope: string, transport: "sse" | "poll", startAt: string) {
+    const server = new H3();
+    registerSyncRoutes(server, {
+      basePath: "/_parlor",
+      data: handle,
+      hub,
+      scope: () => scope,
+      transport,
+      pollIntervalMs: 50,
+      keepAliveMs: 50,
+    });
+    const delivered: SyncEvent[] = [];
+    const resets: string[] = [];
+    const client = createSyncClient({
+      request: (path, init) => server.fetch(new Request(`http://app.test${path}`, init)),
+      startAt: () => startAt,
+      onEvents: (events) => delivered.push(...events),
+      onReset: (cursor) => resets.push(cursor),
+      coalesceMs: 0,
+    });
+    client.start();
+    return { client, delivered, resets };
+  }
+
+  it.each(["sse", "poll"] as const)(
+    "resets a client more than one batch behind over %s, instead of skipping the rest",
+    async (transport) => {
+      const scope = `backlog-${transport}`;
+      const [start] = await record(scope, 1);
+      const missed = await record(scope, 501);
+      const { client, delivered, resets } = connect(scope, transport, at(start!));
+
+      await vi.waitFor(() => expect(resets).toEqual([at(missed.at(-1)!)]));
+      expect(client.cursor).toBe(at(missed.at(-1)!));
+      const [live] = await record(scope, 1);
+      await vi.waitFor(() => expect(delivered.map((e) => e.id)).toEqual([live!.id]));
+      client.stop();
+    },
+  );
+
+  it.each(["sse", "poll"] as const)(
+    "resets a client whose cursor predates pruned events over %s",
+    async (transport) => {
+      const scope = `pruned-${transport}`;
+      const [start] = await record(scope, 1);
+      await record(scope, 1);
+      await handle.db.execute(
+        sql`update sync_events set created_at = now() - interval '2 days' where scope = ${scope}`,
+      );
+      expect(await pruneSyncEvents(handle.db)).toBe(2);
+      const [kept] = await record(scope, 1);
+      const { client, delivered, resets } = connect(scope, transport, at(start!));
+
+      await vi.waitFor(() => expect(resets).toEqual([at(kept!)]));
+      expect(delivered).toEqual([]);
+      client.stop();
+    },
+  );
+
+  it("replays one batch in full without a reset", async () => {
+    const [start] = await record("one-batch", 1);
+    const missed = await record("one-batch", 500);
+    const { client, delivered, resets } = connect("one-batch", "sse", at(start!));
+
+    await vi.waitFor(() => expect(delivered).toHaveLength(500));
+    expect(delivered.map((e) => e.id)).toEqual(missed.map((e) => e.id));
+    expect(resets).toEqual([]);
+    client.stop();
+  });
+
+  it("pages a client that does not ask for resets through the backlog, as before", async () => {
+    const [start] = await record("no-reset", 1);
+    const missed = await record("no-reset", 501);
+    const poll = (since: string) =>
+      app
+        .fetch(
+          new Request(`http://app.test/_parlor/sync?since=${encodeURIComponent(since)}`, {
+            headers: { "x-org": "no-reset" },
+          }),
+        )
+        .then((r) => r.json() as Promise<SyncBatch>);
+
+    const first = await poll(at(start!));
+    expect(first.reset).toBeUndefined();
+    expect(first.events).toHaveLength(500);
+    const second = await poll(first.cursor);
+    expect(second.events.map((e) => e.id)).toEqual([missed.at(-1)!.id]);
   });
 });
 

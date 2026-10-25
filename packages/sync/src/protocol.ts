@@ -49,6 +49,13 @@ export function cursorOf(event: SyncEvent): SyncCursor {
 export interface SyncBatch {
   readonly events: readonly SyncEvent[];
   readonly cursor: string;
+  /**
+   * The server cannot replay every event after the cursor the client sent: there are more
+   * than one batch of them, or pruning may have removed some. `events` is empty and
+   * `cursor` is where the client's streams stand now, so anything derived from events
+   * before it may be stale. Sent only to a client that asks with `reset=1`.
+   */
+  readonly reset?: true | undefined;
 }
 
 export interface SyncNegotiation {

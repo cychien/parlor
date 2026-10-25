@@ -147,6 +147,51 @@ describe("createSyncClient", () => {
     client.stop();
   });
 
+  it("asks for resets only with onReset, and continues from the cursor a reset names", async () => {
+    const polls: string[] = [];
+    const request = vi.fn(async (path: string) => {
+      if (path.endsWith("/sync/token")) {
+        return Response.json({
+          protocol: 1,
+          transport: "poll",
+          endpoint: "",
+          pollIntervalMs: 100,
+        });
+      }
+      polls.push(path);
+      return polls.length === 1
+        ? Response.json({ events: [], cursor: "40.r", reset: true })
+        : Response.json({ events: [event(41, "s")], cursor: "41.s" });
+    });
+    const onEvents = vi.fn();
+    const onReset = vi.fn();
+    const client = createSyncClient({
+      request,
+      onEvents,
+      onReset,
+      startAt: () => "7.h",
+      coalesceMs: 10,
+    });
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(polls[0]).toBe(`/_parlor/sync?since=${encodeURIComponent("7.h")}&reset=1`);
+    expect(onReset).toHaveBeenCalledWith("40.r");
+    expect(client.cursor).toBe("40.r");
+    expect(onEvents).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(120);
+    expect(polls[1]).toBe(`/_parlor/sync?since=${encodeURIComponent("40.r")}&reset=1`);
+    expect(onEvents).toHaveBeenCalledWith([event(41, "s")]);
+    client.stop();
+
+    polls.length = 0;
+    const unaware = createSyncClient({ request, onEvents: vi.fn() });
+    unaware.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(polls[0]).toBe("/_parlor/sync?since=");
+    unaware.stop();
+  });
+
   it("falls back to polling when negotiation fails", async () => {
     const request = vi.fn(async (path: string) =>
       path.endsWith("/sync/token")

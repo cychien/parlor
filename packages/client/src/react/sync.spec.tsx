@@ -2,7 +2,7 @@ import { hashKey, QueryClient } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 
 import { actionQueryKey } from "../query-keys.js";
-import { invalidateForEvents, ReadTagRegistry } from "./sync.js";
+import { invalidateForEvents, invalidateForReset, ReadTagRegistry } from "./sync.js";
 
 describe("ReadTagRegistry + invalidateForEvents", () => {
   it("invalidates only queries whose read tags overlap the event tags", async () => {
@@ -108,6 +108,42 @@ describe("ReadTagRegistry sync cursors", () => {
     await invalidateForEvents(queryClient, registry, [tasksEvent(9, "i")]);
     newer.settle();
     await newer.fetched;
+    await vi.waitFor(() => expect(stale()).toBe(true));
+  });
+
+  it("invalidates on a reset the data that predates it, and answers in flight once they land", async () => {
+    const { queryClient, registry, key, stale } = setup();
+    const held = (name: string, tags: string[][], cursor?: string) => {
+      const heldKey = actionQueryKey(name, {});
+      queryClient.setQueryData(heldKey, "cached");
+      registry.record(hashKey(heldKey), tags, cursor);
+      return () => queryClient.getQueryState(heldKey)?.isInvalidated ?? false;
+    };
+    const older = held("listNotes", [["notes"]], "5.b");
+    const current = held("listDrafts", [["drafts"]], "20.t");
+    const unknown = held("listTags", [["tags"]]);
+    const untracked = held("hello", []);
+    let settle!: () => void;
+    const fetched = queryClient.fetchQuery({
+      queryKey: key,
+      queryFn: () =>
+        registry.read(hashKey(key), async () => {
+          await new Promise<void>((resolve) => (settle = resolve));
+          return { data: "tasks", tags: [["tasks"]], cursor: "8.h" };
+        }),
+    });
+    await vi.waitFor(() => expect(settle).toBeDefined());
+
+    await invalidateForReset(queryClient, registry, "20.t");
+    expect([older(), current(), unknown(), untracked()]).toEqual([
+      true,
+      false,
+      true,
+      false,
+    ]);
+    expect(registry.latest()).toBe("20.t");
+    settle();
+    await fetched;
     await vi.waitFor(() => expect(stale()).toBe(true));
   });
 
