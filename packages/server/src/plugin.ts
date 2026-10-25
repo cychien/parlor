@@ -15,7 +15,8 @@ import type { Caller } from "./caller.js";
 
 /**
  * A framework feature the app installs with `createServer({ plugins })`. It owns the
- * tables prefixed `parlor_<name>_` and every path under `/_parlor/<name>/`.
+ * tables prefixed `parlor_<name>_`, every path under `/_parlor/<name>/`, and the paths its
+ * absolute routes declare.
  */
 export interface ServerPlugin {
   readonly name: string;
@@ -82,6 +83,11 @@ type SignedInKind = AuthenticatedPrincipal["kind"];
 export interface PluginRoute<K extends SignedInKind | "anonymous"> {
   readonly method: "GET" | "POST";
   readonly path: `/${string}`;
+  /**
+   * Serves `path` as is from the origin root instead of under `/_parlor/<plugin>/`, for URLs
+   * fixed outside the app, such as a payment provider's webhook. The path must be static.
+   */
+  readonly absolute?: boolean | undefined;
   readonly access: readonly K[];
   handle(request: Request, caller: CallerOf<K>): Promise<Response>;
 }
@@ -91,6 +97,8 @@ export interface PublicPluginRoute {
   readonly method: "GET" | "POST";
   /** Absolute when it starts with `/.well-known/`. */
   readonly path: `/${string}`;
+  /** See `PluginRoute.absolute`. */
+  readonly absolute?: boolean | undefined;
   readonly access: "public";
   handle(request: Request): Promise<Response>;
 }

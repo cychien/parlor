@@ -1,5 +1,6 @@
 export {
   agentManifest,
+  type AgentManifestApi,
   type AgentManifestOptions,
   DEFAULT_ROUTE_TREE,
   manifestFromModule,

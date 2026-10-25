@@ -1,7 +1,9 @@
+import { pagePattern, UNROUTED_HEADER } from "@parlor/agent-ui";
 import {
   type AgentUiOptions,
   createAgentUi,
   registerAgentUiRoutes,
+  type UiManifestInput,
   type UiManifestSource,
 } from "@parlor/agent-ui/server";
 import {
@@ -78,6 +80,10 @@ type ManifestSummary = Pick<Manifest, "protocol" | "app">;
 type ManifestReply = Manifest | ManifestSummary | Response;
 
 export interface FrameworkServer {
+  /**
+   * Hands the server the app's page routes, called by the host before the first request.
+   * Throws when a page route would take a document request meant for an absolute route.
+   */
   readonly installUiManifest?: ((source: UiManifestSource) => void) | undefined;
   readonly fetch: (request: Request) => Promise<Response>;
   readonly close: () => Promise<void>;
@@ -141,6 +147,78 @@ function checkPlugins(
     checkMigrations(plugin);
     if (plugin.migrations?.length && !database) {
       throw new Error(`The "${plugin.name}" plugin needs a database.`);
+    }
+  }
+}
+
+interface MountedRoute {
+  readonly plugin: string;
+  readonly route: AnyPluginRoute;
+  readonly path: string;
+}
+
+const isAbsolute = (route: AnyPluginRoute) =>
+  route.absolute === true || route.path.startsWith("/.well-known/");
+
+function mountRoutes(
+  runtimes: readonly { readonly plugin: ServerPlugin; readonly runtime: PluginRuntime }[],
+  basePath: string,
+): MountedRoute[] {
+  const mounted: MountedRoute[] = [];
+  const owners = new Map<string, string>();
+  for (const { plugin, runtime } of runtimes) {
+    for (const route of runtime.routes ?? []) {
+      if (!isAbsolute(route)) {
+        mounted.push({
+          plugin: plugin.name,
+          route,
+          path: `${basePath}/${plugin.name}${route.path}`,
+        });
+        continue;
+      }
+      const { method, path } = route;
+      if (route.absolute && /[:*]/.test(path)) {
+        throw new Error(
+          `The "${plugin.name}" plugin's absolute route ${method} ${path} must be a static path.`,
+        );
+      }
+      if (path === basePath || path.startsWith(`${basePath}/`)) {
+        throw new Error(
+          `The "${plugin.name}" plugin's absolute route ${method} ${path} is under ${basePath}, which the framework serves.`,
+        );
+      }
+      const key = `${method} ${path}`;
+      const owner = owners.get(key);
+      if (owner !== undefined) {
+        throw new Error(
+          owner === plugin.name
+            ? `The "${owner}" plugin serves ${key} twice.`
+            : `The "${owner}" and "${plugin.name}" plugins both serve ${key}.`,
+        );
+      }
+      owners.set(key, plugin.name);
+      mounted.push({ plugin: plugin.name, route, path });
+    }
+  }
+  return mounted;
+}
+
+function refuseShadowedRoutes(
+  manifest: UiManifestInput | undefined,
+  routes: readonly MountedRoute[],
+): void {
+  if (!manifest) return;
+  const pages = manifest.routes.map((page) => ({
+    page,
+    pattern: pagePattern(page.path),
+  }));
+  for (const { plugin, route } of routes) {
+    if (!route.absolute || route.method !== "GET") continue;
+    const shadow = pages.find(({ pattern }) => pattern.test(route.path));
+    if (shadow) {
+      throw new Error(
+        `The "${plugin}" plugin's absolute route GET ${route.path} is also matched by the page route ${shadow.page.path}, so a browser opening it would get the page. Move one of them.`,
+      );
     }
   }
 }
@@ -279,6 +357,7 @@ export function createServer<T extends ActionMap>(
     plugin,
     runtime: plugin.setup(host),
   }));
+  const routes = mountRoutes(runtimes, basePath);
   const audit = auditAll(runtimes.map(({ runtime }) => runtime));
   const agentUi =
     agentUiOptions === false
@@ -352,13 +431,15 @@ export function createServer<T extends ActionMap>(
     return route.handle(request, caller);
   };
 
+  const admitters = new Map(
+    runtimes.map((entry) => [entry.plugin.name, admitterOf(entry)]),
+  );
   for (const entry of runtimes) {
     const { plugin, runtime } = entry;
-    const root = `${basePath}/${plugin.name}`;
-    const admit = admitterOf(entry);
     if (runtime.actions) {
+      const admit = admitters.get(plugin.name)!;
       const pluginRunner = runnerFor(runtime.actions, runtime.allows ? admit : undefined);
-      app.post(`${root}/actions/:name`, async (event) => {
+      app.post(`${basePath}/${plugin.name}/actions/:name`, async (event) => {
         const name = event.context.params?.name ?? "";
         try {
           const input = await readBody(event).catch(() => {
@@ -377,19 +458,17 @@ export function createServer<T extends ActionMap>(
         }
       });
     }
-    for (const route of runtime.routes ?? []) {
-      const path = route.path.startsWith("/.well-known/")
-        ? route.path
-        : root + route.path;
-      app.on(route.method, path, async (event) => {
-        try {
-          await ready();
-          return await handleRoute(route, event.req, admit);
-        } catch (error) {
-          return errorResponse(error);
-        }
-      });
-    }
+  }
+  for (const { plugin, route, path } of routes) {
+    const admit = admitters.get(plugin)!;
+    app.on(route.method, path, async (event) => {
+      try {
+        await ready();
+        return await handleRoute(route, event.req, admit);
+      } catch (error) {
+        return errorResponse(error);
+      }
+    });
   }
 
   if (mcp !== false) {
@@ -471,10 +550,22 @@ export function createServer<T extends ActionMap>(
     });
   }
 
+  app.all("/**", (event) => {
+    const response = errorResponse(
+      new ActionError(
+        "not_found",
+        `No route for ${event.req.method} ${event.url.pathname}`,
+      ),
+    );
+    response.headers.set(UNROUTED_HEADER, "1");
+    return response;
+  });
+
   return {
-    ...(agentUi
-      ? { installUiManifest: (source: UiManifestSource) => agentUi.install(source) }
-      : {}),
+    installUiManifest: (source) => {
+      refuseShadowedRoutes(source(), routes);
+      agentUi?.install(source);
+    },
     fetch: (request) => {
       const response = Promise.resolve(app.fetch(request));
       const settled = () => void inflight.delete(response);

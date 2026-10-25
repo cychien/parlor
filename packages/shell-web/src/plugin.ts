@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
+import { pagePattern } from "@parlor/agent-ui";
 import { agentManifest, DEFAULT_ROUTE_TREE } from "@parlor/agent-ui/vite";
 import { GENERATED_DIR, type ParlorConfig } from "@parlor/config";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
@@ -10,6 +11,7 @@ import { VitePWA } from "vite-plugin-pwa";
 
 import { appCsp, metaCsp, serializeCsp } from "./csp.js";
 import { routeGeneratorOptions, routesDirectory, routeTreeFile } from "./route-tree.js";
+import { pageMatcher, serverRoutes } from "./server-routes.js";
 
 export const FRAMEWORK_ROUTE_PREFIX = "/_parlor";
 /** OAuth discovery lives at the origin root (RFC 8414, RFC 9728), outside the framework prefix. */
@@ -96,20 +98,25 @@ export function parlorWeb(
   options: WebOptions = {},
 ): PluginOption[] {
   const conditions = options.conditions ?? [];
+  const manifest = agentManifest({
+    app: {
+      id: config.app.id,
+      name: config.app.name,
+      ...(config.app.description ? { description: config.app.description } : {}),
+      ...(config.app.scheme ? { scheme: config.app.scheme } : {}),
+    },
+    routeTree: routeTreeFile(config),
+  });
   const plugins: PluginOption[] = [
     ...fileRoutes(config, options.root ?? process.cwd()),
     react(),
     cspPlugin(config, options),
     titlePlugin(config),
-    agentManifest({
-      app: {
-        id: config.app.id,
-        name: config.app.name,
-        ...(config.app.description ? { description: config.app.description } : {}),
-        ...(config.app.scheme ? { scheme: config.app.scheme } : {}),
-      },
-      routeTree: routeTreeFile(config),
-    }),
+    manifest,
+    serverRoutes(
+      config.server.port,
+      pageMatcher(() => manifest.api?.manifest()),
+    ),
     {
       name: "parlor:web",
       config: () => ({
@@ -142,6 +149,15 @@ export function parlorWeb(
             FRAMEWORK_ROUTE_PREFIX,
             ...OAUTH_DISCOVERY_PREFIXES,
           ].map((prefix) => new RegExp(`^${prefix.replaceAll(".", "\\.")}(/|$)`)),
+        },
+        integration: {
+          beforeBuildServiceWorker: (pwa) => {
+            const pages = manifest.api?.manifest();
+            if (!pages) return;
+            pwa.workbox.navigateFallbackAllowlist = pages.routes.map((route) =>
+              pagePattern(route.path),
+            );
+          },
         },
       }),
     );

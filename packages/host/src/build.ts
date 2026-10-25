@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { UI_MANIFEST_FILE } from "@parlor/agent-ui";
+import { pagePattern, UI_MANIFEST_FILE, type UiManifest } from "@parlor/agent-ui";
 import {
   appServerEnv,
   ConfigError,
@@ -22,6 +22,7 @@ import {
   durableServerSource,
   hostEntrySource,
   INDEX_HTML_PLACEHOLDER,
+  PAGE_ROUTES_PLACEHOLDER,
   UI_MANIFEST_PLACEHOLDER,
 } from "./entry.js";
 import { type DeployPreset, nitroPresetFor, syncTransportFor } from "./presets.js";
@@ -49,6 +50,27 @@ export function hostRootDir(projectRoot: string): string {
   return join(projectRoot, GENERATED_DIR, "nitro");
 }
 
+function pageRoutesSource(manifest: Pick<UiManifest, "routes"> | undefined): string {
+  return `[${(manifest?.routes ?? []).map((route) => String(pagePattern(route.path))).join(", ")}]`;
+}
+
+/**
+ * The entry sets the policy on the documents it serves itself, so these cover only the static
+ * files: a rule matching every path would also override the app's own responses.
+ */
+async function staticFileRules(
+  webDir: string,
+  headers: Record<string, string>,
+): Promise<NonNullable<NitroConfig["routeRules"]>> {
+  const entries = await readdir(webDir, { withFileTypes: true }).catch(() => []);
+  const rules: NonNullable<NitroConfig["routeRules"]> = {};
+  for (const entry of entries) {
+    rules[entry.isDirectory() ? `/${entry.name}/**` : `/${entry.name}`] = { headers };
+    if (entry.name === "index.html") rules["/"] = { headers };
+  }
+  return rules;
+}
+
 export async function buildServer(
   { config, rootDir }: LoadedConfig,
   options: ServerBuildOptions,
@@ -59,13 +81,14 @@ export async function buildServer(
   const indexHtml = await readFile(join(webOutDir(rootDir), "index.html"), "utf8").catch(
     () => "",
   );
-  const uiManifest = await readFile(
+  const manifest = await readFile(
     join(rootDir, GENERATED_DIR, UI_MANIFEST_FILE),
     "utf8",
   ).then(
-    (text) => JSON.stringify(JSON.parse(text)),
-    () => "undefined",
+    (text) => JSON.parse(text) as UiManifest,
+    () => undefined,
   );
+  const contentSecurityPolicy = serializeCsp(appCsp(config, {}));
 
   await mkdir(hostRoot, { recursive: true });
   const serverEntry = join(rootDir, config.server.entry);
@@ -79,9 +102,10 @@ export async function buildServer(
     cloudflare
       ? cloudflareEntrySource({
           basePath,
+          contentSecurityPolicy,
           locationHint: config.deploy.cloudflare?.locationHint,
         })
-      : hostEntrySource({ serverEntry, basePath }),
+      : hostEntrySource({ serverEntry, basePath, contentSecurityPolicy }),
   );
   await writeFile(join(hostRoot, ".gitignore"), "*\n");
 
@@ -92,14 +116,14 @@ export async function buildServer(
     ...(cloudflare ? { cloudflare: cloudflare.nitro } : {}),
     compatibilityDate: options.compatibilityDate ?? DEFAULT_COMPATIBILITY_DATE,
     publicAssets: [{ dir: webOutDir(rootDir), baseURL: "/", fallthrough: true }],
-    routeRules: {
-      "/**": { headers: { "content-security-policy": serializeCsp(appCsp(config, {})) } },
-      [`${basePath}/**`]: { headers: false },
-    },
+    routeRules: await staticFileRules(webOutDir(rootDir), {
+      "content-security-policy": contentSecurityPolicy,
+    }),
     traceDeps: [...TRACED_DEPENDENCIES],
     replace: {
       [INDEX_HTML_PLACEHOLDER]: JSON.stringify(indexHtml),
-      [UI_MANIFEST_PLACEHOLDER]: uiManifest,
+      [UI_MANIFEST_PLACEHOLDER]: manifest ? JSON.stringify(manifest) : "undefined",
+      [PAGE_ROUTES_PLACEHOLDER]: pageRoutesSource(manifest),
       [`process.env.${SYNC_TRANSPORT_ENV}`]: JSON.stringify(syncTransport),
       ...(cloudflare ? { [MIGRATIONS_PLACEHOLDER]: cloudflare.migrations } : {}),
       ...Object.fromEntries(

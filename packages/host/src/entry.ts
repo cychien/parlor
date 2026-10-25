@@ -1,36 +1,60 @@
+import { UNROUTED_HEADER } from "@parlor/agent-ui";
+
 export interface EntryOptions {
   readonly serverEntry: string;
   readonly basePath: string;
+  readonly contentSecurityPolicy: string;
 }
 
 export const INDEX_HTML_PLACEHOLDER = "__PARLOR_INDEX_HTML__";
 export const UI_MANIFEST_PLACEHOLDER = "__PARLOR_UI_MANIFEST__";
+export const PAGE_ROUTES_PLACEHOLDER = "__PARLOR_PAGE_ROUTES__";
 
 export const DURABLE_SERVER_BINDING = "PARLOR_SERVER";
 export const DURABLE_SERVER_CLASS = "ParlorServer";
 
-const serveDocument = (basePath: string) => `const INDEX_HTML = ${INDEX_HTML_PLACEHOLDER};
-const BASE_PATH = ${JSON.stringify(basePath)};
+type DocumentOptions = Pick<EntryOptions, "basePath" | "contentSecurityPolicy">;
 
-function wantsDocument(request) {
-  if (request.method !== "GET") return false;
-  const accept = request.headers.get("accept") ?? "";
-  return accept.includes("text/html");
+/**
+ * A page route's document is served without asking the app. Any other request goes to the
+ * app, and a browser gets the document only when no route of the app's matches either.
+ */
+const documentSource = ({
+  basePath,
+  contentSecurityPolicy,
+}: DocumentOptions) => `const INDEX_HTML = ${INDEX_HTML_PLACEHOLDER};
+const PAGE_ROUTES = ${PAGE_ROUTES_PLACEHOLDER};
+const BASE_PATH = ${JSON.stringify(basePath)};
+const DOCUMENT_HEADERS = {
+  "content-type": "text/html; charset=utf-8",
+  "cache-control": "no-cache",
+  "content-security-policy": ${JSON.stringify(contentSecurityPolicy)},
+};
+
+function wantsDocument(request, path) {
+  if (!INDEX_HTML || request.method !== "GET" || path.startsWith(BASE_PATH)) return false;
+  return (request.headers.get("accept") ?? "").includes("text/html");
 }
 
-function documentFor(request) {
-  if (!INDEX_HTML || !wantsDocument(request)) return undefined;
-  if (new URL(request.url).pathname.startsWith(BASE_PATH)) return undefined;
-  return new Response(INDEX_HTML, {
-    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" },
-  });
+async function withDocument(request, serve) {
+  const { pathname } = new URL(request.url);
+  const document = wantsDocument(request, pathname);
+  if (document && PAGE_ROUTES.some((page) => page.test(pathname))) {
+    return new Response(INDEX_HTML, { headers: DOCUMENT_HEADERS });
+  }
+  const response = await serve(request);
+  if (!document || response.status !== 404 || !response.headers.has(${JSON.stringify(UNROUTED_HEADER)})) {
+    return response;
+  }
+  await response.body?.cancel();
+  return new Response(INDEX_HTML, { headers: DOCUMENT_HEADERS });
 }`;
 
-export function hostEntrySource({ serverEntry, basePath }: EntryOptions): string {
+export function hostEntrySource({ serverEntry, ...document }: EntryOptions): string {
   return `import app from ${JSON.stringify(serverEntry)};
 
 const UI_MANIFEST = ${UI_MANIFEST_PLACEHOLDER};
-${serveDocument(basePath)}
+${documentSource(document)}
 
 app.installUiManifest?.(() => UI_MANIFEST);
 
@@ -46,34 +70,33 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 }
 
 export default {
-  async fetch(request) {
-    return documentFor(request) ?? app.fetch(request);
+  fetch(request) {
+    return withDocument(request, (request) => app.fetch(request));
   },
 };
 `;
 }
 
-export interface CloudflareEntryOptions {
-  readonly basePath: string;
+export interface CloudflareEntryOptions extends DocumentOptions {
   readonly locationHint?: string | undefined;
 }
 
 /** The stateless Worker: documents here, everything else to the one Durable Object. */
 export function cloudflareEntrySource({
-  basePath,
   locationHint,
+  ...document
 }: CloudflareEntryOptions): string {
   return `import { env } from "cloudflare:workers";
 
-${serveDocument(basePath)}
+${documentSource(document)}
 
 export default {
-  async fetch(request) {
-    const document = documentFor(request);
-    if (document) return document;
-    const servers = env.${DURABLE_SERVER_BINDING};
-    const server = servers.get(servers.idFromName("app")${locationHint ? `, { locationHint: ${JSON.stringify(locationHint)} }` : ""});
-    return server.fetch(request);
+  fetch(request) {
+    return withDocument(request, (request) => {
+      const servers = env.${DURABLE_SERVER_BINDING};
+      const server = servers.get(servers.idFromName("app")${locationHint ? `, { locationHint: ${JSON.stringify(locationHint)} }` : ""});
+      return server.fetch(request);
+    });
   },
 };
 `;
