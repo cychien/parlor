@@ -105,6 +105,8 @@ export default {
 export interface DurableServerOptions {
   readonly serverEntry: string;
   readonly connectionScopes: boolean;
+  /** The app's own Worker exports, such as its Durable Object classes. */
+  readonly workerExports?: string | undefined;
 }
 
 /**
@@ -114,9 +116,10 @@ export interface DurableServerOptions {
 export function durableServerSource({
   serverEntry,
   connectionScopes,
+  workerExports,
 }: DurableServerOptions): string {
   return `import { DurableObject } from "cloudflare:workers";
-${connectionScopes ? 'import { createConnectionScope } from "@parlor/data";\n' : ""}
+${connectionScopes ? 'import { createConnectionScope } from "@parlor/data";\n' : ""}${workerExports ? `export * from ${JSON.stringify(workerExports)};\n` : ""}
 const UI_MANIFEST = ${UI_MANIFEST_PLACEHOLDER};
 
 let loading;

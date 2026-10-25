@@ -51,9 +51,21 @@
     "tsx": "^4.23.15"
   },
   "devDependencies": {
+    "@parlor/core": "workspace:*",
+    "@parlor/server": "workspace:*",
     "@types/node": "catalog:",
     "drizzle-orm": "^0.45.4",
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "wrangler": "^4.152.0",
+    "zod": "catalog:"
+  },
+  "peerDependencies": {
+    "wrangler": "^4.152.0"
+  },
+  "peerDependenciesMeta": {
+    "wrangler": {
+      "optional": true
+    }
   }
 }
