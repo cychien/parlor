@@ -1,8 +1,8 @@
 import { ActionError } from "@parlor/core";
-import { QueryClient } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { focusManager, onlineManager, QueryClient } from "@tanstack/react-query";
+import { act, render, screen } from "@testing-library/react";
 import { Suspense } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ActionClient } from "../action-client.js";
 import { ACTION_QUERY_PREFIX, actionQueryKey } from "../query-keys.js";
@@ -111,8 +111,14 @@ describe("reading ensured data in a component", () => {
   const Task = ({ suspense }: { readonly suspense: boolean }) =>
     suspense ? <SuspenseTask /> : <PlainTask />;
 
-  async function renderEnsured(suspense: boolean) {
-    const { client, queryClient, context } = setup();
+  afterEach(() => {
+    vi.useRealTimers();
+    focusManager.setFocused(undefined);
+  });
+
+  async function renderEnsured(suspense: boolean, queryClient = new QueryClient()) {
+    const client = fakeClient();
+    const context = { client, queryClient };
     await ensureActionQueryData(context, "getTask", { id: "42" });
     render(
       <FrameworkProvider client={client} queryClient={queryClient} sync={false}>
@@ -121,11 +127,11 @@ describe("reading ensured data in a component", () => {
         </Suspense>
       </FrameworkProvider>,
     );
-    return client;
+    return { client, queryClient };
   }
 
   it("useActionSuspenseQuery renders it at once, without asking again", async () => {
-    const client = await renderEnsured(true);
+    const { client } = await renderEnsured(true);
     expect(screen.getByRole("status").textContent).toBe("version:1");
     expect(screen.queryByText("loading")).toBeNull();
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -135,6 +141,40 @@ describe("reading ensured data in a component", () => {
   it("useActionQuery renders it on its first render", async () => {
     await renderEnsured(false);
     expect(screen.getByRole("status").textContent).toBe("version:1");
+  });
+
+  it.each([true, false])(
+    "keeps it however old it is until a write invalidates it, with suspense %s",
+    async (suspense) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const loaded = Date.now();
+      vi.setSystemTime(loaded - 60 * 60_000);
+      const { client, queryClient } = await renderEnsured(suspense);
+      vi.setSystemTime(loaded);
+
+      act(() => {
+        focusManager.setFocused(false);
+        focusManager.setFocused(true);
+        onlineManager.setOnline(false);
+        onlineManager.setOnline(true);
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(client.invoke).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole("status").textContent).toBe("version:1");
+
+      await act(() => queryClient.invalidateQueries({ queryKey: ACTION_QUERY_PREFIX }));
+      expect((await screen.findByText("version:2")).textContent).toBe("version:2");
+      expect(client.invoke).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("leaves freshness to the app's QueryClient when it sets a staleTime", async () => {
+    const { client } = await renderEnsured(
+      false,
+      new QueryClient({ defaultOptions: { queries: { staleTime: 0 } } }),
+    );
+    expect((await screen.findByText("version:2")).textContent).toBe("version:2");
+    expect(client.invoke).toHaveBeenCalledTimes(2);
   });
 
   it("useActionSuspenseQuery suspends until the action answers when nothing ensured it", async () => {

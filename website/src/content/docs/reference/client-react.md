@@ -13,7 +13,7 @@ import { useActionMutation } from "@parlor/client/react";
 //       ^?
 ```
 
-TanStack Query's `useQuery` and `useMutation` over actions. Queries refetch when any caller runs an action that writes what they read. See [Pages and hooks](/parlor/guides/pages-and-hooks/).
+TanStack Query's `useQuery` and `useMutation` over actions. Queries refetch when any caller runs an action that writes what they read, and their data counts as fresh until then, unless the `QueryClient` sets a `staleTime` default or the hook is given one. See [Pages and hooks](/parlor/guides/pages-and-hooks/).
 
 ```ts
 import { useActionSuspenseQuery } from "@parlor/client/react";
@@ -34,7 +34,7 @@ import { actionQueryOptions } from "@parlor/client/react";
 //       ^?
 ```
 
-The query behind the hooks and `ensureActionQueryData`, for `queryClient.prefetchQuery`, `useQueries` and the like.
+The query behind the hooks and `ensureActionQueryData`, for `queryClient.prefetchQuery`, `useQueries` and the like. Its data stays fresh until a write invalidates it, unless the `QueryClient` sets a `staleTime` default.
 
 ```ts
 import { FrameworkProvider } from "@parlor/client/react";
