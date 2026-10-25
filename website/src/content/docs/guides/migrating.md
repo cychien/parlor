@@ -30,7 +30,7 @@ Parlor cannot do these yet. If the old app depends on one, decide with the perso
 
 - **Storing uploaded files on the server**, such as images or attachments. The `files` capability lets a page pick and save files on the device; there is no server storage.
 - **Server-side rendering for public pages that need SEO.** A Parlor app is a single-page app.
-- **Serverless hosting.** Deploy one `node-server` or `bun` server; see [Deploy](/parlor/guides/deploy/).
+- **Serverless hosting other than Cloudflare.** Deploy one `node-server` or `bun` server, or use the `cloudflare-durable` preset; see [Deploy](/parlor/guides/deploy/).
 - **Background work spread over several server instances.** A plugin's timer runs in every process.
 - **Sign-in other than email and password.** Better Auth has other methods, set in `auth.ts`, but Parlor has not verified them.
 
@@ -237,7 +237,6 @@ New passwords use Better Auth's own hash. Teach `auth.ts` to also check the old 
 import { betterAuthProvider, parlorAuth } from "@parlor/auth";
 import type { DatabaseHandle } from "@parlor/data";
 import bcrypt from "bcryptjs";
-import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { hashPassword, verifyPassword } from "better-auth/crypto";
 
@@ -260,10 +259,10 @@ export function createAuth(database: DatabaseHandle) {
     },
   });
   return betterAuthProvider({
-    instance: betterAuth({
+    options: {
       ...options,
       database: drizzleAdapter(database.db, { provider: "pg", schema }),
-    }),
+    },
   });
 }
 ```

@@ -40,6 +40,11 @@ export interface PluginRuntime {
   /** Called once per action call on every surface after it settles, whatever the outcome. */
   audit?(record: ActionAudit): void;
   /**
+   * Starts the plugin's background work, such as timers. Called once, when the server is
+   * ready for its first request: some runtimes allow no timers while the app loads.
+   */
+  start?(): void;
+  /**
    * Who may use the plugin. Everyone else gets `forbidden` from its actions and signed-in
    * routes and never joins its channel. Absent admits whoever those surfaces admit.
    */

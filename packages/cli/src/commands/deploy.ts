@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 
 import { loadParlorConfig } from "@parlor/config";
+import { nitroPresetFor } from "@parlor/host";
 import { defineCommand } from "citty";
 
 import { warnChatWithoutAuth } from "../chat-warning.js";
@@ -47,6 +48,6 @@ export const deploy = defineCommand({
       );
       return;
     }
-    await runNitroDeploy(result.rootDir, result.preset);
+    await runNitroDeploy(result.rootDir, nitroPresetFor(result.preset));
   },
 });

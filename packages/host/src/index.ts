@@ -16,6 +16,7 @@ export {
   type DeployPreset,
   detectCiPreset,
   isDeployPreset,
+  nitroPresetFor,
   PresetError,
   resolvePreset,
   syncTransportFor,
