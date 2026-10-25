@@ -99,7 +99,11 @@ export function appServer() {
     const { pathname } = new URL(request.url);
     received.push({ path: pathname, headers: request.headers });
     const { id } = (await request.json()) as { id: string };
-    return Response.json({ data: { id, title: `Task ${id}` }, tags: [["tasks", id]] });
+    return Response.json({
+      data: { id, title: `Task ${id}` },
+      tags: [["tasks", id]],
+      cursor: "41.e",
+    });
   });
   return { fetch, received };
 }

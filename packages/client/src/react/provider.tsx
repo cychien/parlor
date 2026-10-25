@@ -164,12 +164,15 @@ function SyncConnection({
   readonly value: FrameworkContextValue;
   readonly queryClient: QueryClient;
 }) {
+  // Data loaded outside action queries (plugin calls, the auth client) has no cursor but is read after this render.
+  const [loadedAfter] = useState(() => value.readTags.latest());
   useEffect(() => {
     const { client } = value;
     const syncClient: SyncClient = createSyncClient({
       request: (path, init) => client.request(path, init),
       basePath: client.basePath,
       clientId: client.clientId,
+      startAt: () => value.readTags.position(loadedAfter),
       onEvents: (events) => {
         void invalidateForEvents(queryClient, value.readTags, events);
         value.bridge.emit(events);
@@ -193,7 +196,7 @@ function SyncConnection({
       syncClient.stop();
       detach();
     };
-  }, [value, queryClient]);
+  }, [value, queryClient, loadedAfter]);
   return null;
 }
 

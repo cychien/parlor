@@ -35,11 +35,10 @@ export function actionQueryOptions<K extends Name>(
   const queryKey = actionQueryKey(name, input);
   return queryOptions<ActionOutput<Actions[K]>, ActionError, ActionOutput<Actions[K]>>({
     queryKey,
-    queryFn: async ({ signal, client: cache }) => {
-      const envelope = await client.invoke(name, input, { signal });
-      readTagsOf(cache).record(hashKey(queryKey), envelope.tags);
-      return envelope.data;
-    },
+    queryFn: ({ signal, client: cache }) =>
+      readTagsOf(cache).read(hashKey(queryKey), () =>
+        client.invoke(name, input, { signal }),
+      ),
     retry: actionRetry(queryClient.getDefaultOptions().queries?.retry),
     ...(queryClient.getDefaultOptions().queries?.staleTime === undefined
       ? { staleTime: freshUntilInvalidated }
