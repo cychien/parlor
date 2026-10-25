@@ -25,7 +25,7 @@ To try several targets at once, name them together:
 pnpm parlor dev --target web,mac
 ```
 
-They share one server and one database, and the native ones act as the web app's origin, so connecting your computer once serves all of them, as in production. Each project runs one `parlor dev` at a time: a second one stops and names the one already running, because both would open the same database.
+They share one server and one database, and the native ones act as the web app's origin, so connecting your computer once serves all of them, as in production. Each project runs one `parlor dev` at a time: a second one stops and names the one already running, because both would open the same database. To run a second one anyway, for example an end-to-end suite beside your own `parlor dev`, give it its own directory with `PARLOR_GENERATED_DIR`; see [Generated files](/parlor/reference/cli/#generated-files).
 
 Generated native projects live in `.parlor/`. Never edit them; they are rewritten on every run.
 
