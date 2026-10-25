@@ -16,6 +16,11 @@ const LONG_LIVED: ReadonlySet<DeployPreset> = new Set([
   "cloudflare-durable",
 ]);
 
+const ON_WORKERD: ReadonlySet<DeployPreset> = new Set([
+  "cloudflare-module",
+  "cloudflare-durable",
+]);
+
 const CI_PRESETS: ReadonlyArray<readonly [string, DeployPreset]> = [
   ["VERCEL", "vercel"],
   ["NETLIFY", "netlify"],
@@ -66,4 +71,9 @@ export function syncTransportFor(preset: DeployPreset): "sse" | "poll" {
 /** `cloudflare-durable` is a Worker that hands every request but documents to one Durable Object. */
 export function nitroPresetFor(preset: DeployPreset): string {
   return preset === "cloudflare-durable" ? "cloudflare-module" : preset;
+}
+
+/** The presets whose server runs on Cloudflare's workerd. */
+export function runsOnWorkerd(preset: DeployPreset): boolean {
+  return ON_WORKERD.has(preset);
 }
