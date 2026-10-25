@@ -60,6 +60,18 @@ describe("web.csp", () => {
   });
 });
 
+describe("web.ssr", () => {
+  const app = { id: "com.example.todo", name: "T" };
+
+  it("is off unless the app names the module that builds it", () => {
+    expect(parseConfig({ app }).web.ssr).toBeUndefined();
+    expect(parseConfig({ app, web: { ssr: { app: "src/app.tsx" } } }).web.ssr).toEqual({
+      app: "src/app.tsx",
+    });
+    expect(() => parseConfig({ app, web: { ssr: {} } })).toThrow();
+  });
+});
+
 describe("desktop.agentHost", () => {
   const app = { id: "com.example.todo", name: "Todo" };
 

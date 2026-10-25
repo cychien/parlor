@@ -22,6 +22,11 @@ export class ReadTagRegistry {
     return this.#tags.get(queryHash);
   }
 
+  /** Every query's read tags, to carry a server-rendered cache to the browser. */
+  entries(): [string, readonly Tag[]][] {
+    return [...this.#tags];
+  }
+
   affected(events: readonly SyncEvent[]): Set<string> {
     const hashes = new Set<string>();
     for (const [hash, reads] of this.#tags) {

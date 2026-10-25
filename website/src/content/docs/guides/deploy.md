@@ -22,6 +22,8 @@ Pick one with `parlor build --preset vercel`, or `deploy.preset` in `parlor.conf
 
 For `node-server`, `parlor build` prints where it wrote the server; start it with `node <that folder>/server/index.mjs`.
 
+With [`web.ssr`](/parlor/guides/server-rendering/), `parlor build` also builds the server render, and the server renders opted-in pages: in process on `node-server` and `bun`, and in the Worker on `cloudflare-durable`.
+
 ## Cloudflare
 
 `cloudflare-durable` builds a Worker that serves the web app's files and its pages' documents and hands every other request to one Durable Object, which runs the server exactly as `node-server` does: one instance, holding each open page's stream, the agent's screen tools, approvals and streamed replies.
@@ -37,6 +39,7 @@ pnpm parlor deploy
 - Put the Durable Object near the database with `deploy.cloudflare.locationHint` in `parlor.config.ts`, and add the app's own bindings, such as R2, under `deploy.cloudflare.wrangler`.
 - Wrangler applies Durable Object migrations in order, after the last one a deployment applied. Without migrations of its own, the app gets Parlor's `{ tag: "parlor-server-v1", new_sqlite_classes: ["ParlorServer"] }` at the end of the list; once it lists its own, include that entry where it was first deployed.
 - Nothing may do I/O, set a timer or draw random values while `server.ts` loads: workerd forbids it. `createDatabase` and `betterAuthProvider({ options })` wait for the first request; a plugin starts its timers in `start()`.
+- With [server rendering](/parlor/guides/server-rendering/), the Worker renders pages itself. Their loaders reach the actions in the Durable Object, so the Worker holds no database connection. The same rule holds for the app's modules a page imports.
 
 ### Bindings
 

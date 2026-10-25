@@ -73,6 +73,18 @@ export function nitroPresetFor(preset: DeployPreset): string {
   return preset === "cloudflare-durable" ? "cloudflare-module" : preset;
 }
 
+const RENDER_CONDITIONS: Partial<Record<DeployPreset, readonly string[]>> = {
+  "cloudflare-module": ["workerd", "worker"],
+  "cloudflare-durable": ["workerd", "worker"],
+  "deno-deploy": ["deno"],
+  bun: ["bun", "node"],
+};
+
+/** Export conditions of the runtime that renders pages, for the server render build. */
+export function renderConditionsFor(preset: DeployPreset): readonly string[] {
+  return RENDER_CONDITIONS[preset] ?? ["node"];
+}
+
 /** The presets whose server runs on Cloudflare's workerd. */
 export function runsOnWorkerd(preset: DeployPreset): boolean {
   return ON_WORKERD.has(preset);

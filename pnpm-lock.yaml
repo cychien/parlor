@@ -662,6 +662,9 @@ importers:
         specifier: 3.0.260903-beta
         version: 3.0.260903-beta
     devDependencies:
+      '@parlor/client':
+        specifier: workspace:*
+        version: link:../client
       '@parlor/core':
         specifier: workspace:*
         version: link:../core
@@ -671,9 +674,21 @@ importers:
       '@parlor/server':
         specifier: workspace:*
         version: link:../server
+      '@tanstack/react-query':
+        specifier: 'catalog:'
+        version: 5.104.1(react@19.3.0)
+      '@tanstack/react-router':
+        specifier: 'catalog:'
+        version: 1.170.45(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@types/node':
         specifier: 'catalog:'
         version: 24.19.1
+      react:
+        specifier: 'catalog:'
+        version: 19.3.0
+      react-dom:
+        specifier: 'catalog:'
+        version: 19.3.0(react@19.3.0)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -1018,12 +1033,27 @@ importers:
         specifier: ^7.4.1
         version: 7.4.1
     devDependencies:
+      '@parlor/client':
+        specifier: workspace:*
+        version: link:../client
+      '@tanstack/react-query':
+        specifier: 'catalog:'
+        version: 5.104.1(react@19.3.0)
+      '@tanstack/react-router':
+        specifier: 'catalog:'
+        version: 1.170.45(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@tanstack/router-generator':
         specifier: 'catalog:'
         version: 1.167.45(supports-color@10.2.2)
       '@types/node':
         specifier: 'catalog:'
         version: 24.19.1
+      react:
+        specifier: 'catalog:'
+        version: 19.3.0
+      react-dom:
+        specifier: 'catalog:'
+        version: 19.3.0(react@19.3.0)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2

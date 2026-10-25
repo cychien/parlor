@@ -203,7 +203,7 @@ Use `beforeLoad` only for checks that need no data, and fetch in `loader`: `befo
 
 ## The provider
 
-`src/main.tsx` creates the action client, the router with `createParlorRouter`, and wraps the router in `FrameworkProvider`:
+`src/main.tsx` creates the action client, the router with `createParlorRouter`, wraps the router in `FrameworkProvider`, and starts the app with `mount`:
 
 ```tsx
 // @filename: routeTree.gen.ts
@@ -214,24 +214,28 @@ export const routeTree = createRootRouteWithContext<ParlorRouterContext>()();
 // ---cut---
 import { createActionClient } from "@parlor/client";
 import { FrameworkProvider } from "@parlor/client/react";
-import { createParlorRouter } from "@parlor/client/router";
+import { createParlorRouter, mount } from "@parlor/client/router";
 import { RouterProvider } from "@tanstack/react-router";
 import { StrictMode } from "react";
-import { createRoot } from "react-dom/client";
 
 import { routeTree } from "./routeTree.gen.js";
 
 const client = createActionClient();
 const router = createParlorRouter({ routeTree, client });
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <FrameworkProvider client={client} router={router}>
-      <RouterProvider router={router} />
-    </FrameworkProvider>
-  </StrictMode>,
-);
+mount(document.getElementById("root")!, {
+  router,
+  element: (
+    <StrictMode>
+      <FrameworkProvider client={client} router={router}>
+        <RouterProvider router={router} />
+      </FrameworkProvider>
+    </StrictMode>
+  ),
+});
 ```
+
+`mount` renders the app into the element, or hydrates it when the server rendered the page there; see [Server rendering](/parlor/guides/server-rendering/).
 
 `createParlorRouter` is TanStack Router's `createRouter` with `client` and a TanStack Query `queryClient` in every loader's `context`, links that preload on hover, and `defaultPreloadStaleTime: 0`, so TanStack Query alone decides when data is stale. It takes every `createRouter` option, and `context` for more of your own. `FrameworkProvider` uses the router's `queryClient`, so loaders and hooks share one cache. Type the root route's context with `createRootRouteWithContext<ParlorRouterContext>()` in `src/routes/__root.tsx`.
 

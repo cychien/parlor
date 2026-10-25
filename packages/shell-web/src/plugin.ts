@@ -12,6 +12,7 @@ import { VitePWA } from "vite-plugin-pwa";
 import { appCsp, metaCsp, serializeCsp } from "./csp.js";
 import { routeGeneratorOptions, routesDirectory, routeTreeFile } from "./route-tree.js";
 import { pageMatcher, serverRoutes } from "./server-routes.js";
+import { renderModule } from "./ssr.js";
 
 export const FRAMEWORK_ROUTE_PREFIX = "/_parlor";
 /** OAuth discovery lives at the origin root (RFC 8414, RFC 9728), outside the framework prefix. */
@@ -29,6 +30,8 @@ export interface WebOptions {
   readonly root?: string | undefined;
   /** Writes the policy into the built `index.html` for shells that serve it without HTTP headers. */
   readonly cspMeta?: boolean | undefined;
+  /** Builds the server render module (`web.ssr`) instead of the browser app. */
+  readonly render?: boolean | undefined;
 }
 
 function isFrameworkPath(url: string | undefined): boolean {
@@ -98,6 +101,7 @@ export function parlorWeb(
   options: WebOptions = {},
 ): PluginOption[] {
   const conditions = options.conditions ?? [];
+  const root = options.root ?? process.cwd();
   const manifest = agentManifest({
     app: {
       id: config.app.id,
@@ -108,7 +112,7 @@ export function parlorWeb(
     routeTree: routeTreeFile(config),
   });
   const plugins: PluginOption[] = [
-    ...fileRoutes(config, options.root ?? process.cwd()),
+    ...fileRoutes(config, root),
     react(),
     cspPlugin(config, options),
     titlePlugin(config),
@@ -116,6 +120,10 @@ export function parlorWeb(
     serverRoutes(
       config.server.port,
       pageMatcher(() => manifest.api?.manifest()),
+      {
+        // A native shell's platform conditions: it runs the static build, never a server render.
+        render: config.web.ssr !== undefined && conditions.length === 0,
+      },
     ),
     {
       name: "parlor:web",
@@ -140,7 +148,8 @@ export function parlorWeb(
       }),
     },
   ];
-  if (config.web.pwa) {
+  if (config.web.ssr) plugins.push(renderModule(config, root));
+  if (config.web.pwa && !options.render) {
     plugins.push(
       VitePWA({
         registerType: "autoUpdate",
@@ -150,11 +159,18 @@ export function parlorWeb(
             FRAMEWORK_ROUTE_PREFIX,
             ...OAUTH_DISCOVERY_PREFIXES,
           ].map((prefix) => new RegExp(`^${prefix.replaceAll(".", "\\.")}(/|$)`)),
+          // A cached shell would stand in for the pages the server renders.
+          ...(config.web.ssr
+            ? {
+                navigateFallback: null,
+                globIgnores: ["**/node_modules/**/*", "index.html"],
+              }
+            : {}),
         },
         integration: {
           beforeBuildServiceWorker: (pwa) => {
             const pages = manifest.api?.manifest();
-            if (!pages) return;
+            if (!pages || config.web.ssr) return;
             pwa.workbox.navigateFallbackAllowlist = pages.routes.map((route) =>
               pagePattern(route.path),
             );

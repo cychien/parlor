@@ -1,10 +1,20 @@
 import { UNROUTED_HEADER } from "@parlor/agent-ui";
 
+export interface RenderEntryOptions {
+  /** The module `parlor build` built from `web.ssr`, exporting `render`. */
+  readonly module: string;
+  /** The page policy with `{nonce}` in `script-src`, replaced per response. */
+  readonly contentSecurityPolicy: string;
+}
+
 export interface EntryOptions {
   readonly serverEntry: string;
   readonly basePath: string;
   readonly contentSecurityPolicy: string;
+  readonly render?: RenderEntryOptions | undefined;
 }
+
+export const NONCE_PLACEHOLDER = "{nonce}";
 
 export const INDEX_HTML_PLACEHOLDER = "__PARLOR_INDEX_HTML__";
 export const UI_MANIFEST_PLACEHOLDER = "__PARLOR_UI_MANIFEST__";
@@ -13,15 +23,47 @@ export const PAGE_ROUTES_PLACEHOLDER = "__PARLOR_PAGE_ROUTES__";
 export const DURABLE_SERVER_BINDING = "PARLOR_SERVER";
 export const DURABLE_SERVER_CLASS = "ParlorServer";
 
-type DocumentOptions = Pick<EntryOptions, "basePath" | "contentSecurityPolicy">;
+type DocumentOptions = Pick<
+  EntryOptions,
+  "basePath" | "contentSecurityPolicy" | "render"
+>;
+
+/** Imported on the first page it renders, keeping the app's pages out of the server's startup. */
+const renderSource = (render: RenderEntryOptions | undefined) =>
+  render
+    ? `let rendering;
+const loadRender = () => (rendering ??= import(${JSON.stringify(render.module)}).then((module) => module.render));
+const RENDERED_POLICY = ${JSON.stringify(render.contentSecurityPolicy)};
+
+function createNonce() {
+  return btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
+}
+
+async function renderPage(request, serve) {
+  const nonce = createNonce();
+  try {
+    const page = await (await loadRender())(request, { template: INDEX_HTML, fetch: serve, nonce });
+    if (!page) return undefined;
+    const response = new Response(page.body, page);
+    response.headers.set("content-security-policy", RENDERED_POLICY.replace(${JSON.stringify(NONCE_PLACEHOLDER)}, nonce));
+    if (!response.headers.has("cache-control")) response.headers.set("cache-control", "private, no-cache");
+    return response;
+  } catch (error) {
+    console.error(\`[parlor] Rendering \${request.url} on the server failed, so it is served without:\`, error);
+    return undefined;
+  }
+}`
+    : "const renderPage = async () => undefined;";
 
 /**
- * A page route's document is served without asking the app. Any other request goes to the
- * app, and a browser gets the document only when no route of the app's matches either.
+ * A page route's document is rendered on the server when its routes opt in, and is
+ * `index.html` otherwise, without asking the app. Any other request goes to the app, and a
+ * browser gets the document only when no route of the app's matches either.
  */
 const documentSource = ({
   basePath,
   contentSecurityPolicy,
+  render,
 }: DocumentOptions) => `const INDEX_HTML = ${INDEX_HTML_PLACEHOLDER};
 const PAGE_ROUTES = ${PAGE_ROUTES_PLACEHOLDER};
 const BASE_PATH = ${JSON.stringify(basePath)};
@@ -31,6 +73,8 @@ const DOCUMENT_HEADERS = {
   "content-security-policy": ${JSON.stringify(contentSecurityPolicy)},
 };
 
+${renderSource(render)}
+
 function wantsDocument(request, path) {
   if (!INDEX_HTML || request.method !== "GET" || path.startsWith(BASE_PATH)) return false;
   return (request.headers.get("accept") ?? "").includes("text/html");
@@ -38,9 +82,12 @@ function wantsDocument(request, path) {
 
 async function withDocument(request, serve) {
   const { pathname } = new URL(request.url);
+  if (INDEX_HTML && pathname === "/index.html") {
+    return new Response(INDEX_HTML, { headers: DOCUMENT_HEADERS });
+  }
   const document = wantsDocument(request, pathname);
   if (document && PAGE_ROUTES.some((page) => page.test(pathname))) {
-    return new Response(INDEX_HTML, { headers: DOCUMENT_HEADERS });
+    return (await renderPage(request, serve)) ?? new Response(INDEX_HTML, { headers: DOCUMENT_HEADERS });
   }
   const response = await serve(request);
   if (!document || response.status !== 404 || !response.headers.has(${JSON.stringify(UNROUTED_HEADER)})) {

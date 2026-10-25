@@ -138,14 +138,16 @@ export function createActionClient<T extends ActionMap>(
     baseUrl = injectedServerUrl(),
     basePath = DEFAULT_BASE_PATH,
     headers,
-    clientId = generateClientId(),
   } = options;
+  // Drawn on first use: workerd allows no random values while a module loads.
+  let clientId = options.clientId;
+  const ownId = () => (clientId ??= generateClientId());
   const fetchImpl = options.fetch ?? globalThis.fetch;
 
   const request = async (path: string, init: RequestInit = {}) =>
     fetchImpl(`${baseUrl}${path}`, {
       ...init,
-      headers: await resolveHeaders(headers, clientId, init.headers),
+      headers: await resolveHeaders(headers, ownId(), init.headers),
     });
 
   const invoke = async <K extends keyof T & string>(
@@ -157,7 +159,9 @@ export function createActionClient<T extends ActionMap>(
   };
 
   return {
-    clientId,
+    get clientId() {
+      return ownId();
+    },
     basePath,
     request,
     invoke,

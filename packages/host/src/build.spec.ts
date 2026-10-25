@@ -7,10 +7,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { ConfigError, parseConfig } from "@parlor/config";
+import { buildRender } from "@parlor/shell-web";
 import { describe, expect, it } from "vitest";
 
 import { buildServer, devWranglerConfig, withServerMigration } from "./build.js";
 import { hostEntrySource } from "./entry.js";
+import { renderConditionsFor } from "./presets.js";
 
 describe("hostEntrySource", () => {
   it("serves the SPA document outside the framework prefix and delegates the rest", () => {
@@ -25,6 +27,24 @@ describe("hostEntrySource", () => {
     expect(source).toContain(`"content-security-policy": "default-src 'self'"`);
     expect(source).toContain("app.installUiManifest?.(() => UI_MANIFEST)");
     expect(source).toContain("app.fetch(request)");
+    expect(source).toContain("const renderPage = async () => undefined;");
+  });
+
+  it("renders page documents with the module web.ssr built, under a policy with a fresh nonce", () => {
+    const source = hostEntrySource({
+      serverEntry: "/app/server.ts",
+      basePath: "/_parlor",
+      contentSecurityPolicy: "script-src 'self'",
+      render: {
+        module: "/app/.parlor/ssr/render.mjs",
+        contentSecurityPolicy: "script-src 'self' 'nonce-{nonce}'",
+      },
+    });
+    expect(source).toContain('import("/app/.parlor/ssr/render.mjs")');
+    expect(source).toContain(
+      `const RENDERED_POLICY = "script-src 'self' 'nonce-{nonce}'"`,
+    );
+    expect(source).toContain("crypto.getRandomValues(new Uint8Array(16))");
   });
 });
 
@@ -867,5 +887,177 @@ describe("absolute plugin routes in a built app", () => {
       }
     },
     180_000,
+  );
+});
+
+const SSR_SERVER = [
+  "const task = (id: string, cookie: string | null) => ({ id, title: `Task ${id} for ${cookie}` });",
+  "export default {",
+  "  fetch: async (request: Request) => {",
+  "    const path = new URL(request.url).pathname;",
+  '    if (path === "/_parlor/manifest") return Response.json({});',
+  '    if (path === "/_parlor/actions/getTask") {',
+  '      const cookie = request.headers.get("cookie");',
+  '      if (!cookie) return Response.json({ error: { code: "unauthenticated", message: "Sign in" } }, { status: 401 });',
+  "      const { id } = await request.json();",
+  '      return Response.json({ data: task(id, cookie), tags: [["tasks", id]] });',
+  "    }",
+  '    return new Response(null, { status: 404, headers: { "x-parlor-unrouted": "1" } });',
+  "  },",
+  "};",
+].join("\n");
+
+const SSR_APP = `
+import { createActionClient } from "@parlor/client";
+import { ensureActionQueryData, FrameworkProvider, useActionSuspenseQuery } from "@parlor/client/react";
+import { createParlorRouter, routeActionErrors } from "@parlor/client/router";
+import { createRootRouteWithContext, createRoute, HeadContent, Outlet, redirect, RouterProvider } from "@tanstack/react-router";
+
+const root = createRootRouteWithContext()({
+  ssr: true,
+  head: () => ({ meta: [{ property: "og:site_name", content: "Tasks" }] }),
+  component: () => <><HeadContent /><Outlet /></>,
+});
+
+function TaskPage() {
+  const { taskId } = taskRoute.useParams();
+  const { data } = useActionSuspenseQuery("getTask", { id: taskId });
+  return <h1>{data.title}</h1>;
+}
+
+const taskRoute = createRoute({
+  getParentRoute: () => root,
+  path: "/tasks/$taskId",
+  ssr: true,
+  loader: ({ context, params }) => ensureActionQueryData(context, "getTask", { id: params.taskId }),
+  onError: routeActionErrors({ unauthenticated: () => redirect({ to: "/sign-in" }) }),
+  head: ({ loaderData }) => ({ meta: [{ title: loaderData?.title }, { property: "og:title", content: loaderData?.title }] }),
+  component: TaskPage,
+});
+
+const routeTree = root.addChildren([
+  taskRoute,
+  createRoute({ getParentRoute: () => root, path: "/settings", component: () => <p>settings</p> }),
+  createRoute({ getParentRoute: () => root, path: "/sign-in", component: () => <p>sign in</p> }),
+]);
+
+export default function createApp(client) {
+  const router = createParlorRouter({ routeTree, client });
+  return {
+    router,
+    element: (
+      <FrameworkProvider client={client} router={router} sync={false}>
+        <RouterProvider router={router} />
+      </FrameworkProvider>
+    ),
+  };
+}
+`;
+
+describe("server rendering in a built app", () => {
+  it.each(["node-server", "cloudflare-durable"] as const)(
+    "renders an opted-in page with its loader data, head and a nonce on %s, and leaves other documents to the SPA",
+    async (preset) => {
+      await mkdir(GENERATED_DIR, { recursive: true });
+      const rootDir = await mkdtemp(join(GENERATED_DIR, "ssr-"));
+      await writeFile(join(rootDir, "server.ts"), SSR_SERVER);
+      await writeFile(join(rootDir, "app.tsx"), SSR_APP);
+      await mkdir(join(rootDir, ".parlor", "web"), { recursive: true });
+      await writeFile(
+        join(rootDir, ".parlor", "web", "index.html"),
+        '<!doctype html><html lang="en"><head><title>spa</title></head><body><div id="root"></div><script type="module" src="/assets/main.js"></script></body></html>',
+      );
+      await writeFile(
+        join(rootDir, ".parlor", "ui-manifest.json"),
+        JSON.stringify({
+          protocol: 1,
+          app: { id: "dev.parlor.ssr", name: "Tasks" },
+          routes: ["/tasks/$taskId", "/settings", "/sign-in"].map((path) => ({
+            path,
+            params: [],
+            views: [],
+          })),
+          views: [],
+        }),
+      );
+      const config = parseConfig({
+        app: { id: "dev.parlor.ssr", name: "Tasks" },
+        web: { ssr: { app: "app.tsx" } },
+      });
+      const loaded = { config, rootDir, configFile: "parlor.config.ts" };
+      const render = await buildRender(loaded, {
+        conditions: renderConditionsFor(preset),
+      });
+      const result = await buildServer(loaded, { preset, render });
+      const port = await freePort();
+      const origin = `http://127.0.0.1:${port}`;
+      const child = startBuilt(preset, result.outputDir, port);
+      try {
+        for (let i = 0; ; i++) {
+          const response = await fetch(`${origin}/_parlor/manifest`).catch(
+            () => undefined,
+          );
+          if (response?.ok) break;
+          if (i === 300) throw new Error(`${preset} did not start`);
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        const browse = (path: string, headers: Record<string, string> = {}) =>
+          fetch(`${origin}${path}`, {
+            headers: { accept: BROWSER_ACCEPT, ...headers },
+            redirect: "manual",
+          });
+
+        const page = await browse("/tasks/7", { cookie: "session=ok" });
+        expect(page.status).toBe(200);
+        const html = await page.text();
+        expect(html).toContain("<h1>Task 7 for session=ok</h1>");
+        expect(html).toContain("<title>Task 7 for session=ok</title>");
+        expect(html).not.toContain("<title>spa</title>");
+        expect(html).toMatch(/<meta property="og:title" content="Task 7 for session=ok"/);
+        expect(html).toMatch(/<meta property="og:site_name" content="Tasks"/);
+        expect(html).toContain('<div id="root" data-parlor-ssr>');
+        const policy = page.headers.get("content-security-policy") ?? "";
+        const nonce = /'nonce-([^']+)'/.exec(policy)?.[1];
+        expect(nonce).toBeTruthy();
+        expect(policy).toBe(
+          DEFAULT_POLICY.replace(
+            "script-src 'self'",
+            `script-src 'self' 'nonce-${nonce}'`,
+          ),
+        );
+        const inline = [...html.matchAll(/<script\b[^>]*>/g)]
+          .map(([tag]) => tag)
+          .filter((tag) => !tag.includes("src="));
+        expect(inline.length).toBeGreaterThan(0);
+        for (const tag of inline) expect(tag).toContain(`nonce="${nonce}"`);
+        expect(page.headers.get("cache-control")).toBe("private, no-cache");
+
+        const again = await browse("/tasks/7", { cookie: "session=ok" });
+        const nextNonce = /'nonce-([^']+)'/.exec(
+          again.headers.get("content-security-policy") ?? "",
+        )?.[1];
+        expect(nextNonce).not.toBe(nonce);
+        await again.body?.cancel();
+
+        const signedOut = await browse("/tasks/7");
+        expect(signedOut.status).toBe(307);
+        expect(signedOut.headers.get("location")).toBe("/sign-in");
+
+        const settings = await browse("/settings", { cookie: "session=ok" });
+        await expect(settings.text()).resolves.toContain("<title>spa</title>");
+        expect(settings.headers.get("content-security-policy")).toBe(DEFAULT_POLICY);
+
+        const missing = await browse("/no/such/page");
+        expect(missing.status).toBe(200);
+        await expect(missing.text()).resolves.toContain("<title>spa</title>");
+
+        const shell = await fetch(`${origin}/index.html`);
+        await expect(shell.text()).resolves.toContain("<title>spa</title>");
+      } finally {
+        child.kill();
+        await rm(rootDir, { recursive: true, force: true });
+      }
+    },
+    240_000,
   );
 });

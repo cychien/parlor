@@ -47,6 +47,10 @@ export interface FrameworkProviderProps {
 
 const SIGNED_OUT: SessionSnapshot = { status: "signed-out" };
 
+/** A server render does not know the session yet, and hydration must render what it rendered. */
+const LOADING: SessionSnapshot = { status: "loading" };
+const serverSession = () => LOADING;
+
 const NO_SESSION: SessionSource = {
   current: () => SIGNED_OUT,
   subscribe: () => () => {},
@@ -66,7 +70,9 @@ function routerQueryClient(router: AnyRouter | undefined): QueryClient | undefin
 /** Counts changes of the signed-in user after the first settled answer. */
 function useSettledIdentityEpoch(auth: SessionSource | undefined): number {
   const source = auth ?? NO_SESSION;
-  const identity = identityOf(useSyncExternalStore(source.subscribe, source.current));
+  const identity = identityOf(
+    useSyncExternalStore(source.subscribe, source.current, serverSession),
+  );
   const [tracked, setTracked] = useState<{
     readonly settled: string | undefined;
     readonly epoch: number;
@@ -205,5 +211,5 @@ export function useActionClient(): ActionClient<RegisteredActions> {
 export function useSession(): SessionSnapshot {
   const { auth } = useFramework();
   if (!auth) throw new Error("useSession needs <FrameworkProvider auth={...}>");
-  return useSyncExternalStore(auth.subscribe, auth.current);
+  return useSyncExternalStore(auth.subscribe, auth.current, serverSession);
 }

@@ -1,4 +1,5 @@
 import { useAgentConfirmations, useAgentView } from "@parlor/client/react";
+import { useHydrated } from "@tanstack/react-router";
 import {
   lazy,
   startTransition,
@@ -25,6 +26,7 @@ export function AgentPanel() {
   const [everOpened, setEverOpened] = useState(false);
   const [headerActions, setHeaderActions] = useState<HTMLElement | null>(null);
   const pending = useAgentConfirmations().length;
+  const hydrated = useHydrated();
   const { ref } = useAgentView(agentPanel, { get: () => ({ open }) });
   const attach = useCallback(
     (element: HTMLElement | null) => {
@@ -82,29 +84,31 @@ export function AgentPanel() {
         Agent
         {pending > 0 ? <span className="badge">{pending}</span> : null}
       </button>
-      {createPortal(
-        <section
-          id={regionId}
-          ref={attach}
-          className="agent-sidebar"
-          aria-labelledby={titleId}
-          hidden={!open}
-        >
-          <header>
-            <h2 id={titleId}>Agent</h2>
-            <div className="header-actions">
-              <span ref={setHeaderActions} className="header-slot" />
-              <button type="button" onClick={close}>
-                Close
-              </button>
-            </div>
-          </header>
-          <Suspense fallback={<p className="sidebar-note">Loading...</p>}>
-            {everOpened ? <AgentSidebar headerActions={headerActions} /> : null}
-          </Suspense>
-        </section>,
-        document.body,
-      )}
+      {hydrated
+        ? createPortal(
+            <section
+              id={regionId}
+              ref={attach}
+              className="agent-sidebar"
+              aria-labelledby={titleId}
+              hidden={!open}
+            >
+              <header>
+                <h2 id={titleId}>Agent</h2>
+                <div className="header-actions">
+                  <span ref={setHeaderActions} className="header-slot" />
+                  <button type="button" onClick={close}>
+                    Close
+                  </button>
+                </div>
+              </header>
+              <Suspense fallback={<p className="sidebar-note">Loading...</p>}>
+                {everOpened ? <AgentSidebar headerActions={headerActions} /> : null}
+              </Suspense>
+            </section>,
+            document.body,
+          )
+        : null}
     </>
   );
 }
