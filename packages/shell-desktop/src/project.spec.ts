@@ -42,9 +42,9 @@ describe("tauriConfig", () => {
     });
     const { security } = (tauriConfig(withServer) as { app: { security: unknown } }).app;
     expect(security).toEqual({
-      csp: "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://cdn.example.com; font-src 'self'; connect-src 'self' http://localhost:3000 ipc: http://ipc.localhost; worker-src 'self'; manifest-src 'self'; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'",
+      csp: "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://cdn.example.com; font-src 'self'; connect-src 'self' http://localhost:3000 ipc: http://ipc.localhost; media-src 'self'; worker-src 'self'; manifest-src 'self'; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'",
       devCsp:
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://cdn.example.com; font-src 'self'; connect-src 'self' http://localhost:3000 ws: ipc: http://ipc.localhost; worker-src 'self'; manifest-src 'self'; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'",
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://cdn.example.com; font-src 'self'; connect-src 'self' http://localhost:3000 ws: ipc: http://ipc.localhost; media-src 'self'; worker-src 'self'; manifest-src 'self'; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'",
     });
   });
 
@@ -69,6 +69,7 @@ describe("tauriProjectFiles", () => {
 });
 
 const SHELL_COMMANDS = [
+  "parlor_shell::parlor_auth_browser_open,",
   "parlor_shell::parlor_device_key_public,",
   "parlor_shell::parlor_device_key_sign,",
   "parlor_shell::parlor_session_get,",
@@ -92,7 +93,7 @@ describe("desktop.agentHost", () => {
     });
   });
 
-  it("registers the Keychain commands and the dialog and fs plugins for files in every app, with no sidecar without it", () => {
+  it("registers the Keychain and sign-in browser commands and the dialog and fs plugins for files in every app, with no sidecar without it", () => {
     const files = tauriProjectFiles(config);
     const cargo = files["src-tauri/Cargo.toml"]!;
     expect(cargo).toMatch(/parlor-shell = \{ path = ".*shell-desktop\/rust" \}/);

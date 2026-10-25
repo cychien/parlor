@@ -41,6 +41,12 @@ export interface ActionContext {
   readonly principal: Principal;
   readonly db: ParlorDatabase;
   readonly signal?: AbortSignal | undefined;
+  /**
+   * The HTTP request that made the call, whichever surface it came through; undefined for
+   * an in-process call. For what the request carries besides identity, such as a cookie
+   * the app set; who is calling is `principal`.
+   */
+  readonly request?: Request | undefined;
 }
 
 export interface TableLike {

@@ -38,6 +38,7 @@ export function defaultCsp(input: DefaultCspInput = {}): CspDirectives {
     "img-src": [SELF, "data:"],
     "font-src": [SELF],
     "connect-src": unique(connect),
+    "media-src": [SELF],
     "worker-src": [SELF],
     "manifest-src": [SELF],
     "frame-src": [NONE],

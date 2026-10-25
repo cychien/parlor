@@ -131,6 +131,7 @@ export function parlorWeb(
         define: {
           "import.meta.env.PARLOR_SERVER_URL": JSON.stringify(options.serverUrl ?? ""),
           "import.meta.env.PARLOR_APP_ORIGIN": JSON.stringify(options.appOrigin ?? ""),
+          "import.meta.env.PARLOR_APP_SCHEME": JSON.stringify(config.app.scheme ?? ""),
         },
         resolve: { conditions: [...defaultClientConditions, ...conditions] },
         server: {

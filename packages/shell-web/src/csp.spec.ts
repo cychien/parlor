@@ -13,6 +13,7 @@ describe("defaultCsp", () => {
         "img-src 'self' data:",
         "font-src 'self'",
         "connect-src 'self'",
+        "media-src 'self'",
         "worker-src 'self'",
         "manifest-src 'self'",
         "frame-src 'none'",

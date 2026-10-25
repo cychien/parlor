@@ -47,4 +47,4 @@ import { defineAgentView } from "@parlor/client";
 
 Describes a piece of UI the agent can read; bind it with `useAgentView` from [`@parlor/client/react`](/parlor/reference/client-react/).
 
-Also exported: `appOrigin`, `generateClientId`, `createPluginClient` (a typed client for a plugin's actions), and the session interfaces an auth client implements (`SessionSource`, `SessionSnapshot`, `FrameworkAuth`).
+Also exported: `appOrigin`, `generateClientId`, `createPluginClient` (a typed client for a plugin's actions), and the session interfaces an auth client implements (`SessionSource`, `SessionSnapshot`, `FrameworkAuth`). Sign-in itself, by password, email code or a provider such as Google, is the auth client in [`@parlor/auth/client`](/parlor/reference/auth/#parlorauthclient).

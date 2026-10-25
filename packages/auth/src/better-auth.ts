@@ -5,6 +5,7 @@ import { DEFAULT_BASE_PATH, REVOCATION_HORIZON_MS, SHELL_ORIGINS } from "@parlor
 import type { BetterAuthOptions, BetterAuthPlugin } from "better-auth";
 import { bearer, jwt } from "better-auth/plugins";
 
+import { nativeSignIn } from "./native-sign-in.js";
 import type { RevocationNotice } from "./revocation.js";
 
 export const AUTH_PLUGIN = "auth";
@@ -40,6 +41,11 @@ export interface ParlorAuthOptions extends Omit<
    * resumes once the user signs in through `@parlor/auth/client`.
    */
   readonly signInPage: string;
+  /**
+   * The app's URL scheme, `app.scheme`, where social sign-in in a native shell returns.
+   * Defaults to `PARLOR_APP_SCHEME`, which `parlor dev` and `parlor build` set from it.
+   */
+  readonly scheme?: string | undefined;
 }
 
 export interface ParlorAuthSettings {
@@ -117,7 +123,7 @@ function originOf(options: ParlorAuthOptions): string {
  * PKCE, tokens bound to `/_parlor/mcp`).
  */
 export function parlorAuth(options: ParlorAuthOptions): BetterAuthOptions {
-  const { origin: _origin, signInPage, ...rest } = options;
+  const { origin: _origin, signInPage, scheme, ...rest } = options;
   const origin = originOf(options);
   const baseURL = `${origin}${AUTH_BASE_PATH}`;
   const resource = `${origin}${DEFAULT_BASE_PATH}/mcp`;
@@ -140,13 +146,17 @@ export function parlorAuth(options: ParlorAuthOptions): BetterAuthOptions {
     disabledPaths: [...DISABLED_PATHS, ...(rest.disabledPaths ?? [])],
     plugins: [
       ...(rest.plugins ?? []),
-      ...frameworkPlugins(resource, signInPage),
+      ...frameworkPlugins(resource, signInPage, scheme ?? process.env.PARLOR_APP_SCHEME),
       bridgePlugin(bridge),
     ],
   };
 }
 
-function frameworkPlugins(resource: string, signInPage: string): BetterAuthPlugin[] {
+function frameworkPlugins(
+  resource: string,
+  signInPage: string,
+  scheme: string | undefined,
+): BetterAuthPlugin[] {
   // Better Auth's plugin types are not written for exactOptionalPropertyTypes.
   return [
     bearer(),
@@ -159,5 +169,6 @@ function frameworkPlugins(resource: string, signInPage: string): BetterAuthPlugi
       accessTokenExpiresIn: ACCESS_TOKEN_TTL_S,
     }),
     cimd({ fetchClientMetadataResource, metadataProfile: "mcp-2026-07-28" }),
+    nativeSignIn({ scheme: scheme || undefined }),
   ] as BetterAuthPlugin[];
 }

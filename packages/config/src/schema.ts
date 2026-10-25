@@ -8,6 +8,7 @@ export const CSP_DIRECTIVES = [
   "img-src",
   "font-src",
   "connect-src",
+  "media-src",
   "worker-src",
   "manifest-src",
   "frame-src",

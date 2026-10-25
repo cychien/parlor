@@ -1,3 +1,5 @@
+import { tauriAuthBrowser } from "../auth-browser/tauri.js";
+import { webAuthBrowser } from "../auth-browser/web.js";
 import { tauriDeepLink } from "../deep-link/tauri.js";
 import { webDeepLink } from "../deep-link/web.js";
 import { tauriDeviceKey } from "../device-key/tauri.js";
@@ -19,4 +21,5 @@ export const platformAdapters: PlatformAdapters = {
   deviceKey: [tauriDeviceKey(), webDeviceKey()],
   localAgentHost: [tauriLocalAgentHost(), webLocalAgentHost()],
   files: [tauriFiles(), webFiles()],
+  authBrowser: [tauriAuthBrowser(), webAuthBrowser()],
 };

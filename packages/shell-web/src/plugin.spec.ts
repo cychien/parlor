@@ -104,6 +104,22 @@ describe("server url", () => {
       '"http://localhost:5174"',
     );
   });
+
+  it("injects app.scheme, which a native shell's social sign-in returns to", async () => {
+    const withScheme = await resolveConfig(
+      {
+        configFile: false,
+        plugins: parlorWeb(parseConfig({ app: { ...config.app, scheme: "todo" } })),
+      },
+      "build",
+    );
+    const without = await resolveConfig(
+      { configFile: false, plugins: parlorWeb(config) },
+      "build",
+    );
+    expect(withScheme.define?.["import.meta.env.PARLOR_APP_SCHEME"]).toBe('"todo"');
+    expect(without.define?.["import.meta.env.PARLOR_APP_SCHEME"]).toBe('""');
+  });
 });
 
 describe("file routes", () => {
@@ -206,6 +222,7 @@ describe("content security policy", () => {
           "img-src 'self' data: https://cdn.test",
           "font-src 'self'",
           "connect-src 'self' http://localhost:3100 ws:",
+          "media-src 'self'",
           "worker-src 'self'",
           "manifest-src 'self'",
           "frame-src 'none'",
@@ -246,6 +263,7 @@ describe("content security policy", () => {
       "img-src 'self' data:",
       "font-src 'self'",
       "connect-src 'self' https://api.test",
+      "media-src 'self'",
       "worker-src 'self'",
       "manifest-src 'self'",
       "frame-src 'none'",

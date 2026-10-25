@@ -186,7 +186,7 @@ describe("buildServer app name", () => {
 });
 
 const DEFAULT_POLICY =
-  "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'";
+  "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; media-src 'self'; worker-src 'self'; manifest-src 'self'; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'";
 
 describe("buildServer content security policy", () => {
   it("sends the policy on pages, assets and the SPA fallback but leaves the app's own responses to themselves", async () => {
