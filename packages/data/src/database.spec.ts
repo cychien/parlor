@@ -5,7 +5,12 @@ import { join } from "node:path";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createDatabase, type DatabaseHandle, resolveDatabaseUrl } from "./database.js";
+import {
+  createDatabase,
+  type DatabaseHandle,
+  resolveDatabaseUrl,
+  resolvePgliteDir,
+} from "./database.js";
 
 const handles: DatabaseHandle[] = [];
 let template: string;
@@ -38,6 +43,18 @@ describe("resolveDatabaseUrl", () => {
     expect(resolveDatabaseUrl({})).toBeUndefined();
     expect(resolveDatabaseUrl({ DATABASE_URL: "" })).toBeUndefined();
     expect(resolveDatabaseUrl({ DATABASE_URL: "postgres://x" })).toBe("postgres://x");
+  });
+});
+
+describe("resolvePgliteDir", () => {
+  it("keeps PGlite in the run's generated directory", () => {
+    expect(resolvePgliteDir({})).toBe(".parlor/pglite");
+    expect(resolvePgliteDir({ PARLOR_GENERATED_DIR: ".parlor/e2e/" })).toBe(
+      ".parlor/e2e/pglite",
+    );
+    expect(resolvePgliteDir({ PARLOR_GENERATED_DIR: "/tmp/run" })).toBe(
+      "/tmp/run/pglite",
+    );
   });
 });
 

@@ -8,4 +8,5 @@ export {
   DEFAULT_PGLITE_DIR,
   resolveDatabaseUrl,
   resolveDirectUrl,
+  resolvePgliteDir,
 } from "./database.js";

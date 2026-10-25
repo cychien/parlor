@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { DEFAULT_ROUTE_TREE } from "@parlor/agent-ui/vite";
-import { GENERATED_DIR, type LoadedConfig, type ParlorConfig } from "@parlor/config";
+import { generatedDir, type LoadedConfig, type ParlorConfig } from "@parlor/config";
 import type { Config } from "@tanstack/router-generator";
 
 type RouterGenerator = typeof import("@tanstack/router-generator");
@@ -23,7 +23,7 @@ export function routeGeneratorOptions(config: ParlorConfig, root: string) {
     target: "react",
     routesDirectory: routesDirectory(config),
     generatedRouteTree: routeTreeFile(config),
-    tmpDir: resolve(root, GENERATED_DIR, "tanstack"),
+    tmpDir: join(generatedDir(root), "tanstack"),
     quoteStyle: "double",
     semicolons: true,
   } as const satisfies Partial<Config>;

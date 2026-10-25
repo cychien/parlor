@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { claimDevSession } from "./dev-session.js";
 
@@ -16,6 +16,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await rm(root, { recursive: true, force: true });
 });
 
@@ -45,11 +46,28 @@ describe("claimDevSession", () => {
         }),
       );
       expect(() => claimDevSession(root, ["mac"])).toThrow(
-        `parlor dev is already running for this project (web at http://localhost:5174, pid ${other.pid}). A second one would open the same database. Stop it first, or run every target from one: parlor dev --target web,mac.`,
+        `parlor dev is already running for this project (web at http://localhost:5174, pid ${other.pid}). A second one would open the same database. Stop it first, run every target from one: parlor dev --target web,mac, or give the second its own directory: PARLOR_GENERATED_DIR=.parlor/second parlor dev.`,
       );
     } finally {
       other.kill();
     }
+  });
+
+  it("lets a run with its own PARLOR_GENERATED_DIR start beside the one in .parlor", async () => {
+    const first = claimDevSession(root, ["web"]);
+    vi.stubEnv("PARLOR_GENERATED_DIR", ".parlor/e2e");
+    const second = claimDevSession(root, ["web"], process.pid + 1);
+    expect(existsSync(file())).toBe(true);
+    expect(
+      JSON.parse(readFileSync(join(root, ".parlor", "e2e", "dev.json"), "utf8")),
+    ).toEqual({
+      pid: process.pid + 1,
+      targets: ["web"],
+      urls: [],
+    });
+    second.release();
+    vi.unstubAllEnvs();
+    first.release();
   });
 
   it("takes over a record whose process is gone", async () => {

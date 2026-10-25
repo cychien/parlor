@@ -1,9 +1,9 @@
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 import { pagePattern } from "@parlor/agent-ui";
 import { agentManifest, DEFAULT_ROUTE_TREE } from "@parlor/agent-ui/vite";
-import { GENERATED_DIR, type ParlorConfig } from "@parlor/config";
+import { GENERATED_DIR, generatedDir, type ParlorConfig } from "@parlor/config";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
 import { defaultClientConditions, type PluginOption } from "vite";
@@ -104,6 +104,8 @@ export function parlorWeb(
 ): PluginOption[] {
   const conditions = options.conditions ?? [];
   const root = options.root ?? process.cwd();
+  const generated = generatedDir(root);
+  const ownGeneratedDir = generated !== resolve(root, GENERATED_DIR);
   const manifest = agentManifest({
     app: {
       id: config.app.id,
@@ -112,6 +114,7 @@ export function parlorWeb(
       ...(config.app.scheme ? { scheme: config.app.scheme } : {}),
     },
     routeTree: routeTreeFile(config),
+    generatedDir: generated,
   });
   const plugins: PluginOption[] = [
     ...fileRoutes(config, root),
@@ -136,10 +139,12 @@ export function parlorWeb(
           "import.meta.env.PARLOR_APP_SCHEME": JSON.stringify(config.app.scheme ?? ""),
         },
         resolve: { conditions: [...defaultClientConditions, ...conditions] },
+        // A run with its own generated directory may run beside another Vite on this root.
+        ...(ownGeneratedDir ? { cacheDir: join(generated, "vite") } : {}),
         server: {
           port: config.web.port,
           strictPort: true,
-          watch: { ignored: [`**/${GENERATED_DIR}/**`] },
+          watch: { ignored: [`**/${GENERATED_DIR}/**`, join(generated, "**")] },
           proxy: Object.fromEntries(
             [FRAMEWORK_ROUTE_PREFIX, ...OAUTH_DISCOVERY_PREFIXES].map((prefix) => [
               prefix,

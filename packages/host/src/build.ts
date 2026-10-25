@@ -6,7 +6,7 @@ import { pagePattern, UI_MANIFEST_FILE, type UiManifest } from "@parlor/agent-ui
 import {
   appServerEnv,
   ConfigError,
-  GENERATED_DIR,
+  generatedDir,
   type LoadedConfig,
   type ParlorConfig,
 } from "@parlor/config";
@@ -57,7 +57,7 @@ export interface ServerBuildResult {
 }
 
 export function hostRootDir(projectRoot: string): string {
-  return join(projectRoot, GENERATED_DIR, "nitro");
+  return join(generatedDir(projectRoot), "nitro");
 }
 
 function pageRoutesSource(manifest: Pick<UiManifest, "routes"> | undefined): string {
@@ -94,7 +94,7 @@ export async function buildServer(
     () => "",
   );
   const manifest = await readFile(
-    join(rootDir, GENERATED_DIR, UI_MANIFEST_FILE),
+    join(generatedDir(rootDir), UI_MANIFEST_FILE),
     "utf8",
   ).then(
     (text) => JSON.parse(text) as UiManifest,

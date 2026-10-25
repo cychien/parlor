@@ -1,11 +1,11 @@
-import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { parseConfig } from "@parlor/config";
 import { createServer, resolveConfig, build } from "vite";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { parlorWeb, webManifest } from "./plugin.js";
 
@@ -14,6 +14,8 @@ const config = parseConfig({
   server: { port: 3100 },
   web: { port: 5200 },
 });
+
+afterEach(() => vi.unstubAllEnvs());
 
 describe("parlorWeb", () => {
   it("proxies framework routes to the configured server port", async () => {
@@ -28,6 +30,23 @@ describe("parlorWeb", () => {
       "/.well-known/oauth-protected-resource": "http://localhost:3100",
       "/.well-known/oauth-authorization-server": "http://localhost:3100",
     });
+  });
+
+  it("keeps Vite's cache and the watcher out of a run's own generated directory", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "parlor-generated-")));
+    const shared = await resolveConfig(
+      { root, configFile: false, plugins: parlorWeb(config, { root }) },
+      "serve",
+    );
+    expect(shared.cacheDir).not.toContain(".parlor");
+
+    vi.stubEnv("PARLOR_GENERATED_DIR", ".parlor/e2e");
+    const own = await resolveConfig(
+      { root, configFile: false, plugins: parlorWeb(config, { root }) },
+      "serve",
+    );
+    expect(own.cacheDir).toBe(join(root, ".parlor", "e2e", "vite"));
+    expect(own.server.watch?.ignored).toContain(join(root, ".parlor", "e2e", "**"));
   });
 
   it("registers the PWA plugin only when enabled", async () => {

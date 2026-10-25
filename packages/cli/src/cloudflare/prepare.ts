@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { GENERATED_DIR, type LoadedConfig } from "@parlor/config";
+import { generatedDir, type LoadedConfig } from "@parlor/config";
 import {
   devWranglerConfig,
   PresetError,
@@ -11,8 +11,6 @@ import {
 
 import { CliError } from "../errors.js";
 import { resolveWrangler, WRANGLER_MISSING } from "./wrangler.js";
-
-export const CLOUDFLARE_DEV_DIR = join(GENERATED_DIR, "cloudflare");
 
 export interface CloudflareDev {
   readonly configPath: string;
@@ -34,7 +32,7 @@ export async function prepareCloudflareDev(
   if (preset !== "cloudflare-durable") return undefined;
   if (!resolveWrangler(rootDir)) throw new CliError(WRANGLER_MISSING);
   const { wrangler, unavailable } = devWranglerConfig(config);
-  const dir = join(rootDir, CLOUDFLARE_DEV_DIR);
+  const dir = join(generatedDir(rootDir, env), "cloudflare");
   await mkdir(dir, { recursive: true });
   const configPath = join(dir, "wrangler.json");
   await writeFile(configPath, `${JSON.stringify(wrangler, null, 2)}\n`);

@@ -1,6 +1,6 @@
 import { join } from "node:path";
 
-import { GENERATED_DIR, type LoadedConfig } from "@parlor/config";
+import { generatedDir, type LoadedConfig } from "@parlor/config";
 import { build, defaultServerConditions } from "vite";
 
 import type { WebOptions } from "./plugin.js";
@@ -8,7 +8,7 @@ import { RENDER_FILE, RENDER_MODULE } from "./ssr.js";
 import { parlorViteConfig } from "./vite-config.js";
 
 export function webOutDir(rootDir: string): string {
-  return join(rootDir, GENERATED_DIR, "web");
+  return join(generatedDir(rootDir), "web");
 }
 
 export async function buildWeb(
@@ -26,7 +26,7 @@ export async function buildWeb(
 }
 
 export function ssrOutDir(rootDir: string): string {
-  return join(rootDir, GENERATED_DIR, "ssr");
+  return join(generatedDir(rootDir), "ssr");
 }
 
 export interface RenderBuildOptions {

@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { ConfigError, loadParlorConfig } from "./load.js";
+import { ConfigError, generatedDir, loadParlorConfig } from "./load.js";
 
 async function project(configSource?: string) {
   const dir = await mkdtemp(join(tmpdir(), "parlor-config-"));
@@ -35,5 +35,16 @@ describe("loadParlorConfig", () => {
   it("fails clearly when the file is invalid", async () => {
     const dir = await project(`export default { app: { id: "nope", name: "Todo" } };`);
     await expect(loadParlorConfig(dir)).rejects.toThrow(/reverse-DNS/);
+  });
+});
+
+describe("generatedDir", () => {
+  it("is .parlor in the project unless PARLOR_GENERATED_DIR names another", () => {
+    expect(generatedDir("/app", {})).toBe("/app/.parlor");
+    expect(generatedDir("/app", { PARLOR_GENERATED_DIR: "" })).toBe("/app/.parlor");
+    expect(generatedDir("/app", { PARLOR_GENERATED_DIR: ".parlor/e2e" })).toBe(
+      "/app/.parlor/e2e",
+    );
+    expect(generatedDir("/app", { PARLOR_GENERATED_DIR: "/tmp/run" })).toBe("/tmp/run");
   });
 });

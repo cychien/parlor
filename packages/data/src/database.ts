@@ -63,6 +63,12 @@ export function resolveDatabaseUrl(
   return env.DATABASE_URL || undefined;
 }
 
+/** PGlite's directory when `dataDir` is not given: `pglite` in the run's generated directory. */
+export function resolvePgliteDir(env: NodeJS.ProcessEnv = process.env): string {
+  const generated = env.PARLOR_GENERATED_DIR?.replace(/\/+$/, "");
+  return generated ? `${generated}/pglite` : DEFAULT_PGLITE_DIR;
+}
+
 export function resolveDirectUrl(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
@@ -184,7 +190,7 @@ export async function createDatabase(
   const url = options.url ?? resolveDatabaseUrl();
   const handle = url
     ? nodePostgresHandle(url, options.directUrl ?? resolveDirectUrl() ?? url)
-    : await pgliteHandle(options.dataDir ?? DEFAULT_PGLITE_DIR);
+    : await pgliteHandle(options.dataDir ?? resolvePgliteDir());
   const folder = options.migrationsFolder;
   if (!folder) return handle;
   if (migratesWhileLoading) {
