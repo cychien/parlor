@@ -113,6 +113,69 @@ describe("the consent page", () => {
   });
 });
 
+describe("letting the coding agents on the computer use the app", () => {
+  const answer = async (
+    browser: Awaited<ReturnType<typeof signUp>>,
+    computer: Computer,
+    fields: Record<string, string>,
+  ) =>
+    browser.fetch("/_parlor/auth/hosts/authorize", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        ...(await computer.pairing()),
+        decision: "connect",
+        ...fields,
+      }).toString(),
+      redirect: "manual",
+    });
+
+  it("offers it on the consent page, checked, only when the computer can", async () => {
+    const alice = await signUp("Alice");
+    const computer = new Computer();
+    const offered = await alice.fetch(
+      `/_parlor/auth/hosts/authorize?${await computer.authorizeQuery()}&agentTools=offered`,
+    );
+    const html = await offered.text();
+    expect(html).toContain(
+      '<input type="checkbox" name="useAgentTools" value="on" checked><span>Also let Claude Code and Codex on this computer use Hello when you name it.',
+    );
+    expect(html).toContain('name="agentTools" value="offered"');
+    const plain = await alice.fetch(
+      `/_parlor/auth/hosts/authorize?${await computer.authorizeQuery()}`,
+    );
+    expect(await plain.text()).not.toContain("useAgentTools");
+  });
+
+  it("tells the computer what the user chose, and nothing when it did not offer", async () => {
+    const alice = await signUp("Alice");
+    const choiceOf = async (fields: Record<string, string>) =>
+      new URL(
+        (await answer(alice, new Computer(), fields)).headers.get("location")!,
+      ).searchParams.get("agentTools");
+    expect(await choiceOf({ agentTools: "offered", useAgentTools: "on" })).toBe("on");
+    expect(await choiceOf({ agentTools: "offered" })).toBe("off");
+    expect(await choiceOf({})).toBeNull();
+  });
+
+  it("says on the connected page how to ask the agents, by the name they know the app by", async () => {
+    const page = async (query: string) =>
+      (
+        await app.server.fetch(
+          new Request(`${ORIGIN}/_parlor/auth/hosts/connected${query}`),
+        )
+      ).text();
+    const both = await page("?agentTools=hello-localhost-5173");
+    expect(both).toContain("<p>Use it two ways:</p>");
+    expect(both).toContain("<li>In the agent sidebar of Hello.</li>");
+    expect(both).toContain("ask them to “use <code>hello-localhost-5173</code> to …”");
+    const tampered = await page("?agentTools=%3Cscript%3E");
+    expect(tampered).not.toContain("two ways");
+    expect(tampered).not.toContain("<script>alert");
+    expect(await page("")).toContain("ready in the agent sidebar of Hello");
+  });
+});
+
 describe("pairing a computer", () => {
   it("redirects to the computer with a code and its state, and exchanges the code once", async () => {
     const alice = await signUp("Alice");
@@ -136,6 +199,7 @@ describe("pairing a computer", () => {
         name: "Alice",
         email: "alice@example.com",
       },
+      landing: "/_parlor/auth/hosts/connected",
     });
 
     const replay = await computer.exchange(app.server, code);

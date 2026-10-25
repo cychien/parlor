@@ -14,6 +14,8 @@ import {
 import type { PresenceSignature } from "@parlor/capabilities";
 import { canonicalBytes, encodeBase64url } from "@parlor/capabilities/encoding";
 import type {
+  AgentOption,
+  AgentUsage,
   ChatEvent,
   ChatItemBody,
   ClaimedTurn,
@@ -36,6 +38,7 @@ import {
   SessionRefused,
   type StopReason,
 } from "./acp.js";
+import { optionChanges } from "./agent-options.js";
 import type { AgentProfile } from "./agents.js";
 import { finishFold, foldUpdate, startFold, type TurnFold } from "./fold.js";
 import type { AppLink } from "./link.js";
@@ -63,6 +66,13 @@ export interface TurnDeps {
     secret(): Promise<string | undefined>;
     forget(): Promise<void>;
   };
+  /** What the agent said about itself: the options a prompt may choose, or the account's allowance. */
+  readonly learned?: (
+    agentId: string,
+    learned:
+      | { readonly options: readonly AgentOption[] }
+      | { readonly usage: AgentUsage },
+  ) => void;
 }
 
 export const PROMPT_MAX_AGE_MS = 10 * 60_000;
@@ -511,6 +521,7 @@ export async function runTurn(
           resume: await pool.resumable(grant, threadId, agentId),
           pinAskMode: true,
           strictAsk: deps.policy.answers !== "off",
+          autoMode: deps.policy.agentMode !== "ask",
         });
         live = { session, proxy };
         pool.remember(grant, threadId, agentId, live);
@@ -526,6 +537,12 @@ export async function runTurn(
     }
 
     const { session } = live;
+    deps.learned?.(agentId, { options: session.options });
+    for (const change of optionChanges(session.options, claimed.prompt.body.options)) {
+      await session.setOption(change.id, change.value).catch((error: unknown) => {
+        logEvent("option_refused", { agentId, option: change.id, error: String(error) });
+      });
+    }
     const exited = connection!.exited.then((exit) => {
       throw new AgentExited(exit);
     });
@@ -563,9 +580,7 @@ export async function runTurn(
         const allow = question.options.find((option) => option.effect === "allow_once");
         if (allow) return { kind: "selected", optionId: allow.id };
       }
-      const wanted = approvalFor(deps.policy, question);
-      const approval =
-        wanted === "presence" && device && !device.presenceKey ? "computer" : wanted;
+      const approval = approvalFor(deps.policy, question, device);
       const id = nextId();
       const dialog = new AbortController();
       const answered = new Promise<AgentAskAnswer>((resolve) =>
@@ -620,7 +635,13 @@ export async function runTurn(
       if (waiting.approval === "computer") {
         return rejected("This question is answered on the computer.");
       }
-      if (deps.policy.deviceApproval !== "local" && waiting.approval !== "presence") {
+      if (
+        waiting.approval === "device" &&
+        item.body.signed?.deviceId !== device?.deviceId
+      ) {
+        return rejected("This question is answered on the device that asked it.");
+      }
+      if (deps.policy.deviceApproval !== "local" && waiting.approval === undefined) {
         return { kind: "accepted" };
       }
       const { signed, askId, choice, values } = item.body;
@@ -752,6 +773,7 @@ export async function runTurn(
     let failure: AgentExited | Error | undefined;
     const prompted = session.prompt(blocks, {
       update: (update) => {
+        if (update.kind === "usage") deps.learned?.(agentId, { usage: update.usage });
         const step = foldUpdate(fold, update, appServer);
         fold = step.fold;
         if (step.frames.length > 0) link.api.stream({ turnId, frames: step.frames });

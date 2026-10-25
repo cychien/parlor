@@ -172,6 +172,10 @@ const DIFFERENCES: Readonly<
     agreed: true,
     why: "connect trusts the browser that approved it: the host's pairing secret reaches only that browser through the loopback redirect, and its first prompt proves it",
   },
+  "auth/src/statements.ts HOST_PAIRING_KEY added": {
+    agreed: true,
+    why: "the app's connected page and the auth client keep the pairing secret under one key, and the client tells an open sidebar when another tab keeps it",
+  },
   "auth/src/statements.ts checkPairingProof added": {
     agreed: true,
     why: "connect trusts the browser that approved it: the host's pairing secret reaches only that browser through the loopback redirect, and its first prompt proves it",
@@ -192,6 +196,10 @@ const DIFFERENCES: Readonly<
     agreed: true,
     why: "phase 6: `keys` hands the app's own public keys to the host at pairing, which no skeleton member exposed",
   },
+  "agent-host/src/policy.ts approvalFor changed": {
+    agreed: true,
+    why: "the browser that approved `connect` answers its own turn's asks in the chat (`device`), since the loopback redirect put it on this computer, instead of a dialog there",
+  },
   "agent-host/src/policy.ts changePolicy added": {
     agreed: true,
     why: "addendum D7: `parlor-host config` writes policy.json",
@@ -202,7 +210,7 @@ const DIFFERENCES: Readonly<
   },
   "agent-host/src/policy.ts RemotePolicy changed": {
     agreed: true,
-    why: "device linking D4: `promptPresence` asks a linked device for Face ID or Touch ID again after 18 hours; optional, so existing policies still type",
+    why: "device linking D4: `promptPresence` asks a linked device for Face ID or Touch ID again after 18 hours; `agentMode` runs turns in the agent's own safety review unless set to `ask`; both optional, so existing policies still type",
   },
   "agent-host/src/policy.ts presenceDueAt added": {
     agreed: true,
@@ -304,6 +312,10 @@ const DIFFERENCES_6: Readonly<
   "agent-host/src/daemon.ts DaemonDeps changed": {
     agreed: true,
     why: "review of phase 6: `lockToken` names the service.lock the spawning ensureService holds, so the daemon's probe-through-bind takes the lock otherwise",
+  },
+  "agent-host/src/daemon.ts HostDaemon changed": {
+    agreed: true,
+    why: "agent tools: `connect` and `disconnect` say what the coding agents here know the app by, and `agentTools` turns their use of it outside the sidebar on or off",
   },
   "agent-host/src/control.ts ControlRequest changed": {
     agreed: true,

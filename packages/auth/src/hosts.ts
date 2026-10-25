@@ -33,6 +33,7 @@ import { type Database, jwkOf, rowsOf } from "./database.js";
 import { findPendingDevice } from "./devices.js";
 import { escape, failure, page } from "./pages.js";
 import { RevocationSet } from "./revocation.js";
+import { HOST_PAIRING_FRAGMENT, HOST_PAIRING_KEY } from "./statements.js";
 import { HOST_ASSERTION_TYP, HOST_AUDIENCE, type HostAssertion } from "./tokens.js";
 
 export const HOST_CLIENT_ID = "parlor-host";
@@ -50,6 +51,8 @@ export interface HostAuthorizeRequest {
   readonly matchingCode: string;
   /** RFC 7638 thumbprint of the key the code exchange must be signed with. */
   readonly keyThumbprint: string;
+  /** The host can also hand the app to the coding agents on the computer, outside the sidebar. */
+  readonly agentTools?: "offered" | undefined;
 }
 
 /** `POST /hosts/token` */
@@ -75,6 +78,8 @@ export interface HostGrantResponse {
   /** The host shows it locally before it keeps the grant. */
   readonly account: AccountSummary;
   readonly approvedBy?: ApprovingDevice | undefined;
+  /** The app's page, on its origin, that the host sends the approving browser to with the pairing secret. */
+  readonly landing?: string | undefined;
 }
 
 export const HOST_ASSERTION_TTL_MS = 60_000;
@@ -484,10 +489,12 @@ const authorizeRequest = z.object({
     .refine(isPrintable, "Use printable characters."),
   matchingCode: z.string().regex(MATCHING_CODE),
   keyThumbprint: z.string().regex(THUMBPRINT),
+  agentTools: z.literal("offered").optional(),
 });
 
 const authorizeAnswer = authorizeRequest.extend({
   decision: z.enum(["connect", "cancel"]),
+  useAgentTools: z.literal("on").optional(),
 });
 
 const publicKeySchema = z.looseObject({
@@ -571,9 +578,15 @@ async function verifyProof(
   }
 }
 
+/** The MCP server name the host registered the app under, as the connected page shows it. */
+const AGENT_TOOLS_NAME = /^[a-z0-9][a-z0-9_-]{0,79}$/;
+
+const KEEP_PAIRING = `try{const s=new URLSearchParams(location.hash.slice(1)).get(${JSON.stringify(HOST_PAIRING_FRAGMENT)});if(s)localStorage.setItem(${JSON.stringify(HOST_PAIRING_KEY)},s)}catch{}history.replaceState(null,"",location.pathname)`;
+
 /**
  * `GET|POST /hosts/authorize` is the framework-owned consent page and its answer, `POST
- * /hosts/token` the PKCE exchange binding the host's key, `POST /hosts/revoke` the host
+ * /hosts/token` the PKCE exchange binding the host's key, `GET /hosts/connected` where the
+ * approving browser lands and keeps the pairing secret, `POST /hosts/revoke` the host
  * disconnecting itself.
  */
 export function hostRoutes(deps: HostGrantDeps): readonly AnyPluginRoute[] {
@@ -581,6 +594,7 @@ export function hostRoutes(deps: HostGrantDeps): readonly AnyPluginRoute[] {
   const appName = () =>
     process.env.PARLOR_APP_NAME ?? settings.appName ?? new URL(settings.origin).host;
   const authorizeUrl = `${host.basePath}/${AUTH_PLUGIN}/hosts/authorize`;
+  const connectedUrl = `${host.basePath}/${AUTH_PLUGIN}/hosts/connected`;
   const accountOf = async (userId: UserId) => host.auth?.account?.(userId);
 
   return [
@@ -611,6 +625,11 @@ export function hostRoutes(deps: HostGrantDeps): readonly AnyPluginRoute[] {
 <p>The coding agents on <strong>${escape(pairing.hostName)}</strong> (${escape(pairing.platform)}) will take your prompts from ${escape(app)} and run on that computer. Continue only if you just ran <code>connect</code> there.</p>
 <form method="post" action="${escape(authorizeUrl)}">
 ${hidden}
+${
+  pairing.agentTools === "offered"
+    ? `<label class="choice"><input type="checkbox" name="useAgentTools" value="on" checked><span>Also let Claude Code and Codex on this computer use ${escape(app)} when you name it. They ask before their first change in each conversation.</span></label>`
+    : ""
+}
 <button type="submit" name="decision" value="cancel">Cancel</button>
 <button type="submit" name="decision" value="connect">Connect</button>
 </form>`;
@@ -649,7 +668,7 @@ ${hidden}
         if (!parsed.success) {
           return refuse(400, "invalid_input", "This connection request is incomplete.");
         }
-        const { decision, ...pairing } = parsed.data;
+        const { decision, useAgentTools, ...pairing } = parsed.data;
         const target =
           pairing.redirectUri === IPC_REDIRECT ? undefined : new URL(pairing.redirectUri);
         if (decision === "cancel") {
@@ -672,9 +691,19 @@ ${hidden}
               ${pairing.keyThumbprint}, ${pairing.redirectUri}, ${pairing.hostName}, ${pairing.platform},
               ${new Date(Date.now() + CODE_TTL_MS).toISOString()})`);
         });
-        if (!target) return Response.json({ code, state: pairing.state });
+        const agentTools =
+          pairing.agentTools === "offered" ? useAgentTools === "on" : undefined;
+        if (!target) {
+          return Response.json({
+            code,
+            state: pairing.state,
+            ...(agentTools === undefined ? {} : { agentTools }),
+          });
+        }
         target.searchParams.set("code", code);
         target.searchParams.set("state", pairing.state);
+        if (agentTools !== undefined)
+          target.searchParams.set("agentTools", agentTools ? "on" : "off");
         return new Response(null, { status: 303, headers: { location: target.href } });
       },
     }),
@@ -724,8 +753,30 @@ ${hidden}
         const response: HostGrantResponse = {
           grant: { id: grantId, hostId },
           account: { userId, name: profile?.name ?? "", email: profile?.email },
+          landing: connectedUrl,
         };
         return Response.json(response);
+      },
+    },
+    {
+      method: "GET",
+      path: "/hosts/connected",
+      access: "public",
+      handle: async (request) => {
+        const app = escape(appName());
+        const tools = new URL(request.url).searchParams.get("agentTools");
+        const body =
+          tools && AGENT_TOOLS_NAME.test(tools)
+            ? `<h1>Connected to ${app}</h1>
+<p>Use it two ways:</p>
+<ul>
+<li>In the agent sidebar of ${app}.</li>
+<li>In Claude Code or Codex on this computer: ask them to “use <code>${escape(tools)}</code> to …”. They ask you before their first change in each conversation.</li>
+</ul>
+<p>You can close this tab.</p>`
+            : `<h1>Connected to ${app}</h1>
+<p>The coding agents on your computer are ready in the agent sidebar of ${app}. You can close this tab.</p>`;
+        return page("Computer connected", body, ["'none'"], KEEP_PAIRING);
       },
     },
     pluginRoute({

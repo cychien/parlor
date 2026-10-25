@@ -19,6 +19,7 @@ export { ACTION_QUERY_PREFIX, actionQueryKey } from "./query-keys.js";
 export { createPluginClient, type PluginClient } from "./plugin-client.js";
 export type {
   AccountDevice,
+  ComputerDisconnector,
   DeviceLinker,
   DeviceSource,
   FrameworkAuth,

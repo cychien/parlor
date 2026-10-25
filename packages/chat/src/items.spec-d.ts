@@ -64,9 +64,9 @@ test("a host streams text and open items; only the server settles a turn", () =>
 
 test("an ask's approval is the host policy's to set, or absent for any device", () => {
   expectTypeOf<ChatItemBody<"ask">["approval"]>().toEqualTypeOf<
-    "presence" | "computer" | undefined
+    "presence" | "computer" | "device" | undefined
   >();
   expectTypeOf<Extract<ChatItem, { kind: "ask" }>["approval"]>().toEqualTypeOf<
-    "presence" | "computer" | undefined
+    "presence" | "computer" | "device" | undefined
   >();
 });

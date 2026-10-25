@@ -20,6 +20,11 @@ export interface LocalPrompter {
   }): void;
   /** Passive: a device was linked to the agents here. */
   deviceLinked?(input: { readonly appName: string; readonly device: string }): void;
+  /** Passive: the app ended this computer's connection, and the agents here lost it too. */
+  disconnected?(input: {
+    readonly appName: string;
+    readonly removedFrom?: string | undefined;
+  }): void;
 }
 
 const UNPRINTABLE = /[\p{Cc}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
@@ -58,6 +63,11 @@ export function terminalPrompter(): LocalPrompter {
         `${printable(agent)} for ${printable(appName)} asks: ${printable(question)}\n${menu}\nChoice: `,
       );
       return choices[Number(answer?.trim()) - 1]?.id;
+    },
+    disconnected: ({ appName, removedFrom }) => {
+      process.stdout.write(
+        `${printable(appName)} disconnected this computer.${removedFrom ? ` Removed it from ${printable(removedFrom)}.` : ""}\n`,
+      );
     },
     deviceLinked: ({ appName, device }) => {
       process.stdout.write(
@@ -143,6 +153,23 @@ export function macDialogPrompter(): LocalPrompter {
           clipped(`${device} was linked`),
           clipped(
             `It can use your agents for ${appName}. Not you? Remove it under Devices in the app's Agent sidebar.`,
+          ),
+        ],
+      );
+    },
+    disconnected: ({ appName, removedFrom }) => {
+      void osascript(
+        [
+          "on run argv",
+          `display notification (item 2 of argv) with title "${DIALOG_TITLE}" subtitle (item 1 of argv)`,
+          "end run",
+        ],
+        [
+          clipped(`${appName} disconnected this computer`),
+          clipped(
+            removedFrom
+              ? `Its sidebar and ${removedFrom} here can no longer use it.`
+              : "Its sidebar can no longer use your agents here.",
           ),
         ],
       );

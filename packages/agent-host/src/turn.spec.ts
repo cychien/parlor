@@ -89,6 +89,32 @@ const bypassClosable: FakeAgentScript = {
   advertise: { ...bypassOnly.advertise, close: true },
 };
 
+const withOptions: FakeAgentScript = {
+  advertise: {
+    options: [
+      {
+        id: "model",
+        name: "Model",
+        category: "model",
+        current: "default",
+        values: [
+          { id: "default", name: "Default" },
+          { id: "sonnet", name: "Sonnet" },
+        ],
+      },
+    ],
+  },
+  steps: {
+    spend: [
+      {
+        kind: "usage",
+        usage: { windows: [{ id: "five_hour", minutes: 300, used: 0.25 }], at: 0 },
+      },
+      { kind: "reply", chunks: ["done"] },
+    ],
+  },
+};
+
 type Logged =
   | {
       readonly kind: "stream";
@@ -126,6 +152,7 @@ beforeAll(async () => {
   await writeFile(join(dir, "bypass.json"), JSON.stringify(bypassOnly));
   await writeFile(join(dir, "codex.json"), JSON.stringify(codexLike));
   await writeFile(join(dir, "bypass-close.json"), JSON.stringify(bypassClosable));
+  await writeFile(join(dir, "options.json"), JSON.stringify(withOptions));
   proxy = createMcpProxy("parlor-host");
   await proxy.listen(join(dir, "run", "proxy.sock"));
   pool = createSessionPool(join(dir, "sessions.json"));
@@ -140,6 +167,8 @@ afterAll(async () => {
 
 interface AgentLogEntry {
   readonly modeId?: string;
+  readonly configId?: string;
+  readonly value?: unknown;
   readonly at: number;
   readonly method: string;
   readonly pid: number;
@@ -163,6 +192,7 @@ interface HarnessOptions {
   readonly prompter?: Partial<LocalPrompter>;
   readonly now?: () => number;
   readonly pairing?: TurnDeps["pairing"];
+  readonly learned?: TurnDeps["learned"];
 }
 
 let harnesses = 0;
@@ -251,6 +281,11 @@ function harness(
         id: "fake-bypass-close",
         name: "Fake bypass with close",
       },
+      {
+        ...fakeAgentProfile(ENTRY, join(dir, "options.json")),
+        id: "fake-options",
+        name: "Fake with options",
+      },
     ],
     launcher: options.launcher ?? acpLauncher(),
     pool,
@@ -260,6 +295,7 @@ function harness(
     prompter,
     now,
     ...(options.pairing ? { pairing: options.pairing } : {}),
+    ...(options.learned ? { learned: options.learned } : {}),
   };
   const appended = () =>
     logged.flatMap((entry) => (entry.kind === "append" ? entry.items : []));
@@ -762,6 +798,38 @@ const finishOf = (run: ReturnType<typeof harness>) =>
 
 const eventsOf = (run: ReturnType<typeof harness>) =>
   run.appended().flatMap((item) => (item.kind === "event" ? [item.body] : []));
+
+describe("runTurn with the agent's options", () => {
+  it("runs the turn with the options the prompt chose, and passes on what the agent said", async () => {
+    const learned = vi.fn();
+    const run = harness(undefined, { learned });
+    const base = claim(asId("thread", "o1"), "fake-options", "spend");
+    const claimed: ClaimedTurn = {
+      ...base,
+      prompt: {
+        ...base.prompt,
+        body: {
+          ...base.prompt.body,
+          options: { model: "sonnet", mode: "bypassPermissions" },
+        },
+      },
+    };
+    expect(await runTurn(claimed, run.deps)).toMatchObject({ state: "done" });
+    expect(
+      agentLogEntries()
+        .filter((entry) => entry.method === "session/set_config_option")
+        .map(({ configId, value }) => ({ configId, value })),
+    ).toEqual([{ configId: "model", value: "sonnet" }]);
+    expect(learned).toHaveBeenCalledWith("fake-options", {
+      options: [expect.objectContaining({ id: "model", current: "default" })],
+    });
+    expect(learned).toHaveBeenCalledWith("fake-options", {
+      usage: expect.objectContaining({
+        windows: [{ id: "five_hour", minutes: 300, used: 0.25 }],
+      }),
+    });
+  }, 30_000);
+});
 
 describe("runTurn trusting the device that sent the prompt", () => {
   const policy = DEFAULT_POLICY;
@@ -1499,6 +1567,43 @@ describe("runTurn taking answers only as the policy says", () => {
     expect(await runTurn(turn, run.deps)).toMatchObject({ state: "done" });
     expect(askOf(run)!.body).toMatchObject({ approval: "computer" });
     expect(answerHere).toHaveBeenCalledOnce();
+  }, 30_000);
+
+  it("lets the browser that approved `connect` answer its own turn's asks in the chat, and no other device", async () => {
+    const browser = await TestDevice.create();
+    const phone = await TestDevice.create("device-2");
+    const trust = memoryTrust();
+    await trust.pin(APP, { ...pinOf(browser), presenceKey: undefined, via: "pairing" });
+    await trust.pin(APP, pinOf(phone));
+    const answerHere = vi.fn(async () => "allow");
+    let answers: Record<string, unknown>[] | undefined;
+    const run: ReturnType<typeof harness> = harness(
+      chatAnswers(
+        () => run,
+        () => answers,
+      ),
+      { trust, policy: DEFAULT_POLICY, prompter: { answerHere } },
+    );
+    const turn = await signedClaim(browser, askThread, "scripted", {
+      device: { ...browser.keys, presenceKey: undefined },
+    });
+    const running = runTurn(turn, run.deps);
+    await vi.waitFor(() => expect(askOf(run)).toBeDefined());
+    expect(askOf(run)!.body).toMatchObject({ approval: "device" });
+    const answer = { threadId: askThread, askId: askOf(run)!.id, choice: "allow" };
+    const at = Date.now();
+    answers = [
+      {},
+      { signed: await phone.signAnswer(APP, answer, at, true) },
+      { signed: await browser.signAnswer(APP, answer, at, false) },
+    ];
+    expect(await running).toMatchObject({ state: "done" });
+    expect(
+      eventsOf(run)
+        .filter((body) => body.event === "answer_rejected")
+        .map((body) => body.itemId),
+    ).toEqual(["a1", "a2"]);
+    expect(answerHere).not.toHaveBeenCalled();
   }, 30_000);
   const presenceAsk = async (
     run: () => ReturnType<typeof harness>,

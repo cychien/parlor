@@ -33,6 +33,7 @@ describe("parlor-host config", () => {
       deviceApproval: "local",
       answers: "computer",
       promptPresence: { maxAgeHours: 18 },
+      agentMode: "auto",
     });
     expect(JSON.parse(await readFile(policyFile(), "utf8"))).toEqual({
       answers: "computer",
@@ -42,11 +43,13 @@ describe("parlor-host config", () => {
       deviceApproval: "local",
       answers: "computer",
       promptPresence: { maxAgeHours: 18 },
+      agentMode: "auto",
     });
     expect(JSON.parse((await config("--answers", "presence")).stdout)).toEqual({
       deviceApproval: "local",
       answers: "presence",
       promptPresence: { maxAgeHours: 18 },
+      agentMode: "auto",
     });
   }, 30_000);
 
@@ -76,6 +79,22 @@ describe("parlor-host config", () => {
     });
     expect(JSON.parse(await readFile(policyFile(), "utf8"))).toMatchObject({
       promptPresence: "off",
+    });
+  }, 30_000);
+
+  it("sets whether agents act on their own safety review or ask before every action", async () => {
+    expect(JSON.parse((await config("--agent-mode", "ask")).stdout).agentMode).toBe(
+      "ask",
+    );
+    expect(JSON.parse((await config("--agent-mode", "auto")).stdout).agentMode).toBe(
+      "auto",
+    );
+    await expect(config("--agent-mode", "yolo")).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining("--agent-mode takes auto or ask."),
+    });
+    expect(JSON.parse(await readFile(policyFile(), "utf8"))).toMatchObject({
+      agentMode: "auto",
     });
   }, 30_000);
 });

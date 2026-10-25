@@ -530,6 +530,31 @@ describe("the auth client's device", () => {
     }
   });
 
+  it("tells the page when another tab keeps or clears the pairing secret, and only then", async () => {
+    const events = new EventTarget();
+    const scope = globalThis as {
+      addEventListener?: EventTarget["addEventListener"];
+      removeEventListener?: EventTarget["removeEventListener"];
+    };
+    scope.addEventListener = events.addEventListener.bind(events);
+    scope.removeEventListener = events.removeEventListener.bind(events);
+    const storage = (key: string | null) => Object.assign(new Event("storage"), { key });
+    try {
+      const listener = vi.fn();
+      const stop = createAuthClient({ baseUrl: PAGE }).subscribeLink!(listener);
+      events.dispatchEvent(storage("parlor:host-pairing"));
+      events.dispatchEvent(storage("unrelated"));
+      events.dispatchEvent(storage(null));
+      expect(listener).toHaveBeenCalledTimes(2);
+      stop();
+      events.dispatchEvent(storage("parlor:host-pairing"));
+      expect(listener).toHaveBeenCalledTimes(2);
+    } finally {
+      delete scope.addEventListener;
+      delete scope.removeEventListener;
+    }
+  });
+
   it("proves no pairing on a prompt from a browser the host never redirected", async () => {
     const { auth } = await signedIn(new TestDeviceKey());
     const signed = await (await auth.device())!.signPrompt(prompt);

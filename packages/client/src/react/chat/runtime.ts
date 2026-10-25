@@ -1,6 +1,8 @@
 import type { AgentConfirmation, AgentUiClient } from "@parlor/agent-ui/client";
 import type { CapabilityHandle, LocalAgentHost } from "@parlor/capabilities";
 import {
+  type AgentOption,
+  type AgentUsage,
   CHAT_CHANNEL,
   CHAT_TAG,
   type ChatFrame,
@@ -33,6 +35,7 @@ import type { ClientChannel } from "@parlor/sync";
 import { generateClientId } from "../../action-client.js";
 import type { PluginClient } from "../../plugin-client.js";
 import type {
+  ComputerDisconnector,
   DeviceLinker,
   DeviceSource,
   HostAuthorizer,
@@ -54,6 +57,17 @@ export interface AgentChoice {
   readonly online: boolean;
   readonly ready: boolean;
   readonly problem: string | undefined;
+  /** What a prompt to this agent may choose, such as its model; empty until it has said. */
+  readonly options: readonly AgentChoiceOption[];
+  /** The account's allowance, as the agent last reported it. */
+  readonly usage: AgentUsage | undefined;
+  /** The name this agent knows the app by outside the sidebar, when the user let it use the app there. */
+  readonly outsideName: string | undefined;
+}
+
+export interface AgentChoiceOption extends AgentOption {
+  /** The value the next prompt runs with: this device's choice, or the agent's own. */
+  readonly selected: string;
 }
 
 /** How this client adds a computer, decided by the `localAgentHost` capability. */
@@ -172,6 +186,10 @@ export interface ChatCommands {
     values?: Readonly<Record<string, string | number | boolean>>,
   ): Promise<void>;
   choose(agentKey: string): void;
+  /** Chooses a value of the chosen agent's option for this device's next prompts to it. */
+  setOption(optionId: string, value: string): void;
+  /** Disconnects a computer: its agents leave the sidebar and stop using the app outside it. */
+  disconnect(hostId: string): Promise<void>;
   /** `undefined` opens the most recent thread, if there is one. */
   openThread(threadId: string | undefined): void;
   /** Starts a blank thread; it exists on the server once the first prompt is sent. */
@@ -210,7 +228,9 @@ export interface ChatRuntimeDeps {
   readonly transport: () => "sse" | "poll" | undefined;
   readonly onNegotiated: (listener: (transport: "sse" | "poll") => void) => () => void;
   readonly isHidden?: (() => boolean) | undefined;
-  readonly auth: Partial<DeviceSource & HostAuthorizer & DeviceLinker> | undefined;
+  readonly auth:
+    | Partial<DeviceSource & HostAuthorizer & DeviceLinker & ComputerDisconnector>
+    | undefined;
   readonly localHost: Promise<CapabilityHandle<LocalAgentHost>>;
   readonly threadId: string | undefined;
 }
@@ -305,6 +325,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
   let draft = "";
   let failure: string | undefined;
   let chosen: string | undefined;
+  let optionChoices = readOptionChoices();
   let sending = false;
   let pendingSend: PendingSend | undefined;
   let startedNew = false;
@@ -372,16 +393,41 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     return refusedLast(hostId, deviceId) ? 0 : due - PRESENCE_MARGIN_MS;
   };
 
+  /** This device's choices for `agentKey` that its agent still offers. */
+  const chosenOptions = (
+    agentKey: string,
+    options: readonly AgentOption[],
+  ): Record<string, string> =>
+    Object.fromEntries(
+      Object.entries(optionChoices[agentKey] ?? {}).filter(([id, value]) =>
+        options.some(
+          (option) =>
+            option.id === id && option.values.some((candidate) => candidate.id === value),
+        ),
+      ),
+    );
+
   const choices = (): AgentChoice[] =>
     hosts.flatMap((host) =>
-      host.agents.map((agent) => ({
-        key: `${host.id}/${agent.id}`,
-        name: agent.name,
-        hostName: host.name,
-        online: host.online,
-        ready: agent.ready,
-        problem: agent.problem,
-      })),
+      host.agents.map((agent) => {
+        const key = `${host.id}/${agent.id}`;
+        const offered = agent.options ?? [];
+        const picked = chosenOptions(key, offered);
+        return {
+          key,
+          name: agent.name,
+          hostName: host.name,
+          online: host.online,
+          ready: agent.ready,
+          problem: agent.problem,
+          options: offered.map((option) => ({
+            ...option,
+            selected: picked[option.id] ?? option.current,
+          })),
+          usage: agent.usage,
+          outsideName: agent.outsideName,
+        };
+      }),
     );
 
   const waitOn = (reason: ChatWait["reason"], hostId: string): ChatWait => ({
@@ -746,6 +792,10 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     try {
       await reporting(async () => {
         const agent = { hostId: asId("host", hostId), agentId };
+        const offered = hosts
+          .find((host) => host.id === hostId)
+          ?.agents.find((candidate) => candidate.id === agentId)?.options;
+        const options = chosenOptions(agentKey, offered ?? []);
         const signed = deps.auth?.device
           ? await signPrompt({
               threadId: attempt.threadId,
@@ -759,7 +809,12 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
           turnId: attempt.turnId,
           itemId: attempt.itemId,
           clientId: deps.clientId,
-          prompt: { text: attempt.text, agent, ...(signed ? { signed } : {}) },
+          prompt: {
+            text: attempt.text,
+            agent,
+            ...(signed ? { signed } : {}),
+            ...(Object.keys(options).length > 0 ? { options } : {}),
+          },
         });
         settle();
         if (epoch !== generation) return;
@@ -932,7 +987,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       await whenSetUp(() =>
         reporting(async () => {
           const found = deps.auth?.device ? await deviceOf() : undefined;
-          if (ask.approval === "presence" && !found) {
+          if ((ask.approval === "presence" || ask.approval === "device") && !found) {
             throw new NeedsDevice(
               "This question needs a device that can confirm it is you.",
             );
@@ -1038,6 +1093,24 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       chosen = agentKey;
       emit();
     },
+    async disconnect(hostId) {
+      if (!deps.auth?.disconnectComputer) {
+        throw new Error("This app cannot disconnect computers.");
+      }
+      await deps.auth.disconnectComputer(hostId);
+      await refreshHosts();
+      emit();
+    },
+    setOption(optionId, value) {
+      const agentKey = state.agent?.key;
+      if (agentKey === undefined) return;
+      optionChoices = {
+        ...optionChoices,
+        [agentKey]: { ...optionChoices[agentKey], [optionId]: value },
+      };
+      writeOptionChoices(optionChoices);
+      emit();
+    },
     openThread(target) {
       switchTo(target === undefined ? undefined : asId("thread", target), false);
     },
@@ -1099,6 +1172,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
         if (transport === "poll") announceActivity();
       });
       const offConfirmations = agentUi.confirmations.subscribe(emit);
+      const offLink = deps.auth?.subscribeLink?.(() => void refreshLink());
       emit();
       announceActivity();
       void initial();
@@ -1116,6 +1190,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
         offResume();
         offNegotiated();
         offConfirmations();
+        offLink?.();
         stopWatching?.();
         stopWatching = undefined;
         watched = undefined;
@@ -1194,4 +1269,25 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
   }
 
   return runtime;
+}
+
+const OPTION_CHOICES_KEY = "parlor:agent-options";
+
+type OptionChoices = Readonly<Record<string, Readonly<Record<string, string>>>>;
+
+function readOptionChoices(): OptionChoices {
+  try {
+    const stored: unknown = JSON.parse(
+      globalThis.localStorage?.getItem(OPTION_CHOICES_KEY) ?? "{}",
+    );
+    return stored && typeof stored === "object" ? (stored as OptionChoices) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeOptionChoices(choices: OptionChoices): void {
+  try {
+    globalThis.localStorage?.setItem(OPTION_CHOICES_KEY, JSON.stringify(choices));
+  } catch {}
 }

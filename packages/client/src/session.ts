@@ -95,6 +95,8 @@ export interface DeviceLinker {
     /** It approved `connect` on the computer, so its first prompt links it. */
     readonly pairing: boolean;
   }>;
+  /** Called when another tab changes what `linkState` reads, such as approving `connect`. */
+  subscribeLink?(listener: () => void): () => void;
   /** Enrolls this device, with Face ID or Touch ID unless `presence` is false, and shows its code. */
   startLink(options?: { readonly presence?: boolean }): Promise<{
     readonly deviceId: string;
@@ -119,6 +121,11 @@ export interface DeviceLinker {
   removeDevice(id: string): Promise<void>;
 }
 
+/** Ends a computer's connection: its sidebar turns and its coding agents both lose the app. */
+export interface ComputerDisconnector {
+  disconnectComputer(hostId: string): Promise<void>;
+}
+
 /** What `FrameworkProvider` takes as `auth`; signing, host pairing and linking are optional. */
 export type FrameworkAuth = SessionSource &
-  Partial<DeviceSource & HostAuthorizer & DeviceLinker>;
+  Partial<DeviceSource & HostAuthorizer & DeviceLinker & ComputerDisconnector>;

@@ -19,6 +19,11 @@ import { logEvent } from "./log.js";
 export interface McpProxy {
   listen(socketPath: string): Promise<void>;
   open(appServer: string, appOrigin: string): ProxySession;
+  /**
+   * Serves `parlor-host mcp-proxy --app <origin>`: a coding agent on this computer outside
+   * any turn, such as Claude Code in a terminal. `undefined` refuses the app.
+   */
+  serveOutside(resolve: (appOrigin: string) => OutsideApp | undefined): void;
   stopListening(): Promise<void>;
   close(): Promise<void>;
 }
@@ -34,11 +39,32 @@ export interface ProxySession {
   dispose(): void;
 }
 
+/** An app a coding agent on this computer may use outside its sidebar. */
+export interface OutsideApp {
+  readonly appOrigin: string;
+  readonly appName: string;
+  /** The name the user asks the agent with, its MCP server name. */
+  readonly name: string;
+  /** Whose account the agent acts as: its email, or its name. */
+  readonly account: string;
+  /** A token for `agent`'s calls, fresh enough to use now. */
+  token(agent: string): Promise<string>;
+  /** Asks on this computer, for an agent that cannot ask the user itself. */
+  askHere(question: string): Promise<boolean>;
+}
+
 export const NO_TURN_MESSAGE =
   "No turn is active: the user has not asked anything right now. Wait for their next message.";
 
 export const DISCONNECTED_MESSAGE =
   "This computer no longer serves the app: it was disconnected, or Parlor Host stopped.";
+
+const OUTSIDE_PREFIX = "app ";
+const AGENT_NAMES: Readonly<Record<string, string>> = {
+  "claude-code": "Claude Code",
+  "codex-mcp-client": "Codex",
+  codex: "Codex",
+};
 
 const SOCKET_ENV = "PARLOR_HOST_PROXY_SOCKET";
 const NONCE_ENV = "PARLOR_HOST_PROXY_NONCE";
@@ -227,22 +253,190 @@ function handle(live: Live, line: string, reply: (line: string) => void): void {
   void forward(live, token, line, message, reply);
 }
 
+/**
+ * One agent outside a turn, on one socket. Reads run as asked; the first change in the
+ * conversation waits for the user, through the agent's own elicitation where it has it.
+ */
+function outsideSession(
+  app: OutsideApp,
+  socket: Socket,
+  reply: (line: string) => void,
+): (line: string) => void {
+  const live: Live = {
+    appOrigin: app.appOrigin.replace(/\/+$/, ""),
+    token: undefined,
+    protocolVersion: undefined,
+    initialized: undefined,
+    tools: undefined,
+    inflight: new Set(),
+    sockets: new Set([socket]),
+  };
+  let agent = "A coding agent";
+  let elicits = false;
+  let changesAllowed: Promise<boolean> | undefined;
+  let asked = 0;
+  const answers = new Map<string, (allowed: boolean) => void>();
+
+  const send = async (line: string, message: Message, onReply = reply) => {
+    let token: string;
+    try {
+      token = await app.token(agent);
+    } catch (error) {
+      if (message.id !== undefined) {
+        onReply(
+          failure(message.id, REFUSED_CODE, `${app.appName} refused: ${String(error)}`),
+        );
+      }
+      return;
+    }
+    await forward(live, token, line, message, onReply);
+  };
+
+  const readOnly = async (tool: string): Promise<boolean> => {
+    if (live.tools === undefined) {
+      const id = `parlor-tools-${++asked}`;
+      const list = { jsonrpc: "2.0", id, method: "tools/list", params: {} };
+      await send(JSON.stringify(list), list, () => undefined);
+    }
+    const tools = (live.tools as { readonly tools?: readonly ToolEntry[] } | undefined)
+      ?.tools;
+    return (
+      tools?.find((entry) => entry.name === tool)?.annotations?.readOnlyHint === true
+    );
+  };
+
+  const askToChange = (): Promise<boolean> => {
+    const question = `${agent} wants to change ${app.appName} (${app.appOrigin}) as ${app.account}. Allow changes from this conversation?`;
+    if (!elicits) return app.askHere(question);
+    const id = `parlor-allow-${++asked}`;
+    const answered = new Promise<boolean>((resolve) => answers.set(id, resolve));
+    reply(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        method: "elicitation/create",
+        params: {
+          message: question,
+          requestedSchema: { type: "object", properties: {} },
+        },
+      }),
+    );
+    return answered;
+  };
+
+  return (line) => {
+    const message = parse(line);
+    if (!message) return;
+    if (message.method === undefined && typeof message.id === "string") {
+      const answer = answers.get(message.id);
+      if (answer) {
+        answers.delete(message.id);
+        const action = (message.result as { readonly action?: unknown } | undefined)
+          ?.action;
+        answer(action === "accept");
+        return;
+      }
+    }
+    if (message.method === "initialize") {
+      const params = (message as { readonly params?: InitializeParams }).params;
+      const client = params?.clientInfo?.name;
+      if (typeof client === "string" && client !== "")
+        agent = AGENT_NAMES[client] ?? client;
+      elicits = params?.capabilities?.elicitation !== undefined;
+      logEvent("outside_agent", { appOrigin: app.appOrigin, agent, elicits });
+      void send(line, message, (answer) => reply(withGuidance(answer, app, agent)));
+      return;
+    }
+    if (message.method === "tools/call" && message.id !== undefined) {
+      const tool = (message as { readonly params?: { readonly name?: unknown } }).params
+        ?.name;
+      void (async () => {
+        if (typeof tool === "string" && !(await readOnly(tool))) {
+          changesAllowed ??= askToChange().then((allowed) => {
+            if (!allowed) changesAllowed = undefined;
+            return allowed;
+          });
+          if (!(await changesAllowed)) {
+            reply(
+              result(message.id!, {
+                content: [
+                  {
+                    type: "text",
+                    text: `Nothing was changed: the user did not allow changes to ${app.appName} from this conversation, or could not be asked here. Tell them so. If they ask for the change again, they are asked again first; nothing in ${app.appName} itself turns this on.`,
+                  },
+                ],
+                isError: true,
+              }),
+            );
+            return;
+          }
+        }
+        await send(line, message);
+      })();
+      return;
+    }
+    void send(line, message);
+  };
+}
+
+interface ToolEntry {
+  readonly name?: string;
+  readonly annotations?: { readonly readOnlyHint?: boolean };
+}
+
+interface InitializeParams {
+  readonly clientInfo?: { readonly name?: unknown };
+  readonly capabilities?: { readonly elicitation?: unknown };
+}
+
+/** The app's own instructions, led by when to use it at all: only when the user names it. */
+function withGuidance(line: string, app: OutsideApp, agent: string): string {
+  const answer = parse(line);
+  const initialized = answer?.result as { readonly instructions?: unknown } | undefined;
+  if (!initialized || typeof initialized !== "object") return line;
+  const guidance = `Use these tools only when the user names ${app.appName} or "${app.name}" in their request: they act on the live app at ${app.appOrigin} as ${app.account}, and ${agent} runs outside the app here. Reading is free; before the first change in this conversation the user is asked to allow changes.`;
+  const own =
+    typeof initialized.instructions === "string" ? initialized.instructions : "";
+  return JSON.stringify({
+    ...answer,
+    result: { ...initialized, instructions: own ? `${guidance}\n\n${own}` : guidance },
+  });
+}
+
 export function createMcpProxy(hostBinary: string): McpProxy {
   const sessions = new Map<string, Live>();
   let server: Server | undefined;
   let socketPath: string | undefined;
+  let outside: (appOrigin: string) => OutsideApp | undefined = () => undefined;
 
   const accept = (socket: Socket) => {
     let live: Live | undefined;
+    let outsideLine: ((line: string) => void) | undefined;
     const reply = (line: string) => {
       if (!socket.destroyed) socket.write(`${line}\n`);
     };
     onLines(socket, (line) => {
+      if (outsideLine !== undefined) {
+        outsideLine(line);
+        return;
+      }
       if (live !== undefined) {
         handle(live, line, reply);
         return;
       }
-      live = sessions.get(line.trim());
+      const first = line.trim();
+      if (first.startsWith(OUTSIDE_PREFIX)) {
+        const appOrigin = first.slice(OUTSIDE_PREFIX.length);
+        const app = outside(appOrigin);
+        if (!app) {
+          reply(JSON.stringify({ refused: notServedMessage(appOrigin) }));
+          socket.end();
+          return;
+        }
+        outsideLine = outsideSession(app, socket, reply);
+        return;
+      }
+      live = sessions.get(first);
       if (live) live.sockets.add(socket);
       else socket.destroy();
     });
@@ -262,6 +456,9 @@ export function createMcpProxy(hostBinary: string): McpProxy {
       await chmod(path, 0o600);
       server = listening;
       socketPath = path;
+    },
+    serveOutside(resolve) {
+      outside = resolve;
     },
     open(appServer, appOrigin) {
       if (socketPath === undefined)
@@ -326,22 +523,40 @@ export function createMcpProxy(hostBinary: string): McpProxy {
   };
 }
 
+/** Why an agent outside a turn cannot use `appOrigin` here. */
+function notServedMessage(appOrigin: string): string {
+  return `This computer does not let coding agents use ${appOrigin}: it is not connected, or that was turned off. Connect it again with \`npx @parlor/agent-host connect ${appOrigin}\`.`;
+}
+
+const notRunningMessage = (appOrigin: string) =>
+  `Parlor Host is not running on this computer, so ${appOrigin} cannot be reached. Open the app's agent sidebar, or run \`npx @parlor/agent-host connect ${appOrigin}\`.`;
+
 /**
- * `parlor-host mcp-proxy`: stdio to the daemon socket and back. Once the daemon hangs up,
- * every request still unanswered, and every later one, is answered with an error here.
+ * `parlor-host mcp-proxy`: stdio to the daemon socket and back. Inside a turn the
+ * environment names the session; `--app` serves an agent outside any turn. Once the daemon
+ * hangs up, every request still unanswered, and every later one, is answered with an error
+ * here.
  */
-export async function runMcpProxyProcess(env: NodeJS.ProcessEnv): Promise<void> {
-  const path = env[SOCKET_ENV];
+export async function runMcpProxyProcess(
+  env: NodeJS.ProcessEnv,
+  outside?: { readonly appOrigin: string; readonly socketPath: string },
+): Promise<void> {
+  const path = outside?.socketPath ?? env[SOCKET_ENV];
   const nonce = env[NONCE_ENV];
-  if (!path || !nonce) throw new Error(`${SOCKET_ENV} and ${NONCE_ENV} must be set.`);
+  if (!path || (!outside && !nonce)) {
+    throw new Error(`${SOCKET_ENV} and ${NONCE_ENV} must be set, or --app.`);
+  }
+  let why = outside ? notRunningMessage(outside.appOrigin) : DISCONNECTED_MESSAGE;
   const unanswered = new Set<JsonRpcId>();
   const toAgent = (line: string) => void process.stdout.write(`${line}\n`);
-  const refuse = (id: JsonRpcId) =>
-    toAgent(failure(id, REFUSED_CODE, DISCONNECTED_MESSAGE));
+  const refuse = (id: JsonRpcId) => toAgent(failure(id, REFUSED_CODE, why));
   process.stdout.on("error", () => undefined);
 
   const daemon = connect(path);
   daemon.on("error", () => daemon.destroy());
+  daemon.once("connect", () => {
+    if (outside) why = DISCONNECTED_MESSAGE;
+  });
   const hungUp = new Promise<void>((resolve) =>
     daemon.once("close", () => {
       for (const id of unanswered) refuse(id);
@@ -349,8 +564,13 @@ export async function runMcpProxyProcess(env: NodeJS.ProcessEnv): Promise<void> 
       resolve();
     }),
   );
-  daemon.write(`${nonce}\n`);
+  daemon.write(outside ? `${OUTSIDE_PREFIX}${outside.appOrigin}\n` : `${nonce}\n`);
   onLines(daemon, (line) => {
+    const refused = (parse(line) as { readonly refused?: unknown } | undefined)?.refused;
+    if (typeof refused === "string") {
+      why = refused;
+      return;
+    }
     const message = parse(line);
     if (message?.id !== undefined && message.method === undefined) {
       unanswered.delete(message.id);

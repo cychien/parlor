@@ -213,3 +213,61 @@ describe("turn tokens", () => {
     });
   });
 });
+
+describe("agent tokens outside any turn", () => {
+  async function mint() {
+    const { alice, computer } = await pairedComputer();
+    const { grant, account } = computer.grant!;
+    const principal: HostPrincipal = {
+      kind: "host",
+      userId: account.userId,
+      grantId: grant.id,
+      hostId: grant.hostId,
+    };
+    const delegation = await app.provider.delegateAgent!(principal, {
+      agent: "Claude Code on Alice's MacBook",
+      ttlMs: 120_000,
+    });
+    return { alice, computer, delegation, principal };
+  }
+
+  it("calls MCP tools as an external agent of the user, bound to no turn", async () => {
+    const { delegation, principal } = await mint();
+    const client = new Client({ name: "proxy", version: "0.0.0" });
+    clients.push(client);
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`${ORIGIN}/_parlor/mcp`), {
+        fetch: (input, init) => {
+          const headers = new Headers(init?.headers);
+          headers.set("authorization", `Bearer ${delegation.token}`);
+          return app.server.fetch(new Request(input, { ...init, headers }));
+        },
+      }),
+    );
+    const result = await client.callTool({ name: "whoami", arguments: {} });
+    const seen = result.structuredContent as { principal: unknown; source: string };
+    expect(seen.source).toBe("mcp");
+    expect(seen.principal).toEqual({
+      kind: "agent",
+      userId: principal.userId,
+      grantId: principal.grantId,
+      agent: { name: "Claude Code on Alice's MacBook", verified: true },
+    });
+  });
+
+  it("is neither a host assertion nor allowed where only a host may go", async () => {
+    const { delegation } = await mint();
+    expect(
+      (await callWith(app.server, HELLO, `ParlorHost ${delegation.token}`)).status,
+    ).toBe(401);
+    const response = await callWith(app.server, HELLO, `Bearer ${delegation.token}`);
+    expect(response.status).toBe(403);
+  });
+
+  it("dies with the computer's grant", async () => {
+    const { alice, delegation, principal } = await mint();
+    await alice.account("revokeHost", { hostId: principal.hostId });
+    const mcp = await callWith(app.server, "/_parlor/mcp", `Bearer ${delegation.token}`);
+    expect(mcp.status).toBe(401);
+  });
+});

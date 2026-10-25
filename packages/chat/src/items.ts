@@ -44,6 +44,11 @@ export const chatItemBodies = {
       text: z.string().min(1).max(MAX_PROMPT_CHARS),
       agent: agentRef,
       signed: signed.optional(),
+      /**
+       * The agent's options this turn runs with, by option id. Not signed: the computer runs
+       * only values the agent offers, and none of them widens what the agent may do.
+       */
+      options: z.record(z.string().max(100), z.string().max(200)).optional(),
     }),
   },
   answer: {
@@ -91,9 +96,10 @@ export const chatItemBodies = {
       form: z.record(z.string(), z.unknown()).optional(),
       /**
        * Set by the host's policy, never by the app. Absent: any device answers from the
-       * chat, without presence.
+       * chat, without presence. `device`: only the device that sent the turn's prompt, from
+       * the chat, without presence.
        */
-      approval: z.enum(["presence", "computer"]).optional(),
+      approval: z.enum(["presence", "computer", "device"]).optional(),
     }),
   },
   event: {

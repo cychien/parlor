@@ -20,6 +20,7 @@ import {
   type PluginHost,
   REVOCATION_HORIZON_MS,
   type TurnDelegation,
+  type AgentDelegation,
 } from "@parlor/server";
 import { betterAuth, type BetterAuthOptions } from "better-auth";
 import {
@@ -60,11 +61,15 @@ import { AUTH_MIGRATIONS } from "./migrations.js";
 import { RevocationSet } from "./revocation.js";
 import { authRoutes } from "./routes.js";
 import {
+  type AgentToken,
   agentPrincipalOf,
   credentialOf,
   delegate,
+  delegateAgent,
   type HostAssertion,
+  outsideAgentPrincipalOf,
   type TurnToken,
+  verifyAgentToken,
   verifyTurnToken,
 } from "./tokens.js";
 import {
@@ -315,6 +320,20 @@ export function betterAuthProvider(provided: BetterAuthProviderOptions): AuthPro
     return agentPrincipalOf(claims);
   };
 
+  const outsideAgentOf = async (token: AgentToken): Promise<AgentPrincipal> => {
+    const store = installed().turnKeys;
+    let turnTokenKeys = await store.keys();
+    const kid = decodeProtectedHeader(token).kid;
+    if (kid !== undefined && !turnTokenKeys.publicKeys.has(kid)) {
+      turnTokenKeys = await store.refresh();
+    }
+    const claims = await verifyAgentToken(turnTokenKeys, token, Date.now());
+    if (await started().isRevoked({ kind: "grant", id: claims.gid })) {
+      throw new AuthFailure("revoked", "This computer was disconnected.");
+    }
+    return outsideAgentPrincipalOf(claims);
+  };
+
   const authenticateRequest = async (request: Request): Promise<Principal> => {
     await ready();
     const credential = credentialOf(request.headers.get("authorization"));
@@ -323,6 +342,8 @@ export function betterAuthProvider(provided: BetterAuthProviderOptions): AuthPro
         return hostOf(request, credential.assertion);
       case "turn":
         return turnOf(credential.token);
+      case "agent":
+        return outsideAgentOf(credential.token);
       case "access":
         return agentOf(credential.token);
       case "session": {
@@ -406,6 +427,13 @@ export function betterAuthProvider(provided: BetterAuthProviderOptions): AuthPro
     async delegate(host: HostPrincipal, turn: TurnDelegation): Promise<Delegation> {
       await ready();
       return delegate(await installed().turnKeys.keys(), host, turn, Date.now());
+    },
+    async delegateAgent(
+      host: HostPrincipal,
+      agent: AgentDelegation,
+    ): Promise<Delegation> {
+      await ready();
+      return delegateAgent(await installed().turnKeys.keys(), host, agent, Date.now());
     },
     async hostActive(grantId: GrantId): Promise<boolean> {
       const revoked = await started().isRevoked({ kind: "grant", id: grantId });

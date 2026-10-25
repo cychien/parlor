@@ -439,6 +439,12 @@ async function admitsUserItem(
     if (ask.approval === "presence" && signed?.signature.presence !== "user") {
       throw new ActionError("forbidden", "This question needs a presence check.");
     }
+    if (ask.approval === "device" && !signed) {
+      throw new ActionError(
+        "forbidden",
+        "This question is answered on the device that asked it.",
+      );
+    }
     const [state] = await query(
       tx,
       sql`select state from parlor_chat_turns where id = ${turnId} for update`,

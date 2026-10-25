@@ -17,6 +17,23 @@ Then ask Claude Code to "list my todos" or "add a todo called Ship it". Each too
 
 Without sign-in, MCP calls run in the scope `"default"`, the same rows the UI shows. After `parlor add auth`, the server is an OAuth authorization server: an MCP client discovers it through `/.well-known/oauth-protected-resource`, opens the app's sign-in page, and every call then runs as that user, in that user's scope. Claude Code runs this flow itself (`claude mcp login my-app`).
 
+## From a connected computer, without any setup
+
+After `parlor add auth`, a user who connects their computer for the sidebar (`npx @parlor/agent-host connect <app url>`) can use the app from Claude Code and Codex on that computer too. The consent page offers it, checked: **Also let Claude Code and Codex on this computer use the app when you name it**. Parlor Host then registers the app with each agent's own CLI (`claude mcp add --scope user`, `codex mcp add`) under one name, the app's name with its host and port unless it is a deployed site on the default port, such as `courses` or `courses-localhost-5173`. The connected page and the terminal both say it:
+
+```
+Use it two ways:
+  - In Courses's agent sidebar.
+  - In Claude Code and Codex on this computer: ask them to "use courses-localhost-5173 to ...".
+```
+
+The agents reach the app through Parlor Host, with a short-lived token the computer's grant mints; no app credential is ever in their config. They act as the signed-in user, as an external MCP client: `ctx.source` is `"mcp"`, and a `confirm: true` action waits for the user in the app. Because a coding agent in a terminal may reach for any tool it has, Parlor Host keeps the app from being changed by accident:
+
+- The server's instructions tell the agent to use the app only when the user names it.
+- Reading runs as asked. The first change in each conversation asks the user first, inside the agent where it can ask (MCP elicitation, as Claude Code does), and in a dialog on the computer otherwise. A declined change runs nothing, and the agent is told so.
+
+The connection ends in one place for both uses: **Disconnect** in the sidebar (`useChat().disconnect(hostId)`) or `npx @parlor/agent-host disconnect <app url>` revokes the grant and removes the app from the agents, and the computer posts a notification when the app was the one to end it. `npx @parlor/agent-host tools <app url> --off` stops only the agents outside the sidebar; without `--off` it hands the app to them again.
+
 ## Several apps in one agent
 
 A user may connect one agent to many Parlor apps, and to the same app twice, in production and on `localhost`. Each server introduces itself: its MCP server name and title are the app's `app.name`, and its instructions begin with which app the tools belong to, at which origin, with `app.description` when the config has one:

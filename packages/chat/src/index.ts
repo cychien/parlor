@@ -14,7 +14,11 @@ export { type AppliedFrame, applyFrame } from "./open-turns.js";
 export { isPromptTooLong, MAX_PROMPT_CHARS, PROMPT_LIMIT_MESSAGE } from "./limits.js";
 export type {
   AgentInfo,
+  AgentOption,
+  AgentOptionValue,
   AgentRef,
+  AgentUsage,
+  AgentUsageWindow,
   AnswerToSign,
   ChatOwner,
   ChatSnapshot,

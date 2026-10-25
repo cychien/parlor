@@ -15,6 +15,7 @@ export type { ChatRootProps } from "./chat/chat-root.js";
 export type { ChatThreadProps } from "./chat/chat-thread.js";
 export type {
   AgentChoice,
+  AgentChoiceOption,
   ChatCommands,
   ChatState,
   ChatStatus,

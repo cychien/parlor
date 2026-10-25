@@ -4,10 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   acpLauncher,
+  agentOptionsOf,
   type AgentAskAnswer,
   type AgentConnection,
   type AgentUpdate,
@@ -95,6 +96,58 @@ async function launch(
 }
 
 const prompt = (text: string) => [{ kind: "text" as const, text }];
+
+describe("the options a prompt may choose", () => {
+  it("keeps the agent's selects, groups flattened, and never its permission mode", () => {
+    const configOptions: Parameters<typeof agentOptionsOf>[0] = [
+      {
+        id: "model",
+        name: "Model",
+        category: "model",
+        type: "select",
+        currentValue: "default",
+        options: [
+          { value: "default", name: "Default (recommended)", description: "Opus" },
+        ],
+      },
+      {
+        id: "effort",
+        name: "Effort",
+        category: "thought_level",
+        type: "select",
+        currentValue: "high",
+        options: [
+          { group: "levels", name: "Levels", options: [{ value: "high", name: "High" }] },
+        ],
+      },
+      {
+        id: "mode",
+        name: "Mode",
+        category: "mode",
+        type: "select",
+        currentValue: "default",
+        options: [{ value: "bypassPermissions", name: "Bypass" }],
+      },
+      { id: "fast", name: "Fast", type: "boolean", currentValue: false },
+    ];
+    expect(agentOptionsOf(configOptions)).toEqual([
+      {
+        id: "model",
+        name: "Model",
+        category: "model",
+        current: "default",
+        values: [{ id: "default", name: "Default (recommended)", description: "Opus" }],
+      },
+      {
+        id: "effort",
+        name: "Effort",
+        category: "thought_level",
+        current: "high",
+        values: [{ id: "high", name: "High" }],
+      },
+    ]);
+  });
+});
 
 describe("acpLauncher against the fake agent over real stdio", () => {
   it("delivers every update in wire order before the prompt settles", async () => {
@@ -261,6 +314,53 @@ describe("acpLauncher against the fake agent over real stdio", () => {
     expect(await connection.exited).toEqual({ kind: "exited", code: 3, stderrTail: "" });
   });
 
+  it("offers the agent's model, sets it, and reports the account's allowance", async () => {
+    const file = join(dir, "options.json");
+    const withOptions: FakeAgentScript = {
+      advertise: {
+        options: [
+          {
+            id: "model",
+            name: "Model",
+            category: "model",
+            current: "default",
+            values: [
+              { id: "default", name: "Default" },
+              { id: "sonnet", name: "Sonnet" },
+            ],
+          },
+        ],
+      },
+      steps: {
+        spend: [
+          {
+            kind: "usage",
+            usage: { windows: [{ id: "five_hour", minutes: 300, used: 0.25 }], at: 0 },
+          },
+          { kind: "reply", chunks: ["done"] },
+        ],
+      },
+    };
+    await writeFile(file, JSON.stringify(withOptions));
+    const connection = await launch({}, file);
+    const session = await connection.openSession({
+      cwd: dir,
+      mcpServers: [],
+      pinAskMode: true,
+    });
+    expect(session.options).toMatchObject([{ id: "model", current: "default" }]);
+    await session.setOption("model", "sonnet");
+    expect(session.options).toMatchObject([{ id: "model", current: "sonnet" }]);
+    const updates: AgentUpdate[] = [];
+    await session.prompt(prompt("spend"), {
+      update: (update) => updates.push(update),
+      ask: async () => ({ kind: "cancelled" }),
+    });
+    expect(updates.find((update) => update.kind === "usage")).toMatchObject({
+      usage: { windows: [{ id: "five_hour", minutes: 300, used: 0.25 }] },
+    });
+  });
+
   describe("pinning the mode that asks", () => {
     const codexLike: FakeAgentScript = {
       fallback: "echo",
@@ -273,24 +373,42 @@ describe("acpLauncher against the fake agent over real stdio", () => {
       steps: {},
     };
 
-    async function modesSet(input: { strictAsk?: boolean }): Promise<string[]> {
+    async function modesSet(
+      input: { strictAsk?: boolean; autoMode?: boolean },
+      agent: FakeAgentScript = codexLike,
+    ): Promise<string[]> {
+      return (await modesLog(input, agent))();
+    }
+
+    async function modesLog(
+      input: { strictAsk?: boolean; autoMode?: boolean },
+      agent: FakeAgentScript,
+      then?: string,
+    ): Promise<() => string[]> {
       const log = join(dir, `modes-${Math.random().toString(36).slice(2)}.log`);
-      const file = join(dir, "codex-like.json");
-      await writeFile(file, JSON.stringify(codexLike));
+      const file = join(dir, `script-${Math.random().toString(36).slice(2)}.json`);
+      await writeFile(file, JSON.stringify(agent));
       const connection = await launch({ FAKE_AGENT_LOG: log }, file);
-      await connection.openSession({
+      const session = await connection.openSession({
         cwd: dir,
         mcpServers: [],
         pinAskMode: true,
         ...input,
       });
-      return (existsSync(log) ? readFileSync(log, "utf8") : "")
-        .trim()
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => JSON.parse(line) as { method: string; modeId?: string })
-        .filter((entry) => entry.method === "session/set_mode")
-        .map((entry) => entry.modeId!);
+      if (then) {
+        await session.prompt(prompt(then), {
+          update: () => undefined,
+          ask: async () => ({ kind: "cancelled" }),
+        });
+      }
+      return () =>
+        (existsSync(log) ? readFileSync(log, "utf8") : "")
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line) as { method: string; modeId?: string })
+          .filter((entry) => entry.method === "session/set_mode")
+          .map((entry) => entry.modeId!);
     }
 
     it("keeps the agent's own asking mode when asked for no more", async () => {
@@ -299,6 +417,43 @@ describe("acpLauncher against the fake agent over real stdio", () => {
 
     it("moves to the strictest asking mode, so every write asks", async () => {
       expect(await modesSet({ strictAsk: true })).toEqual(["read-only"]);
+    });
+
+    it("moves to the agent's own safety review when asked to, Codex's `agent` among them", async () => {
+      const withReview: FakeAgentScript = {
+        ...codexLike,
+        advertise: {
+          modes: {
+            current: "workspace-write",
+            available: ["read-only", "workspace-write", "agent"],
+          },
+        },
+      };
+      expect(await modesSet({ strictAsk: true, autoMode: true }, withReview)).toEqual([
+        "agent",
+      ]);
+      expect(await modesSet({ strictAsk: true, autoMode: true })).toEqual(["read-only"]);
+    });
+
+    it("settles in the asking mode once the agent leaves `auto` on its own", async () => {
+      const claudeLike: FakeAgentScript = {
+        advertise: {
+          modes: { current: "default", available: ["default", "acceptEdits", "auto"] },
+        },
+        steps: {
+          downgrade: [
+            { kind: "mode", modeId: "acceptEdits" },
+            { kind: "mode", modeId: "acceptEdits" },
+            { kind: "reply", chunks: ["ok"] },
+          ],
+        },
+      };
+      const modes = await modesLog(
+        { strictAsk: true, autoMode: true },
+        claudeLike,
+        "downgrade",
+      );
+      await vi.waitFor(() => expect(modes()).toEqual(["auto", "default", "default"]));
     });
   });
 

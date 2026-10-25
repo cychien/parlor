@@ -90,6 +90,7 @@ describe("chat() setup", () => {
       "userActive",
       "hostHello",
       "hostReport",
+      "hostAgentToken",
       "hostClaim",
       "hostSignals",
       "hostAppend",

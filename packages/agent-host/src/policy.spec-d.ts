@@ -6,7 +6,7 @@ import type { approvalFor, DEFAULT_POLICY, RemotePolicy } from "./policy.js";
 
 test("the policy has only the computer's own switches: no app setting, no vouching", () => {
   expectTypeOf<keyof RemotePolicy>().toEqualTypeOf<
-    "deviceApproval" | "answers" | "promptPresence"
+    "deviceApproval" | "answers" | "promptPresence" | "agentMode"
   >();
   expectTypeOf<RemotePolicy["deviceApproval"]>().toEqualTypeOf<"local" | "off">();
   expectTypeOf<RemotePolicy["answers"]>().toEqualTypeOf<
@@ -15,6 +15,7 @@ test("the policy has only the computer's own switches: no app setting, no vouchi
   expectTypeOf<RemotePolicy["promptPresence"]>().toEqualTypeOf<
     { readonly maxAgeHours: number } | "off" | undefined
   >();
+  expectTypeOf<RemotePolicy["agentMode"]>().toEqualTypeOf<"auto" | "ask" | undefined>();
 });
 
 test("the default asks for local device approval and presence on every answer", () => {

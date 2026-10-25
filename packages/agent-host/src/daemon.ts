@@ -20,10 +20,17 @@ import {
 import { ActionError, asId, DEV_USER_ID } from "@parlor/core";
 
 import type { AgentLauncher } from "./acp.js";
+import {
+  agentNames,
+  type AgentToolsDeps,
+  registerAgentTools,
+  unregisterAgentTools,
+} from "./agent-tools.js";
 import { type AgentProfile, detectAgents, loadProfiles } from "./agents.js";
 import { connectControl, type ControlRequest } from "./control.js";
 import { requestDevHostToken } from "./dev-host.js";
 import { type AppGrant, devHostKeys, type GrantStore, type HostKeys } from "./grants.js";
+import { learnedStore } from "./learned.js";
 import { onLines } from "./lines.js";
 import { type AppLink, createAppLink } from "./link.js";
 import { withInheritedLock } from "./lock.js";
@@ -44,6 +51,7 @@ import { compareVersions, RELEASE_KEY, signedRelease } from "./release.js";
 import { revokeGrant } from "./revoke.js";
 import { selfEntry } from "./self.js";
 import { type HostRelease, installLoginItem, installRelease } from "./service.js";
+import { agentEnvironment } from "./shell-path.js";
 import type { TrustStore } from "./trust.js";
 import { runTurn } from "./turn.js";
 
@@ -68,14 +76,25 @@ export interface DaemonDeps {
  */
 export interface HostDaemon {
   start(): Promise<void>;
-  connect(appOrigin: string): Promise<void>;
-  disconnect(appOrigin: string): Promise<void>;
+  /** What the coding agents here know the app by, when the user let them use it. */
+  connect(appOrigin: string): Promise<ConnectedTools | undefined>;
+  disconnect(appOrigin: string): Promise<ConnectedTools | undefined>;
+  /** Lets the coding agents here use the app outside its sidebar, or stops them. */
+  agentTools(appOrigin: string, on: boolean): Promise<ConnectedTools | undefined>;
   /** Hands links over to a newer release; running turns finish here first. */
   handover(): Promise<void>;
   stop(): Promise<void>;
 }
 
+/** The app's MCP server name in the coding agents here, and which of them have it. */
+export interface ConnectedTools {
+  readonly name: string;
+  readonly agents: string;
+}
+
 const CONNECT_TIMEOUT_MS = 15_000;
+/** An agent token is asked for again this long before it runs out. */
+const AGENT_TOKEN_MARGIN_MS = 60_000;
 const OFFLINE_REPORT_MS = 1_000;
 function incompatibleMessage(
   grant: AppGrant,
@@ -147,6 +166,7 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
   const platform = platformName();
   let profiles: readonly AgentProfile[] = [];
   let agents: AgentInfo[] = [];
+  const learned = learnedStore(paths.learned);
   let control: Server | undefined;
   let startup: Promise<void> = Promise.resolve();
   const clients = new Set<Socket>();
@@ -199,6 +219,16 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
           policy,
           prompter: deps.prompter,
           now: Date.now,
+          learned: (agentId, news) => {
+            void learned
+              .learn(agentId, news)
+              .then((changed) => {
+                if (!changed) return;
+                for (const linked of links.values())
+                  void report(linked).catch(() => undefined);
+              })
+              .catch(() => undefined);
+          },
           pairing: {
             secret: async () =>
               (await deps.grants.get(link.grant.appOrigin))?.pairingSecret,
@@ -256,7 +286,85 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
     if (state) logEvent("link_closed", { appOrigin: origin, reason });
   };
 
+  const toolsDeps = (): AgentToolsDeps => ({
+    profiles: profiles.filter((profile) =>
+      agents.some((agent) => agent.id === profile.id),
+    ),
+    hostCommand: join(paths.root, "bin", "parlor-host"),
+    env: agentEnvironment,
+  });
+
+  const toolsOf = (grant: AppGrant | undefined): ConnectedTools | undefined => {
+    const tools = grant?.agentTools;
+    if (!tools?.on || !tools.name || !tools.agents?.length) return undefined;
+    return {
+      name: tools.name,
+      agents: agentNames(profiles, { name: tools.name, agents: tools.agents }),
+    };
+  };
+
+  /** Registers the app with the agents here once the user chose it and it is not yet. */
+  const ensureAgentTools = async (grant: AppGrant): Promise<AppGrant> => {
+    if (!grant.agentTools?.on || grant.dev || grant.agentTools.agents) return grant;
+    const registered = await registerAgentTools(toolsDeps(), grant);
+    const next: AppGrant = { ...grant, agentTools: { on: true, ...registered } };
+    await deps.grants.save(next);
+    return next;
+  };
+
+  const removeAgentTools = async (grant: AppGrant | undefined) => {
+    const tools = grant?.agentTools;
+    if (!tools?.name || !tools.agents?.length) return;
+    await unregisterAgentTools(toolsDeps(), { name: tools.name, agents: tools.agents });
+  };
+
+  const agentTokens = new Map<
+    string,
+    { readonly token: string; readonly expiresAt: number }
+  >();
+  /** The grant as last saved, which a link opened before a change still holds the old copy of. */
+  const latest = new Map<string, AppGrant>();
+
+  deps.proxy.serveOutside((appOrigin) => {
+    const state = links.get(appOrigin);
+    if (!state || state.link.grant.dev) return undefined;
+    const grant = latest.get(appOrigin) ?? state.link.grant;
+    if (!grant.agentTools?.on || !grant.agentTools.name) return undefined;
+    return {
+      appOrigin,
+      appName: grant.appName,
+      name: grant.agentTools.name,
+      account: grant.account.email ?? grant.account.name,
+      token: async (agent) => {
+        const key = `${grant.grantId}\n${agent}`;
+        const held = agentTokens.get(key);
+        if (held && held.expiresAt - AGENT_TOKEN_MARGIN_MS > Date.now())
+          return held.token;
+        const fresh = await state.link.api.calls.call("hostAgentToken", {
+          agent: `${agent} on ${name}`.slice(0, 120),
+        });
+        agentTokens.set(key, fresh);
+        return fresh.token;
+      },
+      askHere: async (question) =>
+        (await deps.prompter.answerHere({
+          appName: grant.appName,
+          agent: "Parlor Host",
+          question,
+          choices: [
+            { id: "allow", label: "Allow" },
+            { id: "deny", label: "Don't allow" },
+          ],
+        })) === "allow",
+    };
+  });
+
   const forget = async (grant: AppGrant) => {
+    await removeAgentTools((await deps.grants.get(grant.appOrigin)) ?? grant);
+    latest.delete(grant.appOrigin);
+    for (const key of agentTokens.keys()) {
+      if (key.startsWith(`${grant.grantId}\n`)) agentTokens.delete(key);
+    }
     devTokens.delete(grant.appOrigin);
     await deps.grants.remove(grant.appOrigin);
     await deps.keys.remove(grant.appOrigin);
@@ -266,6 +374,7 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
 
   const open = (grant: AppGrant, keys: HostKeys): LinkState => {
     const origin = grant.appOrigin;
+    latest.set(origin, grant);
     let state: LinkState;
     const link = createAppLink(grant, {
       keys,
@@ -278,7 +387,14 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
       onRevoked: () => {
         if (links.get(origin) !== state) return;
         if (grant.dev) void reattach(grant);
-        else void closeLink(origin, "revoked").then(() => forget(grant));
+        else {
+          const removedFrom = toolsOf(latest.get(origin) ?? grant)?.agents;
+          void closeLink(origin, "revoked")
+            .then(() => forget(grant))
+            .then(() =>
+              deps.prompter.disconnected?.({ appName: grant.appName, removedFrom }),
+            );
+        }
       },
       onIncompatible: (refused, welcome) => {
         state.incompatible = incompatibleMessage(refused, welcome);
@@ -312,10 +428,22 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
     return { devices: pinned.map((device) => device.deviceId), presenceDue };
   };
 
+  /** The agents with what they said about themselves, and the name they use the app by outside. */
+  const describeFor = (origin: string) => {
+    const tools = latest.get(origin)?.agentTools;
+    return learned
+      .describe(agents, Date.now())
+      .map((agent) =>
+        tools?.on && tools.name && tools.agents?.includes(agent.id)
+          ? { ...agent, outsideName: tools.name }
+          : agent,
+      );
+  };
+
   const report = async (state: LinkState) => {
     const reported = state.link.api.calls.call("hostReport", {
       online: true,
-      agents,
+      agents: describeFor(state.link.grant.appOrigin),
       ...(await pinnedDevices(state)),
     });
     const timeout = new Promise<never>((_, reject) =>
@@ -412,6 +540,7 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
         await deps.proxy.listen(paths.proxy);
         profiles = await loadProfiles(paths.agents);
         agents = await detectAgents(profiles);
+        await learned.load();
         finishStartup();
       } catch (error) {
         failStartup(error);
@@ -429,23 +558,41 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
       }
     },
     async connect(appOrigin) {
-      const grant = await deps.grants.get(appOrigin);
-      if (!grant || grant.declined) {
+      const saved = await deps.grants.get(appOrigin);
+      if (!saved || saved.declined) {
         throw new Error(`This computer is not connected to ${appOrigin}.`);
       }
+      const grant = await ensureAgentTools(saved);
       const current = links.get(appOrigin);
       if (current?.link.grant.grantId === grant.grantId) {
+        latest.set(appOrigin, grant);
         await report(current);
-        return;
+        return toolsOf(grant);
       }
       await closeLink(appOrigin, "replaced");
       if (current) await deps.pool.forget(current.link.grant);
+      latest.set(appOrigin, grant);
       await report(open(grant, deps.keys));
+      return toolsOf(grant);
+    },
+    async agentTools(appOrigin, on) {
+      const saved = await deps.grants.get(appOrigin);
+      if (!saved || saved.declined || saved.dev) {
+        throw new Error(`This computer is not connected to ${appOrigin}.`);
+      }
+      if (!on) await removeAgentTools(saved);
+      const grant = await ensureAgentTools({ ...saved, agentTools: { on } });
+      if (!on) await deps.grants.save(grant);
+      latest.set(appOrigin, grant);
+      const state = links.get(appOrigin);
+      if (state) await report(state).catch(() => undefined);
+      return toolsOf(grant);
     },
     async disconnect(appOrigin) {
       const state = links.get(appOrigin);
-      const grant = state?.link.grant ?? (await deps.grants.get(appOrigin));
+      const grant = (await deps.grants.get(appOrigin)) ?? state?.link.grant;
       if (!grant) throw new Error(`This computer is not connected to ${appOrigin}.`);
+      const removed = toolsOf(grant);
       if (state) {
         await state.link.stop({ revoke: true });
       } else {
@@ -457,6 +604,7 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
       }
       await closeLink(appOrigin, "disconnected");
       await forget(grant);
+      return removed;
     },
     async handover() {
       if (handedOver) return;
@@ -474,7 +622,10 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
         await Promise.all(
           [...links.values()].map((state) =>
             Promise.race([
-              state.link.api.calls.call("hostReport", { online: false, agents }),
+              state.link.api.calls.call("hostReport", {
+                online: false,
+                agents: describeFor(state.link.grant.appOrigin),
+              }),
               new Promise((resolve) => setTimeout(resolve, OFFLINE_REPORT_MS)),
             ]).catch(() => undefined),
           ),
@@ -604,12 +755,18 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
       }
       case "confirm_local_pairing":
         return confirmPairing(request);
-      case "connect":
-        await daemon.connect(request.appOrigin);
-        return { ok: true };
-      case "disconnect":
-        await daemon.disconnect(request.appOrigin);
-        return { ok: true };
+      case "connect": {
+        const agentTools = await daemon.connect(request.appOrigin);
+        return { ok: true, ...(agentTools ? { agentTools } : {}) };
+      }
+      case "disconnect": {
+        const agentTools = await daemon.disconnect(request.appOrigin);
+        return { ok: true, ...(agentTools ? { agentTools } : {}) };
+      }
+      case "agent_tools": {
+        const agentTools = await daemon.agentTools(request.appOrigin, request.on);
+        return { ok: true, ...(agentTools ? { agentTools } : {}) };
+      }
       case "dev_attach":
         await attach(request.appOrigin, request.hostToken);
         return { ok: true };

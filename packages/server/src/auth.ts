@@ -40,6 +40,11 @@ export interface AuthProvider extends ServerPlugin {
    */
   delegate?(host: HostPrincipal, turn: TurnDelegation): Promise<Delegation>;
   /**
+   * Mints the token an agent on the host's computer carries outside any turn, such as
+   * Claude Code in a terminal: an external MCP client of the user, revoked with the grant.
+   */
+  delegateAgent?(host: HostPrincipal, agent: AgentDelegation): Promise<Delegation>;
+  /**
    * Whether the host grant still holds. Lists of computers drop a grant that answers
    * false at once, without waiting for the host to notice. Absent means every grant holds.
    */
@@ -57,6 +62,12 @@ export interface TurnDelegation {
   readonly threadId: ThreadId;
   readonly turnId: TurnId;
   readonly clientId: string;
+  readonly agent: string;
+  readonly ttlMs: number;
+}
+
+export interface AgentDelegation {
+  /** How the app names it, such as "Claude Code on Alice's MacBook". */
   readonly agent: string;
   readonly ttlMs: number;
 }
