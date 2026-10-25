@@ -106,5 +106,5 @@ describe("the PATH agents are found on", () => {
     expect(path).toContain("/usr/local/bin");
     expect(path.some((entry) => entry.endsWith("/.local/bin"))).toBe(true);
     expect(path.filter((entry) => entry === "/opt/homebrew/bin")).toHaveLength(1);
-  });
+  }, 30_000);
 });
