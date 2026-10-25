@@ -14,6 +14,12 @@ export interface ParlorSessionStorePlugin {
   set(options: { value?: string }): Promise<void>;
 }
 
+export interface ParlorAuthBrowserPlugin {
+  open(options: { url: string; callbackScheme: string }): Promise<{ url?: string }>;
+}
+
 export const ParlorDeviceKey = registerPlugin<ParlorDeviceKeyPlugin>("ParlorDeviceKey");
 export const ParlorSessionStore =
   registerPlugin<ParlorSessionStorePlugin>("ParlorSessionStore");
+export const ParlorAuthBrowser =
+  registerPlugin<ParlorAuthBrowserPlugin>("ParlorAuthBrowser");

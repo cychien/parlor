@@ -33,6 +33,7 @@ import { resolveCapability } from "@parlor/capabilities";
 | `deepLink`      | receive the links that open the app through `app.scheme`                     |
 | `sessionStore`  | keep the session token: a cookie on the web, a secure store in native shells |
 | `deviceKey`     | a signing key bound to this device                                           |
+| `authBrowser`   | run a sign-in page outside the app's webview and get the URL it returned to  |
 
 ## Files
 
@@ -54,5 +55,30 @@ if (handle.available) {
 | Web    | the browser's file chooser                   | the save dialog where the browser has one, else a download |
 | macOS  | the native open dialog, filtered by `accept` | the native save dialog                                     |
 | iPhone | the system picker: photos, camera, Files     | the share sheet, with Save to Files                        |
+
+## Auth browser
+
+```ts
+import { authBrowser, resolveCapability } from "@parlor/capabilities";
+
+const handle = await resolveCapability(authBrowser);
+if (handle.available) {
+  const returned = await handle.api.open(
+    "https://app.example.com/_parlor/auth/native/sign-in/social?provider=google",
+    "myapp://_parlor/auth/callback",
+  );
+  console.log(returned ?? "closed");
+}
+```
+
+`open(url, callbackUrl)` resolves with the URL the flow ended at, or `undefined` when the user closed it. The auth client's `social.signIn` uses it; apps rarely call it directly.
+
+| Where  | `open`                                                                                |
+| ------ | ------------------------------------------------------------------------------------- |
+| Web    | the page itself goes to `url`; it never resolves, the flow returns as a page load     |
+| macOS  | ASWebAuthenticationSession over the app's window, returning to `callbackUrl`'s scheme |
+| iPhone | ASWebAuthenticationSession, returning to `callbackUrl`'s scheme                       |
+
+It is unavailable in a native shell without it, such as Android, and in a desktop project generated before it existed.
 
 `defineCapability` defines a new one from its adapters.

@@ -1,4 +1,5 @@
 export type { PlatformAdapters } from "./adapters/types.js";
+export * from "./auth-browser/index.js";
 export {
   type CapabilityAdapter,
   type CapabilityDefinition,

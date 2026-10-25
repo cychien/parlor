@@ -1,3 +1,5 @@
+import { capacitorAuthBrowser } from "../auth-browser/capacitor.js";
+import { webAuthBrowser } from "../auth-browser/web.js";
 import { capacitorDeepLink } from "../deep-link/capacitor.js";
 import { webDeepLink } from "../deep-link/web.js";
 import { capacitorDeviceKey } from "../device-key/capacitor.js";
@@ -19,4 +21,5 @@ export const platformAdapters: PlatformAdapters = {
   deviceKey: [capacitorDeviceKey(), webDeviceKey()],
   localAgentHost: [capacitorLocalAgentHost(), webLocalAgentHost()],
   files: [capacitorFiles(), webFiles()],
+  authBrowser: [capacitorAuthBrowser(), webAuthBrowser()],
 };

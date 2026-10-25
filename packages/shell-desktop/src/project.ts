@@ -90,6 +90,7 @@ serde_json = "1"
 export const AGENT_HOST_SIDECAR = "binaries/parlor-host";
 
 const SHELL_COMMANDS = [
+  "parlor_auth_browser_open",
   "parlor_device_key_public",
   "parlor_device_key_sign",
   "parlor_session_get",
@@ -104,7 +105,8 @@ const AGENT_HOST_COMMANDS = [
 ];
 
 /**
- * Every app registers the Keychain `parlor_session_*` and `parlor_device_key_*` commands.
+ * Every app registers the Keychain `parlor_session_*` and `parlor_device_key_*` commands,
+ * and `parlor_auth_browser_open` for social sign-in.
  * With `desktop.agentHost`, `setup()` also runs the bundled `parlor-host daemon --ensure`
  * (adopt, install or upgrade the per-user service) and the `parlor_host_*` commands
  * join them. The dialog and fs plugins back the `files` capability.

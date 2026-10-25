@@ -1,3 +1,4 @@
+import { webAuthBrowser } from "../auth-browser/web.js";
 import { webDeepLink } from "../deep-link/web.js";
 import { webDeviceKey } from "../device-key/web.js";
 import { webFiles } from "../files/web.js";
@@ -13,4 +14,5 @@ export const platformAdapters: PlatformAdapters = {
   deviceKey: [webDeviceKey()],
   localAgentHost: [webLocalAgentHost()],
   files: [webFiles()],
+  authBrowser: [webAuthBrowser()],
 };
