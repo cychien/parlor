@@ -1,6 +1,5 @@
 import { betterAuthProvider, parlorAuth } from "@parlor/auth";
 import type { DatabaseHandle } from "@parlor/data";
-import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 
 import * as schema from "./schema/index.js";
@@ -12,9 +11,9 @@ export function createAuth(database: DatabaseHandle) {
     emailAndPassword: { enabled: true },
   });
   return betterAuthProvider({
-    instance: betterAuth({
+    options: {
       ...options,
       database: drizzleAdapter(database.db, { provider: "pg", schema }),
-    }),
+    },
   });
 }

@@ -20,6 +20,11 @@ export interface ListenOptions {
 }
 
 export interface DataProvider<TDb = unknown> {
+  /**
+   * Work deferred to the server's first request, such as migrations on runtimes that allow
+   * no I/O while the app loads. The server awaits it before anything else touches the data.
+   */
+  prepare?(): Promise<void>;
   read(): TDb;
   transaction<T>(run: (tx: TDb) => Promise<T>): Promise<T>;
   listen?(

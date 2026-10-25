@@ -2,7 +2,6 @@ import { betterAuthProvider } from "@parlor/auth";
 import { chat } from "@parlor/chat/server";
 import { createDatabase } from "@parlor/data";
 import { createServer } from "@parlor/server";
-import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 
 import { registry } from "./actions/index.js";
@@ -14,14 +13,14 @@ const database = await createDatabase({
   migrationsFolder: "migrations",
 });
 
-const auth = betterAuth({
-  ...authOptions,
-  database: drizzleAdapter(database.db, { provider: "pg", schema }),
-});
-
 export default createServer({
   actions: registry,
   database,
-  auth: betterAuthProvider({ instance: auth }),
+  auth: betterAuthProvider({
+    options: {
+      ...authOptions,
+      database: drizzleAdapter(database.db, { provider: "pg", schema }),
+    },
+  }),
   plugins: [chat()],
 });

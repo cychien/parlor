@@ -37,3 +37,5 @@ import { createServer } from "@parlor/server";
 ## For plugin authors
 
 `pluginRoute`, the `ServerPlugin` and `PluginHost` types, `AuthFailure`, `requireAccess` and `requireSurface` build a plugin like `chat()`. `devAuth()` is the provider `parlor dev` installs when the app has none.
+
+A plugin's `setup` runs while the app loads, where some runtimes, such as Cloudflare's, allow no I/O and no timers. Start background work, such as an interval, in the runtime's `start()`, which the server calls once when it is ready for its first request.

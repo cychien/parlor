@@ -39,6 +39,11 @@ export interface PluginRuntime {
   readonly routes?: readonly AnyPluginRoute[] | undefined;
   /** Called once per action call on every surface after it settles, whatever the outcome. */
   audit?(record: ActionAudit): void;
+  /**
+   * Starts the plugin's background work, such as timers. Called once, when the server is
+   * ready for its first request: some runtimes allow no timers while the app loads.
+   */
+  start?(): void;
   /** Runs before `close()` awaits in-flight requests, so it must end what it holds open. */
   close?(): void | Promise<void>;
 }

@@ -1,20 +1,27 @@
+import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { UI_MANIFEST_FILE } from "@parlor/agent-ui";
 import { appServerEnv, GENERATED_DIR, type LoadedConfig } from "@parlor/config";
 import { appCsp, serializeCsp, webOutDir } from "@parlor/shell-web";
+import { readMigrationFiles } from "drizzle-orm/migrator";
 import { build, copyPublicAssets, createNitro, prepare } from "nitro/builder";
 import type { NitroConfig } from "nitro/types";
 
 import {
+  cloudflareEntrySource,
+  DURABLE_SERVER_BINDING,
+  DURABLE_SERVER_CLASS,
+  durableServerSource,
   hostEntrySource,
   INDEX_HTML_PLACEHOLDER,
   UI_MANIFEST_PLACEHOLDER,
 } from "./entry.js";
-import { type DeployPreset, syncTransportFor } from "./presets.js";
+import { type DeployPreset, nitroPresetFor, syncTransportFor } from "./presets.js";
 
 export const SYNC_TRANSPORT_ENV = "PARLOR_SYNC_TRANSPORT";
+export const MIGRATIONS_PLACEHOLDER = "__PARLOR_MIGRATIONS__";
 const TRACED_DEPENDENCIES = ["@electric-sql/pglite", "pg"] as const;
 const DEFAULT_COMPATIBILITY_DATE =
   "2026-10-01" satisfies NitroConfig["compatibilityDate"];
@@ -55,17 +62,28 @@ export async function buildServer(
   );
 
   await mkdir(hostRoot, { recursive: true });
+  const serverEntry = join(rootDir, config.server.entry);
   const entryPath = join(hostRoot, "entry.mjs");
+  const cloudflare =
+    options.preset === "cloudflare-durable"
+      ? await prepareDurable({ config, rootDir }, hostRoot, serverEntry)
+      : undefined;
   await writeFile(
     entryPath,
-    hostEntrySource({ serverEntry: join(rootDir, config.server.entry), basePath }),
+    cloudflare
+      ? cloudflareEntrySource({
+          basePath,
+          locationHint: config.deploy.cloudflare?.locationHint,
+        })
+      : hostEntrySource({ serverEntry, basePath }),
   );
   await writeFile(join(hostRoot, ".gitignore"), "*\n");
 
   const nitro = await createNitro({
     rootDir: hostRoot,
-    preset: options.preset,
+    preset: nitroPresetFor(options.preset),
     serverEntry: entryPath,
+    ...(cloudflare ? { cloudflare: cloudflare.nitro } : {}),
     compatibilityDate: options.compatibilityDate ?? DEFAULT_COMPATIBILITY_DATE,
     publicAssets: [{ dir: webOutDir(rootDir), baseURL: "/", fallthrough: true }],
     routeRules: {
@@ -77,6 +95,7 @@ export async function buildServer(
       [INDEX_HTML_PLACEHOLDER]: JSON.stringify(indexHtml),
       [UI_MANIFEST_PLACEHOLDER]: uiManifest,
       [`process.env.${SYNC_TRANSPORT_ENV}`]: JSON.stringify(syncTransport),
+      ...(cloudflare ? { [MIGRATIONS_PLACEHOLDER]: cloudflare.migrations } : {}),
       ...Object.fromEntries(
         Object.entries(appServerEnv(config)).map(([name, value]) => [
           `process.env.${name}`,
@@ -95,5 +114,86 @@ export async function buildServer(
     outputDir: nitro.options.output.dir,
     preset: options.preset,
     syncTransport,
+  };
+}
+
+type CloudflareOptions = NonNullable<NitroConfig["cloudflare"]>;
+type WranglerConfig = NonNullable<CloudflareOptions["wrangler"]>;
+
+interface DurableBuild {
+  readonly nitro: CloudflareOptions;
+  readonly migrations: string;
+}
+
+/** `app.id` is reverse-DNS lowercase alphanumerics, so only its dots need replacing. */
+function workerName(appId: string): string {
+  return appId.replaceAll(".", "-").slice(0, 63);
+}
+
+function embeddedMigrations(rootDir: string, folder: string): string {
+  const absolute = join(rootDir, folder);
+  if (!existsSync(join(absolute, "meta", "_journal.json"))) return "undefined";
+  return JSON.stringify({ [folder]: readMigrationFiles({ migrationsFolder: absolute }) });
+}
+
+/** The bundler's view: a node_modules lookup from the project, never NODE_PATH. */
+function installed(rootDir: string, name: string): boolean {
+  for (let dir = rootDir; ; dir = dirname(dir)) {
+    if (existsSync(join(dir, "node_modules", name, "package.json"))) return true;
+    if (dirname(dir) === dir) return false;
+  }
+}
+
+/**
+ * Wrangler applies Durable Object migrations as an append-only log, after the last tag a
+ * deployment applied. An app with its own migrations lists ours where it first deployed.
+ */
+export function withServerMigration(
+  migrations: NonNullable<WranglerConfig["migrations"]>,
+): NonNullable<WranglerConfig["migrations"]> {
+  const declared = migrations.some((migration) =>
+    [migration.new_classes, migration.new_sqlite_classes].some((classes) =>
+      classes?.includes(DURABLE_SERVER_CLASS),
+    ),
+  );
+  if (declared) return migrations;
+  return [
+    ...migrations,
+    { tag: "parlor-server-v1", new_sqlite_classes: [DURABLE_SERVER_CLASS] },
+  ];
+}
+
+async function prepareDurable(
+  { config, rootDir }: Pick<LoadedConfig, "config" | "rootDir">,
+  hostRoot: string,
+  serverEntry: string,
+): Promise<DurableBuild> {
+  const exportsPath = join(hostRoot, "exports.cloudflare.mjs");
+  await writeFile(
+    exportsPath,
+    durableServerSource({
+      serverEntry,
+      connectionScopes: installed(rootDir, "@parlor/data"),
+    }),
+  );
+  const own = (config.deploy.cloudflare?.wrangler ?? {}) as WranglerConfig;
+  return {
+    migrations: embeddedMigrations(rootDir, config.database.migrations),
+    nitro: {
+      exports: exportsPath,
+      deployConfig: true,
+      nodeCompat: true,
+      wrangler: {
+        name: workerName(config.app.id),
+        ...own,
+        durable_objects: {
+          bindings: [
+            { name: DURABLE_SERVER_BINDING, class_name: DURABLE_SERVER_CLASS },
+            ...(own.durable_objects?.bindings ?? []),
+          ],
+        },
+        migrations: withServerMigration(own.migrations ?? []),
+      },
+    },
   };
 }

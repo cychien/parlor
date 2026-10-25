@@ -33,6 +33,7 @@
     "@parlor/agent-ui": "workspace:*",
     "@parlor/config": "workspace:*",
     "@parlor/shell-web": "workspace:*",
+    "drizzle-orm": "^0.45.4",
     "nitro": "3.0.260903-beta"
   },
   "devDependencies": {
@@ -41,6 +42,7 @@
     "@parlor/server": "workspace:*",
     "@types/node": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "wrangler": "^4.152.0"
   }
 }

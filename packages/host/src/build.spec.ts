@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -8,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { parseConfig } from "@parlor/config";
 import { describe, expect, it } from "vitest";
 
-import { buildServer } from "./build.js";
+import { buildServer, withServerMigration } from "./build.js";
 import { hostEntrySource } from "./entry.js";
 
 describe("hostEntrySource", () => {
@@ -301,4 +302,143 @@ describe("built node-server shutdown", () => {
     },
     120_000,
   );
+});
+
+const require = createRequire(import.meta.url);
+
+function wranglerBin(): string {
+  const manifest = require.resolve("wrangler/package.json");
+  const { bin } = require(manifest) as { bin: { wrangler: string } };
+  return join(dirname(manifest), bin.wrangler);
+}
+
+describe("buildServer for cloudflare-durable", () => {
+  it("serves documents from the Worker and runs the app in one Durable Object", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "parlor-host-cf-"));
+    await writeFile(
+      join(rootDir, "server.ts"),
+      [
+        "await Promise.resolve();",
+        "let served = 0;",
+        "let ui: (() => unknown) | undefined;",
+        "declare const __PARLOR_MIGRATIONS__: Record<string, unknown[]> | undefined;",
+        "const migrations = typeof __PARLOR_MIGRATIONS__ === 'undefined' ? null : Object.fromEntries(Object.entries(__PARLOR_MIGRATIONS__).map(([folder, list]) => [folder, list.length]));",
+        "export default {",
+        "  installUiManifest: (source: () => unknown) => { ui = source; },",
+        "  fetch: (request: Request) => Response.json({ path: new URL(request.url).pathname, served: ++served, ui: ui?.() ?? null, migrations, transport: process.env.PARLOR_SYNC_TRANSPORT ?? null }),",
+        "};",
+      ].join("\n"),
+    );
+    await mkdir(join(rootDir, "migrations", "meta"), { recursive: true });
+    await writeFile(
+      join(rootDir, "migrations", "0000_init.sql"),
+      "create table t (n int);",
+    );
+    await writeFile(
+      join(rootDir, "migrations", "meta", "_journal.json"),
+      JSON.stringify({
+        version: "7",
+        dialect: "postgresql",
+        entries: [{ idx: 0, version: "7", when: 1, tag: "0000_init", breakpoints: true }],
+      }),
+    );
+    await mkdir(join(rootDir, ".parlor", "web", "assets"), { recursive: true });
+    await writeFile(
+      join(rootDir, ".parlor", "web", "index.html"),
+      "<!doctype html><title>spa</title>",
+    );
+    await writeFile(join(rootDir, ".parlor", "web", "assets", "a.js"), "console.log(1)");
+    await writeFile(
+      join(rootDir, ".parlor", "ui-manifest.json"),
+      JSON.stringify({ protocol: 1, routes: [{ path: "/settings" }] }),
+    );
+    const config = parseConfig({ app: { id: "dev.parlor.hostcf", name: "Host" } });
+
+    const result = await buildServer(
+      { config, rootDir, configFile: "parlor.config.ts" },
+      { preset: "cloudflare-durable" },
+    );
+    expect(result.syncTransport).toBe("sse");
+    const wrangler = JSON.parse(
+      await readFile(join(result.outputDir, "server", "wrangler.json"), "utf8"),
+    );
+    expect(wrangler.name).toBe("dev-parlor-hostcf");
+    expect(wrangler.durable_objects.bindings).toEqual([
+      { name: "PARLOR_SERVER", class_name: "ParlorServer" },
+    ]);
+    expect(wrangler.migrations).toEqual([
+      { tag: "parlor-server-v1", new_sqlite_classes: ["ParlorServer"] },
+    ]);
+
+    const port = await freePort();
+    const child = spawn(
+      process.execPath,
+      [
+        wranglerBin(),
+        "dev",
+        "--config",
+        join(result.outputDir, "server", "wrangler.json"),
+        "--port",
+        String(port),
+        "--ip",
+        "127.0.0.1",
+      ],
+      {
+        env: { ...process.env, CI: "1", WRANGLER_SEND_METRICS: "false" },
+        stdio: "ignore",
+      },
+    );
+    try {
+      const api = async (path: string) => {
+        for (let i = 0; i < 200; i++) {
+          try {
+            const response = await fetch(`http://127.0.0.1:${port}${path}`);
+            if (response.ok) return (await response.json()) as Record<string, unknown>;
+          } catch {}
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        throw new Error("wrangler dev did not start");
+      };
+      await expect(api("/_parlor/ping")).resolves.toEqual({
+        path: "/_parlor/ping",
+        served: 1,
+        ui: { protocol: 1, routes: [{ path: "/settings" }] },
+        migrations: { migrations: 1 },
+        transport: "sse",
+      });
+      const objects = await fetch(
+        `http://127.0.0.1:${port}/cdn-cgi/local/explorer/api/workers/durable_objects/namespaces/dev-parlor-hostcf-ParlorServer/objects`,
+      );
+      await expect(objects.json()).resolves.toMatchObject({ result: [{ name: "app" }] });
+      await expect(api("/webhooks/pay")).resolves.toMatchObject({ served: 2 });
+      const asset = await fetch(`http://127.0.0.1:${port}/assets/a.js`);
+      await expect(asset.text()).resolves.toBe("console.log(1)");
+      const page = await fetch(`http://127.0.0.1:${port}/tasks/42`, {
+        headers: { accept: "text/html" },
+      });
+      expect(page.headers.get("content-type")).toContain("text/html");
+      await expect(page.text()).resolves.toContain("<title>spa</title>");
+      await expect(api("/_parlor/ping")).resolves.toMatchObject({ served: 3 });
+    } finally {
+      child.kill();
+    }
+  }, 180_000);
+});
+
+describe("withServerMigration", () => {
+  const server = { tag: "parlor-server-v1", new_sqlite_classes: ["ParlorServer"] };
+  const fridge = { tag: "v1_fridge", new_sqlite_classes: ["Fridge"] };
+
+  it("adds the server's migration to an app with none", () => {
+    expect(withServerMigration([])).toEqual([server]);
+  });
+
+  it("appends it after the app's own, never before a tag a deployment already applied", () => {
+    expect(withServerMigration([fridge])).toEqual([fridge, server]);
+  });
+
+  it("keeps the app's order once the app lists it", () => {
+    const later = { tag: "v2_cache", new_sqlite_classes: ["Cache"] };
+    expect(withServerMigration([fridge, server, later])).toEqual([fridge, server, later]);
+  });
 });
