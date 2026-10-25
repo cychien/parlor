@@ -57,7 +57,8 @@ export interface SyncClientOptions {
   readonly onResume?: (() => void) | undefined;
   /**
    * The server refused the credential (401 or 403). The client never degrades to polling
-   * on it; it keeps retrying the negotiation with backoff. Defaults to `onError`.
+   * on it; it keeps retrying the negotiation with backoff, unless this calls `stop`.
+   * Defaults to `onError`.
    */
   readonly onUnauthorized?: ((error: SyncUnauthorized) => void) | undefined;
 }

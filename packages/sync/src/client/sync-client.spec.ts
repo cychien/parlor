@@ -363,6 +363,48 @@ describe("createSyncClient refused credentials", () => {
   });
 });
 
+describe("createSyncClient stopped on a refusal", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it.each(["sse", "poll"] as const)(
+    "asks nothing more once onUnauthorized stops it (%s), and resumes on start",
+    async (transport) => {
+      let refused = transport === "sse";
+      const request = vi.fn(async (path: string) => {
+        if (refused) return new Response(null, { status: 401 });
+        if (path.endsWith("/sync/token"))
+          return Response.json({
+            protocol: 1,
+            transport,
+            endpoint: "",
+            pollIntervalMs: 100,
+          });
+        return Response.json({ events: [], cursor: "" });
+      });
+      const client = createSyncClient({
+        request,
+        onEvents: vi.fn(),
+        onUnauthorized: () => client.stop(),
+        reconnectBaseMs: 100,
+      });
+      client.start();
+      await vi.advanceTimersByTimeAsync(150);
+      refused = true;
+      await vi.advanceTimersByTimeAsync(150);
+      const asked = request.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(request.mock.calls.length).toBe(asked);
+
+      refused = false;
+      client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request.mock.calls[asked]?.[0]).toBe("/_parlor/sync/token");
+      client.stop();
+    },
+  );
+});
+
 describe("createSyncClient channels", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
