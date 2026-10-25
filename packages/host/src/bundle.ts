@@ -8,6 +8,8 @@ type ChunkTest = RegExp | ((id: string) => boolean | null | undefined);
 
 interface ChunkGroup {
   test?: ChunkTest;
+  name?: unknown;
+  debugName?: string;
 }
 
 const JSON_MODULE = /\.json(?:\?|$)/;
@@ -35,6 +37,16 @@ export function keepJsonOutOfChunkGroups(config: BundleConfig): void {
   for (const group of chunkGroups(config)) {
     const { test } = group;
     group.test = (id) => !JSON_MODULE.test(id) && matches(test, id);
+  }
+}
+
+/**
+ * Rolldown warns on every build that a chunk group named by a function has no label for its
+ * timing report, and Nitro names its library group that way.
+ */
+export function labelChunkGroups(config: BundleConfig): void {
+  for (const group of chunkGroups(config)) {
+    if (typeof group.name === "function") group.debugName ??= "libs";
   }
 }
 

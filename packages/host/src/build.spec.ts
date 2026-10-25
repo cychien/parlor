@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import { ConfigError, parseConfig } from "@parlor/config";
 import { buildRender } from "@parlor/shell-web";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { buildServer, devWranglerConfig, withServerMigration } from "./build.js";
 import { hostEntrySource } from "./entry.js";
@@ -182,6 +182,33 @@ describe("buildServer app name", () => {
     } finally {
       child.kill();
     }
+  }, 120_000);
+});
+
+describe("buildServer warnings", () => {
+  it("labels Nitro's library chunk group, so rolldown does not warn about it", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "parlor-host-warnings-"));
+    await writeFile(
+      join(rootDir, "server.ts"),
+      "export default { fetch: () => new Response() };",
+    );
+    const config = parseConfig({ app: { id: "dev.parlor.host", name: "Host" } });
+    const printed: unknown[] = [];
+    const record = (...args: unknown[]) => void printed.push(...args);
+    const log = vi.spyOn(console, "log").mockImplementation(record);
+    const warn = vi.spyOn(console, "warn").mockImplementation(record);
+    try {
+      await buildServer(
+        { config, rootDir, configFile: "parlor.config.ts" },
+        { preset: "node-server" },
+      );
+    } finally {
+      log.mockRestore();
+      warn.mockRestore();
+    }
+    expect(printed.map(String).join("\n")).not.toContain(
+      "MISSING_CODE_SPLITTING_GROUP_DEBUG_NAME",
+    );
   }, 120_000);
 });
 

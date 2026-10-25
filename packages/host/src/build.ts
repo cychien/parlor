@@ -15,7 +15,11 @@ import { readMigrationFiles } from "drizzle-orm/migrator";
 import { build, copyPublicAssets, createNitro, prepare } from "nitro/builder";
 import type { NitroConfig } from "nitro/types";
 
-import { importRequiredBuiltins, keepJsonOutOfChunkGroups } from "./bundle.js";
+import {
+  importRequiredBuiltins,
+  keepJsonOutOfChunkGroups,
+  labelChunkGroups,
+} from "./bundle.js";
 import {
   cloudflareEntrySource,
   DURABLE_SERVER_BINDING,
@@ -159,6 +163,7 @@ export async function buildServer(
     hooks: {
       "rollup:before": (nitroBuild, bundle) => {
         keepJsonOutOfChunkGroups(bundle);
+        labelChunkGroups(bundle);
         if (runsOnWorkerd(options.preset)) importRequiredBuiltins(nitroBuild, bundle);
       },
     },
