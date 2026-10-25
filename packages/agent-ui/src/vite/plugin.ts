@@ -1,11 +1,14 @@
 import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
+  type AliasOptions,
+  build as viteBuild,
   isRunnableDevEnvironment,
   type Logger,
   type Plugin,
+  type Rolldown,
   runnerImport,
   type ViteDevServer,
 } from "vite";
@@ -47,6 +50,46 @@ function withoutStyles(): Plugin {
     resolveId: (source) => (STYLE_IMPORT.test(source) ? EMPTY_STYLE : undefined),
     load: (id) => (id === EMPTY_STYLE ? "export default {};" : undefined),
   };
+}
+
+/**
+ * Imports the route tree as one tree-shaken bundle of it and its dependencies, so Node loads
+ * one module instead of every file of every library the routes import.
+ */
+async function importBundled(
+  entry: string,
+  root: string,
+  alias: AliasOptions,
+  outDir: string,
+): Promise<unknown> {
+  const built = (await viteBuild({
+    root,
+    configFile: false,
+    logLevel: "silent",
+    publicDir: false,
+    resolve: { alias },
+    plugins: [withoutStyles()],
+    ssr: { noExternal: true },
+    build: {
+      ssr: entry,
+      write: false,
+      minify: false,
+      copyPublicDir: false,
+      rolldownOptions: { output: { codeSplitting: false } },
+    },
+  })) as Rolldown.RolldownOutput;
+  const chunk = built.output.find(
+    (output): output is Rolldown.OutputChunk => output.type === "chunk" && output.isEntry,
+  );
+  if (!chunk) throw new Error(`Bundling ${entry} produced no entry chunk.`);
+  await mkdir(outDir, { recursive: true });
+  const file = join(outDir, `route-tree.${process.pid}.${Date.now()}.mjs`);
+  await writeFile(file, chunk.code);
+  try {
+    return await import(pathToFileURL(file).href);
+  } finally {
+    await rm(file, { force: true });
+  }
 }
 
 const STACK_FILE = /(?:\(|at )((?:file:\/\/)?\/[^\s()]+?):\d+:\d+\)?$/;
@@ -174,18 +217,23 @@ export function agentManifest(options: AgentManifestOptions): Plugin<AgentManife
     },
     async buildStart() {
       if (this.environment.mode !== "build" || this.environment.name !== "client") return;
-      const loaded = await loadRouteTree(
-        async (entry) =>
-          (
+      const { alias } = this.environment.config.resolve;
+      const loaded = await loadRouteTree(async (entry) => {
+        try {
+          return await importBundled(entry, root, alias, dirname(outFile()));
+        } catch {
+          // The runner loads module by module, so its failure names the module that threw.
+          return (
             await runnerImport(entry, {
               root,
               configFile: false,
               logLevel: "error",
-              resolve: { alias: this.environment.config.resolve.alias },
+              resolve: { alias },
               plugins: [withoutStyles()],
             })
-          ).module,
-      );
+          ).module;
+        }
+      });
       if (!loaded.ok) {
         logger?.warn(
           `[parlor] Building without the agent UI manifest: ${loaded.failure}. Keep browser-only code out of the top level of route modules.`,

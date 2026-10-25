@@ -142,6 +142,42 @@ describe("agentManifest", () => {
     expect((await manifestOf(root)).routes).toHaveLength(3);
   }, 30_000);
 
+  it("loads only the library modules the routes use when building", async () => {
+    const root = await fixture("Settings.");
+    const library = join(root, "node_modules", "icon-library");
+    await mkdir(library, { recursive: true });
+    await writeFile(
+      join(library, "package.json"),
+      '{ "name": "icon-library", "type": "module", "sideEffects": false, "exports": "./index.js" }',
+    );
+    await writeFile(
+      join(library, "index.js"),
+      'export { home } from "./home.js";\nexport { gear } from "./gear.js";\n',
+    );
+    await writeFile(join(library, "home.js"), 'export const home = "home";\n');
+    await writeFile(
+      join(library, "gear.js"),
+      'throw new Error("gear.js was loaded");\nexport const gear = "gear";\n',
+    );
+    await writeFile(
+      join(root, "src", "routeTree.gen.ts"),
+      `import { home } from "icon-library";\nObject.assign(globalThis, { homeIcon: home });\n${routeTree("Settings.")}`,
+    );
+    const warn = vi.fn();
+    await build({
+      root,
+      configFile: false,
+      logLevel: "silent",
+      customLogger: loggerWith(warn),
+      plugins: [agentManifest({ app })],
+      build: { outDir: join(root, "dist"), write: false },
+    });
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("Building without the agent UI manifest"),
+    );
+    expect((await manifestOf(root)).routes).toHaveLength(3);
+  }, 30_000);
+
   it("fails the build when two different views share a name", async () => {
     const root = await fixture("Settings.", true);
     await expect(
