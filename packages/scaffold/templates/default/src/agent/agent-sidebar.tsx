@@ -131,8 +131,15 @@ function Note({
 }
 
 function Computers() {
-  const { agents, agent, choose, connect, hosts, status } = useChat();
+  const { agents, agent, choose, connect, hosts, status, unavailable } = useChat();
   if (status === "loading") return null;
+  if (unavailable?.reason === "forbidden") {
+    return (
+      <Note title="The agent is not available to you">
+        <p>This app does not let your account use it.</p>
+      </Note>
+    );
+  }
   if (status === "unavailable") {
     return (
       <Note title="The agent is not available here">

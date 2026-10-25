@@ -36,6 +36,7 @@ export type {
 } from "./model.js";
 export {
   CHAT_CHANNEL,
+  CHAT_PLUGIN,
   type ChatFrame,
   HOST_PROTOCOL,
   type HostFrame,

@@ -48,6 +48,8 @@ export interface ActionRunnerOptions<T extends ActionMap> {
     | undefined;
   readonly confirm?: Confirm | undefined;
   readonly audit?: ((record: ActionAudit) => void) | undefined;
+  /** Throws for a caller the surface admits but the actions' owner does not; audited like any refusal. */
+  readonly admit?: ((caller: Caller) => Promise<void>) | undefined;
   /** Awaited before every call, so it must memoize; defaults to creating the sync tables. */
   readonly ready?: (() => Promise<void>) | undefined;
 }
@@ -141,7 +143,7 @@ const INTERNAL_CALLER: Caller = {
 export function createActionRunner<T extends ActionMap>(
   options: ActionRunnerOptions<T>,
 ): ActionRunner {
-  const { actions, scope, database, sync, onClient, confirm, audit } = options;
+  const { actions, scope, database, sync, onClient, confirm, audit, admit } = options;
   const callers = options.callers ?? createCallerResolver(undefined, scope);
   const pruner = sync && database ? createPruner(database) : undefined;
   let prepared: Promise<void> | undefined;
@@ -165,6 +167,7 @@ export function createActionRunner<T extends ActionMap>(
     trace: Trace,
   ): Promise<InvokeResult> => {
     if (runOptions.surface) requireSurface(caller, runOptions.surface, callers.enforcing);
+    await admit?.(caller);
     const client = caller.clientId;
     onClient?.(client, caller.audience);
     const signal = runOptions.signal ?? request?.signal;
