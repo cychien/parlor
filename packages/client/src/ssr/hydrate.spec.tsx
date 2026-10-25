@@ -79,6 +79,7 @@ describe("mount", () => {
     expect(queryClient.getQueryData(key)).toEqual({ id: "7", title: "Task 7" });
     const hash = queryClient.getQueryCache().find({ queryKey: key })!.queryHash;
     expect(readTagsOf(queryClient).tagsFor(hash)).toEqual([["tasks", "7"]]);
+    expect(readTagsOf(queryClient).position()).toBe("41.e");
   });
 
   it("keeps the server's data however long the page took to arrive, without asking again", async () => {

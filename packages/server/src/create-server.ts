@@ -413,8 +413,9 @@ export function createServer<T extends ActionMap>(
       });
       const result = await runner.run(name, input, event.req, sourceOf(event.req), {
         surface: "actions",
+        cursor: true,
       });
-      return { data: result.data, tags: result.reads };
+      return { data: result.data, tags: result.reads, cursor: result.cursor };
     } catch (error) {
       return errorBody(event, error);
     }
@@ -450,9 +451,9 @@ export function createServer<T extends ActionMap>(
             input,
             event.req,
             sourceOf(event.req),
-            { surface: "pluginActions" },
+            { surface: "pluginActions", cursor: true },
           );
-          return { data: result.data, tags: result.reads };
+          return { data: result.data, tags: result.reads, cursor: result.cursor };
         } catch (error) {
           return errorBody(event, error);
         }

@@ -7,6 +7,7 @@ export {
   type Surface,
 } from "./access.js";
 export {
+  type ActionRun,
   type ActionRunner,
   type Confirm,
   createActionRunner,

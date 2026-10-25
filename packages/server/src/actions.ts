@@ -6,6 +6,7 @@ import {
   ANONYMOUS,
   type ActionSource,
   type DataProvider,
+  isMutating,
   type Principal,
 } from "@parlor/core";
 import {
@@ -14,9 +15,11 @@ import {
   type InvokeResult,
   type PreparedCall,
 } from "@parlor/core/registry";
+import { encodeCursor } from "@parlor/sync";
 import {
   createPruner,
   ensureSyncTables,
+  readSyncCursor,
   recordSyncEvent,
   type SyncDatabase,
 } from "@parlor/sync/server";
@@ -59,6 +62,13 @@ export interface RunOptions {
   readonly origin?: AgentOrigin | undefined;
   /** Refuses callers the surface does not admit, inside the call so the refusal is audited. */
   readonly surface?: Surface | undefined;
+  /** Also answer the sync cursor a read's result reflects, for a client that keeps it fresh. */
+  readonly cursor?: boolean | undefined;
+}
+
+export interface ActionRun extends InvokeResult {
+  /** Set for a read with `cursor`: every sync event of the caller's streams up to it is in `data`. */
+  readonly cursor?: string | undefined;
 }
 
 export interface ActionRunner {
@@ -68,7 +78,7 @@ export interface ActionRunner {
     request: Request | undefined,
     source: ActionSource,
     options?: RunOptions,
-  ): Promise<InvokeResult>;
+  ): Promise<ActionRun>;
   ready(): Promise<void>;
 }
 
@@ -157,6 +167,17 @@ export function createActionRunner<T extends ActionMap>(
       return prepared;
     });
 
+  const cursorBefore = async (
+    name: string,
+    caller: Caller,
+  ): Promise<string | undefined> => {
+    const action = actions.get(name);
+    if (!sync || !database || !action?.reads || isMutating(action)) return undefined;
+    const streams =
+      caller.audience === caller.scope ? [caller.scope] : [caller.scope, caller.audience];
+    return encodeCursor(await readSyncCursor(database.read() as SyncDatabase, streams));
+  };
+
   const invoke = async (
     name: string,
     input: unknown,
@@ -165,13 +186,14 @@ export function createActionRunner<T extends ActionMap>(
     source: ActionSource,
     runOptions: RunOptions,
     trace: Trace,
-  ): Promise<InvokeResult> => {
+  ): Promise<ActionRun> => {
     if (runOptions.surface) requireSurface(caller, runOptions.surface, callers.enforcing);
     await admit?.(caller);
     const client = caller.clientId;
     onClient?.(client, caller.audience);
     const signal = runOptions.signal ?? request?.signal;
     const resolvedScope = caller.scope;
+    const cursor = runOptions.cursor ? await cursorBefore(name, caller) : undefined;
     const result = await invokeAction(
       actions,
       name,
@@ -209,7 +231,7 @@ export function createActionRunner<T extends ActionMap>(
       },
     );
     if (result.writes.length > 0) pruner?.touch();
-    return result;
+    return cursor === undefined ? result : { ...result, cursor };
   };
 
   return {

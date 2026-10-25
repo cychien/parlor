@@ -1,4 +1,3 @@
-import type { Tag } from "@parlor/core";
 import {
   type DehydratedState,
   dehydrate,
@@ -15,7 +14,7 @@ import {
 
 import type { ActionClient } from "../action-client.js";
 import type { ActionQueryContext } from "../react/action-query.js";
-import { readTagsOf } from "../react/sync.js";
+import { type ReadEntry, readTagsOf } from "../react/sync.js";
 import type { RegisteredActions } from "../register.js";
 
 /** The router context Parlor's loaders read: `createRootRouteWithContext<ParlorRouterContext>()`. */
@@ -65,7 +64,7 @@ const QUERY_CACHE = "parlorQueryCache";
 
 interface DehydratedQueryCache {
   readonly state: DehydratedState;
-  readonly readTags: readonly (readonly [string, readonly Tag[]])[];
+  readonly readTags: readonly ReadEntry[];
 }
 
 function dehydrateQueryCache(queryClient: QueryClient): DehydratedQueryCache {
@@ -77,7 +76,7 @@ function hydrateQueryCache(queryClient: QueryClient, cache: unknown): void {
   const { state, readTags } = cache as DehydratedQueryCache;
   hydrate(queryClient, state);
   const registry = readTagsOf(queryClient);
-  for (const [hash, tags] of readTags) registry.record(hash, tags);
+  for (const [hash, tags, cursor] of readTags) registry.record(hash, tags, cursor);
 }
 
 /**

@@ -37,6 +37,8 @@ export interface CallOptions {
 export interface ActionEnvelope<T> {
   readonly data: T;
   readonly tags: readonly Tag[];
+  /** The sync cursor a read's data reflects, when the server tracks it. */
+  readonly cursor?: string | undefined;
 }
 
 export interface ActionClient<T extends ActionMap> {
@@ -98,8 +100,16 @@ export async function invokeAt<T extends ActionMap, K extends keyof T & string>(
       options.missingIsNotFound ? { missingIsNotFound: true } : {},
     );
   }
-  const body = (await response.json()) as { data: ActionOutput<T[K]>; tags?: Tag[] };
-  return { data: body.data, tags: body.tags ?? [] };
+  const body = (await response.json()) as {
+    data: ActionOutput<T[K]>;
+    tags?: Tag[];
+    cursor?: string;
+  };
+  return {
+    data: body.data,
+    tags: body.tags ?? [],
+    ...(typeof body.cursor === "string" ? { cursor: body.cursor } : {}),
+  };
 }
 
 export function resolveServerOrigin(): string {

@@ -14,6 +14,7 @@ export {
   parseNotifyPayload,
   PRUNE_LOCK_KEY,
   pruneSyncEvents,
+  readSyncCursor,
   readSyncEvents,
   recordSyncEvent,
   type RecordSyncEventInput,
