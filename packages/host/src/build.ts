@@ -15,6 +15,7 @@ import { readMigrationFiles } from "drizzle-orm/migrator";
 import { build, copyPublicAssets, createNitro, prepare } from "nitro/builder";
 import type { NitroConfig } from "nitro/types";
 
+import { importRequiredBuiltins, keepJsonOutOfChunkGroups } from "./bundle.js";
 import {
   cloudflareEntrySource,
   DURABLE_SERVER_BINDING,
@@ -27,7 +28,12 @@ import {
   type RenderEntryOptions,
   UI_MANIFEST_PLACEHOLDER,
 } from "./entry.js";
-import { type DeployPreset, nitroPresetFor, syncTransportFor } from "./presets.js";
+import {
+  type DeployPreset,
+  nitroPresetFor,
+  runsOnWorkerd,
+  syncTransportFor,
+} from "./presets.js";
 
 export const SYNC_TRANSPORT_ENV = "PARLOR_SYNC_TRANSPORT";
 export const MIGRATIONS_PLACEHOLDER = "__PARLOR_MIGRATIONS__";
@@ -150,6 +156,12 @@ export async function buildServer(
       ignoredAssets,
     ),
     traceDeps: [...TRACED_DEPENDENCIES],
+    hooks: {
+      "rollup:before": (nitroBuild, bundle) => {
+        keepJsonOutOfChunkGroups(bundle);
+        if (runsOnWorkerd(options.preset)) importRequiredBuiltins(nitroBuild, bundle);
+      },
+    },
     replace: {
       [INDEX_HTML_PLACEHOLDER]: JSON.stringify(indexHtml),
       [UI_MANIFEST_PLACEHOLDER]: manifest ? JSON.stringify(manifest) : "undefined",

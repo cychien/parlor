@@ -16,6 +16,11 @@ const LONG_LIVED: ReadonlySet<DeployPreset> = new Set([
   "cloudflare-durable",
 ]);
 
+const ON_WORKERD: ReadonlySet<DeployPreset> = new Set([
+  "cloudflare-module",
+  "cloudflare-durable",
+]);
+
 const CI_PRESETS: ReadonlyArray<readonly [string, DeployPreset]> = [
   ["VERCEL", "vercel"],
   ["NETLIFY", "netlify"],
@@ -78,4 +83,9 @@ const RENDER_CONDITIONS: Partial<Record<DeployPreset, readonly string[]>> = {
 /** Export conditions of the runtime that renders pages, for the server render build. */
 export function renderConditionsFor(preset: DeployPreset): readonly string[] {
   return RENDER_CONDITIONS[preset] ?? ["node"];
+}
+
+/** The presets whose server runs on Cloudflare's workerd. */
+export function runsOnWorkerd(preset: DeployPreset): boolean {
+  return ON_WORKERD.has(preset);
 }
