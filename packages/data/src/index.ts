@@ -2,6 +2,7 @@ export { type ConnectionScope, createConnectionScope } from "./connection-scope.
 export {
   createDatabase,
   type Database,
+  type DatabaseClient,
   type DatabaseHandle,
   type DatabaseOptions,
   DEFAULT_PGLITE_DIR,

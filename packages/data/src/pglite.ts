@@ -19,6 +19,7 @@ export async function pgliteHandle(dataDir: string): Promise<DatabaseHandle> {
   const db = drizzle(client);
   return {
     db,
+    client: { query: (text, params) => client.query(text, params) },
     driver: "pglite",
     read: () => db,
     transaction: (run) => db.transaction((tx) => run(tx)),
