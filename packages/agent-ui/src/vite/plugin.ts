@@ -178,6 +178,7 @@ export function agentManifest(options: AgentManifestOptions): Plugin<AgentManife
               root,
               configFile: false,
               logLevel: "error",
+              resolve: { alias: this.environment.config.resolve.alias },
               plugins: [withoutStyles()],
             })
           ).module,
