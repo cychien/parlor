@@ -5,6 +5,8 @@ description: File-based routes, and the hooks that call actions from React.
 
 The web app is one React app with TanStack Router file routes. Every file in `src/routes/` is a page; `src/routes/__root.tsx` is the shell around them. `parlor dev`, `parlor build` and `parlor typegen` regenerate `src/routeTree.gen.ts` from that folder, so routes stay typed. Commit the generated file.
 
+`parlor build` puts each page's components in a chunk of their own, so the first load carries only the pages it shows; the rest load when a link to them is hovered or followed.
+
 ## Type the actions once
 
 `src/parlor.d.ts` tells the client which actions exist, so hook names and inputs are checked:

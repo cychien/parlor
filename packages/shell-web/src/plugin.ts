@@ -83,7 +83,9 @@ export function webManifest(config: ParlorConfig) {
 
 function fileRoutes(config: ParlorConfig, root: string): PluginOption[] {
   if (!existsSync(resolve(root, routesDirectory(config)))) return [];
-  return [tanstackRouter(routeGeneratorOptions(config, root))];
+  return [
+    tanstackRouter({ ...routeGeneratorOptions(config, root), autoCodeSplitting: true }),
+  ];
 }
 
 function titlePlugin(config: ParlorConfig): PluginOption {

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -163,6 +163,58 @@ describe("file routes", () => {
     const tree = await readFile(join(root, "src", "routeTree.gen.ts"), "utf8");
     expect(tree).toContain('path: "/settings"');
   });
+
+  it("builds each route's component into a chunk of its own, loaded when the route is", async () => {
+    const root = await mkdtemp(join(tmpdir(), "parlor-routes-"));
+    await mkdir(join(root, "src", "routes"), { recursive: true });
+    await writeFile(
+      join(root, "index.html"),
+      '<!doctype html><html><head><title>t</title></head><body><script type="module" src="/src/main.ts"></script></body></html>',
+    );
+    await writeFile(
+      join(root, "src", "main.ts"),
+      'import { routeTree } from "./routeTree.gen";\nconsole.log(routeTree);\n',
+    );
+    await writeFile(
+      join(root, "src", "routes", "__root.tsx"),
+      'import { createRootRoute } from "@tanstack/react-router";\nexport const Route = createRootRoute({});\n',
+    );
+    await writeFile(
+      join(root, "src", "routes", "settings.tsx"),
+      [
+        'import { createFileRoute } from "@tanstack/react-router";',
+        'export const Route = createFileRoute("/settings")({ component: Settings });',
+        'function Settings() { return "the settings page"; }',
+        "",
+      ].join("\n"),
+    );
+    const outDir = join(root, "out");
+    await build({
+      root,
+      configFile: false,
+      logLevel: "silent",
+      plugins: parlorWeb({ ...config, web: { ...config.web, pwa: false } }, { root }),
+      build: {
+        outDir,
+        rolldownOptions: { external: [/^@tanstack\//, /^react(\/|$)/] },
+      },
+    });
+    const entry = /src="\/assets\/([^"]+\.js)"/.exec(
+      await readFile(join(outDir, "index.html"), "utf8"),
+    )?.[1];
+    const assets = await readdir(join(outDir, "assets"));
+    const holding: string[] = [];
+    for (const asset of assets) {
+      const source = await readFile(join(outDir, "assets", asset), "utf8");
+      if (source.includes("the settings page")) holding.push(asset);
+    }
+    expect(entry).toBeDefined();
+    expect(holding).toHaveLength(1);
+    expect(holding).not.toContain(entry);
+    expect(await readFile(join(outDir, "assets", entry!), "utf8")).toContain(
+      `./${holding[0]}`,
+    );
+  }, 30_000);
 });
 
 function freePort(): Promise<number> {
