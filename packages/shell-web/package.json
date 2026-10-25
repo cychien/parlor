@@ -40,8 +40,13 @@
     "workbox-window": "^7.4.1"
   },
   "devDependencies": {
+    "@parlor/client": "workspace:*",
+    "@tanstack/react-query": "catalog:",
+    "@tanstack/react-router": "catalog:",
     "@tanstack/router-generator": "catalog:",
     "@types/node": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

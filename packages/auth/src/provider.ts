@@ -21,7 +21,7 @@ import {
   REVOCATION_HORIZON_MS,
   type TurnDelegation,
 } from "@parlor/server";
-import type { BetterAuthOptions } from "better-auth";
+import { betterAuth, type BetterAuthOptions } from "better-auth";
 import {
   createLocalJWKSet,
   decodeProtectedHeader,
@@ -120,8 +120,30 @@ export interface StoredSession {
   readonly userAgent?: string | null | undefined;
 }
 
-export interface BetterAuthProviderOptions {
-  readonly instance: BetterAuthInstance;
+export type BetterAuthProviderOptions =
+  | { readonly instance: BetterAuthInstance }
+  | {
+      /**
+       * The options for `betterAuth()`, which the provider calls on the first request.
+       * Better Auth starts querying the database as soon as it is created, and some
+       * runtimes, such as Cloudflare's, allow no I/O while the app loads.
+       */
+      readonly options: BetterAuthOptions;
+    };
+
+/** Stands in for the instance until the first call needs it. */
+function deferredInstance(options: BetterAuthOptions): BetterAuthInstance {
+  let created: BetterAuthInstance | undefined;
+  const current = () =>
+    (created ??= betterAuth(options) as unknown as BetterAuthInstance);
+  return {
+    options,
+    handler: (request) => current().handler(request),
+    api: { getSession: (input) => current().api.getSession(input) },
+    get $context() {
+      return current().$context;
+    },
+  };
 }
 
 function hasCookie(request: Request, name: string): boolean {
@@ -135,9 +157,9 @@ function hasCookie(request: Request, name: string): boolean {
  * native shells. Access tokens Better Auth issued to MCP clients become agent principals
  * without a turn.
  */
-export function betterAuthProvider({
-  instance,
-}: BetterAuthProviderOptions): AuthProvider {
+export function betterAuthProvider(provided: BetterAuthProviderOptions): AuthProvider {
+  const instance =
+    "instance" in provided ? provided.instance : deferredInstance(provided.options);
   const bridge = bridgeOf(instance.options);
   const settings: ParlorAuthSettings = bridge.settings;
   let revocations: RevocationSet | undefined;

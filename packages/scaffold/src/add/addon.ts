@@ -1,8 +1,15 @@
-import type { Op } from "../edit/ops.js";
+import type { CallSite, Op } from "../edit/ops.js";
 
 /** Stands for `server.entry` from `parlor.config.ts`, wherever the app keeps it. */
 export const SERVER_ENTRY: unique symbol = Symbol("server entry");
 export type ProjectFile = string | typeof SERVER_ENTRY;
+
+/** The root route, with or without a typed router context. */
+export const ROOT_ROUTE: CallSite = {
+  callee: "createRootRoute",
+  or: ["createRootRouteWithContext"],
+  from: "@tanstack/react-router",
+};
 
 /** Folders under `templates/` in this package. `default` is the full default app. */
 export type TemplateName = "default" | "auth";

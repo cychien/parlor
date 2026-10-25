@@ -3,13 +3,18 @@ export const DEPLOY_PRESETS = [
   "vercel",
   "netlify",
   "cloudflare-module",
+  "cloudflare-durable",
   "aws-lambda",
   "deno-deploy",
   "bun",
 ] as const;
 export type DeployPreset = (typeof DEPLOY_PRESETS)[number];
 
-const LONG_LIVED: ReadonlySet<DeployPreset> = new Set(["node-server", "bun"]);
+const LONG_LIVED: ReadonlySet<DeployPreset> = new Set([
+  "node-server",
+  "bun",
+  "cloudflare-durable",
+]);
 
 const CI_PRESETS: ReadonlyArray<readonly [string, DeployPreset]> = [
   ["VERCEL", "vercel"],
@@ -56,4 +61,21 @@ export function resolvePreset(
 
 export function syncTransportFor(preset: DeployPreset): "sse" | "poll" {
   return LONG_LIVED.has(preset) ? "sse" : "poll";
+}
+
+/** `cloudflare-durable` is a Worker that hands every request but documents to one Durable Object. */
+export function nitroPresetFor(preset: DeployPreset): string {
+  return preset === "cloudflare-durable" ? "cloudflare-module" : preset;
+}
+
+const RENDER_CONDITIONS: Partial<Record<DeployPreset, readonly string[]>> = {
+  "cloudflare-module": ["workerd", "worker"],
+  "cloudflare-durable": ["workerd", "worker"],
+  "deno-deploy": ["deno"],
+  bun: ["bun", "node"],
+};
+
+/** Export conditions of the runtime that renders pages, for the server render build. */
+export function renderConditionsFor(preset: DeployPreset): readonly string[] {
+  return RENDER_CONDITIONS[preset] ?? ["node"];
 }

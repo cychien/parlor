@@ -36,6 +36,12 @@ export interface SyncClientOptions {
    * negotiated one, so a caller can only slow polling down.
    */
   readonly pollEveryMs?: (() => number) | undefined;
+  /**
+   * Where to read from while the client has no cursor of its own: the encoded cursor of the
+   * oldest data the page holds, so the first stream does not replay what that data already
+   * shows. Defaults to the start of the retained log.
+   */
+  readonly startAt?: (() => string) | undefined;
   /** Bounds a negotiation or a poll, not the SSE stream. Defaults to 10 s. */
   readonly requestTimeoutMs?: number | undefined;
   /**
@@ -216,7 +222,9 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     }
   };
 
-  const since = () => (cursor === INITIAL_CURSOR ? "" : encodeCursor(cursor));
+  const held = () => (cursor === INITIAL_CURSOR ? "" : encodeCursor(cursor));
+  const since = () =>
+    cursor === INITIAL_CURSOR ? (options.startAt?.() ?? "") : encodeCursor(cursor);
 
   const poll = async (mine: number) => {
     const batch = await withTimeout(async (signal) => {
@@ -503,7 +511,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     },
     reconnectNow,
     get cursor() {
-      return since();
+      return held();
     },
     get transport() {
       return transport;

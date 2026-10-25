@@ -148,14 +148,7 @@ export function chat(options: ChatOptions = {}): ServerPlugin {
           console.warn("[parlor] chat: pruning revoked computers failed:", error);
         }
       };
-      const sweep = setInterval(() => {
-        (host.ready?.() ?? Promise.resolve())
-          .then(() => reconcile())
-          .catch((error: unknown) => {
-            console.warn("[parlor] chat: sweeping lapsed turns failed:", error);
-          });
-      }, heartbeatMs);
-      sweep.unref();
+      let sweep: ReturnType<typeof setInterval> | undefined;
       const actions = chatActions({
         enforcing: auth.enforcing,
         transact,
@@ -183,6 +176,16 @@ export function chat(options: ChatOptions = {}): ServerPlugin {
             host.announce(ownStream(owner), [[HOSTS_TAG, hostId]]),
         }),
         channel: relay.channel,
+        start: () => {
+          sweep = setInterval(() => {
+            (host.ready?.() ?? Promise.resolve())
+              .then(() => reconcile())
+              .catch((error: unknown) => {
+                console.warn("[parlor] chat: sweeping lapsed turns failed:", error);
+              });
+          }, heartbeatMs);
+          sweep.unref?.();
+        },
         close: () => {
           clearInterval(sweep);
           relay.close();

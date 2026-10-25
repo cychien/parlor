@@ -1,4 +1,10 @@
-export { buildWeb, webOutDir } from "./build.js";
+export {
+  buildRender,
+  buildWeb,
+  type RenderBuildOptions,
+  ssrOutDir,
+  webOutDir,
+} from "./build.js";
 export {
   appCsp,
   type CspDirective,
@@ -23,6 +29,7 @@ export {
   webManifest,
   type WebOptions,
 } from "./plugin.js";
+export { RENDER_MODULE } from "./ssr.js";
 export {
   FRAMEWORK_VITE_KEYS,
   mergeViteConfig,

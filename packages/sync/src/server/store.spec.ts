@@ -7,6 +7,7 @@ import {
   ensureSyncTables,
   type NotifyPayload,
   pruneSyncEvents,
+  readSyncCursor,
   readSyncEvents,
   recordSyncEvent,
 } from "./store.js";
@@ -42,6 +43,30 @@ describe("sync store", () => {
       id: a.id,
     });
     expect(after.map((e) => e.id)).toEqual([b.id]);
+  });
+
+  it("reads the cursor of the last event across the given streams, or the initial one", async () => {
+    expect(await readSyncCursor(handle.db, ["empty-a", "empty-b"])).toEqual(
+      INITIAL_CURSOR,
+    );
+    const own = await handle.transaction((tx) =>
+      recordSyncEvent(tx, { scope: "cursor-team", tags: [["tasks"]] }),
+    );
+    const mine = await handle.transaction((tx) =>
+      recordSyncEvent(tx, { scope: "cursor-user", tags: [["drafts"]] }),
+    );
+    await handle.transaction((tx) =>
+      recordSyncEvent(tx, { scope: "cursor-elsewhere", tags: [["tasks"]] }),
+    );
+
+    expect(await readSyncCursor(handle.db, "cursor-team")).toEqual({
+      version: own.version,
+      id: own.id,
+    });
+    expect(await readSyncCursor(handle.db, ["cursor-team", "cursor-user"])).toEqual({
+      version: mine.version,
+      id: mine.id,
+    });
   });
 
   it("does not record events for rolled back transactions", async () => {

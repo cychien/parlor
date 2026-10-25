@@ -1,4 +1,4 @@
-import { defineAddon, SERVER_ENTRY } from "../add/addon.js";
+import { defineAddon, ROOT_ROUTE, SERVER_ENTRY } from "../add/addon.js";
 
 /**
  * The default template already contains all of this; a test runs this add-on on it and expects
@@ -28,7 +28,7 @@ export const agent = defineAddon({
         { kind: "import", names: ["agentPanel"], from: "../agent/views.js" },
         {
           kind: "append-element",
-          call: { callee: "createRootRoute", from: "@tanstack/react-router" },
+          call: ROOT_ROUTE,
           path: ["staticData", "views"],
           element: "agentPanel",
         },

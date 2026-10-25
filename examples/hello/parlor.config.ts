@@ -8,5 +8,6 @@ export default defineConfig({
     scheme: "hello",
   },
   server: { url: "http://localhost:3000" },
+  web: { ssr: { app: "src/app.tsx" } },
   desktop: { agentHost: true },
 });

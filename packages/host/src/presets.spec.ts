@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { resolvePreset, syncTransportFor } from "./presets.js";
+import { nitroPresetFor, resolvePreset, syncTransportFor } from "./presets.js";
 
 describe("resolvePreset", () => {
   it("prefers the flag, then config, then CI env, then node-server", () => {
@@ -38,5 +38,14 @@ describe("syncTransportFor", () => {
     expect(syncTransportFor("bun")).toBe("sse");
     expect(syncTransportFor("vercel")).toBe("poll");
     expect(syncTransportFor("cloudflare-module")).toBe("poll");
+    expect(syncTransportFor("cloudflare-durable")).toBe("sse");
+  });
+});
+
+describe("nitroPresetFor", () => {
+  it("builds cloudflare-durable on Nitro's module Worker and passes the rest through", () => {
+    expect(nitroPresetFor("cloudflare-durable")).toBe("cloudflare-module");
+    expect(nitroPresetFor("cloudflare-module")).toBe("cloudflare-module");
+    expect(nitroPresetFor("node-server")).toBe("node-server");
   });
 });

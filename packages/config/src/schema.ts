@@ -55,6 +55,11 @@ export const parlorConfigSchema = z.object({
       backgroundColor: z.string().default("#ffffff"),
       routeTree: z.string().optional(),
       csp: z.partialRecord(z.enum(CSP_DIRECTIVES), z.array(z.string())).optional(),
+      /**
+       * Renders routes with `ssr: true` on the server, on web only. `app` is the module whose
+       * default export builds the app for an action client, so the server builds one per request.
+       */
+      ssr: z.object({ app: z.string() }).optional(),
     })
     .prefault({}),
   desktop: z
@@ -71,7 +76,20 @@ export const parlorConfigSchema = z.object({
       migrations: z.string().default("migrations"),
     })
     .prefault({}),
-  deploy: z.object({ preset: z.string().optional() }).prefault({}),
+  deploy: z
+    .object({
+      preset: z.string().optional(),
+      /** Only read by the cloudflare-durable preset. */
+      cloudflare: z
+        .object({
+          /** Where the app's Durable Object starts, such as "weur": put it near the database. */
+          locationHint: z.string().optional(),
+          /** Merged into the generated wrangler config: the app's own bindings, its name. */
+          wrangler: z.record(z.string(), z.unknown()).optional(),
+        })
+        .optional(),
+    })
+    .prefault({}),
   /**
    * Merged into the Vite config `parlor dev` and `parlor build` own, for plugins such as
    * `@tailwindcss/vite`. Keys Parlor sets itself (root, ports, outDir) are ignored with a warning.

@@ -1,7 +1,9 @@
 import type { AgentActivityKind, AgentActivityState } from "@parlor/client/react";
 import { Chat, useAgentConfirmations, useSession } from "@parlor/client/react";
+import type { ParlorRouterContext } from "@parlor/client/router";
 import {
-  createRootRoute,
+  createRootRouteWithContext,
+  HeadContent,
   Link,
   Navigate,
   Outlet,
@@ -13,19 +15,35 @@ import { auth } from "../auth.js";
 import { allCardsVisible, useSidebarView } from "../sidebar-view.js";
 import { agentPanel } from "../views.js";
 
-export const Route = createRootRoute({
+export const Route = createRootRouteWithContext<ParlorRouterContext>()({
   staticData: {
     description: "The app shell: navigation to every page.",
     views: [agentPanel],
   },
-  component: Layout,
+  ssr: true,
+  head: () => ({
+    meta: [
+      { property: "og:site_name", content: "Hello" },
+      { property: "og:type", content: "website" },
+    ],
+  }),
+  component: Root,
 });
 
+function Root() {
+  return (
+    <>
+      <HeadContent />
+      <Layout />
+    </>
+  );
+}
+
+/** A page's loader already sent a signed-out visitor to sign in, so the shell shows while the session loads. */
 function Layout() {
   const session = useSession();
   const { pathname } = useLocation();
   if (pathname === "/sign-in") return <Outlet />;
-  if (session.status === "loading") return null;
   if (session.status === "signed-out") return <Navigate to="/sign-in" replace />;
   return (
     <div className="shell">

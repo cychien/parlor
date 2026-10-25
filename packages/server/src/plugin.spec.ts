@@ -1,4 +1,5 @@
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { UNROUTED_HEADER } from "@parlor/agent-ui";
 import {
   ActionError,
   ANONYMOUS,
@@ -21,6 +22,7 @@ import {
 } from "./create-server.js";
 import {
   type ActionAudit,
+  type AnyPluginRoute,
   type PluginHost,
   pluginRoute,
   type ServerPlugin,
@@ -557,4 +559,151 @@ describe("a server without plugins", () => {
     });
     expect((await call(server, "GET", "/_parlor/strict/x")).status).toBe(404);
   });
+});
+
+describe("absolute plugin routes", () => {
+  const route = (
+    method: "GET" | "POST",
+    path: `/${string}`,
+    absolute = true,
+  ): AnyPluginRoute => ({
+    method,
+    path,
+    absolute,
+    access: "public",
+    handle: () => Promise.resolve(Response.json({ method, path })),
+  });
+  const plugin = (name: string, routes: AnyPluginRoute[]): ServerPlugin => ({
+    name,
+    setup: () => ({ routes }),
+  });
+  const manifest =
+    (...paths: string[]) =>
+    () => ({
+      protocol: 1 as const,
+      app: { id: "dev.parlor.test", name: "Test" },
+      routes: paths.map((path) => ({ path, params: [], views: [] })),
+      views: [],
+    });
+
+  it("serves an absolute route at the origin root with its access, and not under the prefix", async () => {
+    const server = serve({
+      auth: testAuth,
+      plugins: [
+        plugin("payments", [
+          route("POST", "/api/payment/webhook"),
+          pluginRoute({
+            method: "GET",
+            path: "/api/payment/return",
+            absolute: true,
+            access: ["user"],
+            handle: (_request, caller) =>
+              Promise.resolve(Response.json({ user: caller.principal.userId })),
+          }),
+        ]),
+      ],
+    });
+    expect(await json(await call(server, "POST", "/api/payment/webhook"))).toEqual({
+      status: 200,
+      body: { method: "POST", path: "/api/payment/webhook" },
+    });
+    expect(await json(await call(server, "GET", "/api/payment/return", "alice"))).toEqual(
+      { status: 200, body: { user: "alice" } },
+    );
+    expect((await call(server, "GET", "/api/payment/return")).status).toBe(401);
+    const prefixed = await call(server, "POST", "/_parlor/payments/api/payment/webhook");
+    expect(prefixed.status).toBe(404);
+    expect(prefixed.headers.get(UNROUTED_HEADER)).toBe("1");
+  });
+
+  it("marks the 404 for a request no route matches, but not a route's own 404", async () => {
+    const server = serve({
+      plugins: [
+        plugin("strict", [
+          {
+            method: "GET",
+            path: "/missing",
+            absolute: true,
+            access: "public",
+            handle: () => Promise.reject(new ActionError("not_found", "Nothing here.")),
+          },
+        ]),
+      ],
+    });
+    const own = await call(server, "GET", "/missing");
+    expect(own.status).toBe(404);
+    expect(own.headers.get(UNROUTED_HEADER)).toBeNull();
+    for (const [method, path] of [
+      ["GET", "/tasks/42"],
+      ["POST", "/missing"],
+      ["GET", "/_parlor/nothing"],
+    ] as const) {
+      const unrouted = await call(server, method, path);
+      expect(unrouted.status).toBe(404);
+      expect(unrouted.headers.get(UNROUTED_HEADER)).toBe("1");
+      expect(await unrouted.json()).toMatchObject({ error: { code: "not_found" } });
+    }
+  });
+
+  it("refuses at startup an absolute route the framework or another plugin already serves", () => {
+    const install = (plugins: ServerPlugin[], basePath?: string) => () =>
+      createServer({ actions: appActions, plugins, basePath });
+    expect(install([plugin("pay", [route("GET", "/_parlor")])])).toThrow(
+      /is under \/_parlor, which the framework serves/,
+    );
+    expect(install([plugin("pay", [route("POST", "/_parlor/sync/stream")])])).toThrow(
+      /is under \/_parlor/,
+    );
+    expect(install([plugin("pay", [route("GET", "/api/x")])], "/api")).toThrow(
+      /is under \/api/,
+    );
+    expect(install([plugin("pay", [route("GET", "/_parlorish")])])).not.toThrow();
+    expect(install([plugin("pay", [route("GET", "/pay/:id")])])).toThrow(
+      /must be a static path/,
+    );
+    expect(install([plugin("pay", [route("GET", "/pay/**")])])).toThrow(
+      /must be a static path/,
+    );
+    expect(
+      install([
+        plugin("pay", [route("POST", "/api/hook")]),
+        plugin("shop", [route("POST", "/api/hook")]),
+      ]),
+    ).toThrow(/The "pay" and "shop" plugins both serve POST \/api\/hook/);
+    expect(
+      install([plugin("pay", [route("GET", "/api/hook"), route("GET", "/api/hook")])]),
+    ).toThrow(/The "pay" plugin serves GET \/api\/hook twice/);
+    expect(
+      install([plugin("pay", [route("GET", "/api/hook"), route("POST", "/api/hook")])]),
+    ).not.toThrow();
+    expect(
+      install([
+        plugin("pay", [route("GET", "/hook", false)]),
+        plugin("shop", [route("GET", "/hook", false)]),
+      ]),
+    ).not.toThrow();
+  });
+
+  it.each([true, false])(
+    "refuses an absolute GET route a page route would take a document request for (agent UI %s)",
+    (agentUi) => {
+      const server = serve({
+        agentUi: agentUi ? {} : false,
+        plugins: [
+          plugin("pay", [
+            route("GET", "/api/payment/return"),
+            route("POST", "/payment/webhook"),
+          ]),
+        ],
+      });
+      const install = (source: ReturnType<typeof manifest>) => () =>
+        server.installUiManifest?.(source);
+      expect(install(manifest("/", "/payment/$orderId", "/api/payment"))).not.toThrow();
+      expect(install(manifest("/api/$section/return"))).toThrow(
+        /absolute route GET \/api\/payment\/return is also matched by the page route \/api\/\$section\/return/,
+      );
+      expect(install(manifest("/$"))).toThrow(/page route \/\$/);
+      expect(install(() => undefined)).not.toThrow();
+    },
+  );
 });

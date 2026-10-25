@@ -61,3 +61,4 @@ export {
   type ViewValue,
   type WritableField,
 } from "./view.js";
+export { pagePattern, UNROUTED_HEADER } from "./pages.js";

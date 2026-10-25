@@ -33,7 +33,21 @@ import { createServer } from "@parlor/server";
 | `GET /_parlor/manifest`        | the actions and their schemas                 |
 | `/_parlor/sync/*`              | the live-update channel                       |
 | `/.well-known/oauth-*`         | OAuth discovery, with an auth provider        |
+| `/_parlor/<plugin>/*`          | each plugin's routes                          |
 
 ## For plugin authors
 
 `pluginRoute`, the `ServerPlugin` and `PluginHost` types, `AuthFailure`, `requireAccess` and `requireSurface` build a plugin like `chat()`. `devAuth()` is the provider `parlor dev` installs when the app has none.
+
+A plugin route is served under `/_parlor/<plugin>/`. Set `absolute: true` on it to serve its `path` from the origin root instead, for a URL fixed outside the app, such as a payment provider's webhook or return URL. The path must be static. `createServer` refuses one under `basePath` and one that another route already serves, and the server refuses to start when a page route also matches an absolute `GET` route's path.
+
+In `parlor dev` and in every build, a request is answered by the first of:
+
+1. a static file of the web app
+2. the app's document, for a browser's `GET` to a path a page route matches
+3. the server
+4. the app's document, for a browser's `GET` no server route matches, so the page shows its not-found view
+
+The app's content security policy goes on its documents and static files. Responses from the server, absolute routes included, keep their own headers.
+
+A plugin's `setup` runs while the app loads, where some runtimes, such as Cloudflare's, allow no I/O and no timers. Start background work, such as an interval, in the runtime's `start()`, which the server calls once when it is ready for its first request.

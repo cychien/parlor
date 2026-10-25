@@ -18,7 +18,7 @@ Write down what the old app does before changing anything, and map each item:
 | Users, passwords, sessions                         | `--add auth` (Better Auth, email and password) ([step 6](#6-bring-the-users))                          |
 | Roles, admin flags, permissions                    | a table and a check at the top of each action ([step 5](#roles))                                       |
 | Pages and client routing                           | files in `src/routes/` ([step 8](#8-rebuild-the-pages))                                                |
-| `fetch`, axios or React Query calls to the backend | `useActionQuery` and `useActionMutation`                                                               |
+| `fetch`, axios or React Query calls to the backend | `useActionQuery` and `useActionMutation`, or `ensureActionQueryData` in a route `loader`               |
 | WebSockets or polling to keep pages fresh          | nothing to port: `reads` and `writes` refresh pages                                                    |
 | Webhooks and callbacks from other services         | a server plugin route ([step 9](#9-webhooks-and-scheduled-work))                                       |
 | Cron jobs                                          | a server plugin timer ([step 9](#9-webhooks-and-scheduled-work))                                       |
@@ -30,7 +30,7 @@ Parlor cannot do these yet. If the old app depends on one, decide with the perso
 
 - **Storing uploaded files on the server**, such as images or attachments. The `files` capability lets a page pick and save files on the device; there is no server storage.
 - **Server-side rendering for public pages that need SEO.** A Parlor app is a single-page app.
-- **Serverless hosting.** Deploy one `node-server` or `bun` server; see [Deploy](/parlor/guides/deploy/).
+- **Serverless hosting other than Cloudflare.** Deploy one `node-server` or `bun` server, or use the `cloudflare-durable` preset; see [Deploy](/parlor/guides/deploy/).
 - **Background work spread over several server instances.** A plugin's timer runs in every process.
 - **Sign-in other than email and password.** Better Auth has other methods, set in `auth.ts`, but Parlor has not verified them.
 
@@ -237,7 +237,6 @@ New passwords use Better Auth's own hash. Teach `auth.ts` to also check the old 
 import { betterAuthProvider, parlorAuth } from "@parlor/auth";
 import type { DatabaseHandle } from "@parlor/data";
 import bcrypt from "bcryptjs";
-import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { hashPassword, verifyPassword } from "better-auth/crypto";
 
@@ -260,10 +259,10 @@ export function createAuth(database: DatabaseHandle) {
     },
   });
   return betterAuthProvider({
-    instance: betterAuth({
+    options: {
       ...options,
       database: drizzleAdapter(database.db, { provider: "pg", schema }),
-    }),
+    },
   });
 }
 ```
@@ -389,6 +388,7 @@ await database.close();
 
 - One file per page in `src/routes/`, for example `src/routes/courses.$courseId.tsx` for `/courses/:courseId`.
 - Read with `useActionQuery("listCourses", {})`, and change data with `useActionMutation("updateCourse")`. Never call `fetch` for app data.
+- Data the old app loaded in route loaders, or before rendering a page, goes in the route's `loader` with `ensureActionQueryData`, read with `useActionSuspenseQuery`. Redirects the old loaders decided from data stay there; `routeActionErrors` turns `not_found`, `unauthenticated` and `forbidden` into `notFound()` or a redirect. See [Load a page's data in its loader](/parlor/guides/pages-and-hooks/#load-a-pages-data-in-its-loader).
 - Give each page a `staticData.description`, so agents know what it is for.
 - Expose what the page shows as agent views: a `keyed` view per row (keyed by the id your actions take) and a `writable` view per form. Agents can then resolve "this course" and fill a form for the user to submit. The template's todo page shows both; see [The agent sidebar](/parlor/guides/agent-sidebar/).
 
@@ -396,7 +396,9 @@ await database.close();
 
 Anything that is not a person or an agent calling the app, such as a payment provider's webhook or a nightly job, goes in a server plugin, installed in `server.ts` with `plugins: [...]`.
 
-A plugin route is served at `/_parlor/<plugin name><path>`. A `public` route has no session, so check the caller yourself, for example by verifying a signature. After writing, announce the tables you changed, so open pages refresh:
+A plugin route is served at `/_parlor/<plugin name><path>`. When its URL is already set somewhere you cannot change, such as the webhook and return URLs configured at a payment provider, add `absolute: true` and the route is served at exactly `path`. A browser sent to an absolute `GET` route reaches the route, not the app's page, and the server refuses to start if a page route also matches that path.
+
+A `public` route has no session, so check the caller yourself, for example by verifying a signature. After writing, announce the tables you changed, so open pages refresh:
 
 ```ts
 // @filename: schema/index.ts
@@ -423,7 +425,7 @@ const signed = (body: string, signature: string, secret: string) => {
   return given.length === expected.length && timingSafeEqual(given, expected);
 };
 
-/** The payment provider's webhook, at POST /_parlor/payments/webhook. */
+/** The payment provider's webhook, at the URL the old app gave it. */
 export function payments(options: {
   readonly database: DatabaseHandle;
   readonly scope: string;
@@ -436,7 +438,8 @@ export function payments(options: {
       routes: [
         {
           method: "POST",
-          path: "/webhook",
+          path: "/api/payment/webhook",
+          absolute: true,
           access: "public",
           async handle(request) {
             const body = await request.text();

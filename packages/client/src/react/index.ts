@@ -33,10 +33,17 @@ export { useAgentActivity } from "./agent-ui/use-agent-activity.js";
 export { useAgentConfirmations } from "./agent-ui/use-agent-confirmations.js";
 export { type AgentViewHandle, useAgentView } from "./agent-ui/use-agent-view.js";
 export {
+  type ActionQueryContext,
+  actionQueryOptions,
+  ensureActionQueryData,
+} from "./action-query.js";
+export {
   type ActionMutationOptions,
   type ActionQueryOptions,
+  type ActionSuspenseQueryOptions,
   useActionMutation,
   useActionQuery,
+  useActionSuspenseQuery,
 } from "./hooks.js";
 export {
   FrameworkProvider,

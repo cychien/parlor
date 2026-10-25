@@ -18,7 +18,7 @@ import type { RegisteredActions } from "../register.js";
 import type { FrameworkAuth, SessionSnapshot, SessionSource } from "../session.js";
 import { createAgentUiRuntime } from "./agent-ui/runtime.js";
 import { type FrameworkSync, SyncBridge } from "./sync-bridge.js";
-import { invalidateForEvents, ReadTagRegistry } from "./sync.js";
+import { invalidateForEvents, type ReadTagRegistry, readTagsOf } from "./sync.js";
 
 interface FrameworkContextValue {
   readonly client: ActionClient<RegisteredActions>;
@@ -33,6 +33,7 @@ const FrameworkContext = createContext<FrameworkContextValue | null>(null);
 
 export interface FrameworkProviderProps {
   readonly client: ActionClient<RegisteredActions>;
+  /** Defaults to the router's `context.queryClient`, so loaders and hooks share one cache. */
   readonly queryClient?: QueryClient | undefined;
   readonly sync?: boolean | undefined;
   readonly router?: AnyRouter | undefined;
@@ -48,6 +49,10 @@ export interface FrameworkProviderProps {
 
 const SIGNED_OUT: SessionSnapshot = { status: "signed-out" };
 
+/** A server render does not know the session yet, and hydration must render what it rendered. */
+const LOADING: SessionSnapshot = { status: "loading" };
+const serverSession = () => LOADING;
+
 const NO_SESSION: SessionSource = {
   current: () => SIGNED_OUT,
   subscribe: () => () => {},
@@ -57,10 +62,19 @@ function identityOf(session: SessionSnapshot): string {
   return session.status === "signed-in" ? `user:${session.user.id}` : session.status;
 }
 
+function routerQueryClient(router: AnyRouter | undefined): QueryClient | undefined {
+  const context: unknown = router?.options.context;
+  if (typeof context !== "object" || context === null || !("queryClient" in context))
+    return undefined;
+  return context.queryClient instanceof QueryClient ? context.queryClient : undefined;
+}
+
 /** Counts changes of the signed-in user after the first settled answer. */
 function useSettledIdentityEpoch(auth: SessionSource | undefined): number {
   const source = auth ?? NO_SESSION;
-  const identity = identityOf(useSyncExternalStore(source.subscribe, source.current));
+  const identity = identityOf(
+    useSyncExternalStore(source.subscribe, source.current, serverSession),
+  );
   const [tracked, setTracked] = useState<{
     readonly settled: string | undefined;
     readonly epoch: number;
@@ -89,12 +103,14 @@ export function FrameworkProvider({
   auth,
   children,
 }: FrameworkProviderProps) {
-  const [ownQueryClient] = useState(() => queryClient ?? new QueryClient());
+  const [ownQueryClient] = useState(
+    () => queryClient ?? routerQueryClient(router) ?? new QueryClient(),
+  );
   const [value] = useState<FrameworkContextValue>(() => {
     const bridge = new SyncBridge();
     return {
       client,
-      readTags: new ReadTagRegistry(),
+      readTags: readTagsOf(ownQueryClient),
       agentUi: createAgentUiRuntime({ client, queryClient: ownQueryClient, router }),
       auth,
       sync: bridge,
@@ -108,10 +124,9 @@ export function FrameworkProvider({
     if (appliedEpoch.current === epoch) return;
     appliedEpoch.current = epoch;
     void ownQueryClient.resetQueries();
+    void router?.invalidate();
     value.agentUi.reset();
-  }, [epoch, ownQueryClient, value]);
-
-  useEffect(() => value.readTags.attach(ownQueryClient), [value, ownQueryClient]);
+  }, [epoch, ownQueryClient, router, value]);
 
   useEffect(() => value.agentUi.start(), [value]);
 
@@ -159,6 +174,8 @@ function SyncConnection({
   readonly value: FrameworkContextValue;
   readonly queryClient: QueryClient;
 }) {
+  // Data loaded outside action queries (plugin calls, the auth client) has no cursor but is read after this render.
+  const [loadedAfter] = useState(() => value.readTags.latest());
   useEffect(() => {
     const { client, auth } = value;
     let refused: SessionSnapshot | undefined;
@@ -166,6 +183,7 @@ function SyncConnection({
       request: (path, init) => client.request(path, init),
       basePath: client.basePath,
       clientId: client.clientId,
+      startAt: () => value.readTags.position(loadedAfter),
       onEvents: (events) => {
         void invalidateForEvents(queryClient, value.readTags, events);
         value.bridge.emit(events);
@@ -210,7 +228,7 @@ function SyncConnection({
       syncClient.stop();
       detach();
     };
-  }, [value, queryClient]);
+  }, [value, queryClient, loadedAfter]);
   return null;
 }
 
@@ -228,5 +246,5 @@ export function useActionClient(): ActionClient<RegisteredActions> {
 export function useSession(): SessionSnapshot {
   const { auth } = useFramework();
   if (!auth) throw new Error("useSession needs <FrameworkProvider auth={...}>");
-  return useSyncExternalStore(auth.subscribe, auth.current);
+  return useSyncExternalStore(auth.subscribe, auth.current, serverSession);
 }

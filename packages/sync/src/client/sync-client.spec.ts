@@ -106,6 +106,47 @@ describe("createSyncClient", () => {
     client.stop();
   });
 
+  it("starts where the page's data stands until it has a cursor of its own", async () => {
+    const streams: string[] = [];
+    const request = vi.fn(async (path: string) => {
+      if (path.endsWith("/sync/token")) {
+        return Response.json({
+          protocol: 1,
+          transport: "sse",
+          endpoint: "/_parlor/sync/stream",
+          pollIntervalMs: 2000,
+        });
+      }
+      streams.push(path);
+      const frames = ['event: handshake\ndata: {"protocol":1,"capabilities":[]}\n\n'];
+      if (streams.length === 2) {
+        frames.push(
+          `data: ${JSON.stringify({ events: [event(9, "z")], cursor: "9.z" })}\n\n`,
+        );
+      }
+      return new Response(sseBody(frames, { end: streams.length < 3 }), { status: 200 });
+    });
+    let held = "7.h";
+    const client = createSyncClient({
+      request,
+      onEvents: vi.fn(),
+      startAt: () => held,
+      reconnectBaseMs: 100,
+    });
+    client.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(streams[0]).toContain(`since=${encodeURIComponent("7.h")}`);
+    expect(client.cursor).toBe("");
+
+    held = "8.i";
+    await vi.advanceTimersByTimeAsync(150);
+    expect(streams[1]).toContain(`since=${encodeURIComponent("8.i")}`);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(client.cursor).toBe("9.z");
+    expect(streams[2]).toContain(`since=${encodeURIComponent("9.z")}`);
+    client.stop();
+  });
+
   it("falls back to polling when negotiation fails", async () => {
     const request = vi.fn(async (path: string) =>
       path.endsWith("/sync/token")

@@ -251,6 +251,33 @@ describe("wrap-property and jsx", () => {
     });
   });
 
+  it("finds a curried stand-in, createRootRouteWithContext<Context>()({ ... })", () => {
+    const withContext = ROOT.replace(
+      "import { createRootRoute }",
+      "import { createRootRouteWithContext }",
+    ).replace("createRootRoute({", "createRootRouteWithContext<ParlorRouterContext>()({");
+    const either: Op = {
+      kind: "wrap-property",
+      call: {
+        callee: "createRootRoute",
+        or: ["createRootRouteWithContext"],
+        from: "@tanstack/react-router",
+      },
+      path: ["component"],
+      wrapper: "withSignIn",
+    };
+    const text = edited("src/routes/__root.tsx", withContext, [either]);
+    expect(text).toBe(
+      withContext.replace("component: Layout,", "component: withSignIn(Layout),"),
+    );
+    expect(
+      evaluateOp(parseSource("src/routes/__root.tsx", withContext), wrap),
+    ).toMatchObject({
+      status: "unsafe",
+      reason: expect.stringContaining("does not import createRootRoute"),
+    });
+  });
+
   it("adds an attribute to the one element of that name", () => {
     const attribute: Op = {
       kind: "jsx-attribute",

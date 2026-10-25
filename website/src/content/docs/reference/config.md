@@ -26,9 +26,12 @@ import { defineConfig } from "@parlor/config";
 | `web.port`                                             | `5173`                       | the web app's port in development, or the next free one                      |
 | `web.pwa`, `web.themeColor`, `web.backgroundColor`     | `true`, `#ffffff`, `#ffffff` | the installable web app                                                      |
 | `web.routeTree`, `web.csp`                             | `src/routeTree.gen.ts`, none | the generated route tree; extra CSP sources                                  |
+| `web.ssr.app`                                          | none                         | the module that builds the app; renders `ssr: true` routes on the server     |
 | `desktop.width`, `desktop.height`, `desktop.agentHost` | `1024`, `768`, none          | the desktop window; bundle Parlor Host                                       |
 | `database.schema`, `database.migrations`               | `schema`, `migrations`       | where tables and migrations live                                             |
 | `deploy.preset`                                        | detected                     | the build preset; see [Deploy](/parlor/guides/deploy/)                       |
+| `deploy.cloudflare.locationHint`                       | none                         | where `cloudflare-durable` starts the app's Durable Object, such as `weur`   |
+| `deploy.cloudflare.wrangler`                           | none                         | merged into the generated wrangler config: bindings, worker name             |
 | `vite`                                                 | none                         | Vite options merged into every build; see [Styling](/parlor/guides/styling/) |
 
 ## @parlor/config/tsconfig

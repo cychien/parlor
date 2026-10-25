@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
+import { pagePattern } from "@parlor/agent-ui";
 import { agentManifest, DEFAULT_ROUTE_TREE } from "@parlor/agent-ui/vite";
 import { GENERATED_DIR, type ParlorConfig } from "@parlor/config";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
@@ -10,6 +11,8 @@ import { VitePWA } from "vite-plugin-pwa";
 
 import { appCsp, metaCsp, serializeCsp } from "./csp.js";
 import { routeGeneratorOptions, routesDirectory, routeTreeFile } from "./route-tree.js";
+import { pageMatcher, serverRoutes } from "./server-routes.js";
+import { renderModule } from "./ssr.js";
 
 export const FRAMEWORK_ROUTE_PREFIX = "/_parlor";
 /** OAuth discovery lives at the origin root (RFC 8414, RFC 9728), outside the framework prefix. */
@@ -27,6 +30,8 @@ export interface WebOptions {
   readonly root?: string | undefined;
   /** Writes the policy into the built `index.html` for shells that serve it without HTTP headers. */
   readonly cspMeta?: boolean | undefined;
+  /** Builds the server render module (`web.ssr`) instead of the browser app. */
+  readonly render?: boolean | undefined;
 }
 
 function isFrameworkPath(url: string | undefined): boolean {
@@ -96,20 +101,30 @@ export function parlorWeb(
   options: WebOptions = {},
 ): PluginOption[] {
   const conditions = options.conditions ?? [];
+  const root = options.root ?? process.cwd();
+  const manifest = agentManifest({
+    app: {
+      id: config.app.id,
+      name: config.app.name,
+      ...(config.app.description ? { description: config.app.description } : {}),
+      ...(config.app.scheme ? { scheme: config.app.scheme } : {}),
+    },
+    routeTree: routeTreeFile(config),
+  });
   const plugins: PluginOption[] = [
-    ...fileRoutes(config, options.root ?? process.cwd()),
+    ...fileRoutes(config, root),
     react(),
     cspPlugin(config, options),
     titlePlugin(config),
-    agentManifest({
-      app: {
-        id: config.app.id,
-        name: config.app.name,
-        ...(config.app.description ? { description: config.app.description } : {}),
-        ...(config.app.scheme ? { scheme: config.app.scheme } : {}),
+    manifest,
+    serverRoutes(
+      config.server.port,
+      pageMatcher(() => manifest.api?.manifest()),
+      {
+        // A native shell's platform conditions: it runs the static build, never a server render.
+        render: config.web.ssr !== undefined && conditions.length === 0,
       },
-      routeTree: routeTreeFile(config),
-    }),
+    ),
     {
       name: "parlor:web",
       config: () => ({
@@ -132,7 +147,8 @@ export function parlorWeb(
       }),
     },
   ];
-  if (config.web.pwa) {
+  if (config.web.ssr) plugins.push(renderModule(config, root));
+  if (config.web.pwa && !options.render) {
     plugins.push(
       VitePWA({
         registerType: "autoUpdate",
@@ -142,6 +158,22 @@ export function parlorWeb(
             FRAMEWORK_ROUTE_PREFIX,
             ...OAUTH_DISCOVERY_PREFIXES,
           ].map((prefix) => new RegExp(`^${prefix.replaceAll(".", "\\.")}(/|$)`)),
+          // A cached shell would stand in for the pages the server renders.
+          ...(config.web.ssr
+            ? {
+                navigateFallback: null,
+                globIgnores: ["**/node_modules/**/*", "index.html"],
+              }
+            : {}),
+        },
+        integration: {
+          beforeBuildServiceWorker: (pwa) => {
+            const pages = manifest.api?.manifest();
+            if (!pages || config.web.ssr) return;
+            pwa.workbox.navigateFallbackAllowlist = pages.routes.map((route) =>
+              pagePattern(route.path),
+            );
+          },
         },
       }),
     );

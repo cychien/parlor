@@ -1,7 +1,9 @@
+import { pagePattern, UNROUTED_HEADER } from "@parlor/agent-ui";
 import {
   type AgentUiOptions,
   createAgentUi,
   registerAgentUiRoutes,
+  type UiManifestInput,
   type UiManifestSource,
 } from "@parlor/agent-ui/server";
 import {
@@ -76,6 +78,10 @@ type ManifestSummary = Pick<Manifest, "protocol" | "app">;
 type ManifestReply = Manifest | ManifestSummary | Response;
 
 export interface FrameworkServer {
+  /**
+   * Hands the server the app's page routes, called by the host before the first request.
+   * Throws when a page route would take a document request meant for an absolute route.
+   */
   readonly installUiManifest?: ((source: UiManifestSource) => void) | undefined;
   readonly fetch: (request: Request) => Promise<Response>;
   readonly close: () => Promise<void>;
@@ -143,6 +149,78 @@ function checkPlugins(
   }
 }
 
+interface MountedRoute {
+  readonly plugin: string;
+  readonly route: AnyPluginRoute;
+  readonly path: string;
+}
+
+const isAbsolute = (route: AnyPluginRoute) =>
+  route.absolute === true || route.path.startsWith("/.well-known/");
+
+function mountRoutes(
+  runtimes: readonly { readonly plugin: ServerPlugin; readonly runtime: PluginRuntime }[],
+  basePath: string,
+): MountedRoute[] {
+  const mounted: MountedRoute[] = [];
+  const owners = new Map<string, string>();
+  for (const { plugin, runtime } of runtimes) {
+    for (const route of runtime.routes ?? []) {
+      if (!isAbsolute(route)) {
+        mounted.push({
+          plugin: plugin.name,
+          route,
+          path: `${basePath}/${plugin.name}${route.path}`,
+        });
+        continue;
+      }
+      const { method, path } = route;
+      if (route.absolute && /[:*]/.test(path)) {
+        throw new Error(
+          `The "${plugin.name}" plugin's absolute route ${method} ${path} must be a static path.`,
+        );
+      }
+      if (path === basePath || path.startsWith(`${basePath}/`)) {
+        throw new Error(
+          `The "${plugin.name}" plugin's absolute route ${method} ${path} is under ${basePath}, which the framework serves.`,
+        );
+      }
+      const key = `${method} ${path}`;
+      const owner = owners.get(key);
+      if (owner !== undefined) {
+        throw new Error(
+          owner === plugin.name
+            ? `The "${owner}" plugin serves ${key} twice.`
+            : `The "${owner}" and "${plugin.name}" plugins both serve ${key}.`,
+        );
+      }
+      owners.set(key, plugin.name);
+      mounted.push({ plugin: plugin.name, route, path });
+    }
+  }
+  return mounted;
+}
+
+function refuseShadowedRoutes(
+  manifest: UiManifestInput | undefined,
+  routes: readonly MountedRoute[],
+): void {
+  if (!manifest) return;
+  const pages = manifest.routes.map((page) => ({
+    page,
+    pattern: pagePattern(page.path),
+  }));
+  for (const { plugin, route } of routes) {
+    if (!route.absolute || route.method !== "GET") continue;
+    const shadow = pages.find(({ pattern }) => pattern.test(route.path));
+    if (shadow) {
+      throw new Error(
+        `The "${plugin}" plugin's absolute route GET ${route.path} is also matched by the page route ${shadow.page.path}, so a browser opening it would get the page. Move one of them.`,
+      );
+    }
+  }
+}
+
 function auditAll(
   runtimes: readonly PluginRuntime[],
 ): ((record: ActionAudit) => void) | undefined {
@@ -194,9 +272,12 @@ export function createServer<T extends ActionMap>(
   let prepared: Promise<void> | undefined;
   const ready = () =>
     (prepared ??= (async () => {
-      if (!database) return;
-      if (syncEnabled) await ensureSyncTables(database.read() as SyncDatabase);
-      await applyMigrations(database, installed);
+      if (database) {
+        await database.prepare?.();
+        if (syncEnabled) await ensureSyncTables(database.read() as SyncDatabase);
+        await applyMigrations(database, installed);
+      }
+      for (const { runtime } of runtimes) runtime.start?.();
     })());
   const callers = createCallerResolver(auth, scope, ready);
   const host: PluginHost = {
@@ -219,6 +300,7 @@ export function createServer<T extends ActionMap>(
     },
   };
   const runtimes = installed.map((plugin) => ({ plugin, runtime: plugin.setup(host) }));
+  const routes = mountRoutes(runtimes, basePath);
   const audit = auditAll(runtimes.map(({ runtime }) => runtime));
   const agentUi =
     agentUiOptions === false
@@ -270,8 +352,9 @@ export function createServer<T extends ActionMap>(
       });
       const result = await runner.run(name, input, event.req, sourceOf(event.req), {
         surface: "actions",
+        cursor: true,
       });
-      return { data: result.data, tags: result.reads };
+      return { data: result.data, tags: result.reads, cursor: result.cursor };
     } catch (error) {
       return errorBody(event, error);
     }
@@ -284,10 +367,9 @@ export function createServer<T extends ActionMap>(
   };
 
   for (const { plugin, runtime } of runtimes) {
-    const root = `${basePath}/${plugin.name}`;
     if (runtime.actions) {
       const pluginRunner = runnerFor(runtime.actions);
-      app.post(`${root}/actions/:name`, async (event) => {
+      app.post(`${basePath}/${plugin.name}/actions/:name`, async (event) => {
         const name = event.context.params?.name ?? "";
         try {
           const input = await readBody(event).catch(() => {
@@ -298,27 +380,24 @@ export function createServer<T extends ActionMap>(
             input,
             event.req,
             sourceOf(event.req),
-            { surface: "pluginActions" },
+            { surface: "pluginActions", cursor: true },
           );
-          return { data: result.data, tags: result.reads };
+          return { data: result.data, tags: result.reads, cursor: result.cursor };
         } catch (error) {
           return errorBody(event, error);
         }
       });
     }
-    for (const route of runtime.routes ?? []) {
-      const path = route.path.startsWith("/.well-known/")
-        ? route.path
-        : root + route.path;
-      app.on(route.method, path, async (event) => {
-        try {
-          await ready();
-          return await handleRoute(route, event.req);
-        } catch (error) {
-          return errorResponse(error);
-        }
-      });
-    }
+  }
+  for (const { route, path } of routes) {
+    app.on(route.method, path, async (event) => {
+      try {
+        await ready();
+        return await handleRoute(route, event.req);
+      } catch (error) {
+        return errorResponse(error);
+      }
+    });
   }
 
   if (mcp !== false) {
@@ -400,10 +479,22 @@ export function createServer<T extends ActionMap>(
     });
   }
 
+  app.all("/**", (event) => {
+    const response = errorResponse(
+      new ActionError(
+        "not_found",
+        `No route for ${event.req.method} ${event.url.pathname}`,
+      ),
+    );
+    response.headers.set(UNROUTED_HEADER, "1");
+    return response;
+  });
+
   return {
-    ...(agentUi
-      ? { installUiManifest: (source: UiManifestSource) => agentUi.install(source) }
-      : {}),
+    installUiManifest: (source) => {
+      refuseShadowedRoutes(source(), routes);
+      agentUi?.install(source);
+    },
     fetch: (request) => {
       const response = Promise.resolve(app.fetch(request));
       const settled = () => void inflight.delete(response);

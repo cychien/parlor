@@ -14,7 +14,7 @@ import { createActionClient } from "@parlor/client";
 
 The browser's only way to reach the server. Without options it calls the page's own origin, or `server.url` in a native shell. `headers` adds headers to every call (the auth client's session); `baseUrl` and `fetch` point it elsewhere, for example at `server.fetch` in tests.
 
-`client.call(name, input)` returns an action's data; `client.invoke(name, input)` returns `{ data, tags }`.
+`client.call(name, input)` returns an action's data; `client.invoke(name, input)` returns `{ data, tags, cursor }`: the tags the action read, and for a read on a server with sync, the sync cursor its data reflects.
 
 ## Register
 

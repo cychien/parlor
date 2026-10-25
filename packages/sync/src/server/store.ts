@@ -4,6 +4,7 @@ import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 
 import {
   compareCursors,
+  INITIAL_CURSOR,
   type SyncCursor,
   type SyncEvent,
   SYNC_CHANNEL,
@@ -131,6 +132,31 @@ export async function readSyncEvents(
       source: row.source ?? undefined,
     }))
     .sort((a, b) => compareCursors(a, b));
+}
+
+/**
+ * The last event of these streams, or the initial cursor when they have none. Read before
+ * a query, it marks what the query's answer already reflects: versions are allocated under
+ * one row lock, so any event committed later in these streams sorts after it.
+ */
+export async function readSyncCursor(
+  db: SyncDatabase,
+  scope: string | readonly string[],
+): Promise<SyncCursor> {
+  const scopes = typeof scope === "string" ? [scope] : scope;
+  const lasts = scopes.map(
+    (one) =>
+      sql`(select version, id from sync_events where scope = ${one} order by version desc, id desc limit 1)`,
+  );
+  const found = await rows<{ id: string; version: number | string }>(
+    db.execute(sql.join(lasts, sql` union all `)),
+  );
+  return found
+    .map((row) => ({ version: Number(row.version), id: row.id }))
+    .reduce<SyncCursor>(
+      (latest, cursor) => (compareCursors(cursor, latest) > 0 ? cursor : latest),
+      INITIAL_CURSOR,
+    );
 }
 
 export async function pruneSyncEvents(

@@ -89,6 +89,18 @@ describe("client identity and envelopes", () => {
     expect(createActionClient({ fetch: fakeFetch(200, {}) }).clientId).toMatch(/.+/);
   });
 
+  it("draws its id on first use, so a module can create one where workerd forbids randomness", async () => {
+    const random = vi.spyOn(globalThis.crypto, "randomUUID");
+    const fetch = fakeFetch(200, {});
+    const client = createActionClient({ fetch });
+    expect(random).not.toHaveBeenCalled();
+    await client.request("/_parlor/ping");
+    const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(new Headers(init.headers).get("x-parlor-client")).toBe(client.clientId);
+    expect(random).toHaveBeenCalledOnce();
+    random.mockRestore();
+  });
+
   it("request() prefixes the base url and keeps framework headers", async () => {
     const fetch = fakeFetch(200, {});
     const client = createActionClient({
