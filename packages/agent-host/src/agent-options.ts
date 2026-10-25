@@ -73,6 +73,45 @@ export function agentUsageOf(
   return windows.length === 0 ? undefined : { windows: ordered(windows), at };
 }
 
+interface CodexWindow {
+  readonly usedPercent?: unknown;
+  readonly windowDurationMins?: unknown;
+  readonly resetsAt?: unknown;
+}
+
+/**
+ * Codex's rate limit, from `account/rateLimits/read` on its app-server: two windows it calls
+ * `primary` and `secondary`, each carrying its own length, so neither is taken to be the short one.
+ */
+export function codexUsageOf(result: unknown, at: number): AgentUsage | undefined {
+  const limits = (
+    result as { readonly rateLimits?: Readonly<Record<string, CodexWindow>> }
+  )?.rateLimits;
+  if (!limits || typeof limits !== "object") return undefined;
+  const windows = (["primary", "secondary"] as const).flatMap(
+    (id): AgentUsageWindow[] => {
+      const slot = limits[id];
+      const used = slot?.usedPercent;
+      const minutes = slot?.windowDurationMins;
+      if (typeof used !== "number" || !Number.isFinite(used)) return [];
+      if (typeof minutes !== "number" || !(minutes > 0)) return [];
+      const resetsAt =
+        typeof slot?.resetsAt === "number" && Number.isFinite(slot.resetsAt)
+          ? slot.resetsAt * 1000
+          : undefined;
+      return [
+        {
+          id,
+          minutes,
+          used: Math.min(1, Math.max(0, used / 100)),
+          ...(resetsAt === undefined ? {} : { resetsAt }),
+        },
+      ];
+    },
+  );
+  return windows.length === 0 ? undefined : { windows: ordered(windows), at };
+}
+
 /**
  * `next` laid over `held` window by window: an event names one window, and the others it
  * leaves out still stand until they roll over.
@@ -99,4 +138,6 @@ function ordered(windows: readonly AgentUsageWindow[]): AgentUsageWindow[] {
 const ACCOUNT_WINDOWS: Readonly<Record<string, true>> = {
   five_hour: true,
   seven_day: true,
+  primary: true,
+  secondary: true,
 };
