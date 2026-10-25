@@ -18,7 +18,7 @@ Write down what the old app does before changing anything, and map each item:
 | Users, passwords, sessions                         | `--add auth` (Better Auth, email and password) ([step 6](#6-bring-the-users))                          |
 | Roles, admin flags, permissions                    | a table and a check at the top of each action ([step 5](#roles))                                       |
 | Pages and client routing                           | files in `src/routes/` ([step 8](#8-rebuild-the-pages))                                                |
-| `fetch`, axios or React Query calls to the backend | `useActionQuery` and `useActionMutation`                                                               |
+| `fetch`, axios or React Query calls to the backend | `useActionQuery` and `useActionMutation`, or `ensureActionQueryData` in a route `loader`               |
 | WebSockets or polling to keep pages fresh          | nothing to port: `reads` and `writes` refresh pages                                                    |
 | Webhooks and callbacks from other services         | a server plugin route ([step 9](#9-webhooks-and-scheduled-work))                                       |
 | Cron jobs                                          | a server plugin timer ([step 9](#9-webhooks-and-scheduled-work))                                       |
@@ -388,6 +388,7 @@ await database.close();
 
 - One file per page in `src/routes/`, for example `src/routes/courses.$courseId.tsx` for `/courses/:courseId`.
 - Read with `useActionQuery("listCourses", {})`, and change data with `useActionMutation("updateCourse")`. Never call `fetch` for app data.
+- Data the old app loaded in route loaders, or before rendering a page, goes in the route's `loader` with `ensureActionQueryData`, read with `useActionSuspenseQuery`. Redirects the old loaders decided from data stay there; `routeActionErrors` turns `not_found`, `unauthenticated` and `forbidden` into `notFound()` or a redirect. See [Load a page's data in its loader](/parlor/guides/pages-and-hooks/#load-a-pages-data-in-its-loader).
 - Give each page a `staticData.description`, so agents know what it is for.
 - Expose what the page shows as agent views: a `keyed` view per row (keyed by the id your actions take) and a `writable` view per form. Agents can then resolve "this course" and fill a form for the user to submit. The template's todo page shows both; see [The agent sidebar](/parlor/guides/agent-sidebar/).
 

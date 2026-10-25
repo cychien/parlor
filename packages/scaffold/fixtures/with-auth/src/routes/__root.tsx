@@ -1,10 +1,11 @@
-import { createRootRoute, Link, Outlet } from "@tanstack/react-router";
+import type { ParlorRouterContext } from "@parlor/client/router";
+import { createRootRouteWithContext, Link, Outlet } from "@tanstack/react-router";
 
 import { agentPanel } from "../agent/views.js";
 import { withSignIn } from "../auth/sign-in-gate.js";
 import { HeaderActions } from "../header-actions.js";
 
-export const Route = createRootRoute({
+export const Route = createRootRouteWithContext<ParlorRouterContext>()({
   staticData: {
     description: "The app shell: a header with the agent button, then the page.",
     views: [agentPanel],

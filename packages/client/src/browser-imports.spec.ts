@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { build, type Plugin } from "vite";
 import { describe, expect, it } from "vitest";
 
-const entries = ["./index.ts", "./react/index.ts"].map((path) =>
+const entries = ["./index.ts", "./react/index.ts", "./router/index.ts"].map((path) =>
   fileURLToPath(new URL(path, import.meta.url)),
 );
 

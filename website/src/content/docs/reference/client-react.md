@@ -16,11 +16,32 @@ import { useActionMutation } from "@parlor/client/react";
 TanStack Query's `useQuery` and `useMutation` over actions. Queries refetch when any caller runs an action that writes what they read. See [Pages and hooks](/parlor/guides/pages-and-hooks/).
 
 ```ts
+import { useActionSuspenseQuery } from "@parlor/client/react";
+//       ^?
+```
+
+`useActionQuery` as a `useSuspenseQuery`: `data` is always set. It suspends until the action answers, unless a route loader already ensured the data.
+
+```ts
+import { ensureActionQueryData } from "@parlor/client/react";
+//       ^?
+```
+
+For route loaders: the action's cached data, fetched first when there is none or a write it reads has made it out of date. `context` is the router context `createParlorRouter` gives every loader, `{ client, queryClient }`. The data lands in the entry `useActionQuery` and `useActionSuspenseQuery` read, with its read tags, so it stays fresh like theirs. Rejects with the action's `ActionError`. See [Load a page's data in its loader](/parlor/guides/pages-and-hooks/#load-a-pages-data-in-its-loader).
+
+```ts
+import { actionQueryOptions } from "@parlor/client/react";
+//       ^?
+```
+
+The query behind the hooks and `ensureActionQueryData`, for `queryClient.prefetchQuery`, `useQueries` and the like.
+
+```ts
 import { FrameworkProvider } from "@parlor/client/react";
 //       ^?
 ```
 
-Wraps the app: `client` (the action client), `router` (the TanStack router) and, with sign-in, `auth` (the auth client from `@parlor/auth/client`).
+Wraps the app: `client` (the action client), `router` (the TanStack router) and, with sign-in, `auth` (the auth client from `@parlor/auth/client`). It uses `queryClient` when given, else the router's `context.queryClient`, else a new one. When the signed-in user changes, it clears cached queries and runs the router's loaders again.
 
 ## Sessions and capabilities
 

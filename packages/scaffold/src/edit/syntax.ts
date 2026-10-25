@@ -12,6 +12,8 @@ import type { SourceFile } from "./source.js";
 export interface CallSite {
   readonly callee: string;
   readonly from: string;
+  /** Other names from `from` that stand in for `callee`, such as `createRootRouteWithContext`. */
+  readonly or?: readonly string[];
 }
 
 export type Found<T> = { readonly ok: true; readonly value: T } | Unsafe;
@@ -105,22 +107,36 @@ export function callsOf(file: SourceFile, local: string): CallExpression[] {
   return calls;
 }
 
-/** Exactly one call of `site.callee` through its import binding; never a same-named local. */
+/** The call a curried factory returns, `f<T>()(options)`, when `call` is `f<T>()`. */
+function curriedCall(file: SourceFile, call: CallExpression): CallExpression {
+  if (call.arguments.length > 0) return call;
+  let outer: CallExpression | undefined;
+  forEachNode(file.ast, (node) => {
+    if (node.type === "CallExpression" && node.callee === call) outer = node;
+  });
+  return outer ?? call;
+}
+
+/**
+ * Exactly one call of `site.callee`, or of a name in `site.or`, through its import binding;
+ * never a same-named local. A curried call, `f<T>()(options)`, is the call that takes options.
+ */
 export function findCall(file: SourceFile, site: CallSite): Found<CallExpression> {
-  const local = importedName(file, site.callee, site.from);
-  if (!local) {
+  const names = [site.callee, ...(site.or ?? [])];
+  const locals = names.flatMap((name) => importedName(file, name, site.from) ?? []);
+  if (locals.length === 0) {
     return unsafe(
       declaresAtTopLevel(file, site.callee)
         ? `\`${site.callee}\` here is declared in ${file.path}, not imported from ${site.from}.`
-        : `${file.path} does not import ${site.callee} from ${site.from}.`,
+        : `${file.path} does not import ${names.join(" or ")} from ${site.from}.`,
     );
   }
-  const calls = callsOf(file, local);
+  const calls = locals.flatMap((local) => callsOf(file, local));
   if (calls.length === 0) return unsafe(`${file.path} never calls ${site.callee}().`);
   if (calls.length > 1) {
     return unsafe(`${site.callee}() is called in more than one place in ${file.path}.`);
   }
-  return found(calls[0]!);
+  return found(curriedCall(file, calls[0]!));
 }
 
 export type ObjectArgument =
