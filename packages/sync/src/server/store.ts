@@ -42,6 +42,13 @@ export async function ensureSyncTables(db: SyncDatabase): Promise<void> {
     insert into sync_version (id, v)
     select 1, greatest(coalesce((select max(version) from sync_events), 0), 0)
     on conflict (id) do nothing`);
+  await db.execute(
+    sql`create table if not exists sync_pruned (id int primary key, version bigint not null)`,
+  );
+  await db.execute(sql`
+    insert into sync_pruned (id, version)
+    select 1, coalesce((select min(version) - 1 from sync_events), (select v from sync_version where id = 1))
+    on conflict (id) do nothing`);
 }
 
 export interface RecordSyncEventInput {
@@ -134,6 +141,38 @@ export async function readSyncEvents(
     .sort((a, b) => compareCursors(a, b));
 }
 
+export type SyncBacklog =
+  | { readonly events: SyncEvent[]; readonly resetTo?: undefined }
+  | { readonly resetTo: SyncCursor };
+
+/**
+ * Every event of these streams after `since`, or, when they cannot all be replayed, the
+ * cursor to reset to: there are more than one batch of them, or pruning removed events
+ * after `since`. The initial cursor asks for the retained log, so pruning never resets it.
+ */
+export async function readSyncBacklog(
+  db: SyncDatabase,
+  scope: string | readonly string[],
+  since: SyncCursor,
+): Promise<SyncBacklog> {
+  const events = await readSyncEvents(db, scope, since, MAX_BATCH + 1);
+  const pruned = await readPrunedVersion(db);
+  const fromStart = compareCursors(since, INITIAL_CURSOR) === 0;
+  if (events.length <= MAX_BATCH && (fromStart || since.version >= pruned)) {
+    return { events };
+  }
+  const head = await readSyncCursor(db, scope);
+  const floor: SyncCursor = { version: pruned, id: "" };
+  return { resetTo: compareCursors(head, floor) > 0 ? head : floor };
+}
+
+async function readPrunedVersion(db: SyncDatabase): Promise<number> {
+  const [row] = await rows<{ version: number | string }>(
+    db.execute(sql`select version from sync_pruned where id = 1`),
+  );
+  return Number(row?.version ?? 0);
+}
+
 /**
  * The last event of these streams, or the initial cursor when they have none. Read before
  * a query, it marks what the query's answer already reflects: versions are allocated under
@@ -169,10 +208,17 @@ export async function pruneSyncEvents(
     );
     if (!lock?.held) return 0;
     const cutoff = new Date(Date.now() - retentionMs);
-    const deleted = await rows<{ id: string }>(
-      tx.execute(sql`delete from sync_events where created_at < ${cutoff} returning id`),
+    const [deleted] = await rows<{ count: number }>(
+      tx.execute(sql`
+        with deleted as (
+          delete from sync_events where created_at < ${cutoff} returning version
+        ), marked as (
+          update sync_pruned set version = greatest(version, (select max(version) from deleted))
+           where id = 1
+        )
+        select count(*)::int as count from deleted`),
     );
-    return deleted.length;
+    return deleted?.count ?? 0;
   });
 }
 

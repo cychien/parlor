@@ -18,7 +18,12 @@ import type { RegisteredActions } from "../register.js";
 import type { FrameworkAuth, SessionSnapshot, SessionSource } from "../session.js";
 import { createAgentUiRuntime } from "./agent-ui/runtime.js";
 import { type FrameworkSync, SyncBridge } from "./sync-bridge.js";
-import { invalidateForEvents, type ReadTagRegistry, readTagsOf } from "./sync.js";
+import {
+  invalidateForEvents,
+  invalidateForReset,
+  type ReadTagRegistry,
+  readTagsOf,
+} from "./sync.js";
 
 interface FrameworkContextValue {
   readonly client: ActionClient<RegisteredActions>;
@@ -187,6 +192,10 @@ function SyncConnection({
       onEvents: (events) => {
         void invalidateForEvents(queryClient, value.readTags, events);
         value.bridge.emit(events);
+      },
+      onReset: (cursor) => {
+        void invalidateForReset(queryClient, value.readTags, cursor);
+        value.bridge.resumed();
       },
       isHidden: () => globalThis.document?.visibilityState === "hidden",
       channels: [value.agentUi],

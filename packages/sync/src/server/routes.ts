@@ -14,7 +14,7 @@ import {
   SYNC_PROTOCOL_VERSION,
 } from "../protocol.js";
 import type { SyncHub } from "./hub.js";
-import { readSyncEvents, type SyncDatabase } from "./store.js";
+import { readSyncBacklog, readSyncEvents, type SyncDatabase } from "./store.js";
 
 export type SyncTransport = "sse" | "poll";
 
@@ -60,6 +60,23 @@ function batch(events: SyncEvent[], since: string): SyncBatch {
   return { events, cursor: last ? encodeCursor(cursorOf(last)) : since };
 }
 
+async function missedSince(
+  db: SyncDatabase,
+  streams: readonly string[],
+  event: H3Event,
+): Promise<SyncBatch> {
+  const query = getQuery(event);
+  const since = String(query.since ?? "");
+  if (query.reset !== "1") {
+    return batch(await readSyncEvents(db, streams, decodeCursor(since)), since);
+  }
+  const backlog = await readSyncBacklog(db, streams, decodeCursor(since));
+  if (backlog.resetTo) {
+    return { events: [], cursor: encodeCursor(backlog.resetTo), reset: true };
+  }
+  return batch(backlog.events, since);
+}
+
 export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
   const { basePath, data, hub, scope } = options;
   const streamsOf = async (request: Request): Promise<readonly string[]> => {
@@ -83,21 +100,15 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
   }));
 
   app.get(`${basePath}/sync`, async (event: H3Event) => {
-    const since = String(getQuery(event).since ?? "");
-    const events = await readSyncEvents(
-      db(),
-      await streamsOf(event.req),
-      decodeCursor(since),
-    );
+    const missed = await missedSince(db(), await streamsOf(event.req), event);
     event.res.headers.set("cache-control", "no-store");
-    return batch(events, since);
+    return missed;
   });
 
   app.get(`${basePath}/sync/stream`, async (event: H3Event) => {
     const streams = await streamsOf(event.req);
     const currentScope = streams[0]!;
     const authority = await options.authority?.(event.req);
-    const sinceParam = String(getQuery(event).since ?? "");
     await hub.start();
     const stream = createEventStream(event);
     const send = (payload: SyncBatch) => void stream.push(JSON.stringify(payload));
@@ -159,14 +170,12 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
         }),
       );
     }
-    const since = decodeCursor(sinceParam);
-    const missed = await readSyncEvents(db(), streams, since).catch((error: unknown) => {
+    const missed = await missedSince(db(), streams, event).catch((error: unknown) => {
       detach();
       throw error;
     });
-    if (missed.length > 0) send(batch(missed, sinceParam));
-    const last = missed.at(-1);
-    const caughtUpTo = last ? cursorOf(last) : since;
+    if (missed.events.length > 0 || missed.reset) send(missed);
+    const caughtUpTo = decodeCursor(missed.cursor);
     const pending = arrivedDuringCatchUp
       .filter((syncEvent) => compareCursors(cursorOf(syncEvent), caughtUpTo) > 0)
       .sort((a, b) => compareCursors(cursorOf(a), cursorOf(b)));

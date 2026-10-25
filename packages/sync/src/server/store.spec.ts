@@ -2,11 +2,12 @@ import { createDatabase, type DatabaseHandle } from "@parlor/data";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { INITIAL_CURSOR } from "../protocol.js";
+import { cursorOf, INITIAL_CURSOR, type SyncEvent } from "../protocol.js";
 import {
   ensureSyncTables,
   type NotifyPayload,
   pruneSyncEvents,
+  readSyncBacklog,
   readSyncCursor,
   readSyncEvents,
   recordSyncEvent,
@@ -125,5 +126,83 @@ describe("sync store", () => {
     expect(
       (await readSyncEvents(handle.db, "acme", INITIAL_CURSOR)).length,
     ).toBeGreaterThan(0);
+  });
+});
+
+describe("readSyncBacklog", () => {
+  let fresh: DatabaseHandle;
+  beforeAll(async () => {
+    fresh = await createDatabase({ dataDir: "memory://" });
+    await ensureSyncTables(fresh.db);
+  }, 30_000);
+  afterAll(() => fresh.close());
+
+  const record = (scope: string, count: number) =>
+    fresh.transaction(async (tx) => {
+      const recorded: SyncEvent[] = [];
+      for (let i = 0; i < count; i += 1) {
+        recorded.push(await recordSyncEvent(tx, { scope, tags: [["tasks", `${i}`]] }));
+      }
+      return recorded;
+    });
+  const age = (scope: string) =>
+    fresh.db.execute(
+      sql`update sync_events set created_at = now() - interval '2 days' where scope = ${scope}`,
+    );
+
+  it("returns up to one batch of missed events, and resets to the last event beyond it", async () => {
+    const [start] = await record("batch", 1);
+    const missed = await record("batch", 500);
+    expect(await readSyncBacklog(fresh.db, "batch", cursorOf(start!))).toEqual({
+      events: missed,
+    });
+
+    const [beyond] = await record("batch", 1);
+    expect(await readSyncBacklog(fresh.db, "batch", cursorOf(start!))).toEqual({
+      resetTo: cursorOf(beyond!),
+    });
+  });
+
+  it("resets a cursor that predates pruned events, and never the initial one", async () => {
+    const [start, gone] = await record("pruned", 2);
+    await age("pruned");
+    await pruneSyncEvents(fresh.db);
+    const [kept] = await record("pruned", 1);
+
+    expect(await readSyncBacklog(fresh.db, "pruned", cursorOf(start!))).toEqual({
+      resetTo: cursorOf(kept!),
+    });
+    expect(await readSyncBacklog(fresh.db, "pruned", cursorOf(gone!))).toEqual({
+      events: [kept],
+    });
+    expect(await readSyncBacklog(fresh.db, "pruned", INITIAL_CURSOR)).toEqual({
+      events: [kept],
+    });
+  });
+
+  it("resets past the pruned events when the streams have none left", async () => {
+    const [start, gone] = await record("emptied", 2);
+    await age("emptied");
+    await pruneSyncEvents(fresh.db);
+
+    const backlog = await readSyncBacklog(fresh.db, "emptied", cursorOf(start!));
+    expect(backlog.resetTo).toEqual({ version: gone!.version, id: "" });
+    expect(await readSyncBacklog(fresh.db, "emptied", backlog.resetTo!)).toEqual({
+      events: [],
+    });
+  });
+
+  it("counts events pruned before the deployment tracked pruning", async () => {
+    const [start, gone] = await record("upgrade", 2);
+    const [kept] = await record("upgrade", 1);
+    await fresh.db.execute(
+      sql`delete from sync_events where version <= ${gone!.version}`,
+    );
+    await fresh.db.execute(sql`delete from sync_pruned`);
+    await ensureSyncTables(fresh.db);
+
+    expect(await readSyncBacklog(fresh.db, "upgrade", cursorOf(start!))).toEqual({
+      resetTo: cursorOf(kept!),
+    });
   });
 });

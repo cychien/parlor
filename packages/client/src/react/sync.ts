@@ -24,6 +24,8 @@ interface Fetch {
   /** Its answer reflects at least this: the newest cursor seen before it was sent. */
   readonly floor: SyncCursor;
   readonly arrived: SyncEvent[];
+  /** The newest reset while it was in flight: events up to it were never delivered. */
+  reset: SyncCursor | undefined;
 }
 
 /** One recorded read: its query hash, read tags and the encoded cursor its data reflects. */
@@ -39,6 +41,11 @@ const newer = (event: SyncEvent, cursor: SyncCursor | undefined) =>
 
 const overlaps = (reads: readonly Tag[], event: SyncEvent) =>
   reads.some((read) => event.tags.some((write) => tagsOverlap(read, write)));
+
+const predates = (read: Read, reset: SyncCursor | undefined) =>
+  reset !== undefined &&
+  read.tags.length > 0 &&
+  (read.cursor === undefined || compareCursors(read.cursor, reset) < 0);
 
 /**
  * What each action query read and how far into the sync log its data reaches, so an event
@@ -74,12 +81,13 @@ export class ReadTagRegistry {
    * it was in flight and is newer than the answer invalidates the data once it lands.
    */
   async read<T>(queryHash: string, fetch: () => Promise<ActionEnvelope<T>>): Promise<T> {
-    const pending: Fetch = { floor: this.#seen, arrived: [] };
+    const pending: Fetch = { floor: this.#seen, arrived: [], reset: undefined };
     this.#fetches.add(pending);
     try {
       const { data, tags, cursor } = await fetch();
       const read = this.record(queryHash, tags, cursor);
       if (
+        predates(read, pending.reset) ||
         pending.arrived.some(
           (event) => newer(event, read.cursor) && overlaps(tags, event),
         )
@@ -128,6 +136,18 @@ export class ReadTagRegistry {
     return hashes;
   }
 
+  /**
+   * Sync was reset to `cursor` without the events before it: every query whose data may
+   * predate it, and fetches in flight, whose answers are checked when they land.
+   */
+  reset(cursor: SyncCursor): Set<string> {
+    this.#seen = later(cursor, this.#seen);
+    for (const fetch of this.#fetches) fetch.reset = cursor;
+    const hashes = new Set<string>();
+    for (const [hash, read] of this.#reads) if (predates(read, cursor)) hashes.add(hash);
+    return hashes;
+  }
+
   /** The newest cursor any answer or event has shown, encoded; every later read reflects it. */
   latest(): string {
     return encoded(this.#seen);
@@ -164,13 +184,25 @@ export function readTagsOf(queryClient: QueryClient): ReadTagRegistry {
   return registry;
 }
 
+/** Invalidates every query whose data may predate the cursor sync was reset to. */
+export function invalidateForReset(
+  queryClient: QueryClient,
+  registry: ReadTagRegistry,
+  cursor: string,
+): Promise<void> {
+  return invalidateHashes(queryClient, registry.reset(decodeCursor(cursor)));
+}
+
 export function invalidateForEvents(
   queryClient: QueryClient,
   registry: ReadTagRegistry,
   events: readonly SyncEvent[],
 ): Promise<void> {
   registry.observe(events);
-  const hashes = registry.affected(events);
+  return invalidateHashes(queryClient, registry.affected(events));
+}
+
+function invalidateHashes(queryClient: QueryClient, hashes: Set<string>): Promise<void> {
   if (hashes.size === 0) return Promise.resolve();
   return queryClient.invalidateQueries({
     queryKey: ACTION_QUERY_PREFIX,

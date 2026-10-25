@@ -4,7 +4,10 @@ import type { SyncClient } from "@parlor/sync/client";
 export interface FrameworkSync {
   addChannel(channel: ClientChannel): () => void;
   onEvents(listener: (events: readonly SyncEvent[]) => void): () => void;
-  /** The connection came back after a failure; reread what could have changed unseen. */
+  /**
+   * The connection came back after a failure, or the server could not replay every event
+   * this client missed; reread what could have changed unseen.
+   */
   onResume(listener: () => void): () => void;
   /** What the server negotiated; `undefined` until it has, and while no client is attached. */
   transport(): "sse" | "poll" | undefined;

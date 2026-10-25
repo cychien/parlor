@@ -84,7 +84,7 @@ export function Notes() {
 
 `useActionQuery(name, input, options?)` is a TanStack Query `useQuery` whose data is the action's return value. `useActionMutation(name, options?)` is a `useMutation`. Both accept the usual TanStack Query options.
 
-You never refetch by hand. When any caller runs an action that `writes` what a query `reads`, the query refetches, in this tab and in every other one. Only writes newer than the query's data count: each read answers with how far into the sync log its data reaches, so a page that loads right after some writes, or reconnects, does not refetch for writes its data already shows.
+You never refetch by hand. When any caller runs an action that `writes` what a query `reads`, the query refetches, in this tab and in every other one. Only writes newer than the query's data count: each read answers with how far into the sync log its data reaches, so a page that loads right after some writes, or reconnects, does not refetch for writes its data already shows. A page that reconnects after missing more writes than the server replays at once, or writes older than the server keeps, refetches every query whose data predates the reconnect.
 
 Until then the data counts as fresh: mounting another component that reads it, focusing the window, reconnecting and hydrating a page the server rendered all use it as it is. To refetch on TanStack Query's own schedule instead, pass `staleTime` to the hook, or give your `QueryClient` a `staleTime` default.
 
