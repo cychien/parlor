@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node scripts/sample-paths.ts && astro dev",
-    "build": "node scripts/sample-paths.ts && node scripts/check-samples.ts && astro build",
+    "dev": "astro dev",
+    "build": "node scripts/check-samples.ts && astro build",
     "preview": "astro preview",
     "typecheck": "astro sync && tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
