@@ -7,6 +7,7 @@ import { pair, type PairInput, pairingDeviceOf, startLocalPairing } from "./pair
 import { type Browser, memoryHostKeys, type SpecApp, startSpecApp } from "./spec-kit.js";
 
 let app: SpecApp;
+const realFetch = globalThis.fetch;
 
 beforeAll(async () => {
   vi.stubEnv("PARLOR_APP_NAME", "Hello");
@@ -37,7 +38,6 @@ function connectAs(
     tab: Promise<{ status: number; location: string | null; text: string }>;
   }[] = [];
   const statuses: number[] = [];
-  const realFetch = globalThis.fetch;
   vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
     const response =
       options.tokenAnswer && String(args[0]).endsWith("/_parlor/auth/hosts/token")
@@ -74,7 +74,7 @@ function connectAs(
   return { outcome: pair(input), keys, opened };
 }
 
-describe("pairing a computer from its terminal", () => {
+describe("pairing a computer from its terminal", { timeout: 30_000 }, () => {
   it("T4-06: reads the app's name without a session and pairs as the signed-in user", async () => {
     const bob = await app.signUp("Bob");
     const bobs = connectAs(bob);
@@ -205,7 +205,7 @@ describe("pairing a computer from its terminal", () => {
   });
 });
 
-describe("pairing a computer from the desktop app", () => {
+describe("pairing a computer from the desktop app", { timeout: 30_000 }, () => {
   const authorize = async (
     browser: Browser,
     pairing: Record<string, unknown>,

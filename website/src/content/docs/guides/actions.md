@@ -57,7 +57,7 @@ export const registry = createRegistry({
 
 - `description` is what an agent reads to decide when to call the action. Write it for a reader who sees nothing else.
 - `input` is a zod schema. Field descriptions (`.describe(...)`) become the tool's parameter docs.
-- `run` gets the parsed input and a context: `db`, `scope`, `principal` (who is calling) and `source` (`ui`, `agent`, `mcp` or `http`).
+- `run` gets the parsed input and a context: `db`, `scope`, `principal` (who is calling), `source` (`ui`, `agent`, `mcp` or `http`) and `request`, the HTTP request that made the call on any surface, for what it carries besides identity, such as a cookie the app set.
 
 ## Scope every row
 

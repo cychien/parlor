@@ -37,6 +37,19 @@ export class ReadTagRegistry {
   }
 }
 
+const registries = new WeakMap<QueryClient, ReadTagRegistry>();
+
+/** The one registry of `queryClient`, shared by hooks, loaders and sync; it lives as long as the client. */
+export function readTagsOf(queryClient: QueryClient): ReadTagRegistry {
+  let registry = registries.get(queryClient);
+  if (!registry) {
+    registry = new ReadTagRegistry();
+    registry.attach(queryClient);
+    registries.set(queryClient, registry);
+  }
+  return registry;
+}
+
 export function invalidateForEvents(
   queryClient: QueryClient,
   registry: ReadTagRegistry,
