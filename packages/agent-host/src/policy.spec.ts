@@ -48,6 +48,22 @@ describe("RemotePolicy", () => {
     ).toBe("computer");
     expect(approvalFor(DEFAULT_POLICY, question)).toBeUndefined();
   });
+
+  it("leaves a device without presence to the computer, but for the browser that approved `connect` here", () => {
+    const key = { format: "es256-raw", keyId: "k1", publicKey: {} } as const;
+    expect(
+      approvalFor(DEFAULT_POLICY, permission(), { via: "local", presenceKey: key }),
+    ).toBe("presence");
+    expect(approvalFor(DEFAULT_POLICY, permission(), { via: "vouched" })).toBe(
+      "computer",
+    );
+    expect(approvalFor(DEFAULT_POLICY, permission(), { via: "pairing" })).toBe("device");
+    expect(
+      approvalFor({ deviceApproval: "local", answers: "computer" }, permission(), {
+        via: "pairing",
+      }),
+    ).toBe("computer");
+  });
 });
 
 describe("the policy file", () => {
@@ -71,6 +87,7 @@ describe("the policy file", () => {
       deviceApproval: "local",
       answers: "computer",
       promptPresence: { maxAgeHours: 18 },
+      agentMode: "auto",
     });
     expect((await stat(file)).mode & 0o777).toBe(0o600);
     expect(JSON.parse(await readFile(file, "utf8"))).toEqual({ answers: "computer" });
@@ -85,6 +102,9 @@ describe("the policy file", () => {
     expect(
       await changePolicy(file, DEFAULT_POLICY, { promptPresence: { maxAgeHours: 2 } }),
     ).toEqual({ ...DEV_POLICY, promptPresence: { maxAgeHours: 2 } });
+    expect(await changePolicy(file, DEFAULT_POLICY, { agentMode: "ask" })).toMatchObject({
+      agentMode: "ask",
+    });
   });
 
   it("keeps the base for a setting it cannot make sense of, and for a file that is not JSON", async () => {
@@ -95,6 +115,7 @@ describe("the policy file", () => {
         deviceApproval: "sometimes",
         answers: 3,
         promptPresence: { maxAgeHours: -1 },
+        agentMode: "yolo",
       }),
     );
     expect(await loadPolicy(file, DEFAULT_POLICY)).toEqual(DEFAULT_POLICY);

@@ -11,6 +11,7 @@ describe("hostPaths", () => {
       policy: "/Users/alice/.parlor/host/policy.json",
       sessions: "/Users/alice/.parlor/host/sessions.json",
       agents: "/Users/alice/.parlor/host/agents.json",
+      learned: "/Users/alice/.parlor/host/learned.json",
       control: "/Users/alice/.parlor/host/run/control.sock",
       proxy: "/Users/alice/.parlor/host/run/proxy.sock",
       versions: "/Users/alice/.parlor/host/versions",

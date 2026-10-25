@@ -5,6 +5,7 @@ import {
   type TurnBinding,
 } from "@parlor/core";
 import {
+  type AgentDelegation,
   AuthFailure,
   type Delegation,
   REVOCATION_HORIZON_MS,
@@ -20,6 +21,8 @@ export const TURN_AUDIENCE = "parlor:mcp";
 
 export const HOST_ASSERTION_TYP = "parlor-host+jwt";
 export const TURN_TOKEN_TYP = "parlor-turn+jwt";
+/** An agent on the host's computer outside any turn: Claude Code or Codex in a terminal. */
+export const AGENT_TOKEN_TYP = "parlor-agent+jwt";
 
 const CLOCK_SKEW_MS = 60_000;
 
@@ -37,11 +40,15 @@ declare const audience: unique symbol;
 export type Jws<A extends TokenAudience> = string & { readonly [audience]: A };
 export type HostAssertion = Jws<typeof HOST_AUDIENCE>;
 export type TurnToken = Jws<typeof TURN_AUDIENCE>;
+declare const outsideTurns: unique symbol;
+/** Same audience as a turn token, never mistaken for one: no turn, so no screen to drive. */
+export type AgentToken = Jws<typeof TURN_AUDIENCE> & { readonly [outsideTurns]: true };
 
 /** What an `authorization` header carries, sorted by scheme and shape before any verification. */
 export type Credential =
   | { readonly kind: "host"; readonly assertion: HostAssertion }
   | { readonly kind: "turn"; readonly token: TurnToken }
+  | { readonly kind: "agent"; readonly token: AgentToken }
   | { readonly kind: "access"; readonly token: string }
   | { readonly kind: "session"; readonly token: string };
 
@@ -100,9 +107,14 @@ export function credentialOf(authorization: string | null): Credential | undefin
     return { kind: "host", assertion: brand<typeof HOST_AUDIENCE>(value) };
   }
   if (!JWS_SHAPE.test(value)) return { kind: "session", token: value };
-  return typOf(value) === TURN_TOKEN_TYP
-    ? { kind: "turn", token: brand<typeof TURN_AUDIENCE>(value) }
-    : { kind: "access", token: value };
+  switch (typOf(value)) {
+    case TURN_TOKEN_TYP:
+      return { kind: "turn", token: brand<typeof TURN_AUDIENCE>(value) };
+    case AGENT_TOKEN_TYP:
+      return { kind: "agent", token: brand<typeof TURN_AUDIENCE>(value) as AgentToken };
+    default:
+      return { kind: "access", token: value };
+  }
 }
 
 /** Mints a turn token for `host`'s grant; the provider's `delegate`. */
@@ -201,5 +213,103 @@ export function agentPrincipalOf(
       hostId: asId("host", claims.hid),
       clientId: claims.cid,
     },
+  };
+}
+
+export interface AgentTokenClaims {
+  readonly aud: typeof TURN_AUDIENCE;
+  readonly iss: string;
+  readonly sub: string;
+  readonly gid: string;
+  readonly hid: string;
+  readonly agt: string;
+  readonly iat: number;
+  readonly exp: number;
+}
+
+/** Mints a token for an agent on `host`'s computer outside any turn; the provider's `delegateAgent`. */
+export async function delegateAgent(
+  keys: TurnTokenKeys,
+  host: HostPrincipal,
+  agent: AgentDelegation,
+  now: number,
+): Promise<Delegation> {
+  if (!(agent.ttlMs > 0))
+    throw new RangeError("An agent token needs a positive lifetime.");
+  const iat = Math.floor(now / 1000);
+  const exp = iat + Math.ceil(Math.min(agent.ttlMs, MAX_TURN_TOKEN_TTL_MS) / 1000);
+  const claims: AgentTokenClaims = {
+    aud: TURN_AUDIENCE,
+    iss: keys.issuer,
+    sub: host.userId,
+    gid: host.grantId,
+    hid: host.hostId,
+    agt: agent.agent,
+    iat,
+    exp,
+  };
+  const token = await new SignJWT({ ...claims })
+    .setProtectedHeader({ alg: "ES256", typ: AGENT_TOKEN_TYP, kid: keys.kid })
+    .sign(keys.privateKey);
+  return { token, expiresAt: exp * 1000 };
+}
+
+const agentClaimsSchema = z.object({
+  aud: z.literal(TURN_AUDIENCE),
+  iss: z.string().min(1),
+  sub: z.string().min(1),
+  gid: z.string().min(1),
+  hid: z.string().min(1),
+  agt: z.string().min(1),
+  iat: z.number().int(),
+  exp: z.number().int(),
+});
+
+/** Signature, `aud`, `iss` and `exp` only; the caller then asks `RevocationSet` about `gid`. */
+export async function verifyAgentToken(
+  keys: TurnTokenKeys,
+  token: AgentToken,
+  now: number,
+): Promise<AgentTokenClaims> {
+  let payload: unknown;
+  try {
+    ({ payload } = await jwtVerify(
+      token,
+      (header) => {
+        const key =
+          header.kid === undefined ? undefined : keys.publicKeys.get(header.kid);
+        if (!key) throw new errors.JWKSNoMatchingKey();
+        return key;
+      },
+      {
+        algorithms: ["ES256"],
+        typ: AGENT_TOKEN_TYP,
+        issuer: keys.issuer,
+        audience: TURN_AUDIENCE,
+        currentDate: new Date(now),
+      },
+    ));
+  } catch (error) {
+    if (error instanceof errors.JWTExpired) {
+      throw new AuthFailure("expired", "The agent token expired.");
+    }
+    throw new AuthFailure("invalid", "The agent token is invalid.");
+  }
+  const claims = agentClaimsSchema.safeParse(payload);
+  if (!claims.success) throw new AuthFailure("invalid", "The agent token is malformed.");
+  const { iat, exp } = claims.data;
+  if (exp - iat > MAX_TURN_TOKEN_TTL_MS / 1000 || iat * 1000 > now + CLOCK_SKEW_MS) {
+    throw new AuthFailure("invalid", "The agent token has an impossible lifetime.");
+  }
+  return claims.data;
+}
+
+/** An external agent of the user: no turn, so `ui_*` reaches no screen and confirms go to the app. */
+export function outsideAgentPrincipalOf(claims: AgentTokenClaims): AgentPrincipal {
+  return {
+    kind: "agent",
+    userId: asId("user", claims.sub),
+    grantId: asId("grant", claims.gid),
+    agent: { name: claims.agt, verified: true },
   };
 }

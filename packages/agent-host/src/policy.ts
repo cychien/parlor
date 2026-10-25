@@ -19,18 +19,25 @@ export interface RemotePolicy {
    * again. Absent: never.
    */
   readonly promptPresence?: { readonly maxAgeHours: number } | "off" | undefined;
+  /**
+   * `auto`: the agent's own safety review decides, asking only for what it flags, where the
+   * agent has one. `ask`: it asks before every action. Absent: `auto`.
+   */
+  readonly agentMode?: "auto" | "ask" | undefined;
 }
 
 export const DEFAULT_POLICY: RemotePolicy = {
   deviceApproval: "local",
   answers: "presence",
   promptPresence: { maxAgeHours: 18 },
+  agentMode: "auto",
 };
 
 export const DEV_POLICY: RemotePolicy = {
   deviceApproval: "off",
   answers: "off",
   promptPresence: "off",
+  agentMode: "auto",
 };
 
 /** When `device`'s prompts need Face ID or Touch ID again; undefined when they never do. */
@@ -51,13 +58,21 @@ export function isAppTool(ask: AgentAsk, appServer: string): boolean {
   return ask.kind === "permission" && ask.mcp?.server === appServer;
 }
 
-/** The ask item's `approval`; `undefined` lets any trusted device answer without presence. */
+/**
+ * The ask item's `approval`; `undefined` lets any trusted device answer without presence.
+ * Where presence is wanted, the browser that approved `connect` here answers its own turn's
+ * asks in the chat, since the loopback redirect put it on this computer; any other device
+ * without presence leaves them to this computer.
+ */
 export function approvalFor(
   policy: RemotePolicy,
   ask: AgentAsk,
-): "presence" | "computer" | undefined {
+  device?: Pick<TrustedDevice, "presenceKey" | "via">,
+): "presence" | "computer" | "device" | undefined {
   if (ask.kind === "question" || policy.answers === "off") return undefined;
-  return policy.answers;
+  if (policy.answers === "computer" || !device || device.presenceKey)
+    return policy.answers;
+  return device.via === "pairing" ? "device" : "computer";
 }
 
 type Overlay = { readonly [K in keyof RemotePolicy]?: unknown };
@@ -80,6 +95,11 @@ export async function loadPolicy(
     deviceApproval: choose(["local", "off"], overlay.deviceApproval, base.deviceApproval),
     answers: choose(["presence", "computer", "off"], overlay.answers, base.answers),
     promptPresence: promptPresenceOf(overlay.promptPresence, base.promptPresence),
+    agentMode: choose(
+      ["auto", "ask"] as const,
+      overlay.agentMode,
+      base.agentMode ?? "auto",
+    ),
   };
 }
 

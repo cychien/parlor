@@ -25,5 +25,6 @@ export {
   capacitorProjectDir,
   capacitorProjectFiles,
   DEVICE_KEY_PLUGIN,
+  drawsUnderSystemBars,
   ensureCapacitorProject,
 } from "./project.js";

@@ -1,6 +1,8 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 
+import type { AgentOption, AgentUsage } from "@parlor/chat";
+
 import {
   type AcpStdio,
   type AgentAsk,
@@ -29,6 +31,7 @@ export interface FakeAgentScript {
         readonly close?: boolean | undefined;
         readonly mcpHttp?: boolean | undefined;
         readonly modes?: AgentModes | undefined;
+        readonly options?: readonly AgentOption[] | undefined;
       }
     | undefined;
   readonly steps: Readonly<Record<string, readonly FakeStep[]>>;
@@ -43,6 +46,10 @@ export type FakeStep =
       readonly perSecond?: number;
     }
   | { readonly kind: "thought"; readonly text: string }
+  /** The agent moving itself to another mode, as Claude does off a model without `auto`. */
+  | { readonly kind: "mode"; readonly modeId: string }
+  /** A rate limit report, as Claude Code sends it on a `usage_update`. */
+  | { readonly kind: "usage"; readonly usage: AgentUsage }
   | {
       readonly kind: "tool";
       readonly title: string;
@@ -214,6 +221,12 @@ export function serveFakeAgent(script: FakeAgentScript, io: AcpStdio): Promise<v
       case "thought":
         await peer.update({ kind: "thought", text: step.text });
         return undefined;
+      case "mode":
+        await peer.update({ kind: "mode", modeId: step.modeId });
+        return undefined;
+      case "usage":
+        await peer.update({ kind: "usage", usage: step.usage });
+        return undefined;
       case "tool": {
         const toolCallId = `tool-${++tools}`;
         await peer.update({
@@ -301,7 +314,11 @@ export function serveFakeAgent(script: FakeAgentScript, io: AcpStdio): Promise<v
       newSession: async (input) => {
         const id = `fake-session-${sessions.size + 1}`;
         sessions.set(id, input.mcpServers);
-        return { id, modes: script.advertise?.modes };
+        return {
+          id,
+          modes: script.advertise?.modes,
+          options: script.advertise?.options,
+        };
       },
       prompt: async (sessionId, blocks: readonly PromptBlock[], peer) => {
         const text = blocks.map((block) => block.text).join("\n");

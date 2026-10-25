@@ -18,6 +18,7 @@ export {
   AuthFailure,
   type AuthFailureReason,
   type AuthProvider,
+  type AgentDelegation,
   type Delegation,
   type DeviceKeys,
   type DeviceVouch,

@@ -55,6 +55,9 @@ async function host() {
     { revokeGrant },
     { fileTrustStore },
     { ensureService },
+    { unregisterAgentTools, agentNames },
+    { detectAgents, loadProfiles },
+    { agentEnvironment },
   ] = await Promise.all([
     import("./acp.js"),
     import("@parlor/chat"),
@@ -70,6 +73,9 @@ async function host() {
     import("./revoke.js"),
     import("./trust.js"),
     import("./service.js"),
+    import("./agent-tools.js"),
+    import("./agents.js"),
+    import("./shell-path.js"),
   ]);
   type Paths = ReturnType<typeof hostPaths>;
   type Grants = ReturnType<typeof fileGrantStore>;
@@ -100,11 +106,29 @@ async function host() {
       const reply = await client.send({ op: "disconnect", appOrigin: origin });
       client.close();
       if (!reply.ok) throw new Error(reply.error);
-      return;
+      return reply.agentTools;
     }
     const grants = fileGrantStore(paths.grants);
     const grant = await grants.get(origin);
     if (!grant) throw new Error(`This computer is not connected to ${origin}.`);
+    const tools = grant.agentTools;
+    let removed: { readonly name: string; readonly agents: string } | undefined;
+    if (tools?.name && tools.agents?.length) {
+      const profiles = await loadProfiles(paths.agents);
+      const installed = await detectAgents(profiles);
+      const listed = { name: tools.name, agents: tools.agents };
+      await unregisterAgentTools(
+        {
+          profiles: profiles.filter((profile) =>
+            installed.some((a) => a.id === profile.id),
+          ),
+          hostCommand: join(paths.root, "bin", "parlor-host"),
+          env: agentEnvironment,
+        },
+        listed,
+      );
+      removed = { name: tools.name, agents: agentNames(profiles, listed) };
+    }
     const keys = keychainHostKeys(KEYCHAIN_SERVICE);
     await revokeGrant({
       appOrigin: origin,
@@ -114,6 +138,7 @@ async function host() {
     await grants.remove(origin);
     await keys.remove(origin);
     await fileTrustStore(paths.trust).forget(origin);
+    return removed;
   };
   return {
     changePolicy,
@@ -282,6 +307,7 @@ const connect = defineCommand({
           platform: platformName(),
           keys: kit.keychainHostKeys(KEYCHAIN_SERVICE),
           workspaceRoot: paths.workspaces,
+          offerAgentTools: true,
           channel: {
             kind: "browser",
             open: async (url) => {
@@ -333,14 +359,70 @@ const connect = defineCommand({
       fail(reply.error);
       return;
     }
+    const app = printable(grant.appName);
     process.stdout.write(
-      `Connected to ${printable(grant.appName)} as ${printable(grant.account.email ?? grant.account.name)}. Your agents are ready in its sidebar.\nNot you? Run \`npx @parlor/agent-host disconnect ${origin}\`.\n`,
+      `Connected to ${app} as ${printable(grant.account.email ?? grant.account.name)}.\n${usage(app, reply.agentTools)}Not you? Run \`npx @parlor/agent-host disconnect ${origin}\`.\n`,
     );
     if (alreadyConnected) {
       process.stdout.write(
         "This computer was already connected. To use your agents from another browser or device, open the Agent sidebar there and link it.\n",
       );
+      if (grant.agentTools === undefined) {
+        process.stdout.write(
+          `To use ${app} from Claude Code and Codex here too, run \`npx @parlor/agent-host tools ${origin}\`.\n`,
+        );
+      }
     }
+  },
+});
+
+/** The two ways to use the app from this computer, for the lines after "Connected". */
+function usage(
+  app: string,
+  tools: { readonly name: string; readonly agents: string } | undefined,
+): string {
+  const sidebar = `  - In ${app}'s agent sidebar.\n`;
+  if (!tools) return `Use your agents in ${app}'s agent sidebar.\n`;
+  return `Use it two ways:\n${sidebar}  - In ${tools.agents} on this computer: ask them to "use ${tools.name} to ...". They ask you before their first change in each conversation.\n`;
+}
+
+const tools = defineCommand({
+  meta: {
+    name: "tools",
+    description:
+      "Let the coding agents on this computer use an app outside its sidebar, or stop them",
+  },
+  args: {
+    url: { type: "positional", required: true, description: "The app's URL" },
+    off: { type: "boolean", description: "Stop them; the sidebar keeps working" },
+  },
+  async run({ args }) {
+    const kit = await host();
+    const origin = new URL(args.url).origin;
+    const client = await kit.connectControl(kit.hostPaths().control);
+    if (!client) {
+      fail(
+        `Parlor Host is not running. Run \`npx @parlor/agent-host connect ${origin}\` first.`,
+      );
+      return;
+    }
+    const reply = await client.send({
+      op: "agent_tools",
+      appOrigin: origin,
+      on: !args.off,
+    });
+    client.close();
+    if (!reply.ok) {
+      fail(reply.error);
+      return;
+    }
+    process.stdout.write(
+      args.off
+        ? `The coding agents on this computer no longer use ${origin}. Its sidebar still works.\n`
+        : reply.agentTools
+          ? `${reply.agentTools.agents} can use ${origin}: ask them to "use ${reply.agentTools.name} to ...".\n`
+          : "No coding agent here can take it: install Claude Code or Codex, then run this again.\n",
+    );
   },
 });
 
@@ -349,9 +431,21 @@ const disconnect = defineCommand({
   args: { url: { type: "positional", required: true, description: "The app's URL" } },
   async run({ args }) {
     const kit = await host();
-    await kit
-      .disconnectFrom(new URL(args.url).origin)
-      .catch((error: unknown) => fail(errorText(error)));
+    const origin = new URL(args.url).origin;
+    let removed: Awaited<ReturnType<typeof kit.disconnectFrom>>;
+    try {
+      removed = await kit.disconnectFrom(origin);
+    } catch (error) {
+      fail(errorText(error));
+      return;
+    }
+    process.stdout.write(
+      `Disconnected this computer from ${origin}: its sidebar can no longer reach your agents here.\n${
+        removed
+          ? `Removed ${removed.name} from ${removed.agents}, so they cannot change it either.\n`
+          : ""
+      }`,
+    );
   },
 });
 
@@ -457,6 +551,11 @@ const config = defineCommand({
       description:
         "Hours a linked device sends before it confirms with Face ID or Touch ID again, or off",
     },
+    "agent-mode": {
+      type: "string",
+      description:
+        "auto: the agent's own safety review decides and asks only for what it flags; ask: it asks before every action",
+    },
   },
   async run({ args }) {
     const kit = await host();
@@ -478,6 +577,14 @@ const config = defineCommand({
         return;
       }
       change = { ...change, promptPresence: hours === "off" ? "off" : { maxAgeHours } };
+    }
+    const agentMode = args["agent-mode"];
+    if (agentMode !== undefined) {
+      if (agentMode !== "auto" && agentMode !== "ask") {
+        fail("--agent-mode takes auto or ask.");
+        return;
+      }
+      change = { ...change, agentMode };
     }
     const current =
       Object.keys(change).length === 0
@@ -552,9 +659,23 @@ function memoryGrants(): GrantStore {
 
 const mcpProxy = defineCommand({
   meta: { name: "mcp-proxy", description: "Internal: an agent's stdio MCP server" },
-  async run() {
-    const { runMcpProxyProcess } = await import("./mcp-proxy.js");
-    await runMcpProxyProcess(process.env);
+  args: {
+    app: {
+      type: "string",
+      description: "Serve this app to a coding agent outside the sidebar",
+    },
+  },
+  async run({ args }) {
+    const [{ runMcpProxyProcess }, { hostPaths }] = await Promise.all([
+      import("./mcp-proxy.js"),
+      import("./paths.js"),
+    ]);
+    await runMcpProxyProcess(
+      process.env,
+      args.app
+        ? { appOrigin: new URL(args.app).origin, socketPath: hostPaths().proxy }
+        : undefined,
+    );
   },
 });
 
@@ -575,6 +696,7 @@ void runMain(
       config,
       dev,
       "mcp-proxy": mcpProxy,
+      tools,
     },
   }),
 );

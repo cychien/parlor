@@ -25,8 +25,9 @@ export interface ChatAskProps extends ComponentProps<"div"> {
 
 /**
  * The agent's own permission prompt or question: `role="group"` named by its question.
- * `data-approval` is `presence` (answering triggers the OS prompt) or `computer` (answered
- * on the computer; choices disabled). `data-state` is `open`, `answered` or `closed`.
+ * `data-approval` is `presence` (answering triggers the OS prompt), `device` (answered by
+ * the device that sent the prompt) or `computer` (answered on the computer; choices
+ * disabled). `data-state` is `open`, `answered` or `closed`.
  * Escape declines.
  */
 export function Ask({ item, onKeyDown, ...props }: ChatAskProps): ReactNode {

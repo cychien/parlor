@@ -65,6 +65,11 @@ export interface Delegated {
 
 export interface TestAuth extends AuthProvider {
   readonly delegated: Delegated[];
+  readonly agentDelegated: {
+    readonly hostId: string;
+    readonly agent: string;
+    readonly ttlMs: number;
+  }[];
   readonly revokedGrants: Set<string>;
   readonly activeDevices: Set<string>;
 }
@@ -76,6 +81,7 @@ export interface ProviderIo {
 
 export function testAuth(enforcing = true, io?: ProviderIo): TestAuth {
   const delegated: Delegated[] = [];
+  const agentDelegated: TestAuth["agentDelegated"] = [];
   const revokedGrants = new Set<string>();
   const activeDevices = new Set<string>();
   const touchDatabase = async () => {
@@ -85,6 +91,7 @@ export function testAuth(enforcing = true, io?: ProviderIo): TestAuth {
     name: "test-auth",
     enforcing,
     delegated,
+    agentDelegated,
     revokedGrants,
     activeDevices,
     async hostActive(grantId) {
@@ -105,6 +112,14 @@ export function testAuth(enforcing = true, io?: ProviderIo): TestAuth {
       return {
         token: `turn.${turn.turnId}.${delegated.length}`,
         expiresAt: Date.now() + turn.ttlMs,
+      };
+    },
+    async delegateAgent(host, agent) {
+      await touchDatabase();
+      agentDelegated.push({ hostId: host.hostId, ...agent });
+      return {
+        token: `agent.${agentDelegated.length}`,
+        expiresAt: Date.now() + agent.ttlMs,
       };
     },
     async account(userId) {

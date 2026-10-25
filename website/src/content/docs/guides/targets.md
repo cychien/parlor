@@ -33,6 +33,16 @@ Generated native projects live in `.parlor/`. Never edit them; they are rewritte
 
 Nothing in your app code. Platform features such as notifications, deep links or a secure session store are capabilities with one interface and an adapter per platform. Ask for one with `useCapability`, and check `available` instead of checking the platform. See the [capabilities reference](/parlor/reference/capabilities/).
 
+## The status bar and the home indicator
+
+On iOS the page sits between the status bar and the home indicator by default, which iOS keeps clear for it; content that scrolls still passes under the status bar. To draw edge to edge, like a native app and like a web app added to the home screen, add `viewport-fit=cover` to the viewport in `index.html`:
+
+```html
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+```
+
+The iOS app then fills the screen, and the page pads its fixed and sticky bars with `env(safe-area-inset-top)` and `env(safe-area-inset-bottom)`, which are 0 in a desktop browser.
+
 ## Desktop settings
 
 `parlor.config.ts` has a `desktop` section: `width` and `height` of the window, and `agentHost: true` to bundle Parlor Host in the app so the agent sidebar can reach the agents on the user's computer.

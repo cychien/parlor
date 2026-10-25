@@ -18,6 +18,8 @@ export function useChat(): ChatState & ChatCommands {
       loadOlder: runtime.loadOlder,
       loadMoreThreads: runtime.loadMoreThreads,
       choose: runtime.choose,
+      setOption: runtime.setOption,
+      disconnect: runtime.disconnect,
       openThread: runtime.openThread,
       newThread: runtime.newThread,
       startLink: runtime.startLink,

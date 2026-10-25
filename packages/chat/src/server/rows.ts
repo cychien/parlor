@@ -4,12 +4,50 @@ import { idSchema } from "../id-schemas.js";
 import { chatItemBodies, type LoggedItem } from "../items.js";
 import type { AgentRef, ThreadSummary, TurnFailure, TurnState } from "../model.js";
 
+const agentOptionSchema = z.object({
+  id: z.string().min(1).max(100),
+  name: z.string().max(100),
+  category: z.string().max(50).optional(),
+  current: z.string().max(200),
+  values: z
+    .array(
+      z.object({
+        id: z.string().min(1).max(200),
+        name: z.string().max(200),
+        description: z.string().max(500).optional(),
+      }),
+    )
+    .max(50)
+    .readonly(),
+});
+
+const agentUsageSchema = z.object({
+  windows: z
+    .array(
+      z.object({
+        id: z.string().min(1).max(50),
+        minutes: z.number().positive(),
+        used: z.number().min(0).max(1),
+        resetsAt: z.number().optional(),
+      }),
+    )
+    .max(10)
+    .readonly(),
+  at: z.number(),
+});
+
 export const agentInfoSchema = z.object({
   id: z.string().min(1),
   name: z.string(),
   version: z.string().optional(),
   ready: z.boolean(),
   problem: z.string().optional(),
+  options: z.array(agentOptionSchema).max(10).readonly().optional(),
+  usage: agentUsageSchema.optional(),
+  outsideName: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9_-]{0,79}$/)
+    .optional(),
 });
 
 const ITEM_KINDS = [

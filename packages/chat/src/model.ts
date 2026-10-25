@@ -40,6 +40,52 @@ export interface AgentInfo {
   readonly ready: boolean;
   /** Why a not-ready agent cannot run yet ("run `claude` to log in"). */
   readonly problem?: string | undefined;
+  /** What a prompt may choose for its turn, as the agent last offered it; absent until it has. */
+  readonly options?: readonly AgentOption[] | undefined;
+  /** The account's allowance, as the agent last reported it; absent until it has. */
+  readonly usage?: AgentUsage | undefined;
+  /**
+   * The name this agent knows the app by outside the sidebar, when the user let it use the
+   * app there: "use coursekit to ..." in Claude Code.
+   */
+  readonly outsideName?: string | undefined;
+}
+
+/**
+ * One setting a prompt may choose, such as the model or how hard it thinks. Never the
+ * permission mode: that is the computer's to set.
+ */
+export interface AgentOption {
+  readonly id: string;
+  readonly name: string;
+  /** `model` and `thought_level` as the agent tags them; any other the agent names. */
+  readonly category?: string | undefined;
+  /** The agent's own default, the value a prompt that chooses nothing runs with. */
+  readonly current: string;
+  readonly values: readonly AgentOptionValue[];
+}
+
+export interface AgentOptionValue {
+  readonly id: string;
+  readonly name: string;
+  readonly description?: string | undefined;
+}
+
+export interface AgentUsage {
+  /** Account-wide windows first, each set shortest first. */
+  readonly windows: readonly AgentUsageWindow[];
+  /** When the agent reported it (epoch ms). */
+  readonly at: number;
+}
+
+export interface AgentUsageWindow {
+  /** The vendor's name for it: `five_hour`, `seven_day`, `seven_day_opus`. */
+  readonly id: string;
+  readonly minutes: number;
+  /** Share of the window used, 0 to 1. */
+  readonly used: number;
+  /** When the window rolls over (epoch ms). */
+  readonly resetsAt?: number | undefined;
 }
 
 export interface ThreadSummary {

@@ -27,6 +27,17 @@ export interface AppGrant {
    * browser proves it on its first prompt and is trusted without asking, then this is dropped.
    */
   readonly pairingSecret?: string | undefined;
+  /**
+   * Whether the coding agents on this computer may use the app outside its sidebar, as the
+   * user chose when connecting, and the name and agents it is registered under once it is.
+   */
+  readonly agentTools?:
+    | {
+        readonly on: boolean;
+        readonly name?: string | undefined;
+        readonly agents?: readonly string[] | undefined;
+      }
+    | undefined;
 }
 
 /** One key per app grant in the OS keychain; the server holds only its public half. */

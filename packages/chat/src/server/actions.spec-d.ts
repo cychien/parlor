@@ -14,7 +14,13 @@ import type { ChatActionConfig, ChatHost, ChatUser, PartyOf } from "./party.js";
 
 test("host actions and user actions are two disjoint sets, together the whole surface", () => {
   expectTypeOf<keyof ChatHostActionMap>().toEqualTypeOf<
-    "hostHello" | "hostReport" | "hostClaim" | "hostSignals" | "hostAppend" | "hostFinish"
+    | "hostHello"
+    | "hostReport"
+    | "hostAgentToken"
+    | "hostClaim"
+    | "hostSignals"
+    | "hostAppend"
+    | "hostFinish"
   >();
   expectTypeOf<keyof ChatUserActionMap>().toEqualTypeOf<
     | "open"

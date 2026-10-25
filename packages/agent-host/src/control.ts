@@ -29,6 +29,7 @@ export type ControlRequest =
       readonly device?: PairingDevice;
     }
   | { readonly op: "disconnect"; readonly appOrigin: string }
+  | { readonly op: "agent_tools"; readonly appOrigin: string; readonly on: boolean }
   | { readonly op: "dev_attach"; readonly appOrigin: string; readonly hostToken: string }
   | { readonly op: "dev_detach"; readonly appOrigin: string };
 
@@ -38,6 +39,12 @@ export interface GrantSummary {
   readonly appOrigin: string;
   readonly appName: string;
   readonly grantId: string;
+}
+
+/** The app's MCP server name in the coding agents on this computer, and which have it. */
+export interface AgentToolsSummary {
+  readonly name: string;
+  readonly agents: string;
 }
 
 export type ControlFailure = { readonly ok: false; readonly error: string };
@@ -52,7 +59,7 @@ interface ControlReplies {
     readonly status: LocalHostStatus;
     readonly grants: readonly GrantSummary[];
   };
-  readonly connect: { readonly ok: true };
+  readonly connect: { readonly ok: true; readonly agentTools?: AgentToolsSummary };
   readonly begin_local_pairing: { readonly ok: true; readonly pairing: HostPairing };
   readonly finish_local_pairing: {
     readonly ok: true;
@@ -63,7 +70,8 @@ interface ControlReplies {
   readonly confirm_local_pairing:
     | { readonly ok: true }
     | { readonly ok: false; readonly error: "declined_locally" };
-  readonly disconnect: { readonly ok: true };
+  readonly disconnect: { readonly ok: true; readonly agentTools?: AgentToolsSummary };
+  readonly agent_tools: { readonly ok: true; readonly agentTools?: AgentToolsSummary };
   readonly dev_attach: { readonly ok: true };
   readonly dev_detach: { readonly ok: true };
 }

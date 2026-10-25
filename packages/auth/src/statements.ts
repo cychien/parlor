@@ -240,6 +240,9 @@ export function removeStatement(
 /** The fragment Parlor Host's loopback redirect carries back to the browser that approved `connect`. */
 export const HOST_PAIRING_FRAGMENT = "parlor-host-pairing";
 
+/** Where a browser keeps that secret, for its first prompt to prove. */
+export const HOST_PAIRING_KEY = "parlor:host-pairing";
+
 const pairingKey = (secret: string) =>
   crypto.subtle.importKey(
     "raw",

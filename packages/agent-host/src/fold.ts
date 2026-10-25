@@ -209,6 +209,8 @@ export function foldUpdate(
         closed: [],
       };
     case "mode":
+    case "options":
+    case "usage":
       return unchanged(fold);
   }
 }

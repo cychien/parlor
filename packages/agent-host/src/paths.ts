@@ -8,6 +8,8 @@ export interface HostPaths {
   readonly policy: string;
   readonly sessions: string;
   readonly agents: string;
+  /** What each agent last said about itself: its options and the account's allowance. */
+  readonly learned: string;
   readonly control: string;
   readonly proxy: string;
   readonly versions: string;
@@ -29,6 +31,7 @@ export function hostPaths(root: string = join(homedir(), ".parlor", "host")): Ho
     policy: join(root, "policy.json"),
     sessions: join(root, "sessions.json"),
     agents: join(root, "agents.json"),
+    learned: join(root, "learned.json"),
     control: join(run, "control.sock"),
     proxy: join(run, "proxy.sock"),
     versions: join(root, "versions"),

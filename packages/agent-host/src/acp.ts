@@ -17,6 +17,7 @@ import {
   RequestError,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
+  type SessionConfigOption,
   type SessionModeState,
   type SessionNotification,
   type SessionUpdate,
@@ -26,8 +27,10 @@ import {
   type ToolCallUpdate,
   type ToolKind as AcpToolKind,
 } from "@agentclientprotocol/sdk";
+import type { AgentOption, AgentUsage } from "@parlor/chat";
 
 import { commandOf, launchEnvironment } from "./adapter-launch.js";
+import { agentUsageOf } from "./agent-options.js";
 import type { AgentProfile } from "./agents.js";
 import { logEvent } from "./log.js";
 
@@ -83,6 +86,12 @@ export interface OpenSessionInput {
   /** A remote turn never runs in a bypass mode. */
   readonly pinAskMode: boolean;
   readonly strictAsk?: boolean | undefined;
+  /**
+   * With `pinAskMode`, the agent's own safety review where it has one (Claude's `auto`,
+   * Codex's `agent`), asking only for what that review flags. Once the agent leaves it, the
+   * session stays in a mode that asks before every action.
+   */
+  readonly autoMode?: boolean | undefined;
 }
 
 export interface StdioMcpServer {
@@ -102,6 +111,10 @@ export interface AgentSession {
   prompt(blocks: readonly PromptBlock[], handlers: TurnHandlers): Promise<StopReason>;
   cancel(): Promise<void>;
   close(): Promise<void>;
+  /** What a prompt may choose for this session now, with the value it runs with. */
+  readonly options: readonly AgentOption[];
+  /** Sets one of `options` to one of its values. */
+  setOption(id: string, value: string): Promise<void>;
 }
 
 export type PromptBlock = { readonly kind: "text"; readonly text: string };
@@ -159,7 +172,9 @@ export type AgentUpdate =
         readonly status: "pending" | "in_progress" | "completed";
       }[];
     }
-  | { readonly kind: "mode"; readonly modeId: string };
+  | { readonly kind: "mode"; readonly modeId: string }
+  | { readonly kind: "options"; readonly options: readonly AgentOption[] }
+  | { readonly kind: "usage"; readonly usage: AgentUsage };
 
 export type AskEffect = "allow_once" | "allow_always" | "reject_once" | "reject_always";
 
@@ -213,9 +228,11 @@ export interface AgentModes {
 /** The agent side of ACP in this file's own terms, for the fake agent. */
 export interface AcpAgentHandlers {
   readonly capabilities: Pick<AgentCapabilities, "resume" | "close" | "mcpHttp">;
-  newSession(
-    input: OpenSessionInput,
-  ): Promise<{ readonly id: string; readonly modes?: AgentModes | undefined }>;
+  newSession(input: OpenSessionInput): Promise<{
+    readonly id: string;
+    readonly modes?: AgentModes | undefined;
+    readonly options?: readonly AgentOption[] | undefined;
+  }>;
   prompt(
     sessionId: string,
     blocks: readonly PromptBlock[],
@@ -233,6 +250,7 @@ const MAX_DETAIL_CHARS = 4_000;
 const AUTH_REQUIRED = -32000;
 const MCP_PREFIX = "mcp__";
 
+const AUTO_MODES_BY_PREFERENCE = ["auto", "agent"];
 const ASK_MODES_BY_PREFERENCE = ["default", "workspace-write", "read-only"];
 const STRICT_ASK_MODES_BY_PREFERENCE = ["default", "read-only", "workspace-write"];
 
@@ -350,6 +368,12 @@ function updateOf(update: SessionUpdate): AgentUpdate | undefined {
       };
     case "current_mode_update":
       return { kind: "mode", modeId: update.currentModeId };
+    case "config_option_update":
+      return { kind: "options", options: agentOptionsOf(update.configOptions) };
+    case "usage_update": {
+      const usage = agentUsageOf(update._meta, Date.now());
+      return usage && { kind: "usage", usage };
+    }
     default:
       return undefined;
   }
@@ -397,7 +421,77 @@ function sessionUpdateOf(update: AgentUpdate): SessionUpdate {
       };
     case "mode":
       return { sessionUpdate: "current_mode_update", currentModeId: update.modeId };
+    case "options":
+      return {
+        sessionUpdate: "config_option_update",
+        configOptions: update.options.map(configOptionOf),
+      };
+    case "usage":
+      return {
+        sessionUpdate: "usage_update",
+        used: 0,
+        size: 0,
+        _meta: {
+          "_claude/rateLimit": {
+            unifiedWindows: Object.fromEntries(
+              update.usage.windows.map((window) => [
+                window.id,
+                {
+                  utilization: window.used,
+                  ...(window.resetsAt === undefined
+                    ? {}
+                    : { resetsAt: window.resetsAt / 1000 }),
+                },
+              ]),
+            ),
+          },
+        },
+      };
   }
+}
+
+/** The permission mode is the computer's to pin; `model_config` tunes a model, not a choice. */
+const HIDDEN_CATEGORIES = new Set(["mode", "model_config"]);
+
+/** The agent's select options a prompt may choose, its groups flattened. */
+export function agentOptionsOf(
+  configOptions: readonly SessionConfigOption[] | null | undefined,
+): AgentOption[] {
+  return (configOptions ?? []).flatMap((option): AgentOption[] => {
+    if (option.type !== "select") return [];
+    if (option.category && HIDDEN_CATEGORIES.has(option.category)) return [];
+    const values = option.options.flatMap((entry) =>
+      "options" in entry ? entry.options : [entry],
+    );
+    return [
+      {
+        id: option.id,
+        name: option.name,
+        ...(option.category ? { category: option.category } : {}),
+        current: option.currentValue,
+        values: values.map((value) => ({
+          id: value.value,
+          name: value.name,
+          ...(value.description ? { description: value.description } : {}),
+        })),
+      },
+    ];
+  });
+}
+
+function configOptionOf(option: AgentOption): SessionConfigOption {
+  return {
+    id: option.id,
+    name: option.name,
+    ...(option.category ? { category: option.category } : {}),
+    type: "select",
+    currentValue: option.current,
+    options: option.values.map((value) => ({
+      value: value.id,
+      name: value.name,
+      ...(value.description ? { description: value.description } : {}),
+    })),
+  };
 }
 
 const claudeToolName = (mcp: McpToolRef) => ({
@@ -547,7 +641,9 @@ function tapSends(stream: Stream): Stream {
 interface LiveState {
   handlers: TurnHandlers | undefined;
   readonly calls: Map<string, KnownCall>;
-  readonly pinned: string | undefined;
+  pinned: string | undefined;
+  fallback: string | undefined;
+  options: readonly AgentOption[];
 }
 
 function askingModeOf(modes: SessionModeState, strict: boolean): string | undefined {
@@ -558,6 +654,11 @@ function askingModeOf(modes: SessionModeState, strict: boolean): string | undefi
   }
   if (ASK_MODES_BY_PREFERENCE.includes(modes.currentModeId)) return modes.currentModeId;
   return ASK_MODES_BY_PREFERENCE.find((mode) => available.has(mode));
+}
+
+function autoModeOf(modes: SessionModeState): string | undefined {
+  const available = new Set(modes.availableModes.map((mode) => mode.id));
+  return AUTO_MODES_BY_PREFERENCE.find((mode) => available.has(mode));
 }
 
 function sessionModesOf(modes: AgentModes | undefined): SessionModeState | undefined {
@@ -633,14 +734,20 @@ export function acpLauncher(): AgentLauncher {
         } else if (mapped.kind === "tool_update" && mapped.title) {
           const known = state.calls.get(mapped.toolCallId);
           state.calls.set(mapped.toolCallId, { ...known, title: mapped.title });
+        } else if (mapped.kind === "options") {
+          state.options = mapped.options;
         }
         if (mapped.kind === "mode" && state.pinned && mapped.modeId !== state.pinned) {
-          void context
-            .request(methods.agent.session.setMode, {
-              sessionId: notification.sessionId,
-              modeId: state.pinned,
-            })
-            .catch(() => undefined);
+          state.pinned = state.fallback ?? state.pinned;
+          state.fallback = undefined;
+          if (mapped.modeId !== state.pinned) {
+            void context
+              .request(methods.agent.session.setMode, {
+                sessionId: notification.sessionId,
+                modeId: state.pinned,
+              })
+              .catch(() => undefined);
+          }
         }
         state.handlers?.update(mapped);
       };
@@ -729,14 +836,24 @@ export function acpLauncher(): AgentLauncher {
               cwd: input.cwd,
               mcpServers,
             });
-            return { id: input.resume, modes: resumed.modes, resumed: true };
+            return {
+              id: input.resume,
+              modes: resumed.modes,
+              configOptions: resumed.configOptions,
+              resumed: true,
+            };
           } catch {}
         }
         const created = await context.request(methods.agent.session.new, {
           cwd: input.cwd,
           mcpServers,
         });
-        return { id: created.sessionId, modes: created.modes, resumed: false };
+        return {
+          id: created.sessionId,
+          modes: created.modes,
+          configOptions: created.configOptions,
+          resumed: false,
+        };
       };
 
       return {
@@ -760,16 +877,24 @@ export function acpLauncher(): AgentLauncher {
             );
           };
           const modes = input.pinAskMode ? opened.modes : undefined;
-          const pinned = modes
+          const asking = modes
             ? askingModeOf(modes, input.strictAsk === true)
             : undefined;
+          const auto = modes && input.autoMode ? autoModeOf(modes) : undefined;
+          const pinned = asking === undefined ? undefined : (auto ?? asking);
           if (modes && pinned === undefined) {
             throw new SessionRefused(
               `${profile.name} offers no mode that asks before it acts, so it cannot take a turn from an app.`,
               !(await close()),
             );
           }
-          const state: LiveState = { handlers: undefined, calls: new Map(), pinned };
+          const state: LiveState = {
+            handlers: undefined,
+            calls: new Map(),
+            pinned,
+            fallback: pinned === asking ? undefined : asking,
+            options: agentOptionsOf(opened.configOptions),
+          };
           sessions.set(sessionId, state);
           if (pinned !== undefined && pinned !== modes?.currentModeId) {
             try {
@@ -788,6 +913,20 @@ export function acpLauncher(): AgentLauncher {
           const session: AgentSession = {
             id: sessionId,
             resumed: opened.resumed,
+            get options() {
+              return state.options;
+            },
+            setOption: async (id, value) => {
+              const response = await context.request(
+                methods.agent.session.setConfigOption,
+                {
+                  sessionId,
+                  configId: id,
+                  value,
+                },
+              );
+              state.options = agentOptionsOf(response.configOptions);
+            },
             prompt: async (blocks, handlers) => {
               if (state.handlers)
                 throw new Error("This session is already answering a prompt.");
@@ -825,6 +964,7 @@ export function acpLauncher(): AgentLauncher {
 export function serveAcpAgent(handlers: AcpAgentHandlers, io: AcpStdio): Promise<void> {
   const running = new Map<string, AbortController>();
   const aliases = new Map<string, string>();
+  const configs = new Map<string, SessionConfigOption[]>();
   const idOf = (sessionId: string) => aliases.get(sessionId) ?? sessionId;
   const app = acpAgent({ name: "parlor-fake-agent" })
     .onRequest(methods.agent.initialize, () => ({
@@ -840,13 +980,19 @@ export function serveAcpAgent(handlers: AcpAgentHandlers, io: AcpStdio): Promise
       authMethods: [],
     }))
     .onRequest(methods.agent.session.new, async ({ params }) => {
-      const { id, modes } = await handlers.newSession({
+      const { id, modes, options } = await handlers.newSession({
         cwd: params.cwd,
         mcpServers: stdioServersOf(params.mcpServers),
         pinAskMode: false,
       });
       const state = sessionModesOf(modes);
-      return { sessionId: id, ...(state ? { modes: state } : {}) };
+      const configOptions = options?.map(configOptionOf);
+      if (configOptions) configs.set(id, configOptions);
+      return {
+        sessionId: id,
+        ...(state ? { modes: state } : {}),
+        ...(configOptions ? { configOptions } : {}),
+      };
     })
     .onRequest(methods.agent.session.resume, async ({ params }) => {
       if (!handlers.capabilities.resume) {
@@ -861,6 +1007,15 @@ export function serveAcpAgent(handlers: AcpAgentHandlers, io: AcpStdio): Promise
       return {};
     })
     .onRequest(methods.agent.session.setMode, () => ({}))
+    .onRequest(methods.agent.session.setConfigOption, ({ params }) => {
+      const options = (configs.get(idOf(params.sessionId)) ?? []).map((option) =>
+        option.id === params.configId && option.type === "select"
+          ? { ...option, currentValue: String(params.value) }
+          : option,
+      );
+      configs.set(idOf(params.sessionId), options);
+      return { configOptions: options };
+    })
     .onRequest(methods.agent.session.close, () => {
       if (!handlers.capabilities.close) {
         throw RequestError.methodNotFound(methods.agent.session.close);

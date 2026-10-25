@@ -284,6 +284,125 @@ describe("disconnecting through the daemon", () => {
     }
   }, 30_000);
 
+  it("hands the app to Claude Code and Codex here when the user chose it, and takes it back", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pt-"));
+    const routes = hostRoutes({ wake: false });
+    const app = await stubApp((request, body, response) =>
+      request.url === "/_parlor/auth/hosts/revoke"
+        ? (json(response, {}), true)
+        : routes(request, body, response),
+    );
+    const keys = memoryHostKeys();
+    await (await keys.create(app.origin)).keep(asId("grant", "host:Hello"));
+    const paths = hostPaths(join(root, ".parlor", "host"));
+    const cli = async (id: string) => {
+      const binary = join(root, id);
+      await writeFile(
+        binary,
+        `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "${id} 1.0.0"; exit 0; fi\necho "$@" >> "${join(root, `${id}.log`)}"\n`,
+      );
+      await chmod(binary, 0o755);
+      return binary;
+    };
+    mkdirSync(paths.root, { recursive: true });
+    await writeFile(
+      paths.agents,
+      JSON.stringify([
+        {
+          id: "claude",
+          name: "Claude Code",
+          binary: await cli("claude"),
+          launch: { kind: "native", command: "true", args: [] },
+        },
+        {
+          id: "codex",
+          name: "Codex",
+          binary: await cli("codex"),
+          launch: { kind: "native", command: "true", args: [] },
+        },
+        {
+          id: "gemini",
+          name: "Gemini",
+          binary: join(root, "missing"),
+          launch: { kind: "native", command: "true", args: [] },
+        },
+      ]),
+    );
+    const logOf = async (id: string) =>
+      (await readFile(join(root, `${id}.log`), "utf8").catch(() => ""))
+        .trim()
+        .split("\n");
+    const grants = fileGrantStore(paths.grants);
+    await grants.save({
+      ...grantFor(app.origin, "Hello", join(root, "Parlor", "hello")),
+      agentTools: { on: true },
+    });
+    const host = createHostDaemon({
+      release: {
+        version: "0.0.0",
+        protocols: { min: 1, max: HOST_PROTOCOL },
+        control: 1,
+      },
+      paths,
+      grants,
+      keys,
+      trust: fileTrustStore(paths.trust),
+      pool: createSessionPool(paths.sessions),
+      proxy: createMcpProxy("parlor-host"),
+      launcher: acpLauncher(),
+      prompter: { answerHere: async () => undefined, turnStarted: () => undefined },
+      policy: DEFAULT_POLICY,
+    });
+    const name = `hello-${new URL(app.origin).host.replace(/[^a-z0-9]+/g, "-")}`;
+    const command = `${join(paths.root, "bin", "parlor-host")} mcp-proxy --app ${app.origin}`;
+    try {
+      await host.start();
+      expect(await host.connect(app.origin)).toEqual({
+        name,
+        agents: "Claude Code and Codex",
+      });
+      expect((await logOf("claude")).at(-1)).toBe(
+        `mcp add --scope user ${name} -- ${command}`,
+      );
+      expect((await logOf("codex")).at(-1)).toBe(`mcp add ${name} -- ${command}`);
+      expect((await grants.get(app.origin))?.agentTools).toEqual({
+        on: true,
+        name,
+        agents: ["claude", "codex"],
+      });
+      const reported = app.seen
+        .filter((seen) => seen.path.endsWith("/hostReport"))
+        .at(-1)!;
+      expect(
+        (
+          JSON.parse(reported.body) as { agents: { id: string; outsideName?: string }[] }
+        ).agents.map(({ id, outsideName }) => [id, outsideName]),
+      ).toEqual([
+        ["claude", name],
+        ["codex", name],
+      ]);
+
+      expect(await host.agentTools(app.origin, false)).toBeUndefined();
+      expect((await logOf("codex")).at(-1)).toBe(`mcp remove ${name}`);
+      expect((await grants.get(app.origin))?.agentTools).toEqual({ on: false });
+      expect(await host.agentTools(app.origin, true)).toEqual({
+        name,
+        agents: "Claude Code and Codex",
+      });
+
+      expect(await host.disconnect(app.origin)).toEqual({
+        name,
+        agents: "Claude Code and Codex",
+      });
+      expect((await logOf("claude")).at(-1)).toBe(`mcp remove --scope user ${name}`);
+      expect(await grants.list()).toEqual([]);
+    } finally {
+      await host.stop();
+      await app.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it("T4-15: a session remembered under one grant is never resumed under the next", async () => {
     const root = await mkdtemp(join(tmpdir(), "pr-"));
     const agentLog = join(root, "agent.log");

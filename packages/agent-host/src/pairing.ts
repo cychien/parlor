@@ -9,6 +9,7 @@ import {
 } from "@parlor/auth";
 import type { HostPairing, PairingDevice } from "@parlor/capabilities";
 
+import { agentToolsName } from "./agent-tools.js";
 import { hostAssertion } from "./assertion.js";
 import type { AppGrant, HostKeyPair, HostKeys } from "./grants.js";
 import { workspaceOf } from "./naming.js";
@@ -45,6 +46,8 @@ export interface PairInput {
   readonly channel: PairingChannel;
   readonly keys: HostKeys;
   readonly workspaceRoot: string;
+  /** Offers, on the consent page, to let the coding agents here use the app outside its sidebar. */
+  readonly offerAgentTools?: boolean | undefined;
 }
 
 export type PairOutcome =
@@ -94,7 +97,9 @@ async function appNameOf(origin: string): Promise<string> {
     : new URL(origin).host;
 }
 
-type Callback = { readonly code: string } | { readonly declined: true };
+type Callback =
+  | { readonly code: string; readonly agentTools?: boolean | undefined }
+  | { readonly declined: true };
 
 const escapeHtml = (text: string) =>
   printable(text).replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
@@ -130,7 +135,12 @@ async function loopback(state: string): Promise<{
     }
     waiting = response;
     const code = url.searchParams.get("code");
-    deliver(code ? { code } : { declined: true });
+    const agentTools = url.searchParams.get("agentTools");
+    deliver(
+      code
+        ? { code, ...(agentTools === null ? {} : { agentTools: agentTools === "on" }) }
+        : { declined: true },
+    );
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as AddressInfo;
@@ -191,6 +201,12 @@ function timeout(ms: number): {
   return { expired, clear: () => clearTimeout(timer) };
 }
 
+/** The pairing secret goes nowhere but the app's own origin; an older app has no landing page. */
+function landingOf(origin: string, landing: string | undefined): URL {
+  const url = landing === undefined ? undefined : URL.parse(landing, origin);
+  return url?.origin === origin ? url : new URL("/", origin);
+}
+
 /**
  * Only the host starts a pairing: it makes the PKCE verifier, `state`, the matching code
  * and the key pair, so nothing from the web side can complete one.
@@ -198,6 +214,7 @@ function timeout(ms: number): {
 export async function pair(input: PairInput): Promise<PairOutcome> {
   const origin = new URL(input.appOrigin).origin;
   const appName = await appNameOf(origin);
+  const toolsName = input.offerAgentTools ? agentToolsName(appName, origin) : undefined;
   const key = await input.keys.create(origin);
   const codeVerifier = base64url(randomBytes(32));
   const pairing: HostPairing = {
@@ -225,6 +242,7 @@ export async function pair(input: PairInput): Promise<PairOutcome> {
         const query = new URLSearchParams({
           redirectUri: listener.redirectUri,
           ...pairing,
+          ...(toolsName ? { agentTools: "offered" } : {}),
         });
         await input.channel.open(`${origin}/_parlor/auth/hosts/authorize?${query}`);
         const callback = await Promise.race([listener.callback, deadline.expired]);
@@ -242,12 +260,21 @@ export async function pair(input: PairInput): Promise<PairOutcome> {
         }
         await key.keep(granted.grant.id);
         const pairingSecret = base64url(randomBytes(32));
-        listener.redirect(
-          `${origin}/#${new URLSearchParams({ [HOST_PAIRING_FRAGMENT]: pairingSecret })}`,
-        );
+        const landing = landingOf(origin, granted.landing);
+        const agentTools =
+          toolsName && "agentTools" in callback ? callback.agentTools : undefined;
+        if (agentTools && toolsName) landing.searchParams.set("agentTools", toolsName);
+        landing.hash = new URLSearchParams({
+          [HOST_PAIRING_FRAGMENT]: pairingSecret,
+        }).toString();
+        listener.redirect(landing.href);
         return {
           paired: true,
-          grant: { ...grantOf(granted), pairingSecret },
+          grant: {
+            ...grantOf(granted),
+            pairingSecret,
+            ...(agentTools === undefined ? {} : { agentTools: { on: agentTools } }),
+          },
           approvedBy: granted.approvedBy,
         };
       } finally {

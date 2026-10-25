@@ -74,9 +74,11 @@ export class Browser {
     return response;
   }
 
+  /** Answers the consent page as a browser would, sending its checked boxes but `uncheck`. */
   async consent(
     url: string,
     decision: "connect" | "cancel",
+    uncheck: readonly string[] = [],
   ): Promise<{
     readonly page: string;
     readonly answer: Response;
@@ -87,6 +89,11 @@ export class Browser {
         (match) => [match[1]!, match[2]!.replaceAll("&amp;", "&")],
       ),
     );
+    for (const [, name, value] of page.matchAll(
+      /<input type="checkbox" name="([^"]+)" value="([^"]*)" checked>/g,
+    )) {
+      if (!uncheck.includes(name!)) fields.set(name!, value!);
+    }
     fields.set("decision", decision);
     const action = /<form method="post" action="([^"]+)"/.exec(page)?.[1] ?? "";
     const answer = await this.fetch(action, {

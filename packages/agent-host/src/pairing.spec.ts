@@ -28,6 +28,9 @@ function connectAs(
   options: {
     readonly decision?: "connect" | "cancel";
     readonly tokenAnswer?: Response;
+    readonly landing?: string;
+    readonly offerAgentTools?: boolean;
+    readonly uncheck?: readonly string[];
   } = {},
 ) {
   const keys = memoryHostKeys();
@@ -39,10 +42,12 @@ function connectAs(
   }[] = [];
   const statuses: number[] = [];
   vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
-    const response =
-      options.tokenAnswer && String(args[0]).endsWith("/_parlor/auth/hosts/token")
-        ? options.tokenAnswer
-        : await realFetch(...args);
+    const exchange = String(args[0]).endsWith("/_parlor/auth/hosts/token");
+    let response =
+      exchange && options.tokenAnswer ? options.tokenAnswer : await realFetch(...args);
+    if (exchange && options.landing !== undefined && response.ok) {
+      response = Response.json({ ...(await response.json()), landing: options.landing });
+    }
     statuses.push(response.status);
     return response;
   });
@@ -52,6 +57,7 @@ function connectAs(
     platform: "macos",
     keys,
     workspaceRoot: "/Users/alice/Parlor",
+    offerAgentTools: options.offerAgentTools,
     channel: {
       kind: "browser",
       open: async (url) => {
@@ -59,6 +65,7 @@ function connectAs(
         const { page, answer } = await browser.consent(
           url,
           options.decision ?? "connect",
+          options.uncheck,
         );
         const tab = realFetch(answer.headers.get("location")!, {
           redirect: "manual",
@@ -115,9 +122,19 @@ describe("pairing a computer from its terminal", { timeout: 30_000 }, () => {
     const tab = await opened!.tab;
     expect(tab.status).toBe(303);
     const back = new URL(tab.location!);
-    expect(back.origin + back.pathname).toBe(`${app.origin}/`);
+    expect(back.origin + back.pathname).toBe(
+      `${app.origin}/_parlor/auth/hosts/connected`,
+    );
     const secret = new URLSearchParams(back.hash.slice(1)).get("parlor-host-pairing");
     expect(secret).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    const landed = await realFetch(back);
+    expect(landed.status).toBe(200);
+    expect(landed.headers.get("content-security-policy")).toMatch(
+      /script-src 'sha256-[A-Za-z0-9+/]+=*'/,
+    );
+    const html = await landed.text();
+    expect(html).toContain("<h1>Connected to Hello</h1>");
+    expect(html).toContain('localStorage.setItem("parlor:host-pairing",s)');
     expect(outcome).toMatchObject({
       paired: true,
       grant: {
@@ -129,6 +146,45 @@ describe("pairing a computer from its terminal", { timeout: 30_000 }, () => {
       },
     });
     expect(alices.keys.origins()).toEqual([app.origin]);
+  });
+
+  it("offers the agents on the computer the app, and lands on a page that names it for them", async () => {
+    const attempt = connectAs(await app.signUp("Grace"), { offerAgentTools: true });
+    const outcome = await attempt.outcome;
+    expect(attempt.opened[0]!.page).toContain('name="useAgentTools" value="on" checked');
+    expect(outcome).toMatchObject({ paired: true, grant: { agentTools: { on: true } } });
+    const back = new URL((await attempt.opened[0]!.tab).location!);
+    const name = `hello-${new URL(app.origin).host.replace(/[^a-z0-9]+/g, "-")}`;
+    expect(back.searchParams.get("agentTools")).toBe(name);
+    const landed = await (await realFetch(back)).text();
+    expect(landed).toContain(`ask them to “use <code>${name}</code> to …”`);
+  });
+
+  it("keeps the app to the sidebar when the user unticks it", async () => {
+    const attempt = connectAs(await app.signUp("Heidi"), {
+      offerAgentTools: true,
+      uncheck: ["useAgentTools"],
+    });
+    expect(await attempt.outcome).toMatchObject({
+      paired: true,
+      grant: { agentTools: { on: false } },
+    });
+    const back = new URL((await attempt.opened[0]!.tab).location!);
+    expect(back.searchParams.has("agentTools")).toBe(false);
+  });
+
+  it("sends the pairing secret to no landing page off the app's origin", async () => {
+    for (const [name, landing] of [
+      ["Erin", "https://elsewhere.example/connected"],
+      ["Frank", "//elsewhere.example/"],
+    ] as const) {
+      const attempt = connectAs(await app.signUp(name), { landing });
+      expect((await attempt.outcome).paired).toBe(true);
+      const back = new URL((await attempt.opened[0]!.tab).location!);
+      expect(back.origin + back.pathname).toBe(`${app.origin}/`);
+      expect(back.hash).toMatch(/^#parlor-host-pairing=/);
+      vi.restoreAllMocks();
+    }
   });
 
   it("connects on the consent page alone and keeps no key when the exchange fails", async () => {

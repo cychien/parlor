@@ -323,7 +323,7 @@ describe.each(drivers)("exactly-once turns on $name", (driver) => {
   });
 
   describe("answers to a question the host asked", () => {
-    const ask = (approval?: "presence" | "computer") =>
+    const ask = (approval?: "presence" | "computer" | "device") =>
       app.action("alice-host", "hostAppend", {
         turnId: "u1",
         items: [
@@ -405,6 +405,14 @@ describe.each(drivers)("exactly-once turns on $name", (driver) => {
       expect(await answers()).toEqual([]);
       expect((await answer("a4", signature("webauthn", "user"))).status).toBe(200);
       expect(await answers()).toEqual([{ id: "a4" }]);
+    });
+
+    it("refuses an unsigned answer to a question its own device answers, and takes a signed one", async () => {
+      await ask("device");
+      expect((await answer("a1")).status).toBe(403);
+      expect(await answers()).toEqual([]);
+      expect((await answer("a2", signature("es256-raw", "none"))).status).toBe(200);
+      expect(await answers()).toEqual([{ id: "a2" }]);
     });
 
     it("T6-06: admits a native presence signature, which carries es256-raw", async () => {

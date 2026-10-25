@@ -15,6 +15,7 @@ import { decodeBase64url, encodeBase64url } from "@parlor/capabilities/encoding"
 import {
   type ActionClient,
   appOrigin,
+  type ComputerDisconnector,
   createActionClient,
   type DeviceLinker,
   type DeviceSource,
@@ -37,6 +38,7 @@ import {
   answerStatement,
   deviceCommitment,
   HOST_PAIRING_FRAGMENT,
+  HOST_PAIRING_KEY,
   linkCode,
   normalizeLinkCode,
   pairingProof,
@@ -53,7 +55,6 @@ const RETRY_MAX_MS = 30_000;
 const TOKEN_HEADER = "set-auth-token";
 const HOST_IPC_REDIRECT = "urn:parlor:ipc";
 const DEBUG_KEY = "parlor:debug";
-const HOST_PAIRING_KEY = "parlor:host-pairing";
 
 const NATIVE_CALLBACK = "//_parlor/auth/callback";
 
@@ -127,7 +128,12 @@ export interface SocialSignInInput {
 }
 
 export interface AuthClient
-  extends SessionSource, DeviceSource, HostAuthorizer, DeviceLinker {
+  extends
+    SessionSource,
+    DeviceSource,
+    HostAuthorizer,
+    DeviceLinker,
+    ComputerDisconnector {
   deviceSetup(): Promise<"needed" | "ready">;
   /** Plug into `createActionClient({ headers })` so every surface carries the session. */
   readonly headers: () => Promise<HeadersInit>;
@@ -244,6 +250,14 @@ function keepHostPairing(): void {
       `${location.pathname}${location.search}${rest ? `#${rest}` : ""}`,
     );
   } catch {}
+}
+
+function watchHostPairing(listener: () => void): () => void {
+  const changed = (event: StorageEvent) => {
+    if (event.key === HOST_PAIRING_KEY || event.key === null) listener();
+  };
+  globalThis.addEventListener?.("storage", changed);
+  return () => globalThis.removeEventListener?.("storage", changed);
 }
 
 function hostPairing(): string | undefined {
@@ -591,6 +605,7 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
         await (await store)?.set(undefined);
       }
     },
+    subscribeLink: watchHostPairing,
     linkState: async () => {
       const pairing = hostPairing() !== undefined;
       const session = current();
@@ -655,6 +670,9 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
         commitment,
         code: linkCode(commitment),
       };
+    },
+    disconnectComputer: async (hostId) => {
+      await account.call("revokeHost", { hostId });
     },
     listDevices: async () => {
       const session = current();

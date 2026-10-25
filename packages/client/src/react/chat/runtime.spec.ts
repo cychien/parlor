@@ -244,6 +244,8 @@ describe("createChatRuntime start", () => {
         online: true,
         ready: true,
         problem: undefined,
+        options: [],
+        usage: undefined,
       },
     ]);
     expect(h.runtime.get().agent?.key).toBe("host_mac/claude");
@@ -540,6 +542,72 @@ describe("createChatRuntime send", () => {
     });
     expect(new Set([send.turnId, send.itemId]).size).toBe(2);
     expect(h.runtime.get().draft).toBe("");
+  });
+
+  it("sends the options this device chose for the agent, remembered across reloads, and only those the agent offers", async () => {
+    const stored = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => stored.set(key, value),
+    });
+    try {
+      const usage = { windows: [{ id: "five_hour", minutes: 300, used: 0.4 }], at: 1 };
+      const withOptions = (): HostSummary => ({
+        ...claudeOnMac(),
+        agents: [
+          {
+            id: "claude",
+            name: "Claude Code",
+            ready: true,
+            options: [
+              {
+                id: "model",
+                name: "Model",
+                category: "model",
+                current: "default",
+                values: [
+                  { id: "default", name: "Default" },
+                  { id: "sonnet", name: "Sonnet" },
+                ],
+              },
+            ],
+            usage,
+          },
+        ],
+      });
+      const open = async () => ({ ...snapshot(), hosts: [withOptions()] });
+      const h = setup({ open, hosts: () => [withOptions()] });
+      h.runtime.start();
+      await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+      expect(h.runtime.get().agent).toMatchObject({
+        options: [{ id: "model", current: "default", selected: "default" }],
+        usage,
+      });
+      h.runtime.setDraft("hello");
+      await h.runtime.send();
+      expect(
+        (h.calls.filter((c) => c.name === "send").at(-1)!.input as { prompt: object })
+          .prompt,
+      ).not.toHaveProperty("options");
+
+      h.runtime.setOption("model", "sonnet");
+      expect(h.runtime.get().agent?.options[0]?.selected).toBe("sonnet");
+      const reloaded = setup({ open, hosts: () => [withOptions()] });
+      reloaded.runtime.start();
+      await vi.waitFor(() => expect(reloaded.runtime.get().status).toBe("idle"));
+      expect(reloaded.runtime.get().agent?.options[0]?.selected).toBe("sonnet");
+      reloaded.runtime.setDraft("again");
+      await reloaded.runtime.send();
+      expect(
+        (reloaded.calls.find((c) => c.name === "send")!.input as { prompt: object })
+          .prompt,
+      ).toMatchObject({ options: { model: "sonnet" } });
+
+      reloaded.runtime.setOption("model", "retired");
+      expect(reloaded.runtime.get().agent?.options[0]?.selected).toBe("default");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("starts a thread of its own when there is none and watches it", async () => {
@@ -1627,6 +1695,29 @@ describe("createChatRuntime linking this device", () => {
     h.runtime.start();
     await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
     expect(h.runtime.get().link).toEqual({ status: "linked" });
+  });
+
+  it("counts as linked once another tab of this browser approves `connect`, and stops listening when stopped", async () => {
+    const l = linker({ vouched: false, pairing: false });
+    let changed: (() => void) | undefined;
+    const unsubscribe = vi.fn();
+    const subscribeLink = vi.fn((listener: () => void) => {
+      changed = listener;
+      return unsubscribe;
+    });
+    const h = setup({
+      auth: { ...l.source, subscribeLink },
+      open: async () => reporting(["dev_laptop"]),
+    });
+    const stop = h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().link.status).toBe("unlinked"));
+
+    l.set({ vouched: false, pairing: true });
+    changed!();
+    await vi.waitFor(() => expect(h.runtime.get().link).toEqual({ status: "linked" }));
+
+    stop();
+    expect(unsubscribe).toHaveBeenCalledOnce();
   });
 
   it("asks an unlinked device to link, shows its code, and lets it send once a linked device vouches", async () => {

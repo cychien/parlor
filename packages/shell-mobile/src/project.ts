@@ -19,6 +19,17 @@ export const DEVICE_KEY_PLUGIN = {
 
 export interface CapacitorProjectOptions {
   readonly devUrl?: string | undefined;
+  /**
+   * The page lays itself out under the status bar and the home indicator, padding with
+   * `env(safe-area-inset-*)`: its viewport says `viewport-fit=cover`.
+   */
+  readonly edgeToEdge?: boolean | undefined;
+}
+
+/** Whether `html`'s viewport asks to draw under the system bars, as `viewport-fit=cover` does. */
+export function drawsUnderSystemBars(html: string): boolean {
+  const viewport = /<meta\b[^>]*\bname=["']viewport["'][^>]*>/i.exec(html)?.[0];
+  return viewport !== undefined && /viewport-fit\s*=\s*cover/i.test(viewport);
 }
 
 export function capacitorProjectDir(rootDir: string): string {
@@ -33,7 +44,7 @@ export function capacitorConfig(
     appId: config.app.id,
     appName: config.app.name,
     webDir: "../web",
-    ios: { contentInset: "automatic" },
+    ios: { contentInset: options.edgeToEdge ? "never" : "automatic" },
     ...(options.devUrl ? { server: { url: options.devUrl, cleartext: true } } : {}),
   };
 }
@@ -80,8 +91,9 @@ export async function ensureCapacitorProject(
   nodeModules: string = shellNodeModules(),
 ): Promise<string> {
   const projectDir = capacitorProjectDir(rootDir);
+  const html = await readFile(join(rootDir, "index.html"), "utf8").catch(() => "");
   for (const [relative, content] of Object.entries(
-    capacitorProjectFiles(config, options),
+    capacitorProjectFiles(config, { edgeToEdge: drawsUnderSystemBars(html), ...options }),
   )) {
     await writeIfChanged(join(projectDir, relative), content);
   }

@@ -11,6 +11,7 @@ import {
   capacitorConfig,
   capacitorProjectFiles,
   DEVICE_KEY_PLUGIN,
+  drawsUnderSystemBars,
   ensureCapacitorProject,
 } from "./project.js";
 
@@ -29,6 +30,44 @@ describe("capacitorConfig", () => {
     expect(capacitorConfig(config, { devUrl: "http://localhost:5173" })).toMatchObject({
       server: { url: "http://localhost:5173", cleartext: true },
     });
+  });
+});
+
+describe("the system bars", () => {
+  it("leaves them to iOS unless the page's viewport says it draws under them", () => {
+    expect(capacitorConfig(config, { edgeToEdge: true })).toMatchObject({
+      ios: { contentInset: "never" },
+    });
+    expect(
+      drawsUnderSystemBars(
+        '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />',
+      ),
+    ).toBe(true);
+    expect(
+      drawsUnderSystemBars('<meta name="viewport" content="width=device-width" />'),
+    ).toBe(false);
+    expect(
+      drawsUnderSystemBars('<meta name="description" content="viewport-fit=cover">'),
+    ).toBe(false);
+  });
+
+  it("reads the choice from the app's index.html", async () => {
+    const { writeFile } = await import("node:fs/promises");
+    const rootDir = await mkdtemp(join(tmpdir(), "parlor-cap-"));
+    const nodeModules = await mkdtemp(join(tmpdir(), "parlor-nm-"));
+    await writeFile(
+      join(rootDir, "index.html"),
+      '<html><head><meta name="viewport" content="width=device-width, viewport-fit=cover"></head></html>',
+    );
+    const projectDir = await ensureCapacitorProject(
+      { config, rootDir, configFile: "parlor.config.ts" },
+      {},
+      nodeModules,
+    );
+    const written = JSON.parse(
+      await readFile(join(projectDir, "capacitor.config.json"), "utf8"),
+    );
+    expect(written.ios).toEqual({ contentInset: "never" });
   });
 });
 

@@ -6,7 +6,7 @@ import {
   type TurnId,
 } from "@parlor/core";
 import { type ActionsOf, createRegistry } from "@parlor/core/registry";
-import { type AuthProvider, HOST_GRANTS_TAG } from "@parlor/server";
+import { type AuthProvider, type Delegation, HOST_GRANTS_TAG } from "@parlor/server";
 import { z } from "zod";
 
 import { idSchema } from "../id-schemas.js";
@@ -79,6 +79,8 @@ const afterSeq = z.number().int().min(0);
 
 const MIN_HOST_PROTOCOL = 2;
 const CONTEXT_HISTORY_ITEMS = 200;
+/** An agent outside a turn asks again well inside the revocation horizon. */
+const AGENT_TOKEN_TTL_MS = 10 * 60_000;
 const TERMINAL: ReadonlySet<string> = new Set(["done", "failed", "cancelled"]);
 
 const dbOf = (ctx: ActionContext) => ctx.db as ChatDb;
@@ -401,6 +403,21 @@ export function hostChatActions(deps: ChatActionDeps) {
         });
         learnAgents(host.host.hostId, input.agents);
         return { id: host.host.hostId, onlineUntil };
+      },
+    }),
+    hostAgentToken: chatAction("host", enforcing, {
+      description:
+        "A token for an agent on this computer outside any turn, such as Claude Code in a terminal, to call the app's actions as the user; revoked with the grant.",
+      input: z.object({ agent: z.string().min(1).max(120) }),
+      run: async ({ agent }, host, ctx): Promise<Delegation> => {
+        await requireWelcome(host, dbOf(ctx));
+        if (!deps.auth.delegateAgent) {
+          throw new ActionError(
+            "not_found",
+            "This app's agents run only in its sidebar.",
+          );
+        }
+        return deps.auth.delegateAgent(host.host, { agent, ttlMs: AGENT_TOKEN_TTL_MS });
       },
     }),
     hostClaim: chatAction("host", enforcing, {
