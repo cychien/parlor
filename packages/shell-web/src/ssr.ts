@@ -11,6 +11,9 @@ export const RENDER_MODULE = "virtual:parlor/render";
 const RESOLVED_RENDER_MODULE = `\0${RENDER_MODULE}`;
 export const RENDER_FILE = "render.mjs";
 
+/** Parlor's packages read `import.meta.env`, which only Vite provides, so Node must not load them. */
+const PARLOR_PACKAGES = /^@parlor\//;
+
 interface RenderOptions {
   readonly template: string;
   readonly fetch: (request: Request) => Promise<Response>;
@@ -25,6 +28,7 @@ type RenderPage = (
 export function renderModule(config: ParlorConfig, root: string): Plugin {
   return {
     name: "parlor:render-module",
+    config: () => ({ ssr: { noExternal: [PARLOR_PACKAGES] } }),
     resolveId: (id) => (id === RENDER_MODULE ? RESOLVED_RENDER_MODULE : undefined),
     load(id) {
       if (id !== RESOLVED_RENDER_MODULE || !config.web.ssr) return undefined;
