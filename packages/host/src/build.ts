@@ -3,7 +3,13 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { UI_MANIFEST_FILE } from "@parlor/agent-ui";
-import { appServerEnv, GENERATED_DIR, type LoadedConfig } from "@parlor/config";
+import {
+  appServerEnv,
+  ConfigError,
+  GENERATED_DIR,
+  type LoadedConfig,
+  type ParlorConfig,
+} from "@parlor/config";
 import { appCsp, serializeCsp, webOutDir } from "@parlor/shell-web";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import { build, copyPublicAssets, createNitro, prepare } from "nitro/builder";
@@ -163,37 +169,90 @@ export function withServerMigration(
   ];
 }
 
+function durableWranglerConfig(config: ParlorConfig): WranglerConfig {
+  const own = (config.deploy.cloudflare?.wrangler ?? {}) as WranglerConfig;
+  return {
+    name: workerName(config.app.id),
+    ...own,
+    durable_objects: {
+      bindings: [
+        { name: DURABLE_SERVER_BINDING, class_name: DURABLE_SERVER_CLASS },
+        ...(own.durable_objects?.bindings ?? []),
+      ],
+    },
+    migrations: withServerMigration(own.migrations ?? []),
+  };
+}
+
+export interface UnavailableDurableObject {
+  readonly binding: string;
+  readonly className: string;
+}
+
+export interface DevWranglerConfig {
+  readonly wrangler: WranglerConfig;
+  /** Classes the Worker itself would define: no Worker code runs in development. */
+  readonly unavailable: readonly UnavailableDurableObject[];
+}
+
+/** The bindings a cloudflare-durable build declares, as Wrangler's `getPlatformProxy()` reads them. */
+export function devWranglerConfig(
+  config: ParlorConfig,
+  compatibilityDate: string = DEFAULT_COMPATIBILITY_DATE,
+): DevWranglerConfig {
+  const {
+    main: _main,
+    assets: _assets,
+    migrations: _migrations,
+    durable_objects: durableObjects,
+    ...production
+  } = durableWranglerConfig(config);
+  const bindings = durableObjects?.bindings ?? [];
+  const ownClass = (binding: (typeof bindings)[number]) =>
+    !binding.script_name || binding.script_name === production.name;
+  return {
+    wrangler: {
+      ...production,
+      compatibility_date: production.compatibility_date ?? compatibilityDate,
+      compatibility_flags: [
+        ...new Set([...(production.compatibility_flags ?? []), "nodejs_compat"]),
+      ],
+      durable_objects: { bindings: bindings.filter((binding) => !ownClass(binding)) },
+    },
+    unavailable: bindings
+      .filter(ownClass)
+      .map((binding) => ({ binding: binding.name, className: binding.class_name })),
+  };
+}
+
 async function prepareDurable(
   { config, rootDir }: Pick<LoadedConfig, "config" | "rootDir">,
   hostRoot: string,
   serverEntry: string,
 ): Promise<DurableBuild> {
+  const workerExports = config.deploy.cloudflare?.exports;
+  const workerExportsPath = workerExports ? join(rootDir, workerExports) : undefined;
+  if (workerExportsPath && !existsSync(workerExportsPath)) {
+    throw new ConfigError(
+      `deploy.cloudflare.exports names ${workerExports}, which does not exist in ${rootDir}`,
+    );
+  }
   const exportsPath = join(hostRoot, "exports.cloudflare.mjs");
   await writeFile(
     exportsPath,
     durableServerSource({
       serverEntry,
       connectionScopes: installed(rootDir, "@parlor/data"),
+      workerExports: workerExportsPath,
     }),
   );
-  const own = (config.deploy.cloudflare?.wrangler ?? {}) as WranglerConfig;
   return {
     migrations: embeddedMigrations(rootDir, config.database.migrations),
     nitro: {
       exports: exportsPath,
       deployConfig: true,
       nodeCompat: true,
-      wrangler: {
-        name: workerName(config.app.id),
-        ...own,
-        durable_objects: {
-          bindings: [
-            { name: DURABLE_SERVER_BINDING, class_name: DURABLE_SERVER_CLASS },
-            ...(own.durable_objects?.bindings ?? []),
-          ],
-        },
-        migrations: withServerMigration(own.migrations ?? []),
-      },
+      wrangler: durableWranglerConfig(config),
     },
   };
 }

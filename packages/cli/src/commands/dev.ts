@@ -3,6 +3,7 @@ import { inspectServerEntry } from "@parlor/scaffold";
 import { defineCommand } from "citty";
 
 import { startDevAgentHost } from "../agent-host-process.js";
+import { prepareCloudflareDev } from "../cloudflare/prepare.js";
 import { claimDevSession } from "../dev-session.js";
 import { CliError } from "../errors.js";
 import { handlers } from "../handlers.js";
@@ -49,6 +50,7 @@ export const dev = defineCommand({
     const targetHandlers = targets.map((target) => resolveHandler(handlers, target));
     for (const handler of targetHandlers) handler.assertHost?.();
     const configured = await loadParlorConfig();
+    const cloudflare = await prepareCloudflareDev(configured);
     const port = parsePort(args.port);
     const session = claimDevSession(configured.rootDir, targets);
     onShutdown(() => session.release());
@@ -71,10 +73,11 @@ export const dev = defineCommand({
     });
     const shared = loadedFor(ports.web[main]!);
     const server = await inspectServerEntry(shared.rootDir, shared.config.server.entry);
-    const serverProcess = startServerProcess(shared, [
-      appOrigin,
-      ...frontends.filter((origin) => origin !== appOrigin),
-    ]);
+    const serverProcess = startServerProcess(
+      shared,
+      [appOrigin, ...frontends.filter((origin) => origin !== appOrigin)],
+      cloudflare,
+    );
     await untilListening(serverProcess, ports.server);
     startDevAgentHost(shared, {
       enabled: args["agent-host"],

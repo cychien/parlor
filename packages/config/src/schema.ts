@@ -81,6 +81,11 @@ export const parlorConfigSchema = z.object({
           locationHint: z.string().optional(),
           /** Merged into the generated wrangler config: the app's own bindings, its name. */
           wrangler: z.record(z.string(), z.unknown()).optional(),
+          /**
+           * A module whose named exports the Worker exports too, such as the app's own Durable
+           * Object classes. The Worker evaluates it at startup, so it may not do I/O while loading.
+           */
+          exports: z.string().optional(),
         })
         .optional(),
     })
