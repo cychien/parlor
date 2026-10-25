@@ -63,6 +63,15 @@ function received() {
 }
 
 describe.each(drivers)("DataProvider contract on $name", (driver) => {
+  it("answers a parameterized statement through client", async () => {
+    const handle = open(driver);
+    const { rows } = await handle.client.query("select $1::int + 1 as n, $2::text as t", [
+      41,
+      "x",
+    ]);
+    expect(rows).toEqual([{ n: 42, t: "x" }]);
+  });
+
   it("delivers NOTIFY to a listener until it unlistens", async () => {
     const handle = open(driver);
     const name = channel();

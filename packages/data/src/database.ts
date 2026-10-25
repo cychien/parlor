@@ -33,8 +33,18 @@ export interface DatabaseOptions {
   readonly migrationsFolder?: string | undefined;
 }
 
+/** Runs one parameterized statement (`$1`, `$2`, ...) and answers its rows, as `pg` does. */
+export interface DatabaseClient {
+  query(text: string, params?: unknown[]): Promise<{ rows: unknown[] }>;
+}
+
 export interface DatabaseHandle extends DataProvider<Database> {
   readonly db: Database;
+  /**
+   * The connection under `db`, for libraries that take a `pg`-style client. Each statement
+   * runs on its own, outside any transaction, on the current connection scope's connections.
+   */
+  readonly client: DatabaseClient;
   readonly driver: "pglite" | "node-postgres";
   listen(
     channel: string,
@@ -60,6 +70,7 @@ export function resolveDirectUrl(
 }
 
 interface PgConnections extends ScopedConnections {
+  readonly pool: pg.Pool;
   readonly db: NodePgDatabase;
   readonly listeners: Set<pg.Client>;
 }
@@ -71,6 +82,7 @@ function openPgConnections(url: string, onClose?: () => void): PgConnections {
   });
   const listeners = new Set<pg.Client>();
   return {
+    pool,
     db: drizzle(pool),
     listeners,
     close: once(async () => {
@@ -106,6 +118,7 @@ function nodePostgresHandle(url: string, directUrl: string): DatabaseHandle {
     });
   return {
     db: scopedDatabase(() => connections().db),
+    client: { query: (text, params) => connections().pool.query(text, params) },
     driver: "node-postgres",
     read: () => connections().db,
     transaction: (run) => connections().db.transaction((tx) => run(tx)),

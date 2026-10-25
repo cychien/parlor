@@ -91,6 +91,23 @@ describe.runIf(postgresUrl)("connection scopes on node-postgres", () => {
     }
   });
 
+  it("runs client statements on the connections of the scope it is used in", async () => {
+    const pid = async () =>
+      (
+        (await handle.client.query("select pg_backend_pid() as pid")).rows[0] as {
+          pid: number;
+        }
+      ).pid;
+    const scope = createConnectionScope();
+    try {
+      const inside = await scope.run(() => backend(handle));
+      expect(await scope.run(pid)).toBe(inside);
+      expect(await pid()).not.toBe(inside);
+    } finally {
+      await scope.close();
+    }
+  });
+
   it("keeps concurrent scopes apart, transactions included", async () => {
     const one = createConnectionScope();
     const two = createConnectionScope();
