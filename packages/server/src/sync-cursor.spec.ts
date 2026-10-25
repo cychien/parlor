@@ -32,6 +32,7 @@ let server: FrameworkServer;
 beforeAll(async () => {
   database = await createDatabase({ dataDir: "memory://" });
   server = createServer({ actions, database });
+  await call("listNotes");
 }, 30_000);
 afterAll(async () => {
   await server.close();
