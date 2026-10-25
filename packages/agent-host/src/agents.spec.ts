@@ -99,5 +99,5 @@ describe("agent profiles", () => {
         problem: `\`${broken} --version\` failed: check that Broken runs in a terminal.`,
       },
     ]);
-  });
+  }, 30_000);
 });

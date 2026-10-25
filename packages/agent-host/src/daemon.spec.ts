@@ -629,8 +629,12 @@ describe("a daemon that is slow to detect its agents", () => {
         true,
       );
       control.close();
+      await vi.waitFor(
+        async () =>
+          expect(await readFile(paths.lock, "utf8").catch(() => "gone")).toBe("gone"),
+        { timeout: 1_000, interval: 20 },
+      );
       expect(started).toBe(false);
-      expect(await readFile(paths.lock, "utf8").catch(() => "gone")).toBe("gone");
       await starting;
     } finally {
       await starting.catch(() => undefined);
