@@ -7,6 +7,7 @@ export default defineConfig({
       "packages/scaffold/templates/default",
       "packages/scaffold/fixtures/with-auth",
       "examples/*",
+      "website",
     ],
   },
 });
