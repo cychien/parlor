@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,6 +8,7 @@ import {
   AGENT_PROFILES,
   type AgentProfile,
   detectAgents,
+  findAgents,
   loadProfiles,
 } from "./agents.js";
 
@@ -54,6 +55,7 @@ describe("agent profiles", () => {
           version: "2.2.2",
         },
         binary: "codex",
+        apps: ["/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex"],
       },
     ]);
   });
@@ -98,6 +100,37 @@ describe("agent profiles", () => {
         ready: false,
         problem: `\`${broken} --version\` failed: check that Broken runs in a terminal.`,
       },
+    ]);
+  }, 30_000);
+
+  it("runs the CLI a desktop app ships when none is on the PATH, and the PATH's when both are", async () => {
+    const shipped = join(dir, "App.app", "cli");
+    await mkdir(join(dir, "App.app"), { recursive: true });
+    await writeFile(shipped, '#!/bin/sh\necho "app-cli 2.0.0"\n');
+    await chmod(shipped, 0o755);
+    const found = await findAgents([
+      { ...fake, id: "onPath", apps: [shipped] },
+      {
+        ...fake,
+        id: "inApp",
+        binary: "parlor-no-such-agent",
+        apps: [join(dir, "gone"), shipped],
+      },
+      {
+        ...fake,
+        id: "nowhere",
+        binary: "parlor-no-such-agent",
+        apps: [join(dir, "gone")],
+      },
+    ]);
+    expect(found.agents.map(({ id, version }) => [id, version])).toEqual([
+      ["onPath", process.versions.node],
+      ["inApp", "2.0.0"],
+    ]);
+    expect(found.profiles.map(({ id, binary }) => [id, binary])).toEqual([
+      ["onPath", "node"],
+      ["inApp", shipped],
+      ["nowhere", "parlor-no-such-agent"],
     ]);
   }, 30_000);
 });

@@ -23,6 +23,7 @@ export function useChat(): ChatState & ChatCommands {
       openThread: runtime.openThread,
       newThread: runtime.newThread,
       startLink: runtime.startLink,
+      checkAgents: runtime.checkAgents,
     }),
     [state, runtime],
   );

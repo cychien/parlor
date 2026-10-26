@@ -28,7 +28,7 @@ import {
   registerAgentTools,
   unregisterAgentTools,
 } from "./agent-tools.js";
-import { type AgentProfile, detectAgents, loadProfiles } from "./agents.js";
+import { type AgentProfile, findAgents, loadProfiles } from "./agents.js";
 import { connectControl, type ControlRequest } from "./control.js";
 import { requestDevHostToken } from "./dev-host.js";
 import { type AppGrant, devHostKeys, type GrantStore, type HostKeys } from "./grants.js";
@@ -53,7 +53,7 @@ import { compareVersions, RELEASE_KEY, signedRelease } from "./release.js";
 import { revokeGrant } from "./revoke.js";
 import { selfEntry } from "./self.js";
 import { type HostRelease, installLoginItem, installRelease } from "./service.js";
-import { agentEnvironment } from "./shell-path.js";
+import { agentEnvironment, rereadAgentPath } from "./shell-path.js";
 import type { TrustStore } from "./trust.js";
 import { runTurn } from "./turn.js";
 
@@ -169,6 +169,8 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
   const devTokens = new Map<string, string>();
   const name = computerName();
   const platform = platformName();
+  /** As `agents.json` lists them; `profiles` are these with each `binary` set to the CLI found. */
+  let listedProfiles: readonly AgentProfile[] = [];
   let profiles: readonly AgentProfile[] = [];
   let agents: AgentInfo[] = [];
   const learned = learnedStore(paths.learned);
@@ -378,8 +380,19 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
     );
   };
 
+  let toolsWork: Promise<unknown> = Promise.resolve();
+  /** Registering and removing the app with the agents runs one at a time, on the grant as saved by then. */
+  const serially = <T>(work: () => Promise<T>): Promise<T> => {
+    const next = toolsWork.then(work, work);
+    toolsWork = next.catch(() => undefined);
+    return next;
+  };
+
   /** Registers the app with the agents here once the user chose it and it is not yet. */
-  const ensureAgentTools = async (grant: AppGrant): Promise<AppGrant> => {
+  const ensureAgentTools = (grant: AppGrant): Promise<AppGrant> =>
+    serially(() => ensureAgentToolsNow(grant));
+
+  const ensureAgentToolsNow = async (grant: AppGrant): Promise<AppGrant> => {
     if (!grant.agentTools?.on || grant.dev) return grant;
     if (grant.agentTools.agents) {
       await writeSkills(grant);
@@ -392,12 +405,87 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
     return next;
   };
 
-  const removeAgentTools = async (grant: AppGrant | undefined) => {
-    const tools = grant?.agentTools;
-    if (!tools?.name || !tools.agents?.length) return;
-    await unregisterAgentTools(toolsDeps(), { name: tools.name, agents: tools.agents });
-    await removeAgentSkills(tools.agents, tools.name, await agentEnvironment());
+  /** Hands the app to agents installed since it was registered with the ones here then. */
+  const handToNewAgents = (origin: string) =>
+    serially(async () => {
+      const grant = await deps.grants.get(origin);
+      if (grant) await handToNewAgentsNow(grant);
+    });
+
+  const handToNewAgentsNow = async (grant: AppGrant) => {
+    const tools = grant.agentTools;
+    if (grant.declined || grant.dev || !tools?.on || !tools.agents) return;
+    const have = new Set(tools.agents);
+    const fresh = toolsDeps().profiles.filter((profile) => !have.has(profile.id));
+    if (fresh.length === 0) {
+      await writeSkills(grant);
+      return;
+    }
+    const registered = await registerAgentTools(
+      { ...toolsDeps(), profiles: fresh },
+      grant,
+    );
+    if (registered.agents.length === 0) {
+      await writeSkills(grant);
+      return;
+    }
+    const next: AppGrant = {
+      ...grant,
+      agentTools: {
+        on: true,
+        name: registered.name,
+        agents: [...tools.agents, ...registered.agents],
+      },
+    };
+    await deps.grants.save(next);
+    latest.set(grant.appOrigin, next);
+    await writeSkills(next);
   };
+
+  let checking: Promise<void> | undefined;
+  let checkAgain = false;
+  /**
+   * Looks for the agents again because a tab asked: one installed since this computer
+   * started shows in every app's sidebar, and gets the apps the user let its agents use.
+   */
+  const checkAgents = (): Promise<void> => {
+    if (checking) {
+      checkAgain = true;
+      return checking;
+    }
+    checking = (async () => {
+      do {
+        checkAgain = false;
+        await rereadAgentPath();
+        const found = await findAgents(listedProfiles);
+        profiles = found.profiles;
+        agents = [...found.agents];
+        for (const grant of await deps.grants.list()) {
+          await handToNewAgents(grant.appOrigin).catch((error: unknown) =>
+            logEvent("agent_tools_failed", {
+              appOrigin: grant.appOrigin,
+              error: String(error),
+            }),
+          );
+        }
+        await Promise.all(
+          [...links.values()].map((state) => report(state, true).catch(() => undefined)),
+        );
+        logEvent("agents_checked", { agents: agents.map((agent) => agent.id) });
+      } while (checkAgain);
+    })().finally(() => {
+      checking = undefined;
+    });
+    return checking;
+  };
+
+  const removeAgentTools = (grant: AppGrant | undefined) =>
+    serially(async () => {
+      const tools = grant?.agentTools;
+      if (!tools?.name || !tools.agents?.length) return;
+      await unregisterAgentTools(toolsDeps(), { name: tools.name, agents: tools.agents });
+      await removeAgentSkills(tools.agents, tools.name, await agentEnvironment());
+    });
 
   const agentTokens = new Map<
     string,
@@ -465,6 +553,7 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
       platform,
       fetch: (input, init) => fetch(input, init),
       onWake: () => wake(state),
+      onAgentsCheck: () => void checkAgents(),
       onPushed: (_link, turn) => {
         // Tells the app this computer has the turn, while it already starts on it.
         void link.api.calls
@@ -529,11 +618,13 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
       );
   };
 
-  const report = async (state: LinkState) => {
+  /** `agentsChecked` when the agents were just looked for, which a tab waiting on a check reads. */
+  const report = async (state: LinkState, agentsChecked = false) => {
     const reported = state.link.api.calls.call("hostReport", {
       online: true,
       agents: describeFor(state.link.grant.appOrigin),
       ...(await pinnedDevices(state)),
+      ...(agentsChecked ? { agentsChecked: true as const } : {}),
     });
     const timeout = new Promise<never>((_, reject) =>
       setTimeout(
@@ -570,7 +661,7 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
   const attach = async (origin: string, hostToken: string) => {
     await closeLink(origin, "replaced");
     devTokens.set(origin, hostToken);
-    await report(open(await devGrant(origin), devHostKeys(hostToken)));
+    await report(open(await devGrant(origin), devHostKeys(hostToken)), true);
   };
 
   const reattach = async (grant: AppGrant) => {
@@ -627,8 +718,10 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
         openHostLog(join(paths.root, "logs", "daemon.log"));
         await putHostCommandFirstOnPath(paths.root);
         await deps.proxy.listen(paths.proxy);
-        profiles = await loadProfiles(paths.agents);
-        agents = await detectAgents(profiles);
+        listedProfiles = await loadProfiles(paths.agents);
+        const found = await findAgents(listedProfiles);
+        profiles = found.profiles;
+        agents = [...found.agents];
         await learned.load();
         finishStartup();
       } catch (error) {
@@ -641,8 +734,8 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
       });
       for (const grant of await deps.grants.list()) {
         if (grant.declined) continue;
-        void writeSkills(grant).catch(() => undefined);
-        void report(open(grant, deps.keys)).catch((error: unknown) =>
+        void handToNewAgents(grant.appOrigin).catch(() => undefined);
+        void report(open(grant, deps.keys), true).catch((error: unknown) =>
           logEvent("link_failed", { appOrigin: grant.appOrigin, error: String(error) }),
         );
       }
@@ -656,13 +749,13 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
       const current = links.get(appOrigin);
       if (current?.link.grant.grantId === grant.grantId) {
         latest.set(appOrigin, grant);
-        await report(current);
+        await report(current, true);
         return toolsOf(grant);
       }
       await closeLink(appOrigin, "replaced");
       if (current) await deps.pool.forget(current.link.grant);
       latest.set(appOrigin, grant);
-      await report(open(grant, deps.keys));
+      await report(open(grant, deps.keys), true);
       return toolsOf(grant);
     },
     async agentTools(appOrigin, on) {

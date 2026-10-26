@@ -12,6 +12,11 @@ export interface AgentProfile {
   readonly launch: AgentLaunch;
   /** The CLI behind it, for the installed-and-logged-in check. */
   readonly binary: string;
+  /**
+   * Where a desktop app ships the same CLI, for a computer with the app and no CLI on its
+   * PATH: the app reads the CLI's own settings, so the agent behaves the same either way.
+   */
+  readonly apps?: readonly string[] | undefined;
 }
 
 /**
@@ -51,6 +56,7 @@ export const AGENT_PROFILES: readonly AgentProfile[] = [
       version: "2.2.2",
     },
     binary: "codex",
+    apps: ["/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex"],
   },
   {
     id: "gemini",
@@ -104,10 +110,11 @@ function launchOf(value: unknown): AgentLaunch | undefined {
 function profileOf(value: unknown): AgentProfile | undefined {
   if (!isFields(value)) return undefined;
   const launch = launchOf(value.launch);
-  const { id, name, binary } = value;
+  const { id, name, binary, apps } = value;
   if (!launch || typeof id !== "string" || typeof name !== "string") return undefined;
   if (typeof binary !== "string" || id === "") return undefined;
-  return { id, name, launch, binary };
+  if (apps !== undefined && !isStrings(apps)) return undefined;
+  return { id, name, launch, binary, ...(apps ? { apps } : {}) };
 }
 
 /** Built-ins plus the user's own `agents.json`, which only this computer's user edits. */
@@ -147,31 +154,63 @@ function versionOf(binary: string, path: string): Promise<string | "missing" | "
   });
 }
 
-/** What `hostReport` sends: the installed agents; one that is not installed is left out. */
-export async function detectAgents(
+/** The agents installed here, each with its profile's `binary` set to the CLI that answered. */
+export interface FoundAgents {
+  readonly agents: readonly AgentInfo[];
+  readonly profiles: readonly AgentProfile[];
+}
+
+/**
+ * Looks for each agent's CLI on the login-shell PATH, then inside the desktop apps that ship
+ * it. An agent found nowhere is left out; the profiles it returns run what was found.
+ */
+export async function findAgents(
   profiles: readonly AgentProfile[],
-): Promise<AgentInfo[]> {
+): Promise<FoundAgents> {
   const path = await agentPath();
   const found = await Promise.all(
-    profiles.map(async (profile): Promise<AgentInfo | undefined> => {
-      const output = await versionOf(profile.binary, path);
+    profiles.map(async (profile) => {
+      let binary = profile.binary;
+      let output = await versionOf(binary, path);
+      for (const app of profile.apps ?? []) {
+        if (output !== "missing") break;
+        binary = app;
+        output = await versionOf(app, path);
+      }
       if (output === "missing") return undefined;
+      const resolved = binary === profile.binary ? profile : { ...profile, binary };
       if (output === "broken") {
-        return {
+        const info: AgentInfo = {
           id: profile.id,
           name: profile.name,
           ready: false,
-          problem: `\`${profile.binary} --version\` failed: check that ${profile.name} runs in a terminal.`,
+          problem: `\`${binary} --version\` failed: check that ${profile.name} runs in a terminal.`,
         };
+        return { info, profile: resolved };
       }
       const version = /\d+\.\d+\.\d+[\w.-]*/.exec(output)?.[0];
-      return {
+      const info: AgentInfo = {
         id: profile.id,
         name: profile.name,
         ready: true,
         ...(version ? { version } : {}),
       };
+      return { info, profile: resolved };
     }),
   );
-  return found.filter((agent): agent is AgentInfo => agent !== undefined);
+  const present = found.filter((entry) => entry !== undefined);
+  return {
+    agents: present.map((entry) => entry.info),
+    profiles: profiles.map(
+      (profile) =>
+        present.find((entry) => entry.profile.id === profile.id)?.profile ?? profile,
+    ),
+  };
+}
+
+/** What `hostReport` sends: the installed agents; one that is not installed is left out. */
+export async function detectAgents(
+  profiles: readonly AgentProfile[],
+): Promise<AgentInfo[]> {
+  return [...(await findAgents(profiles)).agents];
 }
