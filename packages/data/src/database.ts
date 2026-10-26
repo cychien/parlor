@@ -10,6 +10,7 @@ import {
   currentOwner,
   type ScopedConnections,
 } from "./connection-scope.js";
+import { corkWrites } from "./cork.js";
 import { migrateDatabase } from "./migrations.js";
 import { once } from "./once.js";
 
@@ -83,6 +84,11 @@ interface PgConnections extends ScopedConnections {
 
 function openPgConnections(url: string, onClose?: () => void): PgConnections {
   const pool = new pg.Pool({ connectionString: url });
+  pool.on("connect", (client) => {
+    const { connection } = client as unknown as { connection?: { stream?: unknown } };
+    if (connection?.stream)
+      corkWrites(connection.stream as Parameters<typeof corkWrites>[0]);
+  });
   pool.on("error", (error) => {
     console.warn("[parlor] an idle database connection dropped:", error.message);
   });
