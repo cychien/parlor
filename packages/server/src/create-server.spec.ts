@@ -1,4 +1,4 @@
-import { defineAction } from "@parlor/core";
+import { defineAction, encodeReadRequests, REFRESH_HEADER } from "@parlor/core";
 import { createRegistry } from "@parlor/core/registry";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -155,5 +155,77 @@ describe("database wiring", () => {
       withDb.fetch(post("/_parlor/actions/write", {})).then((r) => r.json()),
     ).resolves.toMatchObject({ data: { db: "tx" } });
     expect(log).toEqual(["tx"]);
+  });
+
+  it("answers a write with the reads the page named that it changed, run again after it", async () => {
+    const counts = { course: 0 };
+    const refreshing = createServer({
+      actions: createRegistry({
+        course: defineAction({
+          description: "r",
+          input: z.object({ id: z.string() }),
+          reads: ["course"],
+          run: ({ id }) => ({ id, edits: counts.course }),
+        }),
+        lessons: defineAction({
+          description: "r",
+          input: z.object({}),
+          reads: ["lesson"],
+          run: () => [],
+        }),
+        broken: defineAction({
+          description: "r",
+          input: z.object({}),
+          reads: ["course"],
+          run: () => {
+            throw new Error("boom");
+          },
+        }),
+        rename: defineAction({
+          description: "w",
+          input: z.object({ id: z.string() }),
+          writes: ["course"],
+          run: ({ id }) => {
+            counts.course += 1;
+            return { id };
+          },
+        }),
+      }),
+      sync: false,
+    });
+    const reads = [
+      ["course", { id: "c1" }],
+      ["lessons", {}],
+      ["broken", {}],
+      ["missing", {}],
+    ] as const;
+
+    const answer = await refreshing
+      .fetch(
+        post(
+          "/_parlor/actions/rename",
+          { id: "c1" },
+          {
+            [REFRESH_HEADER]: encodeReadRequests(reads),
+          },
+        ),
+      )
+      .then((r) => r.json());
+    expect(answer).toMatchObject({
+      data: { id: "c1" },
+      writes: [["course", "c1"]],
+      refreshed: [
+        { data: { id: "c1", edits: 1 }, tags: [["course"]] },
+        null,
+        { error: { code: "internal" } },
+        null,
+      ],
+    });
+
+    const plain = await refreshing
+      .fetch(post("/_parlor/actions/rename", { id: "c1" }))
+      .then((r) => r.json());
+    expect(plain).not.toHaveProperty("refreshed");
+    expect(plain).not.toHaveProperty("writes");
   });
 });

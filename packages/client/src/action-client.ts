@@ -3,6 +3,10 @@ import {
   type ActionInput,
   type ActionMap,
   type ActionOutput,
+  encodeReadRequests,
+  type ReadRequest,
+  REFRESH_HEADER,
+  type RefreshedRead,
   SHELL_ORIGINS,
   type Tag,
 } from "@parlor/core";
@@ -32,6 +36,8 @@ export interface ActionClientOptions {
 
 export interface CallOptions {
   readonly signal?: AbortSignal | undefined;
+  /** For a write: the reads the page shows, to answer with fresh the ones it changed. */
+  readonly refresh?: readonly ReadRequest[] | undefined;
 }
 
 export interface ActionEnvelope<T> {
@@ -39,6 +45,10 @@ export interface ActionEnvelope<T> {
   readonly tags: readonly Tag[];
   /** The sync cursor a read's data reflects, when the server tracks it. */
   readonly cursor?: string | undefined;
+  /** For a call with `refresh`, when the server knows it: what the write changed. */
+  readonly writes?: readonly Tag[] | undefined;
+  /** For a call with `refresh`, when the server knows it: each read named, in order. */
+  readonly refreshed?: readonly RefreshedRead[] | undefined;
 }
 
 export interface ActionClient<T extends ActionMap> {
@@ -90,7 +100,12 @@ export async function invokeAt<T extends ActionMap, K extends keyof T & string>(
 ): Promise<ActionEnvelope<ActionOutput<T[K]>>> {
   const response = await request(path, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      ...(options.refresh?.length
+        ? { [REFRESH_HEADER]: encodeReadRequests(options.refresh) }
+        : {}),
+    },
     body: JSON.stringify(input ?? {}),
     signal: options.signal ?? null,
   });
@@ -104,11 +119,16 @@ export async function invokeAt<T extends ActionMap, K extends keyof T & string>(
     data: ActionOutput<T[K]>;
     tags?: Tag[];
     cursor?: string;
+    writes?: Tag[];
+    refreshed?: RefreshedRead[];
   };
   return {
     data: body.data,
     tags: body.tags ?? [],
     ...(typeof body.cursor === "string" ? { cursor: body.cursor } : {}),
+    ...(Array.isArray(body.writes) && Array.isArray(body.refreshed)
+      ? { writes: body.writes, refreshed: body.refreshed }
+      : {}),
   };
 }
 

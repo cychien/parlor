@@ -39,6 +39,7 @@ export {
   actionQueryOptions,
   ensureActionQueryData,
 } from "./action-query.js";
+export { callAndRefresh } from "./write-refresh.js";
 export {
   type ActionMutationOptions,
   type ActionQueryOptions,

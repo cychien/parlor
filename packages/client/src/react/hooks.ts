@@ -12,10 +12,10 @@ import {
   useSuspenseQuery,
 } from "@tanstack/react-query";
 
-import { ACTION_QUERY_PREFIX } from "../query-keys.js";
 import type { RegisteredActions } from "../register.js";
 import { type ActionQueryContext, actionQueryOptions } from "./action-query.js";
 import { useFramework } from "./provider.js";
+import { callAndRefresh } from "./write-refresh.js";
 
 type Actions = RegisteredActions;
 type Name = keyof Actions & string;
@@ -73,10 +73,7 @@ export function useActionMutation<K extends Name>(
   const queryClient = useQueryClient();
   return useMutation({
     ...options,
-    mutationFn: (input) => client.call(name, input),
-    onSuccess: async (data, variables, onMutateResult, context) => {
-      await queryClient.invalidateQueries({ queryKey: ACTION_QUERY_PREFIX });
-      await options?.onSuccess?.(data, variables, onMutateResult, context);
-    },
+    // The page is fresh, with what the write changed, before `onSuccess` runs.
+    mutationFn: (input) => callAndRefresh({ client, queryClient }, name, input),
   });
 }
