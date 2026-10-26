@@ -29,7 +29,8 @@ Use it two ways:
 
 The agents reach the app through Parlor Host, with a short-lived token the computer's grant mints; no app credential is ever in their config. They act as the signed-in user, as an external MCP client: `ctx.source` is `"mcp"`, and a `confirm: true` action waits for the user in the app. Because a coding agent in a terminal may reach for any tool it has, Parlor Host keeps the app from being changed by accident:
 
-- The server's instructions tell the agent to use the app only when the user names it.
+- The server's instructions tell the agent to use the app only when the user names it, and then to use its tools rather than opening the app in a browser.
+- Coding agents load a large MCP server's tools only once they search for them, so Parlor Host also writes a skill named after the app (`~/.claude/skills/<name>`, `~/.codex/skills/<name>`) that sends the agent to the app's tools when the user names it. Disconnecting removes it. A skill of the same name the user wrote is never replaced, and nothing is written into a skills folder the user links in from elsewhere, such as dotfiles.
 - Reading runs as asked. The first change in each conversation asks the user first, inside the agent where it can ask (MCP elicitation, as Claude Code does), and in a dialog on the computer otherwise. A declined change runs nothing, and the agent is told so.
 
 The connection ends in one place for both uses: **Disconnect** in the sidebar (`useChat().disconnect(hostId)`) or `npx @parlor/agent-host disconnect <app url>` revokes the grant and removes the app from the agents, and the computer posts a notification when the app was the one to end it. `npx @parlor/agent-host tools <app url> --off` stops only the agents outside the sidebar; without `--off` it hands the app to them again.

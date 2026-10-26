@@ -284,8 +284,15 @@ describe("disconnecting through the daemon", () => {
     }
   }, 30_000);
 
-  it("hands the app to Claude Code and Codex here when the user chose it, and takes it back", async () => {
+  it("hands the app to Claude Code and Codex here when the user chose it, with a skill each, and takes it back", async () => {
     const root = await mkdtemp(join(tmpdir(), "pt-"));
+    vi.stubEnv("HOME", root);
+    vi.stubEnv("CODEX_HOME", "");
+    vi.stubEnv("CLAUDE_CONFIG_DIR", "");
+    const skillsOf = () =>
+      [".claude", ".codex"].map((dir) =>
+        existsSync(join(root, dir, "skills", name, "SKILL.md")),
+      );
     const routes = hostRoutes({ wake: false });
     const app = await stubApp((request, body, response) =>
       request.url === "/_parlor/auth/hosts/revoke"
@@ -370,6 +377,7 @@ describe("disconnecting through the daemon", () => {
         name,
         agents: ["claude", "codex"],
       });
+      expect(skillsOf()).toEqual([true, true]);
       const reported = app.seen
         .filter((seen) => seen.path.endsWith("/hostReport"))
         .at(-1)!;
@@ -385,10 +393,12 @@ describe("disconnecting through the daemon", () => {
       expect(await host.agentTools(app.origin, false)).toBeUndefined();
       expect((await logOf("codex")).at(-1)).toBe(`mcp remove ${name}`);
       expect((await grants.get(app.origin))?.agentTools).toEqual({ on: false });
+      expect(skillsOf()).toEqual([false, false]);
       expect(await host.agentTools(app.origin, true)).toEqual({
         name,
         agents: "Claude Code and Codex",
       });
+      expect(skillsOf()).toEqual([true, true]);
 
       expect(await host.disconnect(app.origin)).toEqual({
         name,
@@ -396,9 +406,11 @@ describe("disconnecting through the daemon", () => {
       });
       expect((await logOf("claude")).at(-1)).toBe(`mcp remove --scope user ${name}`);
       expect(await grants.list()).toEqual([]);
+      expect(skillsOf()).toEqual([false, false]);
     } finally {
       await host.stop();
       await app.close();
+      vi.unstubAllEnvs();
       await rm(root, { recursive: true, force: true });
     }
   }, 60_000);

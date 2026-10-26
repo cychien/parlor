@@ -20,6 +20,7 @@ import {
 import { ActionError, asId, DEV_USER_ID } from "@parlor/core";
 
 import type { AgentLauncher } from "./acp.js";
+import { removeAgentSkills, writeAgentSkills } from "./agent-skills.js";
 import { readUsage, surveyOptions } from "./agent-survey.js";
 import {
   agentNames,
@@ -361,12 +362,33 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
     };
   };
 
+  /** The skill that sends the agents to the app's tools when the user names it, kept current. */
+  const writeSkills = async (grant: AppGrant) => {
+    const tools = grant.agentTools;
+    if (grant.dev || !tools?.on || !tools.name || !tools.agents?.length) return;
+    await writeAgentSkills(
+      tools.agents,
+      {
+        name: tools.name,
+        appName: grant.appName,
+        appOrigin: grant.appOrigin,
+        account: grant.account.email ?? grant.account.name,
+      },
+      await agentEnvironment(),
+    );
+  };
+
   /** Registers the app with the agents here once the user chose it and it is not yet. */
   const ensureAgentTools = async (grant: AppGrant): Promise<AppGrant> => {
-    if (!grant.agentTools?.on || grant.dev || grant.agentTools.agents) return grant;
+    if (!grant.agentTools?.on || grant.dev) return grant;
+    if (grant.agentTools.agents) {
+      await writeSkills(grant);
+      return grant;
+    }
     const registered = await registerAgentTools(toolsDeps(), grant);
     const next: AppGrant = { ...grant, agentTools: { on: true, ...registered } };
     await deps.grants.save(next);
+    await writeSkills(next);
     return next;
   };
 
@@ -374,6 +396,7 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
     const tools = grant?.agentTools;
     if (!tools?.name || !tools.agents?.length) return;
     await unregisterAgentTools(toolsDeps(), { name: tools.name, agents: tools.agents });
+    await removeAgentSkills(tools.agents, tools.name, await agentEnvironment());
   };
 
   const agentTokens = new Map<
@@ -618,6 +641,7 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
       });
       for (const grant of await deps.grants.list()) {
         if (grant.declined) continue;
+        void writeSkills(grant).catch(() => undefined);
         void report(open(grant, deps.keys)).catch((error: unknown) =>
           logEvent("link_failed", { appOrigin: grant.appOrigin, error: String(error) }),
         );
