@@ -1,6 +1,6 @@
 {
   "name": "create-parlor",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Create a Parlor app: pnpm create parlor, npm create parlor, yarn create parlor, bun create parlor",
   "homepage": "https://cychien.github.io/parlor",
   "bugs": "https://github.com/cychien/parlor/issues",
