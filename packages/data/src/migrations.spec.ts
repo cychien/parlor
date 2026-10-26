@@ -66,8 +66,14 @@ describe("migrations embedded in a build", () => {
 });
 
 describe("the workerd platform", () => {
-  it("refuses PGlite and says DATABASE_URL is missing", async () => {
-    await expect(workerd.pgliteHandle()).rejects.toThrow(/DATABASE_URL/);
+  it("loads without DATABASE_URL, and says it is missing on every use", async () => {
+    const handle = await workerd.pgliteHandle();
+    const db = handle.db;
+    expect(() => db.select).toThrow(/DATABASE_URL is not set/);
+    expect(() => handle.read()).toThrow(/DATABASE_URL/);
+    await expect(handle.migrate("migrations")).rejects.toThrow(/DATABASE_URL/);
+    await expect(handle.transaction(async () => 1)).rejects.toThrow(/DATABASE_URL/);
+    await expect(handle.client.query("select 1")).rejects.toThrow(/DATABASE_URL/);
   });
 
   it("leaves migrations to prepare, since no I/O may run while the app loads", () => {

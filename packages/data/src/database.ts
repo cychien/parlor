@@ -99,6 +99,27 @@ function openPgConnections(url: string, onClose?: () => void): PgConnections {
   };
 }
 
+/**
+ * A deployment with no database yet: it loads, so a host that runs the app's modules before
+ * its settings exist (Cloudflare checks a Worker as it uploads) accepts it, and every use
+ * fails with `error`, which the first request reports.
+ */
+export function unconfiguredHandle(error: Error): DatabaseHandle {
+  const fail = (): never => {
+    throw error;
+  };
+  return {
+    db: scopedDatabase(fail),
+    client: { query: () => Promise.reject(error) },
+    driver: "node-postgres",
+    read: fail,
+    transaction: () => Promise.reject(error),
+    listen: () => Promise.reject(error),
+    migrate: () => Promise.reject(error),
+    close: async () => undefined,
+  };
+}
+
 /** Stays valid across scopes, so code that captured `handle.db` at startup still works. */
 function scopedDatabase(current: () => Database): Database {
   return new Proxy({} as Database, {
