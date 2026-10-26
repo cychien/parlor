@@ -27,6 +27,8 @@ export type ChatItem<C = unknown> =
       readonly state: TurnState;
       readonly failure: TurnFailure | undefined;
       readonly mine: boolean;
+      /** This device's prompt on its way, shown before the server stored it. */
+      readonly sending?: boolean | undefined;
     }
   | {
       readonly kind: "reply" | "reasoning";

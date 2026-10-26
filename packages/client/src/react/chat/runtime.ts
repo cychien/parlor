@@ -328,6 +328,8 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
   let optionChoices = readOptionChoices();
   let sending = false;
   let pendingSend: PendingSend | undefined;
+  /** The prompt in flight, shown in its thread until the server's copy arrives. */
+  let shownSend: PendingSend | undefined;
   let startedNew = false;
   let connect: ConnectOption = {
     kind: "command",
@@ -476,6 +478,27 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     return offline && waitOn("offline", offline.agent.hostId);
   };
 
+  const withShownSend = (folded: readonly ChatItem<AgentConfirmation>[]) => {
+    if (shownSend && items.has(shownSend.itemId)) shownSend = undefined;
+    const shown = shownSend;
+    if (!shown || (threadId !== shown.openedIn && threadId !== shown.threadId)) {
+      return folded;
+    }
+    const [hostId, agentId] = shown.agent.split("/") as [string, string];
+    const row: ChatItem<AgentConfirmation> = {
+      kind: "prompt",
+      id: shown.itemId,
+      turnId: shown.turnId,
+      text: shown.text,
+      agent: { hostId: asId("host", hostId), agentId },
+      state: "queued",
+      failure: undefined,
+      mine: true,
+      sending: true,
+    };
+    return [...folded, row];
+  };
+
   const compute = (): ChatState => {
     const agents = choices();
     const wanted =
@@ -513,13 +536,17 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       moreThreads,
       hasOlder,
       loadingOlder,
-      items: foldThread({
-        items: [...items.values()].sort(bySeq),
-        open: [...open.turns.values()],
-        turns,
-        confirmations: agentUi.confirmations.get().filter((c) => c.threadId === threadId),
-        deviceId: device?.id,
-      }),
+      items: withShownSend(
+        foldThread({
+          items: [...items.values()].sort(bySeq),
+          open: [...open.turns.values()],
+          turns,
+          confirmations: agentUi.confirmations
+            .get()
+            .filter((c) => c.threadId === threadId),
+          deviceId: device?.id,
+        }),
+      ),
       hosts,
       agents,
       agent,
@@ -842,6 +869,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     open = NO_OPEN_TURNS;
     beforeLoad = [];
     pendingSend = undefined;
+    shownSend = undefined;
     stopIds.clear();
     answerIds.clear();
     dirty = false;
@@ -890,12 +918,24 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
               turnId: mint("turn"),
               itemId: mint("item"),
             });
-      await whenSetUp(() =>
-        submit(attempt, target.key, () => {
-          pendingSend = undefined;
-          if (draft.trim() === prompt) draft = "";
-        }),
-      );
+      await whenSetUp(async () => {
+        let delivered = false;
+        shownSend = attempt;
+        if (draft.trim() === prompt) draft = "";
+        emit();
+        try {
+          await submit(attempt, target.key, () => {
+            delivered = true;
+            pendingSend = undefined;
+          });
+        } finally {
+          if (!delivered && shownSend === attempt) {
+            shownSend = undefined;
+            draft = draft.trim() === "" ? attempt.text : `${attempt.text}\n\n${draft}`;
+            emit();
+          }
+        }
+      });
     },
     async loadOlder() {
       const target = threadId;
