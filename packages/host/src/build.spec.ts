@@ -16,7 +16,13 @@ import {
   nitroCli,
   withServerMigration,
 } from "./build.js";
-import { hostEntrySource } from "./entry.js";
+import {
+  cloudflareEntrySource,
+  DURABLE_SERVER_BINDING,
+  hostEntrySource,
+  INDEX_HTML_PLACEHOLDER,
+  PAGE_ROUTES_PLACEHOLDER,
+} from "./entry.js";
 import { renderConditionsFor } from "./presets.js";
 
 describe("nitroCli", () => {
@@ -29,6 +35,63 @@ describe("nitroCli", () => {
       child.once("close", () => resolve(out));
     });
     expect(help).toContain("--prebuilt");
+  });
+});
+
+describe("cloudflareEntrySource", () => {
+  const document = { basePath: "/_parlor", contentSecurityPolicy: "default-src 'self'" };
+
+  /** The Durable Object the generated Worker asks for, given its config and DATABASE_URL. */
+  async function placementOf(
+    locationHint: string | undefined,
+    databaseUrl: string | undefined,
+  ) {
+    const source = cloudflareEntrySource({ ...document, locationHint })
+      .replace('import { env } from "cloudflare:workers";', "")
+      .replace(/^export default/m, "const worker =");
+    const asked: { name?: string; options?: unknown } = {};
+    const env = {
+      DATABASE_URL: databaseUrl,
+      [DURABLE_SERVER_BINDING]: {
+        idFromName: (name: string) => name,
+        get: (name: string, options: unknown) => {
+          Object.assign(asked, { name, options });
+          return { fetch: async () => new Response("served") };
+        },
+      },
+    };
+    // What the build fills in for these placeholders.
+    const filled = source
+      .replaceAll(INDEX_HTML_PLACEHOLDER, '"<!doctype html>"')
+      .replaceAll(PAGE_ROUTES_PLACEHOLDER, "[]");
+    const run = new Function("env", `${filled}\nreturn worker;`) as (env: unknown) => {
+      fetch(request: Request): Promise<Response>;
+    };
+    await run(env).fetch(
+      new Request("https://school.test/_parlor/actions/x", { method: "POST" }),
+    );
+    return asked;
+  }
+
+  it("starts the server beside the database its DATABASE_URL names", async () => {
+    expect(
+      await placementOf(
+        undefined,
+        "postgresql://u:p@ep-x-pooler.ap-southeast-1.aws.neon.tech/db",
+      ),
+    ).toEqual({ name: "app@apac", options: { locationHint: "apac" } });
+  });
+
+  it("lets a configured hint win, and names the server after the hint", async () => {
+    expect(
+      await placementOf("weur", "postgresql://u:p@ep-x.ap-southeast-1.aws.neon.tech/db"),
+    ).toEqual({ name: "app@weur", options: { locationHint: "weur" } });
+    expect(await placementOf(undefined, "postgresql://u:p@db.internal:5432/app")).toEqual(
+      {
+        name: "app",
+        options: {},
+      },
+    );
   });
 });
 
