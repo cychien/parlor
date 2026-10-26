@@ -2646,3 +2646,142 @@ describe("createChatRuntime waiting reasons", () => {
     expect(h.runtime.get().wait?.reason).toBe("offline");
   });
 });
+
+describe("createChatRuntime looking for agents again", () => {
+  const bareMac = (agentsCheckedAt?: number): HostSummary => ({
+    ...claudeOnMac(),
+    agents: [],
+    ...(agentsCheckedAt === undefined ? {} : { agentsCheckedAt }),
+  });
+
+  function looking(options: { hidden?: boolean; checkAgents?: () => unknown } = {}) {
+    let mac: HostSummary = bareMac(100);
+    const h = setup({
+      hidden: () => options.hidden ?? true,
+      open: async () => ({ ...snapshot(), hosts: [mac] }),
+      hosts: () => [mac],
+    });
+    h.call.mockImplementation(async (name: string, input: unknown) => {
+      h.calls.push({ name, input });
+      if (name === "checkAgents") return options.checkAgents?.() ?? { askedAt: 1_000 };
+      if (name === "hosts") return [mac];
+      if (name === "open") return { ...snapshot(), hosts: [mac] };
+      return { ok: true };
+    });
+    const answer = (next: HostSummary) => {
+      mac = next;
+      h.tags(["parlor_chat_hosts", next.id]);
+    };
+    const asked = () => h.calls.filter((call) => call.name === "checkAgents").length;
+    return { h, answer, asked };
+  }
+
+  it("returns the agents that appeared once every online computer looked again", async () => {
+    const { h, answer } = looking();
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    expect(h.runtime.get().agents).toEqual([]);
+
+    const checking = h.runtime.checkAgents();
+    await vi.waitFor(() => expect(h.runtime.get().checkingAgents).toBe(true));
+    answer({ ...claudeOnMac(), agentsCheckedAt: 1_500 });
+
+    const result = await checking;
+    expect(result.answered).toBe(true);
+    expect(result.outdated).toBe(false);
+    expect(result.found.map((agent) => agent.name)).toEqual(["Claude Code"]);
+    expect(h.runtime.get().checkingAgents).toBe(false);
+    expect(h.runtime.get().agents.map((agent) => agent.name)).toEqual(["Claude Code"]);
+  });
+
+  it("waits for a report made after it asked, not one made before", async () => {
+    const { h, answer } = looking();
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    let settled = false;
+    const checking = h.runtime.checkAgents().then((result) => {
+      settled = true;
+      return result;
+    });
+    answer(bareMac(900));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(settled).toBe(false);
+    answer(bareMac(1_200));
+    expect(await checking).toEqual({ found: [], answered: true, outdated: false });
+  });
+
+  describe("on a clock", () => {
+    beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
+    afterEach(() => vi.useRealTimers());
+
+    it("gives up after 8 s when a computer does not answer", async () => {
+      const { h } = looking();
+      h.runtime.start();
+      await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+      const checking = h.runtime.checkAgents();
+      await vi.advanceTimersByTimeAsync(8_000);
+      expect(await checking).toEqual({ found: [], answered: false, outdated: false });
+    });
+
+    it("says a computer too old to look again is outdated", async () => {
+      const { h, answer } = looking();
+      h.runtime.start();
+      await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+      answer(bareMac());
+      const checking = h.runtime.checkAgents();
+      await vi.advanceTimersByTimeAsync(8_000);
+      expect(await checking).toMatchObject({ answered: false, outdated: true });
+    });
+  });
+
+  it("says an app too old to ask is outdated, at once", async () => {
+    const { h } = looking({
+      checkAgents: () => {
+        throw new ActionError("not_found", "Action request failed with HTTP 404");
+      },
+    });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    expect(await h.runtime.checkAgents()).toEqual({
+      found: [],
+      answered: false,
+      outdated: true,
+    });
+  });
+
+  it("asks on its own when a sidebar with a computer and no agent loads or regains focus, at most every 10 s", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { h, asked, answer } = looking({ hidden: false });
+      const stop = h.runtime.start();
+      await vi.waitFor(() => expect(asked()).toBe(1));
+      answer(bareMac(1_200));
+      await vi.waitFor(() => expect(h.runtime.get().checkingAgents).toBe(false));
+      window.dispatchEvent(new Event("focus"));
+      expect(asked()).toBe(1);
+      vi.setSystemTime(Date.now() + 10_000);
+      window.dispatchEvent(new Event("focus"));
+      await vi.waitFor(() => expect(asked()).toBe(2));
+      stop();
+      vi.setSystemTime(Date.now() + 10_000);
+      window.dispatchEvent(new Event("focus"));
+      expect(asked()).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never asks on its own while an agent is there, or while the tab is hidden", async () => {
+    const shown = setup({ hidden: () => false });
+    shown.runtime.start();
+    await vi.waitFor(() => expect(shown.runtime.get().status).toBe("idle"));
+    window.dispatchEvent(new Event("focus"));
+    expect(shown.calls.some((call) => call.name === "checkAgents")).toBe(false);
+
+    const { h, asked } = looking({ hidden: true });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    window.dispatchEvent(new Event("focus"));
+    expect(asked()).toBe(0);
+  });
+});

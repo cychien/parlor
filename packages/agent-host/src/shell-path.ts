@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { access, constants } from "node:fs/promises";
 import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, isAbsolute, join } from "node:path";
 
 const MARK = "__PARLOR_PATH__";
 const TIMEOUT_MS = 3_000;
@@ -35,7 +35,18 @@ function fromLoginShell(): Promise<string | undefined> {
  * launchd's system PATH.
  */
 export function agentPath(): Promise<string> {
-  resolved ??= fromLoginShell().then((login) => {
+  resolved ??= readAgentPath();
+  return resolved;
+}
+
+/** Reads the login shell's PATH again, for an agent installed since: its installer may have added to it. */
+export function rereadAgentPath(): Promise<string> {
+  resolved = readAgentPath();
+  return resolved;
+}
+
+function readAgentPath(): Promise<string> {
+  return fromLoginShell().then((login) => {
     const own = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
     const known = (entry: string) => own.includes(entry);
     const fromShell = (login ?? "")
@@ -45,7 +56,6 @@ export function agentPath(): Promise<string> {
     const installed = wellKnownDirectories().filter((entry) => !rest.includes(entry));
     return [...rest, ...installed].join(delimiter);
   });
-  return resolved;
 }
 
 /** The first executable `name` on `path`, as an absolute path. */
@@ -53,6 +63,12 @@ export async function resolveBinary(
   name: string,
   path: string,
 ): Promise<string | undefined> {
+  if (isAbsolute(name)) {
+    return access(name, constants.X_OK).then(
+      () => name,
+      () => undefined,
+    );
+  }
   for (const directory of path.split(delimiter).filter(Boolean)) {
     const candidate = join(directory, name);
     const found = await access(candidate, constants.X_OK).then(

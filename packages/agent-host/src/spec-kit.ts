@@ -435,6 +435,8 @@ export function hostRoutes(options: {
   readonly turn?: () => unknown;
   /** Pushed on the stream's `chat` channel, as a server on host protocol 3 does. */
   readonly push?: () => unknown;
+  /** Handed a way to send sync events on the open stream later, as a tab's writes do. */
+  readonly stream?: (send: (tags: readonly (readonly string[])[]) => void) => void;
 }): Route {
   let claimed = false;
   return (request, body, response) => {
@@ -494,6 +496,13 @@ export function hostRoutes(options: {
           `event: message\ndata: ${JSON.stringify({ events, cursor: "1.e1" })}\n\n`,
         );
       }
+      let version = 1;
+      options.stream?.((tags) => {
+        version += 1;
+        const events = [{ version, id: `e${version}`, tags }];
+        const cursor = `${version}.e${version}`;
+        response.write(`event: message\ndata: ${JSON.stringify({ events, cursor })}\n\n`);
+      });
       return true;
     }
     if (path === "/_parlor/mcp") {

@@ -65,6 +65,16 @@ export interface AgentChoice {
   readonly outsideName: string | undefined;
 }
 
+/** What `checkAgents` learned: the agents that appeared, and whether every computer answered. */
+export interface AgentsCheck {
+  /** The agents found that the sidebar did not offer before, as "Claude Code on Alice's Mac". */
+  readonly found: readonly AgentChoice[];
+  /** Every online computer looked again in time; false when one did not answer within 8 s. */
+  readonly answered: boolean;
+  /** A computer, or this app, is too old to look again when asked. */
+  readonly outdated: boolean;
+}
+
 export interface AgentChoiceOption extends AgentOption {
   /** The value the next prompt runs with: this device's choice, or the agent's own. */
   readonly selected: string;
@@ -153,6 +163,8 @@ export interface ChatState {
   /** Set while `loadOlder` or `loadMoreThreads` reads. */
   readonly loadingOlder: boolean;
   readonly hosts: readonly HostSummary[];
+  /** Set while `checkAgents` waits for the computers to answer. */
+  readonly checkingAgents: boolean;
   readonly agents: readonly AgentChoice[];
   readonly agent: AgentChoice | undefined;
   readonly connect: ConnectOption;
@@ -196,6 +208,12 @@ export interface ChatCommands {
   newThread(): void;
   /** Shows this device's link code, after Face ID or Touch ID unless `presence` is false. */
   startLink(options?: { readonly presence?: boolean }): Promise<void>;
+  /**
+   * Asks the user's computers to look again for the agents installed on them, and waits
+   * until each online one has answered: one installed since its computer started joins
+   * `agents`, and gets the app outside the sidebar when the user let its agents use it.
+   */
+  checkAgents(): Promise<AgentsCheck>;
 }
 
 export interface DeviceSetupCommands {
@@ -244,6 +262,10 @@ const CHECKING: LinkState = { status: "checking" };
 const READ_RETRY_BASE_MS = 1_000;
 const READ_RETRY_MAX_MS = 30_000;
 const ACTIVITY_PING_MS = 60_000;
+/** How long `checkAgents` waits for the computers to answer. */
+const AGENTS_CHECK_MS = 8_000;
+/** The least time between the looks a sidebar without agents asks for on its own. */
+const AUTO_CHECK_MS = 10_000;
 const UNFIXABLE_BY_RETRY: ReadonlySet<string> = new Set([
   "not_found",
   "unauthenticated",
@@ -409,6 +431,65 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       ),
     );
 
+  let checkingAgents: Promise<AgentsCheck> | undefined;
+  let lastAutoCheck = 0;
+
+  /** Resolves once `done` holds after an update, or after `ms`. */
+  const until = (done: () => boolean, ms: number) =>
+    new Promise<void>((resolve) => {
+      const finish = () => {
+        clearTimeout(timer);
+        listeners.delete(check);
+        resolve();
+      };
+      const check = () => {
+        if (done()) finish();
+      };
+      const timer = setTimeout(finish, ms);
+      listeners.add(check);
+    });
+
+  const checkAgents = (): Promise<AgentsCheck> => {
+    if (checkingAgents) return checkingAgents;
+    const before = new Set(choices().map((choice) => choice.key));
+    checkingAgents = (async (): Promise<AgentsCheck> => {
+      try {
+        let askedAt: number;
+        try {
+          ({ askedAt } = await calls.call("checkAgents", {}));
+        } catch (error) {
+          if (error instanceof ActionError && error.code === "not_found") {
+            return { found: [], answered: false, outdated: true };
+          }
+          throw error;
+        }
+        const online = () => hosts.filter((host) => host.online);
+        const answered = () =>
+          online().every((host) => (host.agentsCheckedAt ?? 0) >= askedAt);
+        if (!answered()) await until(answered, AGENTS_CHECK_MS);
+        return {
+          found: choices().filter((choice) => !before.has(choice.key)),
+          answered: answered(),
+          outdated: online().some((host) => host.agentsCheckedAt === undefined),
+        };
+      } finally {
+        checkingAgents = undefined;
+        emit();
+      }
+    })();
+    emit();
+    return checkingAgents;
+  };
+
+  /** A sidebar with computers but no agent asks them to look again when it comes into view. */
+  const checkAgentsOnSight = () => {
+    if (!running || loaded !== "yes" || deps.isHidden?.() === true) return;
+    if (!hosts.some((host) => host.online) || choices().length > 0) return;
+    if (Date.now() - lastAutoCheck < AUTO_CHECK_MS) return;
+    lastAutoCheck = Date.now();
+    void checkAgents().catch(() => undefined);
+  };
+
   const choices = (): AgentChoice[] =>
     hosts.flatMap((host) =>
       host.agents.map((agent) => {
@@ -552,6 +633,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       agent,
       connect,
       draft,
+      checkingAgents: checkingAgents !== undefined,
       error: failure,
       setup,
       link: linkOf(),
@@ -937,6 +1019,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
         }
       });
     },
+    checkAgents,
     async loadOlder() {
       const target = threadId;
       const before = oldestSeq();
@@ -1212,6 +1295,20 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
         if (transport === "poll") announceActivity();
       });
       const offConfirmations = agentUi.confirmations.subscribe(emit);
+      // Back from installing an agent in a terminal, the window regains focus without the tab ever hiding.
+      const onSight = () => {
+        if (typeof document === "undefined" || document.visibilityState === "visible")
+          checkAgentsOnSight();
+      };
+      const watchesSight =
+        typeof window !== "undefined" &&
+        typeof window.addEventListener === "function" &&
+        typeof document !== "undefined" &&
+        typeof document.addEventListener === "function";
+      if (watchesSight) {
+        window.addEventListener("focus", onSight);
+        document.addEventListener("visibilitychange", onSight);
+      }
       const offLink = deps.auth?.subscribeLink?.(() => void refreshLink());
       emit();
       announceActivity();
@@ -1230,6 +1327,10 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
         offResume();
         offNegotiated();
         offConfirmations();
+        if (watchesSight) {
+          window.removeEventListener("focus", onSight);
+          document.removeEventListener("visibilitychange", onSight);
+        }
         offLink?.();
         stopWatching?.();
         stopWatching = undefined;
@@ -1306,6 +1407,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     await loadFirst();
     announceActivity();
     emit();
+    checkAgentsOnSight();
   }
 
   return runtime;

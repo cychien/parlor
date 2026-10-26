@@ -22,7 +22,12 @@ import type {
   TurnSignals,
 } from "../model.js";
 import { HOST_PROTOCOL, type HostWelcome, PUSHED_TURNS_PROTOCOL } from "../protocol.js";
-import { CHAT_ACTIVITY_TAG, CHAT_TAG, HOSTS_TAG } from "../tags.js";
+import {
+  CHAT_ACTIVITY_TAG,
+  CHAT_AGENTS_CHECK_TAG,
+  CHAT_TAG,
+  HOSTS_TAG,
+} from "../tags.js";
 import { turnContext } from "./context.js";
 import type { LiveRelay } from "./live.js";
 import { type ChatHost, chatAction } from "./party.js";
@@ -280,6 +285,13 @@ export function userChatActions(deps: ChatActionDeps) {
       writes: [CHAT_ACTIVITY_TAG],
       run: (): { readonly ok: true } => ({ ok: true }),
     }),
+    checkAgents: chatAction("user", enforcing, {
+      description:
+        "Ask the user's computers to look again for the coding agents installed on them; each reports what it found, stamped `agentsCheckedAt`. Answers when it asked, by the same clock.",
+      input: z.object({}),
+      writes: [CHAT_AGENTS_CHECK_TAG],
+      run: (): { readonly askedAt: number } => ({ askedAt: Date.now() }),
+    }),
   };
 }
 
@@ -446,12 +458,14 @@ export function hostChatActions(
       },
     }),
     hostReport: chatAction("host", enforcing, {
-      description: "This computer went offline or changed its agents.",
+      description:
+        "This computer went offline, changed its agents, or looked for them again (`agentsChecked`).",
       input: z.object({
         online: z.boolean(),
         agents: z.array(agentInfoSchema).max(32),
         devices: z.array(z.string().min(1).max(64)).max(256).optional(),
         presenceDue: presenceDueSchema.optional(),
+        agentsChecked: z.literal(true).optional(),
       }),
       writes: [HOSTS_TAG],
       run: async (
@@ -468,6 +482,7 @@ export function hostChatActions(
           agents: input.agents,
           devices: input.devices,
           presenceDue: input.presenceDue,
+          agentsCheckedAt: input.agentsChecked ? Date.now() : undefined,
           online: input.online,
           ttlMs: 2 * deps.heartbeatMs,
         });

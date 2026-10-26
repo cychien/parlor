@@ -94,4 +94,8 @@ export const CHAT_MIGRATIONS: readonly Migration[] = [
     id: "chat/0004_host_presence",
     sql: `alter table parlor_chat_hosts add column presence_due jsonb;`,
   },
+  {
+    id: "chat/0005_host_agents_checked",
+    sql: `alter table parlor_chat_hosts add column agents_checked_at timestamptz;`,
+  },
 ];

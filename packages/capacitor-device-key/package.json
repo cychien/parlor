@@ -1,6 +1,6 @@
 {
   "name": "@parlor/capacitor-device-key",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Capacitor plugins for the device key and the session store, backed by the iOS keystore",
   "homepage": "https://cychien.github.io/parlor",
   "bugs": "https://github.com/cychien/parlor/issues",

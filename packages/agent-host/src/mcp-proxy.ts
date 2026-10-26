@@ -493,7 +493,7 @@ function withGuidance(line: string, app: OutsideApp, agent: string): string {
   const answer = parse(line);
   const initialized = answer?.result as { readonly instructions?: unknown } | undefined;
   if (!initialized || typeof initialized !== "object") return line;
-  const guidance = `Use these tools only when the user names ${app.appName} or "${app.name}" in their request: they act on the live app at ${app.appOrigin} as ${app.account}, and ${agent} runs outside the app here. Reading is free; before the first change in this conversation the user is asked to allow changes.`;
+  const guidance = `Use these tools only when the user names ${app.appName} or "${app.name}" in their request: they act on the live app at ${app.appOrigin} as ${app.account}, and ${agent} runs outside the app here. When the user does, use them rather than opening ${app.appName} in a browser: they read and change the same data directly. If your tools load on demand, search them for "${app.name}" first. Reading is free; before the first change in this conversation the user is asked to allow changes.`;
   const own =
     typeof initialized.instructions === "string" ? initialized.instructions : "";
   return JSON.stringify({
