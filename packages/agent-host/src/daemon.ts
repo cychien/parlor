@@ -20,6 +20,7 @@ import {
 import { ActionError, asId, DEV_USER_ID } from "@parlor/core";
 
 import type { AgentLauncher } from "./acp.js";
+import { readUsage, surveyOptions } from "./agent-survey.js";
 import {
   agentNames,
   type AgentToolsDeps,
@@ -30,7 +31,7 @@ import { type AgentProfile, detectAgents, loadProfiles } from "./agents.js";
 import { connectControl, type ControlRequest } from "./control.js";
 import { requestDevHostToken } from "./dev-host.js";
 import { type AppGrant, devHostKeys, type GrantStore, type HostKeys } from "./grants.js";
-import { learnedStore } from "./learned.js";
+import { type LearnedNews, learnedStore } from "./learned.js";
 import { onLines } from "./lines.js";
 import { type AppLink, createAppLink } from "./link.js";
 import { withInheritedLock } from "./lock.js";
@@ -158,6 +159,9 @@ export class HostAlreadyRunning extends Error {
   }
 }
 
+/** Codex's own CLI throttles its rate-limit reports on the same interval. */
+const USAGE_READ_FLOOR_MS = 30_000;
+
 export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
   const { paths } = deps;
   const links = new Map<string, LinkState>();
@@ -182,6 +186,55 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
         });
       }
       return undefined;
+    }
+  };
+
+  /** What an agent said about itself, told to every linked app when it changes what they show. */
+  const learn = (agentId: string, news: LearnedNews) => {
+    void learned
+      .learn(agentId, news)
+      .then((changed) => {
+        if (!changed) return;
+        for (const linked of links.values()) void report(linked).catch(() => undefined);
+      })
+      .catch(() => undefined);
+  };
+
+  /** Ends the reads below on stop or handover, so nothing outlives the daemon. */
+  const stopping = new AbortController();
+
+  const usageReadAt = new Map<string, number>();
+  /** The allowance from the agent's own CLI where ACP carries none, at most every 30s per agent. */
+  const refreshUsage = async (agentId: string) => {
+    const profile = profiles.find((candidate) => candidate.id === agentId);
+    const now = Date.now();
+    if (!profile || stopping.signal.aborted) return;
+    if (now - (usageReadAt.get(agentId) ?? 0) < USAGE_READ_FLOOR_MS) return;
+    usageReadAt.set(agentId, now);
+    const usage = await readUsage(profile, await agentEnvironment(), now).catch(
+      () => undefined,
+    );
+    if (usage && !stopping.signal.aborted) learn(agentId, { usage });
+  };
+
+  let surveyed = false;
+  /**
+   * Options for every agent that has not run a turn yet, so the sidebar can offer a model first.
+   * Once per run, when an app first links: a computer no app uses never starts its agents.
+   */
+  const surveyAgents = async () => {
+    if (surveyed) return;
+    surveyed = true;
+    const env = await agentEnvironment();
+    for (const agent of agents) {
+      const profile = profiles.find((candidate) => candidate.id === agent.id);
+      if (!profile || stopping.signal.aborted) continue;
+      void refreshUsage(agent.id);
+      if (learned.knows(agent.id)) continue;
+      const options = await surveyOptions(profile, deps.launcher, env, stopping.signal);
+      if (stopping.signal.aborted) return;
+      logEvent("agent_surveyed", { agentId: agent.id, options: options?.length ?? 0 });
+      if (options && options.length > 0) learn(agent.id, { options });
     }
   };
 
@@ -219,16 +272,7 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
           policy,
           prompter: deps.prompter,
           now: Date.now,
-          learned: (agentId, news) => {
-            void learned
-              .learn(agentId, news)
-              .then((changed) => {
-                if (!changed) return;
-                for (const linked of links.values())
-                  void report(linked).catch(() => undefined);
-              })
-              .catch(() => undefined);
-          },
+          learned: learn,
           pairing: {
             secret: async () =>
               (await deps.grants.get(link.grant.appOrigin))?.pairingSecret,
@@ -247,6 +291,7 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
           logEvent("turn_finished", { turnId: claimed.turnId, error: String(error) }),
       )
       .finally(() => {
+        void refreshUsage(claimed.agent.agentId);
         state.turns -= 1;
         running.delete(turn);
         settleHandover();
@@ -373,6 +418,7 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
   };
 
   const open = (grant: AppGrant, keys: HostKeys): LinkState => {
+    void surveyAgents().catch(() => undefined);
     const origin = grant.appOrigin;
     latest.set(origin, grant);
     let state: LinkState;
@@ -609,6 +655,7 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
     async handover() {
       if (handedOver) return;
       handedOver = true;
+      stopping.abort();
       for (const state of links.values()) state.link.drain();
       await Promise.all([...links.values()].map((state) => state.claiming));
       const closing = control;
@@ -618,6 +665,7 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
       logEvent("handover_started", { version: deps.release.version });
     },
     async stop() {
+      stopping.abort();
       if (!handedOver) {
         await Promise.all(
           [...links.values()].map((state) =>

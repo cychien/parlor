@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { agentUsageOf, mergeUsage, optionChanges } from "./agent-options.js";
+import {
+  agentUsageOf,
+  codexUsageOf,
+  mergeUsage,
+  optionChanges,
+} from "./agent-options.js";
 
 const OPTIONS = [
   {
@@ -61,6 +66,36 @@ describe("the account's allowance", () => {
         AT,
       ),
     ).toEqual({ windows: [{ id: "five_hour", minutes: 300, used: 0.3 }], at: AT });
+  });
+
+  it("reads Codex's rate limit off its app-server, each window by its own length", () => {
+    expect(
+      codexUsageOf(
+        {
+          rateLimits: {
+            primary: {
+              usedPercent: 12,
+              windowDurationMins: 300,
+              resetsAt: 1_800_000_100,
+            },
+            secondary: { usedPercent: 140, windowDurationMins: 10_080 },
+            credits: { hasCredits: false },
+            planType: "plus",
+          },
+        },
+        AT,
+      ),
+    ).toEqual({
+      windows: [
+        { id: "primary", minutes: 300, used: 0.12, resetsAt: 1_800_000_100_000 },
+        { id: "secondary", minutes: 10_080, used: 1 },
+      ],
+      at: AT,
+    });
+    expect(codexUsageOf(undefined, AT)).toBeUndefined();
+    expect(
+      codexUsageOf({ rateLimits: { primary: { usedPercent: 5 } } }, AT),
+    ).toBeUndefined();
   });
 
   it("says nothing about an update that carries no rate limit", () => {

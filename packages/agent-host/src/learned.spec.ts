@@ -31,7 +31,9 @@ describe("what agents said about themselves", () => {
     const store = learnedStore(file);
     await store.load();
     expect(store.describe([CLAUDE], 0)).toEqual([CLAUDE]);
+    expect(store.knows("claude")).toBe(false);
     expect(await store.learn("claude", { options: OPTIONS })).toBe(true);
+    expect(store.knows("claude")).toBe(true);
     expect(await store.learn("claude", { options: OPTIONS })).toBe(false);
     expect(
       await store.learn("claude", {

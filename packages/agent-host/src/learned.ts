@@ -20,6 +20,8 @@ export interface LearnedStore {
   load(): Promise<void>;
   /** Whether it changed what `describe` returns. */
   learn(agentId: string, news: LearnedNews): Promise<boolean>;
+  /** Whether the agent has said which options it offers. */
+  knows(agentId: string): boolean;
   /** `agents` with what each said about itself, minus usage windows that rolled over. */
   describe(agents: readonly AgentInfo[], now: number): AgentInfo[];
 }
@@ -44,6 +46,7 @@ export function learnedStore(file: string): LearnedStore {
       });
       return true;
     },
+    knows: (agentId) => (known[agentId]?.options?.length ?? 0) > 0,
     describe: (agents, now) =>
       agents.map((agent) => {
         const { options, usage } = known[agent.id] ?? {};
