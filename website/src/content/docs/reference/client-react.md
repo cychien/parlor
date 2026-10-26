@@ -37,6 +37,13 @@ import { actionQueryOptions } from "@parlor/client/react";
 The query behind the hooks and `ensureActionQueryData`, for `queryClient.prefetchQuery`, `useQueries` and the like. Its data stays fresh until a write invalidates it, unless the `QueryClient` sets a `staleTime` default.
 
 ```ts
+import { callAndRefresh } from "@parlor/client/react";
+//       ^?
+```
+
+Calls an action with `context` (`{ client, queryClient }`) and brings the cache up to date with what it changed in the same round trip: the call names the queries the page shows, and the write answers with the ones it touched, run again after it. What `useActionMutation` runs; a flow of several calls behind one button, such as an upload then a save, calls each with it and needs no refetch after. Resolves to the action's data once the page shows it.
+
+```ts
 import { FrameworkProvider } from "@parlor/client/react";
 //       ^?
 ```

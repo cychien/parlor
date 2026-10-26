@@ -82,7 +82,7 @@ export function Notes() {
 }
 ```
 
-`useActionQuery(name, input, options?)` is a TanStack Query `useQuery` whose data is the action's return value. `useActionMutation(name, options?)` is a `useMutation`. Both accept the usual TanStack Query options.
+`useActionQuery(name, input, options?)` is a TanStack Query `useQuery` whose data is the action's return value. `useActionMutation(name, options?)` is a `useMutation`. Both accept the usual TanStack Query options. A mutation names the queries the page shows, and the server answers the write with the ones it changed, run again after it, so the page is fresh in one round trip, before `onSuccess` runs. Queries the write did not change are left alone.
 
 You never refetch by hand. When any caller runs an action that `writes` what a query `reads`, the query refetches, in this tab and in every other one. Only writes newer than the query's data count: each read answers with how far into the sync log its data reaches, so a page that loads right after some writes, or reconnects, does not refetch for writes its data already shows. A page that reconnects after missing more writes than the server replays at once, or writes older than the server keeps, refetches every query whose data predates the reconnect.
 

@@ -60,7 +60,111 @@ describe("useActionQuery / useActionMutation", () => {
     });
 
     await waitFor(() => expect(screen.getByRole("status").textContent).toBe("count:1"));
-    expect(client.invoke).toHaveBeenCalledWith("increment", {});
+    expect(client.invoke).toHaveBeenCalledWith("increment", {}, expect.anything());
+  });
+
+  describe("a write that answers with the reads it changed", () => {
+    function createRefreshingClient(refreshOf: (count: number) => unknown[]) {
+      let count = 0;
+      let label = 0;
+      const invoke = vi.fn(
+        async (name: string, _input: unknown, _options?: { refresh?: unknown[] }) => {
+          if (name === "count") return { data: { count }, tags: [["counter"]] };
+          if (name === "label")
+            return { data: { label: (label += 1) }, tags: [["label"]] };
+          if (name === "increment") {
+            count += 1;
+            return {
+              data: { count },
+              tags: [],
+              writes: [["counter"]],
+              refreshed: refreshOf(count),
+            };
+          }
+          throw new Error(`unexpected ${name}`);
+        },
+      );
+      const client = {
+        clientId: "test-tab",
+        basePath: "/_parlor",
+        invoke,
+        call: async (name: string, input: unknown) => (await invoke(name, input)).data,
+        request: vi.fn(),
+      };
+      return client as unknown as ActionClient<Record<string, never>> & typeof client;
+    }
+
+    function Page() {
+      const count = useActionQuery("count", {});
+      const label = useActionQuery("label", {});
+      const increment = useActionMutation("increment");
+      return (
+        <div>
+          <output>{`count:${count.data?.count} label:${label.data?.label}`}</output>
+          <button onClick={() => increment.mutate({})}>inc</button>
+        </div>
+      );
+    }
+
+    async function writeOnce(client: ActionClient<Record<string, never>>) {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      render(
+        <FrameworkProvider client={client} queryClient={queryClient} sync={false}>
+          <Page />
+        </FrameworkProvider>,
+      );
+      await waitFor(() =>
+        expect(screen.getByRole("status").textContent).toBe("count:0 label:1"),
+      );
+      await act(async () => {
+        screen.getByRole("button").click();
+      });
+    }
+
+    const callsOf = (
+      client: { invoke: { mock: { calls: unknown[][] } } },
+      name: string,
+    ) => client.invoke.mock.calls.filter(([called]) => called === name).length;
+
+    it("names the reads the page shows, takes the fresh ones, and asks for nothing more", async () => {
+      const client = createRefreshingClient((count) => [
+        { data: { count }, tags: [["counter"]] },
+        null,
+      ]);
+      await writeOnce(client);
+
+      await waitFor(() =>
+        expect(screen.getByRole("status").textContent).toBe("count:1 label:1"),
+      );
+      expect(client.invoke).toHaveBeenCalledWith(
+        "increment",
+        {},
+        {
+          refresh: [
+            ["count", {}],
+            ["label", {}],
+          ],
+        },
+      );
+      expect(callsOf(client, "count")).toBe(1);
+      expect(callsOf(client, "label")).toBe(1);
+    });
+
+    it("asks again for a read the server could not run", async () => {
+      const client = createRefreshingClient(() => [
+        { error: { code: "internal", message: "Internal error" } },
+        null,
+      ]);
+      await writeOnce(client);
+
+      await waitFor(() =>
+        expect(screen.getByRole("status").textContent).toBe("count:1 label:1"),
+      );
+      expect(callsOf(client, "count")).toBe(2);
+      expect(callsOf(client, "label")).toBe(1);
+    });
   });
 
   describe("when a query fails", () => {
