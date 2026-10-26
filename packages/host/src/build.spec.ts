@@ -10,9 +10,27 @@ import { ConfigError, parseConfig } from "@parlor/config";
 import { buildRender } from "@parlor/shell-web";
 import { describe, expect, it, vi } from "vitest";
 
-import { buildServer, devWranglerConfig, withServerMigration } from "./build.js";
+import {
+  buildServer,
+  devWranglerConfig,
+  nitroCli,
+  withServerMigration,
+} from "./build.js";
 import { hostEntrySource } from "./entry.js";
 import { renderConditionsFor } from "./presets.js";
+
+describe("nitroCli", () => {
+  it("finds the CLI that `parlor deploy` hands a prebuilt server to", async () => {
+    const help = await new Promise<string>((resolve, reject) => {
+      const child = spawn(process.execPath, [nitroCli(), "deploy", "--help"]);
+      let out = "";
+      child.stdout.on("data", (chunk: Buffer) => (out += chunk.toString()));
+      child.once("error", reject);
+      child.once("close", () => resolve(out));
+    });
+    expect(help).toContain("--prebuilt");
+  });
+});
 
 describe("hostEntrySource", () => {
   it("serves the SPA document outside the framework prefix and delegates the rest", () => {

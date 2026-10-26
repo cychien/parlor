@@ -1,18 +1,15 @@
 import { spawn } from "node:child_process";
-import { createRequire } from "node:module";
 
 import { loadParlorConfig } from "@parlor/config";
-import { nitroPresetFor } from "@parlor/host";
+import { nitroCli, nitroPresetFor } from "@parlor/host";
 import { defineCommand } from "citty";
 
 import { warnChatWithoutAuth } from "../chat-warning.js";
 import { CliError } from "../errors.js";
 import { buildWebAndServer } from "../web-target.js";
 
-const require = createRequire(import.meta.url);
-
 export function runNitroDeploy(hostRoot: string, preset: string): Promise<void> {
-  const bin = require.resolve("nitro/cli");
+  const bin = nitroCli();
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
