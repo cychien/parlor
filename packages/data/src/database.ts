@@ -205,6 +205,20 @@ function nodePostgresHandle(url: string, directUrl: string): DatabaseHandle {
   };
 }
 
+/**
+ * `handle`, migrating `folder` on its first `prepare`. A failed run is not kept: the next
+ * request tries again, rather than every request failing until the server restarts.
+ */
+export function migrateOnPrepare(handle: DatabaseHandle, folder: string): DatabaseHandle {
+  let migrated: Promise<void> | undefined;
+  const migrate = () =>
+    handle.migrate(folder).catch((error: unknown) => {
+      migrated = undefined;
+      throw error;
+    });
+  return { ...handle, prepare: () => (migrated ??= migrate()) };
+}
+
 export async function createDatabase(
   options: DatabaseOptions = {},
 ): Promise<DatabaseHandle> {
@@ -218,6 +232,5 @@ export async function createDatabase(
     await handle.migrate(folder);
     return handle;
   }
-  let migrated: Promise<void> | undefined;
-  return { ...handle, prepare: () => (migrated ??= handle.migrate(folder)) };
+  return migrateOnPrepare(handle, folder);
 }
