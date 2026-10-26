@@ -12,6 +12,8 @@ import {
   type ActionMap,
   ANONYMOUS,
   type DataProvider,
+  decodeReadRequests,
+  REFRESH_HEADER,
 } from "@parlor/core";
 import type { ActionRegistry } from "@parlor/core/registry";
 import type { ServerChannel } from "@parlor/sync";
@@ -48,6 +50,7 @@ import type {
   ServerPlugin,
 } from "./plugin.js";
 import { DEFAULT_BASE_PATH, type Manifest, PROTOCOL_VERSION } from "./protocol.js";
+import { refreshReads } from "./refresh.js";
 import { defaultScope, type ScopeResolver } from "./scope.js";
 
 export interface SyncOptions {
@@ -257,6 +260,7 @@ function gatedChannel(installed: Installed, channel: ServerChannel): ServerChann
   if (!installed.runtime.allows) return channel;
   return {
     event: channel.event,
+    hosts: channel.hosts,
     connect(connection) {
       let detach: (() => void) | undefined;
       let left = false;
@@ -411,11 +415,27 @@ export function createServer<T extends ActionMap>(
       const input = await readBody(event).catch(() => {
         throw new ActionError("invalid_input", "Request body must be JSON");
       });
-      const result = await runner.run(name, input, event.req, sourceOf(event.req), {
-        surface: "actions",
-        cursor: true,
-      });
-      return { data: result.data, tags: result.reads, cursor: result.cursor };
+      const source = sourceOf(event.req);
+      const run = (action: string, actionInput: unknown) =>
+        runner.run(action, actionInput, event.req, source, {
+          surface: "actions",
+          cursor: true,
+        });
+      const result = await run(name, input);
+      const answer = { data: result.data, tags: result.reads, cursor: result.cursor };
+      const reads = decodeReadRequests(event.req.headers.get(REFRESH_HEADER));
+      if (!reads) return answer;
+      const refreshed = await refreshReads(
+        actions,
+        reads,
+        result.writes,
+        async (action, actionInput) => {
+          const read = await run(action, actionInput);
+          return { data: read.data, tags: read.reads, cursor: read.cursor };
+        },
+        (error) => toActionError(error).toBody(),
+      );
+      return { ...answer, writes: result.writes, refreshed };
     } catch (error) {
       return errorBody(event, error);
     }
@@ -523,7 +543,10 @@ export function createServer<T extends ActionMap>(
         const { principal } = caller;
         return {
           principal,
-          channels: admits("channels", caller, callers.enforcing),
+          channels: admits("channels", caller, callers.enforcing)
+            ? true
+            : (channel: ServerChannel) =>
+                principal.kind === "host" && channel.hosts === true,
           ...(auth && principal.kind !== "anonymous"
             ? { revoked: auth.revoked(principal) }
             : {}),

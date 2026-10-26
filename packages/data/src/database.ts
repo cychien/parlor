@@ -10,6 +10,7 @@ import {
   currentOwner,
   type ScopedConnections,
 } from "./connection-scope.js";
+import { corkWrites } from "./cork.js";
 import { migrateDatabase } from "./migrations.js";
 import { once } from "./once.js";
 
@@ -83,6 +84,11 @@ interface PgConnections extends ScopedConnections {
 
 function openPgConnections(url: string, onClose?: () => void): PgConnections {
   const pool = new pg.Pool({ connectionString: url });
+  pool.on("connect", (client) => {
+    const { connection } = client as unknown as { connection?: { stream?: unknown } };
+    if (connection?.stream)
+      corkWrites(connection.stream as Parameters<typeof corkWrites>[0]);
+  });
   pool.on("error", (error) => {
     console.warn("[parlor] an idle database connection dropped:", error.message);
   });
@@ -96,6 +102,27 @@ function openPgConnections(url: string, onClose?: () => void): PgConnections {
       await Promise.all([...listeners].map((client) => client.end()));
       await pool.end();
     }),
+  };
+}
+
+/**
+ * A deployment with no database yet: it loads, so a host that runs the app's modules before
+ * its settings exist (Cloudflare checks a Worker as it uploads) accepts it, and every use
+ * fails with `error`, which the first request reports.
+ */
+export function unconfiguredHandle(error: Error): DatabaseHandle {
+  const fail = (): never => {
+    throw error;
+  };
+  return {
+    db: scopedDatabase(fail),
+    client: { query: () => Promise.reject(error) },
+    driver: "node-postgres",
+    read: fail,
+    transaction: () => Promise.reject(error),
+    listen: () => Promise.reject(error),
+    migrate: () => Promise.reject(error),
+    close: async () => undefined,
   };
 }
 
@@ -184,6 +211,20 @@ function nodePostgresHandle(url: string, directUrl: string): DatabaseHandle {
   };
 }
 
+/**
+ * `handle`, migrating `folder` on its first `prepare`. A failed run is not kept: the next
+ * request tries again, rather than every request failing until the server restarts.
+ */
+export function migrateOnPrepare(handle: DatabaseHandle, folder: string): DatabaseHandle {
+  let migrated: Promise<void> | undefined;
+  const migrate = () =>
+    handle.migrate(folder).catch((error: unknown) => {
+      migrated = undefined;
+      throw error;
+    });
+  return { ...handle, prepare: () => (migrated ??= migrate()) };
+}
+
 export async function createDatabase(
   options: DatabaseOptions = {},
 ): Promise<DatabaseHandle> {
@@ -197,6 +238,5 @@ export async function createDatabase(
     await handle.migrate(folder);
     return handle;
   }
-  let migrated: Promise<void> | undefined;
-  return { ...handle, prepare: () => (migrated ??= handle.migrate(folder)) };
+  return migrateOnPrepare(handle, folder);
 }

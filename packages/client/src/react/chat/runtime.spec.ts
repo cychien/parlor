@@ -671,6 +671,95 @@ describe("createChatRuntime send", () => {
     expect(h.names().filter((name) => name === "send")).toHaveLength(1);
   });
 
+  it("moves the prompt into the thread at once and shows it once the server's copy arrives", async () => {
+    const h = setup();
+    let finish!: () => void;
+    let stored: LoggedItem | undefined;
+    h.call.mockImplementation(async (name: string, input: unknown) => {
+      h.calls.push({ name, input });
+      if (name === "send") {
+        await new Promise<void>((resolve) => (finish = resolve));
+        const sent = input as { turnId: string; itemId: string; prompt: unknown };
+        stored = {
+          id: asId("item", sent.itemId),
+          threadId: asId("thread", "thr_1"),
+          turnId: asId("turn", sent.turnId),
+          seq: 1,
+          at: 1,
+          author: "user",
+          kind: "prompt",
+          body: sent.prompt,
+        } as unknown as LoggedItem;
+      }
+      if (name === "open") return snapshot({ items: stored ? [stored] : [] });
+      return { id: "thr_1" };
+    });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    h.runtime.setDraft("  hello ");
+    const sending = h.runtime.send();
+
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("sending"));
+    expect(h.runtime.get().draft).toBe("");
+    expect(h.runtime.get().items).toEqual([
+      expect.objectContaining({
+        kind: "prompt",
+        text: "hello",
+        mine: true,
+        sending: true,
+      }),
+    ]);
+
+    finish();
+    await sending;
+    const prompts = h.runtime.get().items.filter((item) => item.kind === "prompt");
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toMatchObject({ id: stored!.id, text: "hello" });
+    expect(prompts[0]).not.toHaveProperty("sending");
+  });
+
+  it("takes a failed prompt out of the thread and back into an empty composer", async () => {
+    const h = setup();
+    let fail!: (error: Error) => void;
+    h.call.mockImplementation(async (name: string, input: unknown) => {
+      h.calls.push({ name, input });
+      if (name === "send") await new Promise<void>((_resolve, reject) => (fail = reject));
+      if (name === "open") return snapshot();
+      return { id: "thr_1" };
+    });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    h.runtime.setDraft("hello");
+    const sending = h.runtime.send();
+    await vi.waitFor(() => expect(h.runtime.get().items).toHaveLength(1));
+
+    fail(new TypeError("Failed to fetch"));
+    await expect(sending).rejects.toThrow("Failed to fetch");
+    expect(h.runtime.get().items).toEqual([]);
+    expect(h.runtime.get().draft).toBe("hello");
+  });
+
+  it("puts a failed prompt back above what the user typed meanwhile", async () => {
+    const h = setup();
+    let fail!: (error: Error) => void;
+    h.call.mockImplementation(async (name: string, input: unknown) => {
+      h.calls.push({ name, input });
+      if (name === "send") await new Promise<void>((_resolve, reject) => (fail = reject));
+      if (name === "open") return snapshot();
+      return { id: "thr_1" };
+    });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    h.runtime.setDraft("hello");
+    const sending = h.runtime.send();
+    await vi.waitFor(() => expect(h.runtime.get().items).toHaveLength(1));
+    h.runtime.setDraft("and then");
+
+    fail(new TypeError("Failed to fetch"));
+    await expect(sending).rejects.toThrow();
+    expect(h.runtime.get().draft).toBe("hello\n\nand then");
+  });
+
   it("is sending while the request is in flight and cannot be submitted twice", async () => {
     const h = setup();
     let finish!: () => void;

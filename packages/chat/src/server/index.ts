@@ -11,9 +11,16 @@ import { REVOCATION_HORIZON_MS, type ServerPlugin } from "@parlor/server";
 
 import type { ChatOwner } from "../model.js";
 import { CHAT_PLUGIN } from "../protocol.js";
-import { CHAT_TAG, type ChatActionDeps, chatActions, HOSTS_TAG } from "./actions.js";
+import {
+  CHAT_TAG,
+  type ChatActionDeps,
+  chatActions,
+  HOSTS_TAG,
+  hostSession,
+} from "./actions.js";
 import { inProcessRelay, type LiveRelay } from "./live.js";
 import { CHAT_MIGRATIONS } from "./migrations.js";
+import { turnPush } from "./push.js";
 import { chatRoutes } from "./routes.js";
 import { type ChatDb, sqlChatStore } from "./store.js";
 
@@ -172,7 +179,7 @@ export function chat(options: ChatOptions = {}): ServerPlugin {
         }
       };
       let sweep: ReturnType<typeof setInterval> | undefined;
-      const actions = chatActions({
+      const deps: ChatActionDeps = {
         enforcing: auth.enforcing,
         transact,
         reconcile,
@@ -186,7 +193,10 @@ export function chat(options: ChatOptions = {}): ServerPlugin {
         instructions: options.instructions,
         appName: process.env.PARLOR_APP_NAME ?? "this app",
         appOrigin: () => process.env.PARLOR_ORIGIN ?? process.env.PARLOR_WEB_ORIGIN ?? "",
-      });
+      };
+      const session = hostSession(deps);
+      const pushed = turnPush({ relay, session, db });
+      const actions = chatActions({ ...deps, pushed }, session);
       const { access } = options;
       return {
         actions,
@@ -223,6 +233,7 @@ export function chat(options: ChatOptions = {}): ServerPlugin {
         },
         close: () => {
           clearInterval(sweep);
+          pushed.close();
           relay.close();
         },
       };

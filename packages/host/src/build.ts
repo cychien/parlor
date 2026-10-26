@@ -1,5 +1,6 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 
 import { pagePattern, UI_MANIFEST_FILE, type UiManifest } from "@parlor/agent-ui";
@@ -326,4 +327,18 @@ async function prepareDurable(
       wrangler: durableWranglerConfig(config),
     },
   };
+}
+
+/**
+ * The CLI of the nitro this package builds with, for `nitro deploy`. Nitro ships it as a
+ * `bin`, not an export, so it is found through nitro's own manifest.
+ */
+export function nitroCli(): string {
+  const manifest = createRequire(import.meta.url).resolve("nitro/package.json");
+  const { bin } = JSON.parse(readFileSync(manifest, "utf8")) as {
+    readonly bin?: string | Readonly<Record<string, string>>;
+  };
+  const entry = typeof bin === "string" ? bin : bin?.nitro;
+  if (!entry) throw new Error(`${manifest} names no nitro CLI.`);
+  return join(dirname(manifest), entry);
 }

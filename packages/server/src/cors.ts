@@ -1,4 +1,4 @@
-import { SHELL_ORIGINS } from "@parlor/core";
+import { REFRESH_HEADER, SHELL_ORIGINS } from "@parlor/core";
 import { type H3Event, handleCors } from "h3";
 
 import { CLIENT_HEADER, SESSION_TOKEN_HEADER, SOURCE_HEADER } from "./protocol.js";
@@ -27,7 +27,13 @@ export function corsMiddleware(config: CorsConfig = {}) {
     const preflight = handleCors(event, {
       origin: (origin) => isAllowedOrigin(origin, extra),
       methods: ["GET", "POST", "OPTIONS"],
-      allowHeaders: ["content-type", "authorization", SOURCE_HEADER, CLIENT_HEADER],
+      allowHeaders: [
+        "content-type",
+        "authorization",
+        SOURCE_HEADER,
+        CLIENT_HEADER,
+        REFRESH_HEADER,
+      ],
       credentials: true,
       exposeHeaders: ["content-type", "content-length", SESSION_TOKEN_HEADER],
       preflight: { statusCode: 204 },

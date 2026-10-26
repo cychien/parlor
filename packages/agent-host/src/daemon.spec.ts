@@ -510,6 +510,99 @@ describe("disconnecting through the daemon", () => {
       await rm(root, { recursive: true, force: true });
     }
   }, 60_000);
+
+  it.each([
+    { claimToo: false, case: "with no claim" },
+    { claimToo: true, case: "once when a claim returns it too" },
+  ])(
+    "runs a turn the app pushed and confirms it, $case",
+    async ({ claimToo }) => {
+      const root = await mkdtemp(join(tmpdir(), "pp-"));
+      const agentLog = join(root, "agent.log");
+      vi.stubEnv("FAKE_AGENT_LOG", agentLog);
+      const turn = () =>
+        claimedTurn(
+          "u-pushed",
+          "fake-a",
+          "<parlor-context>pushed</parlor-context>",
+          "hi",
+        );
+      const routes = hostRoutes({
+        wake: true,
+        push: turn,
+        ...(claimToo ? { turn } : {}),
+      });
+      const app = await stubApp((request, body, response) => {
+        if (request.url === "/_parlor/auth/hosts/revoke")
+          return (json(response, {}), true);
+        return routes(request, body, response);
+      });
+      const actions = () =>
+        app.seen
+          .map((seen) => seen.path.split("/").at(-1)!)
+          .filter((name) => name.startsWith("host"));
+      const paths = hostPaths(join(root, ".parlor", "host"));
+      const script = join(root, "script.json");
+      await writeFile(script, JSON.stringify({ fallback: "echo", steps: {} }));
+      mkdirSync(paths.root, { recursive: true });
+      await writeFile(
+        paths.agents,
+        JSON.stringify([
+          {
+            id: "fake-a",
+            name: "Fake A",
+            launch: { kind: "native", command: process.execPath, args: [FAKE, script] },
+            binary: process.execPath,
+          },
+        ]),
+      );
+      const grant = grantFor(app.origin, "Hello", join(root, "Parlor", "hello"));
+      const keys = memoryHostKeys();
+      const grants = fileGrantStore(paths.grants);
+      const host = createHostDaemon({
+        release: {
+          version: "0.0.0",
+          protocols: { min: 1, max: HOST_PROTOCOL },
+          control: 1,
+        },
+        paths,
+        grants,
+        keys,
+        trust: fileTrustStore(paths.trust),
+        pool: createSessionPool(paths.sessions),
+        proxy: createMcpProxy("parlor-host"),
+        launcher: acpLauncher(),
+        prompter: { answerHere: async () => undefined, turnStarted: () => undefined },
+        policy: DEV_POLICY,
+      });
+      try {
+        await host.start();
+        await (await keys.create(app.origin)).keep(grant.grantId);
+        await grants.save(grant);
+        await host.connect(app.origin);
+        await vi.waitFor(() => expect(actions()).toContain("hostFinish"), {
+          timeout: 15_000,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 300));
+
+        const confirm = app.seen.find((seen) => seen.path.endsWith("/hostAppend"));
+        expect(JSON.parse(confirm!.body)).toEqual({ turnId: "u-pushed", items: [] });
+        expect(actions().filter((name) => name === "hostFinish")).toHaveLength(1);
+        const prompts = readFileSync(agentLog, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line) as { method: string })
+          .filter((entry) => entry.method === "session/prompt");
+        expect(prompts).toHaveLength(1);
+      } finally {
+        await host.stop();
+        await app.close();
+        vi.unstubAllEnvs();
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+    60_000,
+  );
 });
 
 describe("what the daemon enforces on a grant's turns", () => {
