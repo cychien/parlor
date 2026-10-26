@@ -3,6 +3,7 @@ export {
   devWranglerConfig,
   type DevWranglerConfig,
   hostRootDir,
+  nitroCli,
   type ServerBuildOptions,
   type ServerBuildResult,
   SYNC_TRANSPORT_ENV,

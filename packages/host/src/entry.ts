@@ -1,5 +1,7 @@
 import { UNROUTED_HEADER } from "@parlor/agent-ui";
 
+import { locationHintForDatabase } from "./location-hint.js";
+
 export interface RenderEntryOptions {
   /** The module `parlor build` built from `web.ssr`, exporting `render`. */
   readonly module: string;
@@ -128,7 +130,19 @@ export interface CloudflareEntryOptions extends DocumentOptions {
   readonly locationHint?: string | undefined;
 }
 
-/** The stateless Worker: documents here, everything else to the one Durable Object. */
+/**
+ * The Durable Object's name. A hint only places an object when it is first created, so the
+ * name follows the hint: setting or changing it starts the server where it says. The server
+ * keeps nothing in the object's own storage, so the new one starts complete.
+ */
+export function durableServerName(locationHint: string | undefined): string {
+  return locationHint ? `app@${locationHint}` : "app";
+}
+
+/**
+ * The stateless Worker: documents here, everything else to the one Durable Object, started
+ * beside the database. The configured hint wins; without one, the region `DATABASE_URL` names.
+ */
 export function cloudflareEntrySource({
   locationHint,
   ...document
@@ -137,12 +151,22 @@ export function cloudflareEntrySource({
 
 ${documentSource(document)}
 
+${locationHintForDatabase.toString()}
+
+${durableServerName.toString()}
+
+const CONFIGURED_HINT = ${JSON.stringify(locationHint ?? null)};
+let placement;
+
 export default {
   fetch(request) {
     return withDocument(request, (request) => {
+      if (!placement) {
+        const hint = CONFIGURED_HINT ?? locationHintForDatabase(env.DATABASE_URL);
+        placement = { name: durableServerName(hint), options: hint ? { locationHint: hint } : {} };
+      }
       const servers = env.${DURABLE_SERVER_BINDING};
-      const server = servers.get(servers.idFromName("app")${locationHint ? `, { locationHint: ${JSON.stringify(locationHint)} }` : ""});
-      return server.fetch(request);
+      return servers.get(servers.idFromName(placement.name), placement.options).fetch(request);
     });
   },
 };
