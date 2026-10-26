@@ -284,8 +284,15 @@ describe("disconnecting through the daemon", () => {
     }
   }, 30_000);
 
-  it("hands the app to Claude Code and Codex here when the user chose it, and takes it back", async () => {
+  it("hands the app to Claude Code and Codex here when the user chose it, with a skill each, and takes it back", async () => {
     const root = await mkdtemp(join(tmpdir(), "pt-"));
+    vi.stubEnv("HOME", root);
+    vi.stubEnv("CODEX_HOME", "");
+    vi.stubEnv("CLAUDE_CONFIG_DIR", "");
+    const skillsOf = () =>
+      [".claude", ".codex"].map((dir) =>
+        existsSync(join(root, dir, "skills", name, "SKILL.md")),
+      );
     const routes = hostRoutes({ wake: false });
     const app = await stubApp((request, body, response) =>
       request.url === "/_parlor/auth/hosts/revoke"
@@ -370,6 +377,7 @@ describe("disconnecting through the daemon", () => {
         name,
         agents: ["claude", "codex"],
       });
+      expect(skillsOf()).toEqual([true, true]);
       const reported = app.seen
         .filter((seen) => seen.path.endsWith("/hostReport"))
         .at(-1)!;
@@ -385,10 +393,12 @@ describe("disconnecting through the daemon", () => {
       expect(await host.agentTools(app.origin, false)).toBeUndefined();
       expect((await logOf("codex")).at(-1)).toBe(`mcp remove ${name}`);
       expect((await grants.get(app.origin))?.agentTools).toEqual({ on: false });
+      expect(skillsOf()).toEqual([false, false]);
       expect(await host.agentTools(app.origin, true)).toEqual({
         name,
         agents: "Claude Code and Codex",
       });
+      expect(skillsOf()).toEqual([true, true]);
 
       expect(await host.disconnect(app.origin)).toEqual({
         name,
@@ -396,9 +406,136 @@ describe("disconnecting through the daemon", () => {
       });
       expect((await logOf("claude")).at(-1)).toBe(`mcp remove --scope user ${name}`);
       expect(await grants.list()).toEqual([]);
+      expect(skillsOf()).toEqual([false, false]);
     } finally {
       await host.stop();
       await app.close();
+      vi.unstubAllEnvs();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("finds an agent installed after connecting when a tab asks, and hands it the app with its skill", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pa-"));
+    vi.stubEnv("HOME", root);
+    vi.stubEnv("CODEX_HOME", "");
+    vi.stubEnv("CLAUDE_CONFIG_DIR", "");
+    let send: ((tags: readonly (readonly string[])[]) => void) | undefined;
+    const routes = hostRoutes({ wake: false, stream: (sender) => (send = sender) });
+    const app = await stubApp((request, body, response) =>
+      request.url === "/_parlor/auth/hosts/revoke"
+        ? (json(response, {}), true)
+        : routes(request, body, response),
+    );
+    const keys = memoryHostKeys();
+    await (await keys.create(app.origin)).keep(asId("grant", "host:Hello"));
+    const paths = hostPaths(join(root, ".parlor", "host"));
+    const cli = async (path: string, id: string) => {
+      mkdirSync(join(path, ".."), { recursive: true });
+      await writeFile(
+        path,
+        `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "${id} 1.0.0"; exit 0; fi\necho "$0 $@" >> "${join(root, `${id}.log`)}"\n`,
+      );
+      await chmod(path, 0o755);
+    };
+    const appCodex = join(root, "Applications", "ChatGPT.app", "codex");
+    await cli(appCodex, "codex");
+    mkdirSync(paths.root, { recursive: true });
+    await writeFile(
+      paths.agents,
+      JSON.stringify([
+        {
+          id: "claude",
+          name: "Claude Code",
+          binary: join(root, "bin", "claude"),
+          launch: { kind: "native", command: "true", args: [] },
+        },
+        {
+          id: "codex",
+          name: "Codex",
+          binary: "codex-not-on-this-path",
+          apps: [appCodex],
+          launch: { kind: "native", command: "true", args: [] },
+        },
+      ]),
+    );
+    const logOf = async (id: string) =>
+      (await readFile(join(root, `${id}.log`), "utf8").catch(() => "")).trim();
+    const skillOf = (dir: string, name: string) =>
+      existsSync(join(root, dir, "skills", name, "SKILL.md"));
+    const grants = fileGrantStore(paths.grants);
+    await grants.save({
+      ...grantFor(app.origin, "Hello", join(root, "Parlor", "hello")),
+      agentTools: { on: true },
+    });
+    const host = createHostDaemon({
+      release: {
+        version: "0.0.0",
+        protocols: { min: 1, max: HOST_PROTOCOL },
+        control: 1,
+      },
+      paths,
+      grants,
+      keys,
+      trust: fileTrustStore(paths.trust),
+      pool: createSessionPool(paths.sessions),
+      proxy: createMcpProxy("parlor-host"),
+      launcher: acpLauncher(),
+      prompter: { answerHere: async () => undefined, turnStarted: () => undefined },
+      policy: DEFAULT_POLICY,
+    });
+    const name = `hello-${new URL(app.origin).host.replace(/[^a-z0-9]+/g, "-")}`;
+    const reports = () =>
+      app.seen
+        .filter((seen) => seen.path.endsWith("/hostReport"))
+        .map(
+          (seen) =>
+            JSON.parse(seen.body) as { agents: { id: string }[]; agentsChecked?: true },
+        );
+    try {
+      await host.start();
+      expect(await host.connect(app.origin)).toEqual({ name, agents: "Codex" });
+      expect(await logOf("codex")).toContain(`${appCodex} mcp add ${name}`);
+      expect([skillOf(".codex", name), skillOf(".claude", name)]).toEqual([true, false]);
+      expect(reports().at(-1)).toMatchObject({
+        agents: [{ id: "codex" }],
+        agentsChecked: true,
+      });
+
+      await cli(join(root, "bin", "claude"), "claude");
+      await vi.waitFor(() => expect(send).toBeDefined());
+      send!([["parlor_chat_agents_check"]]);
+
+      await vi.waitFor(
+        async () =>
+          expect((await grants.get(app.origin))?.agentTools?.agents).toEqual([
+            "codex",
+            "claude",
+          ]),
+        { timeout: 15_000 },
+      );
+      expect(await logOf("claude")).toContain(`mcp add --scope user ${name}`);
+      await vi.waitFor(
+        () =>
+          expect([skillOf(".codex", name), skillOf(".claude", name)]).toEqual([
+            true,
+            true,
+          ]),
+        { timeout: 15_000 },
+      );
+      await vi.waitFor(
+        () =>
+          expect(reports().at(-1)).toMatchObject({
+            agents: [{ id: "claude" }, { id: "codex" }],
+            agentsChecked: true,
+          }),
+        { timeout: 15_000 },
+      );
+      expect((await logOf("codex")).match(/mcp add/g)).toHaveLength(1);
+    } finally {
+      await host.stop();
+      await app.close();
+      vi.unstubAllEnvs();
       await rm(root, { recursive: true, force: true });
     }
   }, 60_000);

@@ -141,7 +141,7 @@ const textOf = (message: Record<string, unknown>) =>
   (message.result as { content: { text: string }[] }).content[0]!.text;
 
 describe("an agent outside any turn", () => {
-  it("is told to use the app only when the user names it, and reads with its own token", async () => {
+  it("is told to use the app only when the user names it, before a browser, and reads with its own token", async () => {
     const agent = agentOutside(origin);
     const initialized = await agent.initialize(true);
     const instructions = (initialized.result as { instructions: string }).instructions;
@@ -149,6 +149,8 @@ describe("an agent outside any turn", () => {
       /^Use these tools only when the user names Hello or "hello-local"/,
     );
     expect(instructions).toContain("as alice@example.com");
+    expect(instructions).toContain("use them rather than opening Hello in a browser");
+    expect(instructions).toContain('search them for "hello-local" first');
     expect(instructions).toMatch(/These tools belong to Hello\.$/);
 
     agent.request("tools/call", { name: "listCourses", arguments: {} });

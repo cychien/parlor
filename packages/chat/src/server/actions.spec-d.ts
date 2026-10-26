@@ -32,6 +32,7 @@ test("host actions and user actions are two disjoint sets, together the whole su
     | "answer"
     | "cancel"
     | "userActive"
+    | "checkAgents"
   >();
   expectTypeOf<keyof ChatActionMap>().toEqualTypeOf<
     keyof ChatHostActionMap | keyof ChatUserActionMap

@@ -31,6 +31,11 @@ export interface HostSummary {
    * (epoch ms); a device it never asks is missing.
    */
   readonly presenceDue?: Readonly<Record<string, number>> | undefined;
+  /**
+   * When this computer last looked for the agents installed on it, by the server's clock;
+   * absent on a computer too old to look again when asked.
+   */
+  readonly agentsCheckedAt?: number | undefined;
 }
 
 export interface AgentInfo {

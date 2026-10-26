@@ -1,5 +1,6 @@
 import {
   CHAT_ACTIVITY_TAG,
+  CHAT_AGENTS_CHECK_TAG,
   CHAT_CHANNEL,
   CHAT_TAG,
   type ClaimedTurn,
@@ -44,6 +45,8 @@ export interface AppLinkDeps {
   readonly fetch: typeof fetch;
   /** A turn may be waiting: claim until not_found, then ask for running turns' signals. */
   readonly onWake: (link: AppLink) => void;
+  /** A tab asked this computer to look again for the agents installed on it. */
+  readonly onAgentsCheck?: ((link: AppLink) => void) | undefined;
   /** The app claimed a turn for this computer and pushed it, saving the claim. */
   readonly onPushed?: ((link: AppLink, turn: ClaimedTurn) => void) | undefined;
   /** Whether a turn runs on this link, which keeps a poll deployment's `/sync` at the active interval. */
@@ -344,6 +347,8 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
               if (polling.touch()) sync?.reconnectNow();
             }
             if (modeNow() === "serving" && heads.includes(CHAT_TAG)) deps.onWake(link);
+            if (modeNow() === "serving" && heads.includes(CHAT_AGENTS_CHECK_TAG))
+              deps.onAgentsCheck?.(link);
           },
           channels: [
             {
