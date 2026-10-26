@@ -257,6 +257,7 @@ function gatedChannel(installed: Installed, channel: ServerChannel): ServerChann
   if (!installed.runtime.allows) return channel;
   return {
     event: channel.event,
+    hosts: channel.hosts,
     connect(connection) {
       let detach: (() => void) | undefined;
       let left = false;
@@ -523,7 +524,10 @@ export function createServer<T extends ActionMap>(
         const { principal } = caller;
         return {
           principal,
-          channels: admits("channels", caller, callers.enforcing),
+          channels: admits("channels", caller, callers.enforcing)
+            ? true
+            : (channel: ServerChannel) =>
+                principal.kind === "host" && channel.hosts === true,
           ...(auth && principal.kind !== "anonymous"
             ? { revoked: auth.revoked(principal) }
             : {}),

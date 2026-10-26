@@ -433,6 +433,8 @@ export const welcome = {
 export function hostRoutes(options: {
   readonly wake: boolean;
   readonly turn?: () => unknown;
+  /** Pushed on the stream's `chat` channel, as a server on host protocol 3 does. */
+  readonly push?: () => unknown;
 }): Route {
   let claimed = false;
   return (request, body, response) => {
@@ -478,9 +480,14 @@ export function hostRoutes(options: {
     }
     if (path === "/_parlor/sync/stream") {
       response.writeHead(200, { "content-type": "text/event-stream" });
+      const capabilities = options.push ? ["chat"] : [];
       response.write(
-        `event: handshake\ndata: ${JSON.stringify({ capabilities: [], keepAliveMs: 10_000 })}\n\n`,
+        `event: handshake\ndata: ${JSON.stringify({ capabilities, keepAliveMs: 10_000 })}\n\n`,
       );
+      if (options.push) {
+        const frame = { type: "claimed", turn: options.push() };
+        response.write(`event: chat\ndata: ${JSON.stringify(frame)}\n\n`);
+      }
       if (options.wake) {
         const events = [{ version: 1, id: "e1", tags: [["parlor_chat", "t1"]] }];
         response.write(

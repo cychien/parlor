@@ -499,13 +499,13 @@ describe.each(drivers)("exactly-once turns on $name", (driver) => {
   it("negotiates the host protocol and welcomes only a compatible computer", async () => {
     const tooNew = await app.action("alice-host-2", "hostHello", {
       ...HELLO,
-      protocols: { min: 3, max: 4 },
+      protocols: { min: 4, max: 5 },
     });
     expect(data(tooNew)).toEqual({
       id: "pc",
       accepted: false,
       reason: "app_too_old",
-      protocols: { min: 2, max: 2 },
+      protocols: { min: 2, max: 3 },
     });
     expect((await app.action("alice-host-2", "hostClaim", {})).status).toBe(403);
     const welcome = await app.action("alice-host-2", "hostHello", HELLO);
@@ -528,7 +528,7 @@ describe.each(drivers)("exactly-once turns on $name", (driver) => {
       id: "pc",
       accepted: false,
       reason: "host_too_old",
-      protocols: { min: 2, max: 2 },
+      protocols: { min: 2, max: 3 },
     });
     expect((await app.action("alice-host-2", "hostClaim", {})).status).toBe(403);
     const current = await app.action("alice-host-2", "hostHello", {

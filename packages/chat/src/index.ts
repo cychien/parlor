@@ -48,6 +48,8 @@ export {
   type HostStreamBatch,
   type HostWelcome,
   parseChatFrame,
+  PUSHED_TURNS_PROTOCOL,
+  type PushedTurn,
   type ProtocolRange,
   type StreamingKind,
 } from "./protocol.js";

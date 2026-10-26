@@ -505,6 +505,33 @@ describe("sync stream channel connections", () => {
     ]);
   });
 
+  it("carries only the channels the authority admits, and lists only those", async () => {
+    const chat = ownerChannel("chat");
+    const ui = ownerChannel("ui");
+    const server = new H3();
+    registerSyncRoutes(server, {
+      basePath: "/_parlor",
+      data: handle,
+      hub,
+      scope: () => "channels",
+      keepAliveMs: 50,
+      channels: [chat.channel, ui.channel],
+      authority: async () => ({
+        principal: principalOf("alice"),
+        channels: (channel) => channel.event === "chat",
+      }),
+    });
+    const response = await server.fetch(as("alice"));
+    await vi.waitFor(() => expect(chat.log).toEqual(["open alice"]));
+    chat.sends.get("alice")!("for-alice");
+
+    expect(await readFrames(response.body!, 2)).toEqual([
+      'event: handshake\ndata: {"protocol":1,"capabilities":["chat"],"keepAliveMs":50}',
+      "event: chat\ndata: for-alice",
+    ]);
+    expect(ui.log).toEqual([]);
+  });
+
   it("aborts the connection's closed signal when the stream ends, before the channel detaches", async () => {
     const chat = ownerChannel("chat");
     const server = appFor(chat.channel, async () => ({

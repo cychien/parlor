@@ -21,11 +21,12 @@ import type {
   HostSummary,
   TurnSignals,
 } from "../model.js";
-import { HOST_PROTOCOL, type HostWelcome } from "../protocol.js";
+import { HOST_PROTOCOL, type HostWelcome, PUSHED_TURNS_PROTOCOL } from "../protocol.js";
 import { CHAT_ACTIVITY_TAG, CHAT_TAG, HOSTS_TAG } from "../tags.js";
 import { turnContext } from "./context.js";
 import type { LiveRelay } from "./live.js";
 import { type ChatHost, chatAction } from "./party.js";
+import type { TurnPush } from "./push.js";
 import { agentInfoSchema, TURN_FAILURES } from "./rows.js";
 
 const presenceDueSchema = z
@@ -69,7 +70,9 @@ export interface ChatActionDeps {
   readonly maxQueued: number;
   readonly instructions: string | undefined;
   readonly appName: string;
-  readonly appOrigin: (ctx: ActionContext) => string;
+  readonly appOrigin: () => string;
+  /** Hands a queued turn straight to its computer; without it computers only claim. */
+  readonly pushed?: TurnPush | undefined;
 }
 
 const threadId = idSchema("thread");
@@ -214,7 +217,7 @@ export function userChatActions(deps: ChatActionDeps) {
           (candidate) => candidate.id === input.prompt.agent.hostId,
         );
         if (!host) throw new ActionError("not_found", "Computer not found");
-        return deps.transact(user, async (tx) => {
+        const sent = await deps.transact(user, async (tx) => {
           await deps.store.appendUserItems(tx, user, {
             threadId: input.threadId,
             turnId: input.turnId,
@@ -232,6 +235,8 @@ export function userChatActions(deps: ChatActionDeps) {
             threadId: input.threadId,
           };
         });
+        if (host.protocol >= PUSHED_TURNS_PROTOCOL) deps.pushed?.offer(user, host.id);
+        return sent;
       },
     }),
     answer: chatAction("user", enforcing, {
@@ -278,9 +283,11 @@ export function userChatActions(deps: ChatActionDeps) {
   };
 }
 
-/** What the user's computers call; `hostHello` first on every link. */
-export function hostChatActions(deps: ChatActionDeps) {
-  const { enforcing } = deps;
+/**
+ * What the server keeps about the computers it serves: which said hello, their agents'
+ * names, and how a turn is claimed for one, by `hostClaim` or pushed to it.
+ */
+export function hostSession(deps: ChatActionDeps) {
   const welcomed = new Set<HostId>();
   const welcome = async (host: ChatHost, db: ChatDb) => {
     const hosts = await deps.store.listHosts(db, host);
@@ -325,6 +332,69 @@ export function hostChatActions(deps: ChatActionDeps) {
       ttlMs: deps.leaseMs,
     });
   };
+  /** The next turn waiting for `host`, claimed for it with its token and context; undefined when none waits. */
+  const claim = async (host: ChatHost, db: ChatDb): Promise<ClaimedTurn | undefined> => {
+    await requireWelcome(host, db);
+    await deps.reconcile(host);
+    const claimed = await deps.transact(host, async (tx) => {
+      const taken = await deps.store.claimTurn(tx, host, host.host, deps.leaseMs);
+      return { result: taken, threadId: taken?.id };
+    });
+    if (!claimed) return undefined;
+    try {
+      const token = await mint(host, db, {
+        threadId: claimed.id,
+        turnId: claimed.turnId,
+        clientId: claimed.clientId,
+        agentId: claimed.agent.agentId,
+      });
+      const deviceId = claimed.prompt.body.signed?.deviceId;
+      const [device, account, page] = await Promise.all([
+        deviceId ? deps.auth.device?.(host.userId, deviceId) : undefined,
+        deps.auth.account?.(host.userId),
+        deps.store.readPage(db, host, claimed.id, CONTEXT_HISTORY_ITEMS),
+      ]);
+      const context = turnContext({
+        appName: deps.appName,
+        appOrigin: deps.appOrigin(),
+        account,
+        device,
+        instructions: deps.instructions,
+        history: page.items.filter((item) => item.seq < claimed.prompt.seq),
+      });
+      return { ...claimed, device, context, token };
+    } catch (error) {
+      await release(host, claimed.id, claimed.turnId).catch(() => false);
+      throw error;
+    }
+  };
+  /** Puts a claimed turn back in the queue, waking the computer to claim it again. */
+  const release = (host: ChatHost, thread: ThreadId, turn: TurnId) =>
+    deps.transact(host, async (tx) => {
+      const released = await deps.store.releaseClaim(tx, host, host.host, turn);
+      return { result: released, threadId: thread };
+    });
+  return {
+    welcome,
+    requireWelcome,
+    learnAgents,
+    agentNameOf,
+    mint,
+    claim,
+    release,
+    welcomed,
+  };
+}
+
+export type HostSession = ReturnType<typeof hostSession>;
+
+/** What the user's computers call; `hostHello` first on every link. */
+export function hostChatActions(
+  deps: ChatActionDeps,
+  session: HostSession = hostSession(deps),
+) {
+  const { enforcing } = deps;
+  const { welcome, requireWelcome, learnAgents, mint, welcomed } = session;
   return {
     hostHello: chatAction("host", enforcing, {
       description:
@@ -425,56 +495,16 @@ export function hostChatActions(deps: ChatActionDeps) {
         "Take the next turn addressed to this computer with its turn token; not_found when none waits.",
       input: z.object({}),
       run: async (_input, host, ctx): Promise<ClaimedTurn> => {
-        const db = dbOf(ctx);
-        await requireWelcome(host, db);
-        await deps.reconcile(host);
-        const claimed = await deps.transact(host, async (tx) => {
-          const taken = await deps.store.claimTurn(tx, host, host.host, deps.leaseMs);
-          if (!taken) throw new ActionError("not_found", "No turn is waiting.");
-          return { result: taken, threadId: taken.id };
-        });
-        try {
-          const token = await mint(host, db, {
-            threadId: claimed.id,
-            turnId: claimed.turnId,
-            clientId: claimed.clientId,
-            agentId: claimed.agent.agentId,
-          });
-          const deviceId = claimed.prompt.body.signed?.deviceId;
-          const [device, account, page] = await Promise.all([
-            deviceId ? deps.auth.device?.(host.userId, deviceId) : undefined,
-            deps.auth.account?.(host.userId),
-            deps.store.readPage(db, host, claimed.id, CONTEXT_HISTORY_ITEMS),
-          ]);
-          const context = turnContext({
-            appName: deps.appName,
-            appOrigin: deps.appOrigin(ctx),
-            account,
-            device,
-            instructions: deps.instructions,
-            history: page.items.filter((item) => item.seq < claimed.prompt.seq),
-          });
-          return { ...claimed, device, context, token };
-        } catch (error) {
-          await deps
-            .transact(host, async (tx) => {
-              const released = await deps.store.releaseClaim(
-                tx,
-                host,
-                host.host,
-                claimed.turnId,
-              );
-              return { result: released, threadId: claimed.id };
-            })
-            .catch(() => false);
-          throw error;
-        }
+        const claimed = await session.claim(host, dbOf(ctx));
+        if (!claimed) throw new ActionError("not_found", "No turn is waiting.");
+        return claimed;
       },
     }),
     hostSignals: chatAction("host", enforcing, {
       description: "Answers and stop requests for the turns this computer runs.",
       input: z.object({ turns: z.array(z.object({ turnId, afterSeq })).max(16) }),
       run: async (input, host, ctx): Promise<TurnSignals[]> => {
+        for (const turn of input.turns) deps.pushed?.confirm(turn.turnId);
         const db = dbOf(ctx);
         await requireWelcome(host, db);
         const signals = await deps.store.readSignals(db, host, host.host, input.turns);
@@ -512,6 +542,7 @@ export function hostChatActions(deps: ChatActionDeps) {
         readonly leaseUntil: number;
         readonly token: ClaimedTurn["token"];
       }> => {
+        deps.pushed?.confirm(input.turnId);
         await requireWelcome(host, dbOf(ctx));
         const appended = await deps.transact(host, async (tx) => {
           const result = await deps.store.appendHostItems(
@@ -542,6 +573,7 @@ export function hostChatActions(deps: ChatActionDeps) {
         ]),
       }),
       run: async (input, host, ctx): Promise<{ readonly id: string }> => {
+        deps.pushed?.confirm(input.turnId);
         await requireWelcome(host, dbOf(ctx));
         const finished = await deps.transact(host, async (tx) => {
           const result = await deps.store.finishTurn(
@@ -564,8 +596,11 @@ export function hostChatActions(deps: ChatActionDeps) {
  * The chat's actions at `/_parlor/chat/actions/<name>`: plugin actions, so never on MCP
  * and never callable by an agent. Writes return the thread or host id as `id`.
  */
-export function chatActions(deps: ChatActionDeps) {
-  return createRegistry({ ...userChatActions(deps), ...hostChatActions(deps) });
+export function chatActions(
+  deps: ChatActionDeps,
+  session: HostSession = hostSession(deps),
+) {
+  return createRegistry({ ...userChatActions(deps), ...hostChatActions(deps, session) });
 }
 
 export type ChatActionRegistry = ReturnType<typeof chatActions>;
