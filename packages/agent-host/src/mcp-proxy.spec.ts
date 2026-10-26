@@ -254,8 +254,8 @@ describe("the MCP proxy's handshake", () => {
   const request = (id: number, method: string, params: unknown = {}) =>
     JSON.stringify({ jsonrpc: "2.0", id, method, params });
 
-  const session = (origin: string) => {
-    const opened = proxy.open("courses", origin);
+  const session = (served: string) => {
+    const opened = proxy.open("courses", served);
     opened.begin({ token: "turn", expiresAt: Date.now() + 60_000 });
     return { opened, agent: agentSide(opened.server.env) };
   };
@@ -268,9 +268,9 @@ describe("the MCP proxy's handshake", () => {
   };
 
   it("answers a later session's handshake from the app's last answers, and still asks the app", async () => {
-    const origin = `${appOrigin}/`;
+    const at = `${appOrigin}/`;
     answer = (method) => ({ status: 200, result: { said: method } });
-    const first = session(origin);
+    const first = session(at);
     for (const [id, method] of [
       [1, "initialize"],
       [2, "tools/list"],
@@ -286,7 +286,7 @@ describe("the MCP proxy's handshake", () => {
 
     asked.length = 0;
     answer = (method) => ({ status: 200, result: { said: method }, delayMs: 1_500 });
-    const second = session(origin);
+    const second = session(at);
     for (const [id, method] of [
       [11, "initialize"],
       [12, "tools/list"],
@@ -303,14 +303,14 @@ describe("the MCP proxy's handshake", () => {
   });
 
   it("tells a session its tool list changed once the app lists other tools, and gives the next session the new list", async () => {
-    const origin = `${appOrigin}/changed`;
+    const at = `${appOrigin}/changed`;
     answer = () => ({ status: 200, result: { tools: [{ name: "old" }] } });
-    const first = session(origin);
+    const first = session(at);
     await timed(first.agent, request(1, "tools/list"));
     first.opened.dispose();
 
     answer = () => ({ status: 200, result: { tools: [{ name: "new" }] } });
-    const second = session(origin);
+    const second = session(at);
     expect((await timed(second.agent, request(2, "tools/list"))).reply).toMatchObject({
       result: { tools: [{ name: "old" }] },
     });
@@ -325,9 +325,9 @@ describe("the MCP proxy's handshake", () => {
   });
 
   it("replays a request the app refuses as malformed, the way it refused it", async () => {
-    const origin = `${appOrigin}/discover`;
+    const at = `${appOrigin}/discover`;
     answer = () => ({ status: 400, raw: '{"error":"bad request"}' });
-    const first = session(origin);
+    const first = session(at);
     const refused = (await timed(first.agent, request(1, "server/discover"))).reply;
     expect(refused).toMatchObject({
       id: 1,
@@ -336,7 +336,7 @@ describe("the MCP proxy's handshake", () => {
     first.opened.dispose();
 
     answer = () => ({ status: 400, raw: '{"error":"bad request"}', delayMs: 1_500 });
-    const second = session(origin);
+    const second = session(at);
     const { reply, ms } = await timed(second.agent, request(2, "server/discover"));
     expect(reply).toEqual({ ...refused, id: 2 });
     expect(ms).toBeLessThan(1_000);
@@ -348,15 +348,15 @@ describe("the MCP proxy's handshake", () => {
     { what: "a server failure", status: 500, method: "tools/list" },
     { what: "a refused initialize", status: 400, method: "initialize" },
   ])("never replays $what", async ({ status, method }) => {
-    const origin = `${appOrigin}/never-${status}-${method}`;
+    const at = `${appOrigin}/never-${status}-${method}`;
     answer = () => ({ status, raw: '{"error":"no"}' });
-    const first = session(origin);
+    const first = session(at);
     await timed(first.agent, request(1, method));
     first.opened.dispose();
 
     asked.length = 0;
     answer = () => ({ status: 200, result: { fine: true } });
-    const second = session(origin);
+    const second = session(at);
     expect((await timed(second.agent, request(2, method))).reply).toEqual({
       jsonrpc: "2.0",
       id: 2,
