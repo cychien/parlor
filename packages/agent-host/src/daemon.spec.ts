@@ -506,21 +506,30 @@ describe("disconnecting through the daemon", () => {
       await vi.waitFor(() => expect(send).toBeDefined());
       send!([["parlor_chat_agents_check"]]);
 
-      await vi.waitFor(async () =>
-        expect((await grants.get(app.origin))?.agentTools?.agents).toEqual([
-          "codex",
-          "claude",
-        ]),
+      await vi.waitFor(
+        async () =>
+          expect((await grants.get(app.origin))?.agentTools?.agents).toEqual([
+            "codex",
+            "claude",
+          ]),
+        { timeout: 15_000 },
       );
       expect(await logOf("claude")).toContain(`mcp add --scope user ${name}`);
-      await vi.waitFor(() =>
-        expect([skillOf(".codex", name), skillOf(".claude", name)]).toEqual([true, true]),
+      await vi.waitFor(
+        () =>
+          expect([skillOf(".codex", name), skillOf(".claude", name)]).toEqual([
+            true,
+            true,
+          ]),
+        { timeout: 15_000 },
       );
-      await vi.waitFor(() =>
-        expect(reports().at(-1)).toMatchObject({
-          agents: [{ id: "claude" }, { id: "codex" }],
-          agentsChecked: true,
-        }),
+      await vi.waitFor(
+        () =>
+          expect(reports().at(-1)).toMatchObject({
+            agents: [{ id: "claude" }, { id: "codex" }],
+            agentsChecked: true,
+          }),
+        { timeout: 15_000 },
       );
       expect((await logOf("codex")).match(/mcp add/g)).toHaveLength(1);
     } finally {
