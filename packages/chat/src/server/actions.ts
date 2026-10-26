@@ -342,14 +342,14 @@ export function hostSession(deps: ChatActionDeps) {
     });
     if (!claimed) return undefined;
     try {
-      const token = await mint(host, db, {
-        threadId: claimed.id,
-        turnId: claimed.turnId,
-        clientId: claimed.clientId,
-        agentId: claimed.agent.agentId,
-      });
       const deviceId = claimed.prompt.body.signed?.deviceId;
-      const [device, account, page] = await Promise.all([
+      const [token, device, account, page] = await Promise.all([
+        mint(host, db, {
+          threadId: claimed.id,
+          turnId: claimed.turnId,
+          clientId: claimed.clientId,
+          agentId: claimed.agent.agentId,
+        }),
         deviceId ? deps.auth.device?.(host.userId, deviceId) : undefined,
         deps.auth.account?.(host.userId),
         deps.store.readPage(db, host, claimed.id, CONTEXT_HISTORY_ITEMS),
