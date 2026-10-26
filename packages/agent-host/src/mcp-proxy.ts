@@ -80,8 +80,13 @@ interface Message {
   readonly result?: unknown;
 }
 
+/** An app's answer to one handshake request, without its id. */
+type KnownAnswer = { readonly result: unknown } | { readonly error: unknown };
+
 interface Live {
   readonly appOrigin: string;
+  /** The app's answers to the handshake every session repeats; undefined outside turns' sessions. */
+  readonly known: Map<string, KnownAnswer> | undefined;
   token: string | undefined;
   protocolVersion: string | undefined;
   initialized: unknown;
@@ -107,6 +112,51 @@ const result = (id: JsonRpcId, value: unknown) =>
 const failure = (id: JsonRpcId, code: number, message: string) =>
   JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } });
 
+/**
+ * What a new session asks before its first prompt, answered by the app the same way each
+ * time for the same parameters. A session gets the last answer at once while the app is
+ * asked again behind it; a list that changed is announced to the agent.
+ */
+const HANDSHAKE: ReadonlySet<string> = new Set([
+  "server/discover",
+  "initialize",
+  "tools/list",
+  "resources/list",
+  "resources/templates/list",
+  "prompts/list",
+]);
+const LIST_CHANGED: Readonly<Record<string, string>> = {
+  "tools/list": "notifications/tools/list_changed",
+  "resources/list": "notifications/resources/list_changed",
+  "prompts/list": "notifications/prompts/list_changed",
+};
+/** Statuses the same request gets again: never a credential, rate or server failure. */
+const STABLE_REFUSALS: ReadonlySet<number> = new Set([400, 404, 405]);
+
+const handshakeKey = (message: Message) =>
+  typeof message.method === "string" && HANDSHAKE.has(message.method)
+    ? `${message.method} ${JSON.stringify((message as { readonly params?: unknown }).params ?? null)}`
+    : undefined;
+
+function knownAnswer(answer: Message | undefined): KnownAnswer | undefined {
+  if (answer === undefined) return undefined;
+  if (answer.result !== undefined) return { result: answer.result };
+  const { error } = answer as { readonly error?: unknown };
+  return error === undefined ? undefined : { error };
+}
+
+/** What the session learns from an `initialize` or `tools/list` answer, wherever it came from. */
+function learn(live: Live, method: string, answer: KnownAnswer): void {
+  if (!("result" in answer)) return;
+  if (method === "initialize") {
+    live.initialized = answer.result;
+    const version = (answer.result as { readonly protocolVersion?: unknown } | undefined)
+      ?.protocolVersion;
+    if (typeof version === "string") live.protocolVersion = version;
+  }
+  if (method === "tools/list") live.tools = answer.result;
+}
+
 /** One line per message on the agent's stdio: only a body with a raw newline is compacted. */
 const asLine = (text: string) =>
   text.includes("\n") ? JSON.stringify(JSON.parse(text)) : text;
@@ -114,6 +164,12 @@ const asLine = (text: string) =>
 function betweenTurns(live: Live, message: Message): string | undefined {
   if (message.id === undefined || typeof message.method !== "string") return undefined;
   const { id } = message;
+  const key = handshakeKey(message);
+  const known = key === undefined ? undefined : live.known?.get(key);
+  if (known) {
+    learn(live, message.method, known);
+    return JSON.stringify({ jsonrpc: "2.0", id, ...known });
+  }
   switch (message.method) {
     case "ping":
       return result(id, {});
@@ -163,17 +219,19 @@ function refusal(status: number): string {
     : `The app answered HTTP ${status}.`;
 }
 
+/** Sends one message to the app; resolves with its status and what the request was answered. */
 async function forward(
   live: Live,
   token: string,
   line: string,
   message: Message,
   reply: (line: string) => void,
-): Promise<void> {
+): Promise<{ readonly status: number; readonly answer: Message | undefined }> {
   const method = typeof message.method === "string" ? message.method : "response";
   const controller = new AbortController();
   live.inflight.add(controller);
   let status = 0;
+  let given: Message | undefined;
   try {
     const response = await fetch(`${live.appOrigin}/_parlor/mcp`, {
       method: "POST",
@@ -201,21 +259,19 @@ async function forward(
       if (answer?.jsonrpc !== "2.0") continue;
       if (answer.id === message.id) {
         answered = true;
-        if (method === "initialize" && answer.result !== undefined) {
-          live.initialized = answer.result;
-          const version = (answer.result as { readonly protocolVersion?: unknown })
-            .protocolVersion;
-          if (typeof version === "string") live.protocolVersion = version;
-        }
-        if (method === "tools/list" && answer.result !== undefined)
-          live.tools = answer.result;
+        given = answer;
+        const known = knownAnswer(answer);
+        if (known) learn(live, method, known);
       }
       reply(asLine(text));
     }
     if (message.id !== undefined && !answered) {
-      reply(failure(message.id, REFUSED_CODE, refusal(status)));
+      const refused = failure(message.id, REFUSED_CODE, refusal(status));
+      given = parse(refused);
+      reply(refused);
     }
   } catch (error) {
+    status = 0;
     if (message.id !== undefined) {
       reply(
         controller.signal.aborted
@@ -231,6 +287,44 @@ async function forward(
     live.inflight.delete(controller);
     logEvent("proxy_forward", { appOrigin: live.appOrigin, rpcMethod: method, status });
   }
+  return { status, answer: given };
+}
+
+/** Keeps the app's answer to a handshake request when the same request gets it again. */
+function remember(
+  live: Live,
+  key: string,
+  outcome: { readonly status: number; readonly answer: Message | undefined },
+): KnownAnswer | undefined {
+  const { status } = outcome;
+  const stable = (status >= 200 && status < 300) || STABLE_REFUSALS.has(status);
+  const known = stable ? knownAnswer(outcome.answer) : undefined;
+  // A refused initialize would leave every later session without the app's tools.
+  if (!known || (key.startsWith("initialize ") && !("result" in known))) return undefined;
+  live.known?.set(key, known);
+  return known;
+}
+
+/** Answers a handshake request from what the app said last, then asks the app again. */
+function replay(
+  live: Live,
+  token: string,
+  line: string,
+  message: Message,
+  key: string,
+  known: KnownAnswer,
+  reply: (line: string) => void,
+): void {
+  const method = message.method as string;
+  learn(live, method, known);
+  reply(JSON.stringify({ jsonrpc: "2.0", id: message.id, ...known }));
+  void forward(live, token, line, message, () => undefined).then((outcome) => {
+    const fresh = remember(live, key, outcome);
+    const changed = LIST_CHANGED[method];
+    if (!changed || !fresh || JSON.stringify(fresh) === JSON.stringify(known)) return;
+    const notice = JSON.stringify({ jsonrpc: "2.0", method: changed });
+    for (const socket of live.sockets) if (!socket.destroyed) socket.write(`${notice}\n`);
+  });
 }
 
 function handle(live: Live, line: string, reply: (line: string) => void): void {
@@ -242,15 +336,19 @@ function handle(live: Live, line: string, reply: (line: string) => void): void {
     if (answer) reply(answer);
     return;
   }
-  if (
-    message.method === "tools/list" &&
-    live.tools !== undefined &&
-    message.id !== undefined
-  ) {
-    reply(result(message.id, live.tools));
+  const key = message.id === undefined ? undefined : handshakeKey(message);
+  if (key === undefined) {
+    void forward(live, token, line, message, reply);
     return;
   }
-  void forward(live, token, line, message, reply);
+  const known = live.known?.get(key);
+  if (known) {
+    replay(live, token, line, message, key, known, reply);
+    return;
+  }
+  void forward(live, token, line, message, reply).then((outcome) =>
+    remember(live, key, outcome),
+  );
 }
 
 /**
@@ -264,6 +362,7 @@ function outsideSession(
 ): (line: string) => void {
   const live: Live = {
     appOrigin: app.appOrigin.replace(/\/+$/, ""),
+    known: undefined,
     token: undefined,
     protocolVersion: undefined,
     initialized: undefined,
@@ -405,6 +504,7 @@ function withGuidance(line: string, app: OutsideApp, agent: string): string {
 
 export function createMcpProxy(hostBinary: string): McpProxy {
   const sessions = new Map<string, Live>();
+  const handshakes = new Map<string, Map<string, KnownAnswer>>();
   let server: Server | undefined;
   let socketPath: string | undefined;
   let outside: (appOrigin: string) => OutsideApp | undefined = () => undefined;
@@ -464,8 +564,15 @@ export function createMcpProxy(hostBinary: string): McpProxy {
       if (socketPath === undefined)
         throw new Error("The MCP proxy is not listening yet.");
       const nonce = randomBytes(24).toString("base64url");
+      const origin = appOrigin.replace(/\/+$/, "");
+      let known = handshakes.get(origin);
+      if (!known) {
+        known = new Map();
+        handshakes.set(origin, known);
+      }
       const live: Live = {
-        appOrigin: appOrigin.replace(/\/+$/, ""),
+        appOrigin: origin,
+        known,
         token: undefined,
         protocolVersion: undefined,
         initialized: undefined,
