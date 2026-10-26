@@ -12,6 +12,7 @@ import { z } from "zod";
 
 import { AuthFailure, type AuthProvider } from "./auth.js";
 import { createServer, type FrameworkServer } from "./create-server.js";
+import type { ServerPlugin } from "./plugin.js";
 
 const alice = asId("user", "alice");
 const bob = asId("user", "bob");
@@ -112,9 +113,13 @@ afterAll(async () => {
   await database.close();
 });
 
-function serve(scope?: (request: Request, principal: Principal) => string) {
+function serve(
+  scope?: (request: Request, principal: Principal) => string,
+  plugins: readonly ServerPlugin[] = [],
+) {
   auth = testAuth();
   const server = createServer({
+    plugins,
     actions,
     auth: auth.provider,
     database: {
@@ -400,6 +405,32 @@ describe("identity with an enforcing provider", () => {
     expect(host.handshake().capabilities).toEqual([]);
     const tab = await openStream(server, { token: "alice", clientId: "tab" });
     expect(tab.handshake().capabilities).toEqual(["ui"]);
+  });
+
+  it("joins a host's stream only to the channels that take computers", async () => {
+    const joined: string[] = [];
+    const channelPlugin = (name: string, hosts: boolean): ServerPlugin => ({
+      name,
+      setup: () => ({
+        channel: {
+          event: name,
+          hosts,
+          connect: (connection) => {
+            joined.push(`${name}:${connection.principal?.kind}`);
+            return () => {};
+          },
+        },
+      }),
+    });
+    const server = serve(undefined, [
+      channelPlugin("chat", true),
+      channelPlugin("demo", false),
+    ]);
+    const host = await openStream(server, { token: "alice-host", clientId: "mac" });
+    expect(host.handshake().capabilities).toEqual(["chat"]);
+    const tab = await openStream(server, { token: "alice", clientId: "tab" });
+    expect(tab.handshake().capabilities).toEqual(["ui", "chat", "demo"]);
+    expect(joined).toEqual(["chat:host", "chat:user", "demo:user"]);
   });
 
   it("closes a stream when its credential is revoked", async () => {

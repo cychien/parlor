@@ -1,10 +1,13 @@
 import {
   CHAT_ACTIVITY_TAG,
+  CHAT_CHANNEL,
   CHAT_TAG,
+  type ClaimedTurn,
   HOST_PROTOCOL,
   type HostFrame,
   type HostStreamBatch,
   type HostWelcome,
+  type PushedTurn,
 } from "@parlor/chat";
 import { type ChatHostActionMap, MAX_STREAM_BODY_BYTES } from "@parlor/chat/server";
 import {
@@ -41,6 +44,8 @@ export interface AppLinkDeps {
   readonly fetch: typeof fetch;
   /** A turn may be waiting: claim until not_found, then ask for running turns' signals. */
   readonly onWake: (link: AppLink) => void;
+  /** The app claimed a turn for this computer and pushed it, saving the claim. */
+  readonly onPushed?: ((link: AppLink, turn: ClaimedTurn) => void) | undefined;
   /** Whether a turn runs on this link, which keeps a poll deployment's `/sync` at the active interval. */
   readonly busy?: (() => boolean) | undefined;
   /** Any 401, or the stream closed for revocation. */
@@ -142,6 +147,16 @@ function untilHeaders(inner: typeof fetch, ms: number): typeof fetch {
       clearTimeout(timer);
     }
   };
+}
+
+/** The turn a `chat` channel frame pushes to this computer; the channel's other frames are for tabs. */
+function pushedTurnOf(data: string): ClaimedTurn | undefined {
+  try {
+    const frame = JSON.parse(data) as Partial<PushedTurn>;
+    return frame.type === "claimed" && frame.turn ? frame.turn : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function adaptivePoll(advertised: boolean, busy: () => boolean) {
@@ -330,6 +345,17 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
             }
             if (modeNow() === "serving" && heads.includes(CHAT_TAG)) deps.onWake(link);
           },
+          channels: [
+            {
+              event: CHAT_CHANNEL,
+              opened: () => undefined,
+              closed: () => undefined,
+              receive: (data) => {
+                const turn = pushedTurnOf(data);
+                if (turn && modeNow() === "serving") deps.onPushed?.(link, turn);
+              },
+            },
+          ],
           onUnauthorized: () => undefined,
           onError: () => undefined,
         });

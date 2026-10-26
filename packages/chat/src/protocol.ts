@@ -8,7 +8,7 @@ import {
 } from "@parlor/core";
 
 import type { ChatItemBody } from "./items.js";
-import type { AgentInfo, OpenItem } from "./model.js";
+import type { AgentInfo, ClaimedTurn, OpenItem } from "./model.js";
 
 export const CHAT_CHANNEL = "chat";
 /** The plugin name, so its routes live under `/_parlor/chat/`. */
@@ -55,8 +55,22 @@ export interface HostStreamBatch {
 /**
  * The versioned contract between an app's backend and Parlor Host: host actions, item
  * kinds, frames and cursor rules. Bumped on any change an older peer could misread.
+ * 3: the server may claim a turn for the computer and push it on the `chat` channel.
  */
-export const HOST_PROTOCOL = 2;
+export const HOST_PROTOCOL = 3;
+
+/** The first protocol whose computers take a turn pushed to them. */
+export const PUSHED_TURNS_PROTOCOL = 3;
+
+/**
+ * Server to one computer, on the `chat` channel: a turn claimed for it, as `hostClaim` would
+ * answer. The computer confirms it by calling about the turn; one it never confirms goes
+ * back to the queue, for `hostClaim`.
+ */
+export interface PushedTurn {
+  readonly type: "claimed";
+  readonly turn: ClaimedTurn;
+}
 
 export interface ProtocolRange {
   readonly min: number;

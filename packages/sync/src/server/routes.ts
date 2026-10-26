@@ -44,7 +44,8 @@ export interface SyncRouteOptions {
 export interface StreamAuthority {
   readonly principal: Principal;
   readonly revoked?: AbortSignal | undefined;
-  readonly channels: boolean;
+  /** Which channels the stream carries: all, none, or those the predicate admits. */
+  readonly channels: boolean | ((channel: ServerChannel) => boolean);
 }
 
 export const DEFAULT_POLL_INTERVAL_MS = 2000;
@@ -90,7 +91,6 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
   const keepAliveMs = options.keepAliveMs ?? DEFAULT_KEEP_ALIVE_MS;
   const db = () => data.read() as SyncDatabase;
   const channels = options.channels ?? [];
-  const capabilities = channels.map((channel) => channel.event);
 
   app.post(`${basePath}/sync/token`, (): SyncNegotiation => ({
     protocol: SYNC_PROTOCOL_VERSION,
@@ -109,6 +109,10 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
     const streams = await streamsOf(event.req);
     const currentScope = streams[0]!;
     const authority = await options.authority?.(event.req);
+    const admitted = authority?.channels ?? true;
+    const carried = channels.filter((channel) =>
+      typeof admitted === "function" ? admitted(channel) : admitted,
+    );
     await hub.start();
     const stream = createEventStream(event);
     const send = (payload: SyncBatch) => void stream.push(JSON.stringify(payload));
@@ -152,12 +156,12 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
       event: "handshake",
       data: JSON.stringify({
         protocol: SYNC_PROTOCOL_VERSION,
-        capabilities: authority?.channels === false ? [] : capabilities,
+        capabilities: carried.map((channel) => channel.event),
         keepAliveMs,
       }),
     });
     const clientId = options.clientId?.(event.req);
-    for (const channel of authority?.channels === false ? [] : channels) {
+    for (const channel of carried) {
       disconnects.push(
         channel.connect({
           clientId,

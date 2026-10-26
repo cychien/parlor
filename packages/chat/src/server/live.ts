@@ -1,5 +1,6 @@
 import {
   DEV_USER_ID,
+  type HostId,
   type ThreadId,
   type TurnId,
   type UserId,
@@ -27,6 +28,11 @@ export interface LiveRelay {
   accept(turn: TurnHolder, batch: HostStreamBatch): void;
   settle(owner: ChatOwner, threadId: ThreadId, turnId: TurnId): void;
   open(owner: ChatOwner, threadId: ThreadId): readonly OpenTurn[];
+  /**
+   * The open streams of one of the owner's computers, by its principal: a turn pushed to it
+   * goes to these only, never to the user's tabs.
+   */
+  computer(owner: ChatOwner, hostId: HostId): readonly ChannelConnection[];
   close(): void;
 }
 
@@ -45,6 +51,10 @@ function ownerKey(scope: string, userId: UserId | undefined): string {
   return `${scope}\u001f${userId ?? DEV_USER_ID}`;
 }
 
+function computerKey(scope: string, userId: UserId, hostId: HostId): string {
+  return `${ownerKey(scope, userId)}\u001f${hostId}`;
+}
+
 function sizeOf(frame: Extract<ChatFrame, { type: "delta" | "item" }>): number {
   return frame.type === "delta"
     ? encoder.encode(frame.text).length
@@ -54,6 +64,7 @@ function sizeOf(frame: Extract<ChatFrame, { type: "delta" | "item" }>): number {
 /** The default: one instance, in memory. */
 export function inProcessRelay(): LiveRelay {
   const connections = new Map<string, Set<ChannelConnection>>();
+  const computers = new Map<string, Set<ChannelConnection>>();
   const turns = new Map<TurnId, OpenState>();
   const settled = new Set<TurnId>();
   let closed = false;
@@ -73,19 +84,24 @@ export function inProcessRelay(): LiveRelay {
 
   const channel: ServerChannel = {
     event: CHAT_CHANNEL,
+    hosts: true,
     connect(connection) {
       if (closed || connection.closed?.aborted) return () => {};
-      const key = ownerKey(connection.scope, userOf(connection.principal));
-      let audience = connections.get(key);
+      const { principal } = connection;
+      const [joined, key] =
+        principal?.kind === "host"
+          ? [computers, computerKey(connection.scope, principal.userId, principal.hostId)]
+          : [connections, ownerKey(connection.scope, userOf(principal))];
+      let audience = joined.get(key);
       if (!audience) {
         audience = new Set();
-        connections.set(key, audience);
+        joined.set(key, audience);
       }
       audience.add(connection);
       const detach = () => {
-        const current = connections.get(key);
+        const current = joined.get(key);
         current?.delete(connection);
-        if (current?.size === 0) connections.delete(key);
+        if (current?.size === 0) joined.delete(key);
         connection.closed?.removeEventListener("abort", detach);
       };
       connection.closed?.addEventListener("abort", detach, { once: true });
@@ -143,6 +159,9 @@ export function inProcessRelay(): LiveRelay {
       forget(turnId);
       push(owner, { type: "settled", threadId, turnId });
     },
+    computer(owner, hostId) {
+      return [...(computers.get(computerKey(owner.scope, owner.userId, hostId)) ?? [])];
+    },
     open(owner, threadId) {
       const open: OpenTurn[] = [];
       for (const [turnId, state] of turns) {
@@ -159,6 +178,7 @@ export function inProcessRelay(): LiveRelay {
     close() {
       closed = true;
       connections.clear();
+      computers.clear();
       turns.clear();
     },
   };

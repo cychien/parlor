@@ -244,9 +244,21 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
   let finishHandover: () => void = () => undefined;
   const drained = new Promise<void>((resolve) => (finishHandover = resolve));
 
-  const run = (state: LinkState, claimed: ClaimedTurn) => {
+  /** A turn runs once here, even when a pushed turn its app took back is claimed again. */
+  const runningTurns = new Set<string>();
+
+  const run = (
+    state: LinkState,
+    claimed: ClaimedTurn,
+    how: "claimed" | "pushed" = "claimed",
+  ) => {
     const { link } = state;
-    logEvent("turn_claimed", { appOrigin: link.grant.appOrigin, turnId: claimed.turnId });
+    if (runningTurns.has(claimed.turnId)) return;
+    runningTurns.add(claimed.turnId);
+    logEvent(how === "pushed" ? "turn_pushed" : "turn_claimed", {
+      appOrigin: link.grant.appOrigin,
+      turnId: claimed.turnId,
+    });
     state.turns += 1;
     const turn = (
       link.grant.dev ? Promise.resolve(DEV_POLICY) : loadPolicy(paths.policy, deps.policy)
@@ -291,6 +303,7 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
           logEvent("turn_finished", { turnId: claimed.turnId, error: String(error) }),
       )
       .finally(() => {
+        runningTurns.delete(claimed.turnId);
         void refreshUsage(claimed.agent.agentId);
         state.turns -= 1;
         running.delete(turn);
@@ -429,6 +442,13 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
       platform,
       fetch: (input, init) => fetch(input, init),
       onWake: () => wake(state),
+      onPushed: (_link, turn) => {
+        // Tells the app this computer has the turn, while it already starts on it.
+        void link.api.calls
+          .call("hostAppend", { turnId: turn.turnId, items: [] })
+          .catch(() => undefined);
+        run(state, turn, "pushed");
+      },
       busy: () => state.turns > 0,
       onRevoked: () => {
         if (links.get(origin) !== state) return;

@@ -267,6 +267,41 @@ describe("an app link", () => {
     expect(link.mode).toBe("closed");
   });
 
+  it("hands a turn the app pushed on its stream to onPushed, and ignores the channel's other frames", async () => {
+    const pushed = { id: "t1", turnId: "u1", clientId: "tab-1" };
+    const sse = [
+      `event: handshake\ndata: ${JSON.stringify({ capabilities: ["chat"], keepAliveMs: 10_000 })}`,
+      `event: chat\ndata: ${JSON.stringify({ type: "delta", turnId: "u0" })}`,
+      `event: chat\ndata: not json`,
+      `event: chat\ndata: ${JSON.stringify({ type: "claimed", turn: pushed })}`,
+    ];
+    const app = stubApp((seen) => {
+      if (seen.path.endsWith("/hostHello")) return data(welcome);
+      if (seen.path.endsWith("/sync/token")) {
+        return Response.json({
+          protocol: 1,
+          transport: "sse",
+          endpoint: "/_parlor/sync/stream",
+          pollIntervalMs: 2000,
+        });
+      }
+      if (seen.path.endsWith("/sync/stream")) {
+        return new Response(sse.map((frame) => `${frame}\n\n`).join(""), {
+          headers: { "content-type": "text/event-stream" },
+        });
+      }
+      return data({ id: "t1" });
+    });
+    const onPushed = vi.fn();
+    const link = createAppLink(grant, deps(app.fetch, { onPushed }));
+    link.start();
+    await vi.waitFor(() => expect(onPushed).toHaveBeenCalled());
+    await settle();
+    expect(onPushed).toHaveBeenCalledOnce();
+    expect(onPushed).toHaveBeenCalledWith(link, pushed);
+    await link.stop();
+  });
+
   it("T6-02: a link drained before its welcome never wakes the host", async () => {
     const app = stubApp((seen) => {
       if (seen.path.endsWith("/hostHello")) return data(welcome);

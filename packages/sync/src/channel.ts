@@ -2,6 +2,11 @@ import type { Principal } from "@parlor/core";
 
 export interface ServerChannel {
   readonly event: string;
+  /**
+   * Also joins the streams of the users' computers (host principals), which carry no other
+   * channel; such a channel keeps what it sends a computer apart from what it sends tabs.
+   */
+  readonly hosts?: boolean | undefined;
   connect(connection: ChannelConnection): () => void;
 }
 

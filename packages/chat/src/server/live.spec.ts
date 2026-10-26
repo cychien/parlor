@@ -92,6 +92,27 @@ describe("inProcessRelay", () => {
     expect(sameScopeOtherUser.received).toEqual([]);
   });
 
+  it("keeps a computer's streams apart: no tab frames reach them, and they are found by host", () => {
+    const relay = inProcessRelay();
+    const hostPrincipal = (hostId: string): Principal => ({
+      kind: "host",
+      userId: alice.userId,
+      grantId: asId("grant", `g-${hostId}`),
+      hostId: asId("host", hostId),
+    });
+    const tab = connect(relay, "alice", userPrincipal("alice"));
+    const mac = connect(relay, "alice", hostPrincipal("mac"));
+    connect(relay, "alice", hostPrincipal("pc"));
+    relay.accept(holder(), batch("u1", delta("u1.1", 0, "Hi")));
+
+    expect(tab.received).toHaveLength(1);
+    expect(mac.received).toEqual([]);
+    expect(relay.computer(alice, asId("host", "mac"))).toHaveLength(1);
+    expect(relay.computer(bob, asId("host", "mac"))).toEqual([]);
+    mac.detach();
+    expect(relay.computer(alice, asId("host", "mac"))).toEqual([]);
+  });
+
   it("skips a duplicate delta, trims an overlapping one and drops one after a gap", () => {
     const relay = inProcessRelay();
     const tab = connect(relay, "alice", userPrincipal("alice"));
