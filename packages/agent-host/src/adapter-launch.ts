@@ -1,4 +1,4 @@
-import { ADAPTER_BINARY_ENV, type AgentProfile } from "./agents.js";
+import { ADAPTER_BINARY_ENV, ADAPTER_ENV, type AgentProfile } from "./agents.js";
 import { adapterKey, embeddedAdapters } from "./embedded.js";
 import { selfInvocation } from "./self.js";
 import { resolveBinary } from "./shell-path.js";
@@ -32,11 +32,10 @@ export async function launchEnvironment(
   profile: AgentProfile,
   env: Readonly<Record<string, string>>,
 ): Promise<Record<string, string>> {
-  const variable =
-    profile.launch.kind === "adapter"
-      ? ADAPTER_BINARY_ENV[profile.launch.package]
-      : undefined;
-  if (variable === undefined || env[variable] !== undefined) return { ...env };
+  const adapter = profile.launch.kind === "adapter" ? profile.launch.package : undefined;
+  const own = { ...env, ...(adapter ? ADAPTER_ENV[adapter] : undefined) };
+  const variable = adapter ? ADAPTER_BINARY_ENV[adapter] : undefined;
+  if (variable === undefined || env[variable] !== undefined) return own;
   const found = await resolveBinary(profile.binary, env.PATH ?? "");
-  return found === undefined ? { ...env } : { ...env, [variable]: found };
+  return found === undefined ? own : { ...own, [variable]: found };
 }

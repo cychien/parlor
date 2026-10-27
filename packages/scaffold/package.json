@@ -1,6 +1,6 @@
 {
   "name": "@parlor/scaffold",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "What create-parlor and parlor add share: the templates, the add-on model, the syntax-tree edit engine, package manager detection, install and git",
   "homepage": "https://cychien.github.io/parlor",
   "bugs": "https://github.com/cychien/parlor/issues",
