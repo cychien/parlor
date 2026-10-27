@@ -72,6 +72,15 @@ export const ADAPTER_BINARY_ENV: Readonly<Record<string, string>> = {
   "@agentclientprotocol/codex-acp": "CODEX_PATH",
 };
 
+/**
+ * What each adapter needs set to serve an app's turn. Codex's adapter skips a requested MCP
+ * server whose name the user's own config already uses, so a turn would reach the app through
+ * the registration for agents outside the sidebar instead, which asks before the first change.
+ */
+export const ADAPTER_ENV: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  "@agentclientprotocol/codex-acp": { DISABLE_MCP_CONFIG_FILTERING: "true" },
+};
+
 export const DETECT_TIMEOUT_MS = 3_000;
 
 type Fields = Readonly<Record<string, unknown>>;
