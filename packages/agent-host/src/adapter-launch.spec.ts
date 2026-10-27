@@ -73,12 +73,26 @@ describe("where an adapter finds the agent CLI", () => {
   });
 
   it("names codex for the Codex adapter, but only when one is executable", async () => {
-    expect(await launchEnvironment(codex, { PATH: dir })).toEqual({ PATH: dir });
+    const turnServers = { DISABLE_MCP_CONFIG_FILTERING: "true" };
+    expect(await launchEnvironment(codex, { PATH: dir })).toEqual({
+      PATH: dir,
+      ...turnServers,
+    });
     await chmod(join(dir, "codex"), 0o755);
     expect(await launchEnvironment(codex, { PATH: dir })).toEqual({
       PATH: dir,
+      ...turnServers,
       CODEX_PATH: join(dir, "codex"),
     });
+  });
+
+  it("lets Codex use the turn's own MCP server over one of the same name in the user's config", async () => {
+    expect(await launchEnvironment(codex, { PATH: "" })).toMatchObject({
+      DISABLE_MCP_CONFIG_FILTERING: "true",
+    });
+    expect(await launchEnvironment(claude, { PATH: "" })).not.toHaveProperty(
+      "DISABLE_MCP_CONFIG_FILTERING",
+    );
   });
 
   it("leaves a path the user set alone, and sets nothing for a native agent", async () => {
