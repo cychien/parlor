@@ -22,18 +22,41 @@ import { createServer } from "@parlor/server";
 | `plugins`                        | framework features with their own routes and tables, such as `chat()` from `@parlor/chat/server`                                                                                     |
 | `scope`                          | how a caller maps to a scope; the default is the user's id, or `"default"`                                                                                                           |
 | `basePath`                       | where the framework routes live; `/_parlor`                                                                                                                                          |
+| `visible`                        | which actions each caller may see and call; see [action visibility](#action-visibility); absent, all of them                                                                         |
 | `cors`, `mcp`, `sync`, `agentUi` | options of those surfaces                                                                                                                                                            |
+
+## Action visibility
+
+`visible(caller, request)` runs at most once per request and returns a test, `(name, action) => boolean`, so a lookup such as the caller's role happens once:
+
+```ts
+import { createRegistry } from "@parlor/core/registry";
+const actions = createRegistry({});
+declare function roleOf(scope: string, request: Request): Promise<"admin" | "viewer">;
+// ---cut---
+import { createServer } from "@parlor/server";
+
+export default createServer({
+  actions,
+  visible: async (caller, request) => {
+    const role = await roleOf(caller.scope, request);
+    return (_name, action) => role === "admin" || !action.writes?.length;
+  },
+});
+```
+
+A hidden action is left out of the manifest and of MCP `tools/list`, and a call to it, over HTTP, MCP or a write's refreshed reads, answers as an action that does not exist would: `not_found` over HTTP, an unknown tool over MCP. It applies to the app's `actions` only, never to a plugin's, such as `chat()` or `@parlor/auth`.
 
 ## Routes it serves
 
-| Path                           | What                                          |
-| ------------------------------ | --------------------------------------------- |
-| `POST /_parlor/actions/<name>` | an action over HTTP                           |
-| `/_parlor/mcp`                 | every action as an MCP tool (streamable HTTP) |
-| `GET /_parlor/manifest`        | the actions and their schemas                 |
-| `/_parlor/sync/*`              | the live-update channel                       |
-| `/.well-known/oauth-*`         | OAuth discovery, with an auth provider        |
-| `/_parlor/<plugin>/*`          | each plugin's routes                          |
+| Path                           | What                                                             |
+| ------------------------------ | ---------------------------------------------------------------- |
+| `POST /_parlor/actions/<name>` | an action over HTTP                                              |
+| `/_parlor/mcp`                 | every action the caller may see as an MCP tool (streamable HTTP) |
+| `GET /_parlor/manifest`        | the actions and their schemas                                    |
+| `/_parlor/sync/*`              | the live-update channel                                          |
+| `/.well-known/oauth-*`         | OAuth discovery, with an auth provider                           |
+| `/_parlor/<plugin>/*`          | each plugin's routes                                             |
 
 ## For plugin authors
 
