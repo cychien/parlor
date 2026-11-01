@@ -3,7 +3,7 @@ title: Agents
 description: Let external agents such as Claude Code use the app over MCP.
 ---
 
-Every action is also an MCP tool. The server speaks MCP over streamable HTTP at `/_parlor/mcp`, next to the actions, so any MCP client can use the app the way the UI does.
+Every action is also an MCP tool, unless the server's [`visible`](/parlor/reference/server/#action-visibility) option hides it from the caller. The server speaks MCP over streamable HTTP at `/_parlor/mcp`, next to the actions, so any MCP client can use the app the way the UI does.
 
 ## Connect Claude Code
 
@@ -47,7 +47,7 @@ The origin is `PARLOR_ORIGIN` in production, the web origin under `parlor dev`. 
 
 ## What agents can and cannot do
 
-- An agent calls exactly the actions the app defines, with the same validation as the UI.
+- An agent calls exactly the actions the app defines and lets it see, with the same validation as the UI.
 - An action marked `confirm: true` waits until a person approves the call in the app. A program calling with an [API key](/parlor/reference/auth/#api-keys) has nobody to approve for it, so its call fails with `confirmation_unavailable` unless the server's `confirmation` policy lets it through.
 - `ctx.source` is `"mcp"` for an external agent and `"agent"` for the sidebar's agent, so an action can tell who is calling.
 
