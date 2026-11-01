@@ -22,6 +22,7 @@ import type { ActionRegistry } from "@parlor/core/registry";
 import type { ActionRunner } from "./actions.js";
 import type { CallerResolver } from "./caller.js";
 import { McpCalls } from "./mcp-calls.js";
+import type { VisibilityResolver } from "./visibility.js";
 
 export interface McpOptions<T extends ActionMap> {
   readonly actions: ActionRegistry<T>;
@@ -37,6 +38,8 @@ export interface McpOptions<T extends ActionMap> {
     | undefined;
   readonly agentUi?: AgentUi | undefined;
   readonly callers?: CallerResolver | undefined;
+  /** Lists only the actions the request may call. */
+  readonly visible?: VisibilityResolver | undefined;
 }
 
 /** The public origin first, then the one `parlor dev` serves the app on, then the request's. */
@@ -190,6 +193,7 @@ export function createMcpHandler<T extends ActionMap>(
     runner,
     agentUi,
     callers,
+    visible,
     app,
     name = app?.name ?? "parlor",
     version = "0.0.0",
@@ -209,7 +213,9 @@ export function createMcpHandler<T extends ActionMap>(
       work,
     );
 
-  const factory = (ctx: McpRequestContext) => {
+  const factory = async (ctx: McpRequestContext) => {
+    const shows =
+      visible && ctx.requestInfo ? await visible(ctx.requestInfo) : () => true;
     const instructions = [
       appIdentity(app, appOrigin(ctx.requestInfo)),
       agentUi?.instructions("mcp"),
@@ -227,7 +233,7 @@ export function createMcpHandler<T extends ActionMap>(
     });
     for (const actionName of actions.names()) {
       const action = actions.get(actionName);
-      if (!action) continue;
+      if (!action || !shows(actionName, action)) continue;
       server.registerTool(
         actionName,
         {

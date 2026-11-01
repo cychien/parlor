@@ -6,6 +6,7 @@ import type { DatabaseHandle } from "@parlor/data";
 import {
   type AuthProvider,
   createServer,
+  type ActionVisibility,
   type FrameworkServer,
   type ServerPlugin,
 } from "@parlor/server";
@@ -53,6 +54,7 @@ export interface TestAppOptions {
   readonly secret?: string | undefined;
   /** More Better Auth options, such as social providers and plugins. */
   readonly auth?: Partial<ParlorAuthOptions> | undefined;
+  readonly visible?: ActionVisibility | undefined;
 }
 
 /** A hello-like app on Better Auth's memory adapter, with revocations in `database`. */
@@ -88,6 +90,7 @@ export function createTestApp(
     actions: options.actions ?? actions,
     auth: provider,
     ...(options.plugins ? { plugins: options.plugins } : {}),
+    ...(options.visible ? { visible: options.visible } : {}),
     database: (options.wrap ?? ((data) => data))({
       read: () => database.read(),
       transaction: (run) => database.transaction(run),
