@@ -16,6 +16,7 @@ export {
 export {
   type AccountProfile,
   AuthFailure,
+  type AuthFailureOptions,
   type AuthFailureReason,
   type AuthProvider,
   type AgentDelegation,
@@ -23,6 +24,7 @@ export {
   type DeviceKeys,
   type DeviceVouch,
   HOST_GRANTS_TAG,
+  type KeyVerifier,
   type PresenceKey,
   type TurnDelegation,
 } from "./auth.js";

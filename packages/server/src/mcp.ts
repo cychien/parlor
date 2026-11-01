@@ -14,13 +14,18 @@ import {
   ActionError,
   type ActionErrorCode,
   type ActionMap,
+  ANONYMOUS,
   type AnyAction,
+  type ConfirmationDecision,
+  type ConfirmationPolicy,
+  defaultConfirmationPolicy,
   isMutating,
+  type Principal,
 } from "@parlor/core";
 import type { ActionRegistry } from "@parlor/core/registry";
 
 import type { ActionRunner } from "./actions.js";
-import type { CallerResolver } from "./caller.js";
+import { type CallerResolver, sourceFor } from "./caller.js";
 import { McpCalls } from "./mcp-calls.js";
 
 export interface McpOptions<T extends ActionMap> {
@@ -37,6 +42,8 @@ export interface McpOptions<T extends ActionMap> {
     | undefined;
   readonly agentUi?: AgentUi | undefined;
   readonly callers?: CallerResolver | undefined;
+  /** The server's confirmation policy, so each tool says what a call from this caller meets. */
+  readonly confirmation?: ConfirmationPolicy | undefined;
 }
 
 /** The public origin first, then the one `parlor dev` serves the app on, then the request's. */
@@ -49,11 +56,13 @@ function appOrigin(request: Request | undefined): string | undefined {
 export function appIdentity(
   app: McpOptions<ActionMap>["app"],
   origin: string | undefined,
+  principal: Principal = ANONYMOUS,
 ): string {
   const where = origin ? ` at ${origin}` : "";
   const what = app?.description ? ` ${app.description.trim()}` : "";
   const who = app ? app.name : "this app";
-  return `These tools belong to ${who}${where}.${what} They act only on ${who}, as the signed-in user; any other app's tools are a separate server.`;
+  const actor = principal.kind === "key" ? principal.name : "the signed-in user";
+  return `These tools belong to ${who}${where}.${what} They act only on ${who}, as ${actor}; any other app's tools are a separate server.`;
 }
 
 function toolResult(result: unknown): CallToolResult {
@@ -111,10 +120,15 @@ function unvalidated(schema: StandardSchemaWithJSON): StandardSchemaWithJSON {
   return { "~standard": { ...schema["~standard"], validate: (value) => ({ value }) } };
 }
 
-function actionDescription(action: AnyAction): string {
-  return action.confirm
-    ? `${action.description} When an agent calls it, the user must approve it in the app first; the call waits for that answer and fails with declined, confirmation_timeout or confirmation_unavailable without running.`
-    : action.description;
+function actionDescription(action: AnyAction, decision: ConfirmationDecision): string {
+  switch (decision) {
+    case "ask":
+      return `${action.description} When an agent calls it, the user must approve it in the app first; the call waits for that answer and fails with declined, confirmation_timeout or confirmation_unavailable without running.`;
+    case "refuse":
+      return `${action.description} It needs a person's approval, which nobody can give for this caller, so a call fails with confirmation_unavailable without running.`;
+    case "proceed":
+      return action.description;
+  }
 }
 
 export const PROGRESS_INTERVAL_MS = 10_000;
@@ -132,6 +146,7 @@ async function verifiedOrigin(
   if (principal?.kind === "agent" && principal.agent.verified) {
     return { via: "mcp", name: principal.agent.name };
   }
+  if (principal?.kind === "key") return { via: "mcp", name: principal.name };
   return originOf(ctx);
 }
 
@@ -190,6 +205,7 @@ export function createMcpHandler<T extends ActionMap>(
     runner,
     agentUi,
     callers,
+    confirmation = defaultConfirmationPolicy,
     app,
     name = app?.name ?? "parlor",
     version = "0.0.0",
@@ -209,10 +225,17 @@ export function createMcpHandler<T extends ActionMap>(
       work,
     );
 
-  const factory = (ctx: McpRequestContext) => {
+  const factory = async (ctx: McpRequestContext) => {
+    const caller =
+      callers && ctx.requestInfo ? await callers(ctx.requestInfo) : undefined;
+    const principal = caller?.principal ?? ANONYMOUS;
+    const source = caller
+      ? sourceFor("mcp", caller, callers?.enforcing === true, "mcp")
+      : "mcp";
+    const screen = principal.kind === "key" ? undefined : agentUi;
     const instructions = [
-      appIdentity(app, appOrigin(ctx.requestInfo)),
-      agentUi?.instructions("mcp"),
+      appIdentity(app, appOrigin(ctx.requestInfo), principal),
+      screen?.instructions("mcp"),
     ]
       .filter(Boolean)
       .join("\n\n");
@@ -231,7 +254,10 @@ export function createMcpHandler<T extends ActionMap>(
       server.registerTool(
         actionName,
         {
-          description: actionDescription(action),
+          description: actionDescription(
+            action,
+            confirmation({ name: actionName, action, principal, source }),
+          ),
           inputSchema: unvalidated(action.input),
           annotations: { readOnlyHint: !isMutating(action) },
         },
@@ -240,7 +266,11 @@ export function createMcpHandler<T extends ActionMap>(
             const origin = await verifiedOrigin(callers, ctx.requestInfo, toolCtx);
             const result = await inCall(ctx, toolCtx, (signal) => {
               const run = () =>
-                runner.run(actionName, args, ctx.requestInfo, "mcp", { signal, origin });
+                runner.run(actionName, args, ctx.requestInfo, "mcp", {
+                  signal,
+                  origin,
+                  surface: "mcp",
+                });
               return action.confirm ? withProgress(toolCtx, run) : run();
             });
             return toolResult(result.data);
@@ -250,8 +280,8 @@ export function createMcpHandler<T extends ActionMap>(
         },
       );
     }
-    const uiTools = agentUi?.tools("mcp") ?? [];
-    const uiManifest = uiTools.length > 0 ? agentUi?.manifest() : undefined;
+    const uiTools = screen?.tools("mcp") ?? [];
+    const uiManifest = uiTools.length > 0 ? screen?.manifest() : undefined;
     if (uiManifest) {
       server.registerResource(
         "ui-manifest",
@@ -292,7 +322,7 @@ export function createMcpHandler<T extends ActionMap>(
               await inCall(ctx, toolCtx, async (signal) =>
                 tool.run(
                   input.data,
-                  await agentUi!.contextFor(
+                  await screen!.contextFor(
                     ctx.requestInfo,
                     await verifiedOrigin(callers, ctx.requestInfo, toolCtx),
                     signal,

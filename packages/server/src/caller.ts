@@ -1,11 +1,13 @@
 import { audienceOf } from "@parlor/agent-ui/server";
 import {
+  ActionError,
   ANONYMOUS,
   type ActionSource,
   type Principal,
   sourceOfPrincipal,
 } from "@parlor/core";
 
+import type { Surface } from "./access.js";
 import type { AuthProvider } from "./auth.js";
 import { CLIENT_HEADER, SOURCE_HEADER } from "./protocol.js";
 import type { ScopeResolver } from "./scope.js";
@@ -40,14 +42,17 @@ export function clientOf(request: Request): string | undefined {
   return request.headers.get(CLIENT_HEADER) ?? undefined;
 }
 
+/** A key's source follows the surface it calls through: `mcp` on MCP, `http` elsewhere. */
 export function sourceFor(
   declared: ActionSource,
   caller: Caller,
   enforcing: boolean,
+  surface?: Surface,
 ): ActionSource {
-  return caller.principal.kind === "anonymous" && !enforcing
-    ? declared
-    : sourceOfPrincipal(caller.principal);
+  const { principal } = caller;
+  if (principal.kind === "anonymous" && !enforcing) return declared;
+  if (principal.kind === "key") return surface === "mcp" ? "mcp" : "http";
+  return sourceOfPrincipal(principal);
 }
 
 /** `prepare` runs before the provider sees a request, so its tables exist by then. */
@@ -61,6 +66,9 @@ export function createCallerResolver(
     if (auth) await prepare?.();
     const principal = auth ? await auth.authenticate(request) : ANONYMOUS;
     const resolvedScope = await scope(request, principal);
+    if (principal.kind === "key" && resolvedScope !== principal.scope) {
+      throw new ActionError("forbidden", "This key acts only in its own scope.");
+    }
     return {
       principal,
       scope: resolvedScope,

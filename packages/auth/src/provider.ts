@@ -6,6 +6,7 @@ import {
   type DeviceId,
   type GrantId,
   type HostPrincipal,
+  type KeyPrincipal,
   type Principal,
   type UserId,
   type UserPrincipal,
@@ -17,6 +18,7 @@ import {
   type AuthProvider,
   type Delegation,
   type DeviceKeys,
+  type KeyVerifier,
   type PluginHost,
   REVOCATION_HORIZON_MS,
   type TurnDelegation,
@@ -33,7 +35,7 @@ import {
 } from "jose";
 
 import { accountActions } from "./account.js";
-import { AUDIT_MIGRATION, createAuditLog } from "./audit.js";
+import { AUDIT_KEY_MIGRATION, AUDIT_MIGRATION, createAuditLog } from "./audit.js";
 import {
   AUTH_PLUGIN,
   bridgeOf,
@@ -125,7 +127,7 @@ export interface StoredSession {
   readonly userAgent?: string | null | undefined;
 }
 
-export type BetterAuthProviderOptions =
+export type BetterAuthProviderOptions = (
   | { readonly instance: BetterAuthInstance }
   | {
       /**
@@ -134,7 +136,23 @@ export type BetterAuthProviderOptions =
        * runtimes, such as Cloudflare's, allow no I/O while the app loads.
        */
       readonly options: BetterAuthOptions;
-    };
+    }
+) & {
+  /**
+   * The app's API keys: a `Bearer` token that starts with `keys.prefix` becomes the key
+   * principal `keys.verify` answers. Keys reach actions, MCP and the manifest only.
+   */
+  readonly keys?: KeyVerifier | undefined;
+};
+
+/** A prefix of letters and digits alone could start a Better Auth session token. */
+function checkKeyPrefix({ prefix }: KeyVerifier): void {
+  if (!/[^A-Za-z0-9]/.test(prefix)) {
+    throw new Error(
+      `The API key prefix "${prefix}" needs a character other than a letter or digit, such as "_", so no session token starts with it.`,
+    );
+  }
+}
 
 /** Stands in for the instance until the first call needs it. */
 function deferredInstance(options: BetterAuthOptions): BetterAuthInstance {
@@ -160,11 +178,13 @@ function hasCookie(request: Request, name: string): boolean {
 /**
  * Sessions become user principals: a cookie on the same-origin web, a bearer token in
  * native shells. Access tokens Better Auth issued to MCP clients become agent principals
- * without a turn.
+ * without a turn, and the app's API keys, with `keys`, key principals.
  */
 export function betterAuthProvider(provided: BetterAuthProviderOptions): AuthProvider {
   const instance =
     "instance" in provided ? provided.instance : deferredInstance(provided.options);
+  const apiKeys = provided.keys;
+  if (apiKeys) checkKeyPrefix(apiKeys);
   const bridge = bridgeOf(instance.options);
   const settings: ParlorAuthSettings = bridge.settings;
   let revocations: RevocationSet | undefined;
@@ -334,10 +354,25 @@ export function betterAuthProvider(provided: BetterAuthProviderOptions): AuthPro
     return outsideAgentPrincipalOf(claims);
   };
 
+  const keyOf = async (secret: string, request: Request): Promise<KeyPrincipal> => {
+    const key = await apiKeys?.verify(secret, request);
+    if (!key) {
+      throw new AuthFailure("invalid", "The API key is invalid or revoked.", {
+        challenge: false,
+      });
+    }
+    return key;
+  };
+
   const authenticateRequest = async (request: Request): Promise<Principal> => {
     await ready();
-    const credential = credentialOf(request.headers.get("authorization"));
+    const credential = credentialOf(
+      request.headers.get("authorization"),
+      apiKeys?.prefix,
+    );
     switch (credential?.kind) {
+      case "key":
+        return keyOf(credential.secret, request);
       case "host":
         return hostOf(request, credential.assertion);
       case "turn":
@@ -369,6 +404,7 @@ export function betterAuthProvider(provided: BetterAuthProviderOptions): AuthPro
       TURN_KEYS_MIGRATION,
       AUDIT_MIGRATION,
       DEVICE_LINKING_MIGRATION,
+      AUDIT_KEY_MIGRATION,
     ],
     enforcing: true,
     setup(host: PluginHost) {

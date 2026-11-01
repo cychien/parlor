@@ -1,6 +1,14 @@
 declare const idKind: unique symbol;
 
-export type IdKind = "user" | "device" | "grant" | "host" | "thread" | "turn" | "item";
+export type IdKind =
+  | "user"
+  | "device"
+  | "grant"
+  | "host"
+  | "thread"
+  | "turn"
+  | "item"
+  | "key";
 
 export type Id<K extends IdKind> = string & { readonly [idKind]: K };
 
@@ -11,6 +19,7 @@ export type HostId = Id<"host">;
 export type ThreadId = Id<"thread">;
 export type TurnId = Id<"turn">;
 export type ItemId = Id<"item">;
+export type KeyId = Id<"key">;
 
 /**
  * Names a string as an id. Only boundary code calls it: a verified token's claims, a

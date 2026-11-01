@@ -69,9 +69,11 @@ export interface ActionConfig<TInput extends z.ZodType, TOutput> {
   readonly notifies?: "scope" | "user" | undefined;
   /**
    * Ask the user to approve each call from an agent (source `mcp` or `agent`) in the app
-   * before it runs. Calls from the app's own UI and plain HTTP never ask. With an enforcing
-   * auth provider the source comes from the caller's credential, so this is a boundary;
-   * without one it stays a UX guard over a self-declared header.
+   * before it runs. Calls from the app's own UI and plain HTTP never ask, and a call with an
+   * API key is refused, as nobody can approve for it. The server's `confirmation` policy can
+   * change both. With an enforcing auth provider the source comes from the caller's
+   * credential, so this is a boundary; without one it stays a UX guard over a
+   * self-declared header.
    */
   readonly confirm?: boolean | undefined;
   /**
@@ -122,6 +124,7 @@ const SOURCE_BY_KIND = {
   user: "ui",
   agent: "mcp",
   host: "http",
+  key: "http",
 } as const satisfies Record<PrincipalKind, ActionSource>;
 
 export function sourceOfPrincipal(principal: Principal): ActionSource {
