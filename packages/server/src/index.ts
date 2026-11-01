@@ -75,8 +75,4 @@ export {
   SOURCE_HEADER,
 } from "./protocol.js";
 export { DEFAULT_SCOPE, defaultScope, type ScopeResolver } from "./scope.js";
-export {
-  type ActionVisibility,
-  type VisibilityResolver,
-  type VisibleTest,
-} from "./visibility.js";
+export { type ActionVisibility, type VisibleTest } from "./visibility.js";
