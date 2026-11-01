@@ -26,6 +26,13 @@ const TOKENS: Record<string, Principal> = {
     grantId: asId("grant", "g-viewer"),
     agent: { name: "Claude Code", verified: true },
   },
+  tly_k1: {
+    kind: "key",
+    keyId: asId("key", "k1"),
+    scope: "org-a",
+    name: 'API key "CI"',
+    claims: { role: "viewer" },
+  },
 };
 
 const provider: AuthProvider = {
@@ -234,5 +241,89 @@ describe("createServer({ visible })", () => {
     expect(await plugin.json()).toMatchObject({ data: "ok" });
     const app = await post(server, "/_parlor/actions/listTasks", "admin");
     expect(app.status).toBe(404);
+  });
+});
+
+describe("visible with an API key and the default confirmation policy", () => {
+  const deleted: string[] = [];
+  const keyActions = createRegistry({
+    listTasks: defineAction({
+      description: "List tasks.",
+      input: z.object({}),
+      run: () => ["t1"],
+    }),
+    listSalaries: defineAction({
+      description: "List salaries.",
+      input: z.object({}),
+      run: () => {
+        ran.push("listSalaries");
+        return ["$"];
+      },
+    }),
+    deleteTask: defineAction({
+      description: "Delete a task.",
+      input: z.object({ id: z.string() }),
+      confirm: true,
+      run: ({ id }) => {
+        deleted.push(id);
+        return { id };
+      },
+    }),
+  });
+
+  function serveKeys(): FrameworkServer {
+    const server = createServer({
+      actions: keyActions,
+      auth: provider,
+      sync: false,
+      visible: (caller) => (name) =>
+        !(caller.principal.kind === "key" && name === "listSalaries"),
+    });
+    server.installUiManifest?.(() => ({
+      protocol: 1,
+      app: { id: "app", name: "App" },
+      routes: [{ path: "/", description: "Home.", params: [], views: [] }],
+      views: [],
+    }));
+    servers.push(server);
+    return server;
+  }
+
+  it("hides what visible hides, refuses a visible confirm action, and shows no screen", async () => {
+    const server = serveKeys();
+
+    const hidden = await post(server, "/_parlor/actions/listSalaries", "tly_k1");
+    expect(hidden.status).toBe(404);
+    expect(await hidden.json()).toMatchObject({ error: { code: "not_found" } });
+    const gated = await post(server, "/_parlor/actions/deleteTask", "tly_k1", {
+      id: "t1",
+    });
+    expect(gated.status).toBe(503);
+    expect(await gated.json()).toMatchObject({
+      error: { code: "confirmation_unavailable" },
+    });
+
+    const key = await connect(server, "tly_k1");
+    expect((await key.listTools()).tools.map((tool) => tool.name)).toEqual([
+      "listTasks",
+      "deleteTask",
+    ]);
+    expect((await key.listResources()).resources).toEqual([]);
+    const viaMcp = await key.callTool({ name: "deleteTask", arguments: { id: "t2" } });
+    expect(viaMcp.isError).toBe(true);
+    expect(JSON.parse((viaMcp.content as { text: string }[])[0]!.text)).toMatchObject({
+      error: { code: "confirmation_unavailable" },
+    });
+    await expect(key.callTool({ name: "listSalaries", arguments: {} })).rejects.toThrow(
+      /Tool listSalaries not found/,
+    );
+
+    const agent = await connect(server, "viewer-agent");
+    expect((await agent.listTools()).tools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(["listSalaries", "deleteTask", "ui_screen"]),
+    );
+
+    expect(deleted).toEqual([]);
+    expect(ran).toEqual([]);
   });
 });
