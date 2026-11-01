@@ -1008,9 +1008,14 @@ function externalClients(state, table) {
   );
 }
 
+// Like a browser: Vite serves the page only to a document request and forwards the rest to the app.
+function probePage(url) {
+  return probe(url, { headers: { accept: "text/html" } });
+}
+
 async function readiness(state) {
   const u = urls(state);
-  const page = await probe(`${u.web}/`);
+  const page = await probePage(`${u.web}/`);
   if (!page.ok || !page.text.includes("<title>Hello</title>"))
     return "web page not served yet";
   let list;
@@ -1926,7 +1931,7 @@ async function cmdDoctor([id]) {
       pids.length === 0 ? "nothing listening" : `listeners ${pids.join(" ")}`,
     );
   }
-  const page = await probe(`${u.web}/`);
+  const page = await probePage(`${u.web}/`);
   check(
     "web page",
     page.ok && page.text.includes("<title>Hello</title>"),
