@@ -1,5 +1,5 @@
 import type { ActionContext, AnyAction, DataProvider, Tag } from "../action.js";
-import { isMutating, needsConfirmation, needsPrincipal } from "../action.js";
+import { isMutating, needsPrincipal } from "../action.js";
 import { type ConfirmationPolicy, defaultConfirmationPolicy } from "../confirmation.js";
 import { ActionError } from "../errors.js";
 import { ANONYMOUS, type Principal } from "../principal.js";
@@ -32,7 +32,7 @@ export interface InvokeOptions {
   readonly confirm?: ((call: PreparedCall) => Promise<void>) | undefined;
   /** Whether a call is asked about, run or refused before `run`; `defaultConfirmationPolicy` when absent. */
   readonly confirmation?: ConfirmationPolicy | undefined;
-  /** Called when the policy runs a call that `needsConfirmation` would have asked about. */
+  /** Called when the policy runs a call the default policy would have asked about or refused. */
   readonly onWaived?: (() => void) | undefined;
   /** An enforcing auth provider is installed: non-public actions refuse anonymous callers. */
   readonly enforcing?: boolean | undefined;
@@ -71,9 +71,10 @@ export async function invokeAction(
   }
   const input = parsed.data;
   const { data, onWrite, confirm, confirmation = defaultConfirmationPolicy } = options;
-  switch (confirmation({ name, action, principal, source: ctx.source })) {
+  const call = { name, action, principal, source: ctx.source };
+  switch (confirmation(call)) {
     case "proceed":
-      if (needsConfirmation(action, ctx.source)) options.onWaived?.();
+      if (defaultConfirmationPolicy(call) !== "proceed") options.onWaived?.();
       break;
     case "refuse":
       throw new ActionError(

@@ -24,7 +24,14 @@ const KEY: KeyPrincipal = {
 };
 const keys: KeyVerifier = {
   prefix: PREFIX,
-  verify: async (secret) => (secret === `${PREFIX}good` ? KEY : undefined),
+  verify: async (secret) => {
+    if (secret === `${PREFIX}good`) return KEY;
+    if (secret === `${PREFIX}unscoped`) return { ...KEY, scope: "" };
+    if (secret === `${PREFIX}user`) {
+      return { kind: "user", userId: "alice", sessionId: "s" } as unknown as KeyPrincipal;
+    }
+    return undefined;
+  },
 };
 
 const ran: string[] = [];
@@ -126,6 +133,18 @@ describe("API keys through the server", () => {
     );
     expect(answer.status).toBe(200);
     expect(answer.body?.data).toEqual({ kind: "key", scope: "org-a", source: "http" });
+  });
+
+  it("never turns what verify answers into anything but a scoped key principal", async () => {
+    for (const secret of ["user", "unscoped"]) {
+      const answer = await callWith(
+        app.server,
+        "/_parlor/actions/whoami",
+        `Bearer ${PREFIX}${secret}`,
+      );
+      expect(answer.status).toBe(500);
+      expect(answer.body).toMatchObject({ error: { code: "internal" } });
+    }
   });
 
   it("answers an unknown key with 401 everywhere and no OAuth challenge on MCP", async () => {

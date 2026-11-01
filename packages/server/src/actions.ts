@@ -217,7 +217,7 @@ export function createActionRunner<T extends ActionMap>(
     await admit?.(caller);
     await refuseHidden(name, request);
     const client = caller.clientId;
-    onClient?.(client, caller.audience);
+    if (caller.principal.kind !== "key") onClient?.(client, caller.audience);
     const signal = runOptions.signal ?? request?.signal;
     const resolvedScope = caller.scope;
     const cursor = runOptions.cursor ? await cursorBefore(name, caller) : undefined;

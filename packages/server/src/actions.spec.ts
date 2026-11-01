@@ -1,10 +1,11 @@
 import type { ConfirmationOutcome, ConfirmationRequest } from "@parlor/agent-ui/server";
-import { ActionError, defineAction } from "@parlor/core";
+import { ActionError, asId, defineAction, type Principal } from "@parlor/core";
 import { createRegistry } from "@parlor/core/registry";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import { type Confirm, createActionRunner } from "./actions.js";
+import type { Caller, CallerResolver } from "./caller.js";
 
 const ran: string[] = [];
 const actions = createRegistry({
@@ -145,5 +146,44 @@ describe("the confirmation gate in the action runner", () => {
     const error = await errorOf(runner().run("remove", { id: "n1" }, request(), "mcp"));
     expect((error as ActionError).code).toBe("confirmation_unavailable");
     expect(ran).toEqual([]);
+  });
+});
+
+describe("screen presence in the action runner", () => {
+  const callerAs = (principal: Principal): CallerResolver =>
+    Object.assign(
+      async (): Promise<Caller> => ({
+        principal,
+        scope: "acme",
+        audience: "acme",
+        clientId: "tab-1",
+      }),
+      { enforcing: true },
+    );
+  const touched = (principal: Principal) => {
+    const clients: (string | undefined)[] = [];
+    const run = createActionRunner({
+      actions,
+      callers: callerAs(principal),
+      sync: false,
+      onClient: (client) => clients.push(client),
+    });
+    return { clients, run };
+  };
+
+  it("marks the client a person calls from, and never one a key names, since a key reaches no screen", async () => {
+    const person = touched({ kind: "user", userId: asId("user", "u"), sessionId: "s" });
+    await person.run.run("list", {}, request("tab-1"), "ui");
+    expect(person.clients).toEqual(["tab-1"]);
+
+    const key = touched({
+      kind: "key",
+      keyId: asId("key", "k"),
+      scope: "acme",
+      name: 'API key "CI"',
+      claims: {},
+    });
+    await key.run.run("list", {}, request("tab-1"), "http");
+    expect(key.clients).toEqual([]);
   });
 });

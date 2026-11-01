@@ -65,8 +65,6 @@ export interface KeyVerifier {
   readonly prefix: string;
   /** The key's principal, or undefined for an unknown or revoked key, which is answered 401. */
   verify(secret: string, request: Request): Promise<KeyPrincipal | undefined>;
-  /** Aborts when the key is revoked, for connections held open. */
-  revoked?(principal: KeyPrincipal): AbortSignal;
 }
 
 /** Announced when a computer's grant is added or removed; whatever lists computers reads it. */
