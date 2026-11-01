@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ChannelConnection, ServerChannel } from "../channel.js";
 import { createSyncClient } from "../client/sync-client.js";
 import { cursorOf, encodeCursor, type SyncBatch, type SyncEvent } from "../protocol.js";
+import { SlowConsumer } from "./event-stream.js";
 import { SyncHub } from "./hub.js";
 import { registerSyncRoutes, type StreamAuthority, transportFromEnv } from "./routes.js";
 import { ensureSyncTables, pruneSyncEvents, recordSyncEvent } from "./store.js";
@@ -151,6 +152,8 @@ describe("sync routes", () => {
     );
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/event-stream");
+    expect(response.headers.get("cache-control")).toContain("no-transform");
+    expect(response.headers.get("x-accel-buffering")).toBe("no");
     const live = await handle.transaction((tx) =>
       recordSyncEvent(tx, { scope: "live", tags: [["tasks", "9"]] }),
     );
@@ -565,5 +568,117 @@ describe("sync stream channel connections", () => {
       expect(chat.closedSignals.map((s) => s.aborted)).toEqual([true]),
     );
     await reader.cancel();
+  });
+});
+
+describe("sync stream catch-up across batches", () => {
+  const record = (scope: string, count: number) =>
+    handle.transaction(async (tx) => {
+      const recorded: SyncEvent[] = [];
+      for (let i = 0; i < count; i += 1) {
+        recorded.push(await recordSyncEvent(tx, { scope, tags: [["tasks", `${i}`]] }));
+      }
+      return recorded;
+    });
+  const at = (syncEvent: SyncEvent) => encodeCursor(cursorOf(syncEvent));
+  const serverFor = (scope: string, maxQueuedBytes?: number) => {
+    const server = new H3();
+    registerSyncRoutes(server, {
+      basePath: "/_parlor",
+      data: handle,
+      hub,
+      scope: () => scope,
+      keepAliveMs: 50,
+      maxQueuedBytes,
+    });
+    return server;
+  };
+  const stream = (server: H3, since: string) =>
+    server.fetch(
+      new Request(
+        `http://app.test/_parlor/sync/stream?since=${encodeURIComponent(since)}`,
+      ),
+    );
+
+  async function readEventIds(body: ReadableStream<Uint8Array>, count: number) {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    const ids: string[] = [];
+    let buffer = "";
+    const deadline = Date.now() + 5000;
+    while (ids.length < count && Date.now() < deadline) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop()!;
+      for (const frame of frames) {
+        if (!frame.startsWith("data: ")) continue;
+        const batch = JSON.parse(frame.slice("data: ".length)) as SyncBatch;
+        ids.push(...batch.events.map((e) => e.id));
+      }
+    }
+    await reader.cancel();
+    return ids;
+  }
+
+  it("replays a backlog longer than one batch to a client that does not ask for resets, before any live event", async () => {
+    const [start] = await record("paged", 1);
+    const missed = await record("paged", 1200);
+    const server = serverFor("paged");
+    const delivered: SyncEvent[] = [];
+    const client = createSyncClient({
+      request: (path, init) => server.fetch(new Request(`http://app.test${path}`, init)),
+      startAt: () => at(start!),
+      onEvents: (events) => delivered.push(...events),
+      coalesceMs: 0,
+    });
+    client.start();
+    await vi.waitFor(() => expect(delivered).toHaveLength(1200), { timeout: 5000 });
+    const [live] = await record("paged", 1);
+
+    await vi.waitFor(() => expect(delivered).toHaveLength(1201));
+    expect(delivered.map((e) => e.id)).toEqual([...missed, live!].map((e) => e.id));
+    client.stop();
+  });
+
+  it("rereads the live events it could not hold while a stalled reader held up the catch-up", async () => {
+    const [start] = await record("stalled", 1);
+    const missed = await record("stalled", 600);
+    const response = await stream(serverFor("stalled"), at(start!));
+    const live = await record("stalled", 600);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const ids = await readEventIds(response.body!, 1200);
+    expect(ids).toEqual([...missed, ...live].map((e) => e.id));
+  });
+
+  it("keeps a slow reader through a catch-up far larger than maxQueuedBytes", async () => {
+    const [start] = await record("bulky", 1);
+    const tags = Array.from({ length: 100 }, (_, i) => ["tasks", `bulk-${i}`] as const);
+    const missed = await handle.transaction(async (tx) => {
+      const recorded: SyncEvent[] = [];
+      for (let i = 0; i < 500; i += 1) {
+        recorded.push(await recordSyncEvent(tx, { scope: "bulky", tags: [...tags] }));
+      }
+      return recorded;
+    });
+    const response = await stream(serverFor("bulky", 128 * 1024), at(start!));
+    const handshake = response.body!.getReader();
+    await handshake.read();
+    handshake.releaseLock();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const ids = await readEventIds(response.body!, 500);
+    expect(ids).toEqual(missed.map((e) => e.id));
+  });
+
+  it("drops a stream whose reader falls maxQueuedBytes behind, and leaves the hub", async () => {
+    const response = await stream(serverFor("slow", 4096), "");
+    expect(hub.subscriberCount("slow")).toBe(1);
+    await record("slow", 40);
+
+    await vi.waitFor(() => expect(hub.subscriberCount("slow")).toBe(0));
+    await expect(response.body!.getReader().read()).rejects.toBeInstanceOf(SlowConsumer);
   });
 });

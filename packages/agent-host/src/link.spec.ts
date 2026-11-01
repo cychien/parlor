@@ -286,9 +286,11 @@ describe("an app link", () => {
         });
       }
       if (seen.path.endsWith("/sync/stream")) {
-        return new Response(sse.map((frame) => `${frame}\n\n`).join(""), {
-          headers: { "content-type": "text/event-stream" },
-        });
+        const frames = new TextEncoder().encode(
+          sse.map((frame) => `${frame}\n\n`).join(""),
+        );
+        const open = new ReadableStream<Uint8Array>({ start: (c) => c.enqueue(frames) });
+        return new Response(open, { headers: { "content-type": "text/event-stream" } });
       }
       return data({ id: "t1" });
     });

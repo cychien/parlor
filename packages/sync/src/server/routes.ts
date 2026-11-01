@@ -1,5 +1,5 @@
 import type { DataProvider, Principal } from "@parlor/core";
-import { createEventStream, getQuery, type H3, type H3Event } from "h3";
+import { getQuery, type H3, type H3Event } from "h3";
 
 import type { ServerChannel } from "../channel.js";
 import {
@@ -13,8 +13,14 @@ import {
   type SyncNegotiation,
   SYNC_PROTOCOL_VERSION,
 } from "../protocol.js";
+import { createEventStream, DEFAULT_MAX_QUEUED_BYTES } from "./event-stream.js";
 import type { SyncHub } from "./hub.js";
-import { readSyncBacklog, readSyncEvents, type SyncDatabase } from "./store.js";
+import {
+  MAX_BATCH,
+  readSyncBacklog,
+  readSyncEvents,
+  type SyncDatabase,
+} from "./store.js";
 
 export type SyncTransport = "sse" | "poll";
 
@@ -31,6 +37,11 @@ export interface SyncRouteOptions {
   readonly transport?: SyncTransport | undefined;
   readonly pollIntervalMs?: number | undefined;
   readonly keepAliveMs?: number | undefined;
+  /**
+   * How far a stream's reader may fall behind before the server drops its connection; the
+   * client then reconnects and catches up from its cursor. Defaults to 1 MiB.
+   */
+  readonly maxQueuedBytes?: number | undefined;
   readonly channels?: readonly ServerChannel[] | undefined;
   readonly clientId?: ((request: Request) => string | undefined) | undefined;
   /**
@@ -61,14 +72,43 @@ function batch(events: SyncEvent[], since: string): SyncBatch {
   return { events, cursor: last ? encodeCursor(cursorOf(last)) : since };
 }
 
+const CATCH_UP_FRAME_CHARS = 64 * 1024;
+
+function catchUpFrames(missed: SyncBatch): SyncBatch[] {
+  if (missed.reset) return [missed];
+  const frames: SyncBatch[] = [];
+  let events: SyncEvent[] = [];
+  let size = 0;
+  for (const event of missed.events) {
+    const eventSize = JSON.stringify(event).length;
+    if (events.length > 0 && size + eventSize > CATCH_UP_FRAME_CHARS) {
+      frames.push(batch(events, missed.cursor));
+      events = [];
+      size = 0;
+    }
+    events.push(event);
+    size += eventSize;
+  }
+  if (events.length > 0) frames.push(batch(events, missed.cursor));
+  return frames;
+}
+
+interface MissedQuery {
+  readonly since: string;
+  readonly reset: boolean;
+}
+
+function missedQuery(event: H3Event): MissedQuery {
+  const query = getQuery(event);
+  return { since: String(query.since ?? ""), reset: query.reset === "1" };
+}
+
 async function missedSince(
   db: SyncDatabase,
   streams: readonly string[],
-  event: H3Event,
+  { since, reset }: MissedQuery,
 ): Promise<SyncBatch> {
-  const query = getQuery(event);
-  const since = String(query.since ?? "");
-  if (query.reset !== "1") {
+  if (!reset) {
     return batch(await readSyncEvents(db, streams, decodeCursor(since)), since);
   }
   const backlog = await readSyncBacklog(db, streams, decodeCursor(since));
@@ -89,6 +129,7 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
     options.transport ?? transportFromEnv() ?? (hub.canPush ? "sse" : "poll");
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const keepAliveMs = options.keepAliveMs ?? DEFAULT_KEEP_ALIVE_MS;
+  const maxQueuedBytes = options.maxQueuedBytes ?? DEFAULT_MAX_QUEUED_BYTES;
   const db = () => data.read() as SyncDatabase;
   const channels = options.channels ?? [];
 
@@ -100,7 +141,11 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
   }));
 
   app.get(`${basePath}/sync`, async (event: H3Event) => {
-    const missed = await missedSince(db(), await streamsOf(event.req), event);
+    const missed = await missedSince(
+      db(),
+      await streamsOf(event.req),
+      missedQuery(event),
+    );
     event.res.headers.set("cache-control", "no-store");
     return missed;
   });
@@ -114,34 +159,35 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
       typeof admitted === "function" ? admitted(channel) : admitted,
     );
     await hub.start();
-    const stream = createEventStream(event);
-    const send = (payload: SyncBatch) => void stream.push(JSON.stringify(payload));
+    const stream = createEventStream(maxQueuedBytes);
+    const send = (payload: SyncBatch) => stream.push({ data: JSON.stringify(payload) });
     const sendLive = (syncEvent: SyncEvent) =>
       send({ events: [syncEvent], cursor: encodeCursor(cursorOf(syncEvent)) });
 
     let arrivedDuringCatchUp: SyncEvent[] | undefined = [];
+    let droppedDuringCatchUp = false;
     const unsubscribes = streams.map((name) =>
       hub.subscribe(
         name,
         (syncEvent) => {
-          if (arrivedDuringCatchUp) arrivedDuringCatchUp.push(syncEvent);
-          else sendLive(syncEvent);
+          if (!arrivedDuringCatchUp) sendLive(syncEvent);
+          else if (arrivedDuringCatchUp.length < MAX_BATCH)
+            arrivedDuringCatchUp.push(syncEvent);
+          else {
+            arrivedDuringCatchUp = [];
+            droppedDuringCatchUp = true;
+          }
         },
-        () => void stream.close(),
+        () => stream.close(),
       ),
     );
-    const keepAlive = setInterval(
-      () => void stream.pushComment("keep-alive"),
-      keepAliveMs,
-    );
+    const keepAlive = setInterval(() => stream.comment("keep-alive"), keepAliveMs);
     const disconnects: (() => void)[] = [];
     const ended = new AbortController();
-    let detached = false;
     const revoked = authority?.revoked;
-    const closeRevoked = () => void stream.close();
+    const closeRevoked = () => stream.close();
     const detach = () => {
-      if (detached) return;
-      detached = true;
+      if (ended.signal.aborted) return;
       ended.abort();
       clearInterval(keepAlive);
       revoked?.removeEventListener("abort", closeRevoked);
@@ -152,7 +198,7 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
     if (revoked?.aborted) closeRevoked();
     else revoked?.addEventListener("abort", closeRevoked, { once: true });
 
-    void stream.push({
+    stream.push({
       event: "handshake",
       data: JSON.stringify({
         protocol: SYNC_PROTOCOL_VERSION,
@@ -168,27 +214,47 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
           scope: currentScope,
           ...(authority ? { principal: authority.principal } : {}),
           closed: ended.signal,
-          send: (frame) => {
-            if (!detached) void stream.push({ event: channel.event, data: frame });
-          },
+          send: (frame) => stream.push({ event: channel.event, data: frame }),
         }),
       );
     }
-    const missed = await missedSince(db(), streams, event).catch((error: unknown) => {
+
+    const query = missedQuery(event);
+    const catchUp = async (first: SyncBatch) => {
+      let missed = first;
+      for (;;) {
+        for (const frame of catchUpFrames(missed)) {
+          await stream.drained();
+          if (ended.signal.aborted) return;
+          send(frame);
+        }
+        const truncated = !missed.reset && missed.events.length >= MAX_BATCH;
+        if (!truncated && !droppedDuringCatchUp) break;
+        droppedDuringCatchUp = false;
+        missed = await missedSince(db(), streams, { ...query, since: missed.cursor });
+      }
+      const caughtUpTo = decodeCursor(missed.cursor);
+      const pending = arrivedDuringCatchUp!
+        .filter((syncEvent) => compareCursors(cursorOf(syncEvent), caughtUpTo) > 0)
+        .sort((a, b) => compareCursors(cursorOf(a), cursorOf(b)));
+      arrivedDuringCatchUp = undefined;
+      for (const syncEvent of pending) sendLive(syncEvent);
+    };
+    const first = await missedSince(db(), streams, query).catch((error: unknown) => {
       detach();
       throw error;
     });
-    if (missed.events.length > 0 || missed.reset) send(missed);
-    const caughtUpTo = decodeCursor(missed.cursor);
-    const pending = arrivedDuringCatchUp
-      .filter((syncEvent) => compareCursors(cursorOf(syncEvent), caughtUpTo) > 0)
-      .sort((a, b) => compareCursors(cursorOf(a), cursorOf(b)));
-    arrivedDuringCatchUp = undefined;
-    for (const syncEvent of pending) sendLive(syncEvent);
-    const body = await stream.send();
+    void catchUp(first).catch((error: unknown) => {
+      console.error("[parlor] sync catch-up failed:", error);
+      stream.close();
+    });
+
+    event.res.headers.set("content-type", "text/event-stream");
+    event.res.headers.set("cache-control", "no-cache, no-store, no-transform");
+    event.res.headers.set("x-accel-buffering", "no");
     if (event.req.headers.get("connection") === "keep-alive") {
       event.res.headers.set("connection", "close");
     }
-    return body;
+    return stream.body;
   });
 }
