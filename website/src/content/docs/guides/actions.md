@@ -96,7 +96,7 @@ export const deleteNote = defineAction({
 });
 ```
 
-`confirm: true` makes every call from an agent wait until the user approves it in the app. Calls from the app's own UI never ask.
+`confirm: true` makes every call from an agent wait until the user approves it in the app. Calls from the app's own UI never ask, and a call with an [API key](/parlor/reference/auth/#api-keys) fails with `confirmation_unavailable` at once, since nobody can approve for it. `createServer({ confirmation })` [changes who is asked](/parlor/reference/server/#confirmation-policy).
 
 ## Errors
 
