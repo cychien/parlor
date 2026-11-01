@@ -54,9 +54,8 @@ import { refreshReads } from "./refresh.js";
 import { defaultScope, type ScopeResolver } from "./scope.js";
 import {
   type ActionVisibility,
-  createVisibilityResolver,
-  type VisibilityResolver,
-  type VisibleTest,
+  createRegistryResolver,
+  type RegistryResolver,
 } from "./visibility.js";
 
 export interface SyncOptions {
@@ -347,9 +346,7 @@ export function createServer<T extends ActionMap>(
       for (const { runtime } of runtimes) runtime.start?.();
     })());
   const callers = createCallerResolver(auth, scope, ready);
-  const visibility = options.visible
-    ? createVisibilityResolver(options.visible, callers)
-    : undefined;
+  const registryFor = createRegistryResolver(actions, options.visible, callers);
   const host: PluginHost = {
     basePath,
     database,
@@ -389,7 +386,7 @@ export function createServer<T extends ActionMap>(
   const runnerFor = (
     registry: ActionRegistry,
     admit?: (caller: Caller) => Promise<void>,
-    visible?: VisibilityResolver,
+    registryOf?: RegistryResolver,
   ): ActionRunner =>
     createActionRunner({
       actions: registry,
@@ -401,10 +398,10 @@ export function createServer<T extends ActionMap>(
       confirm: agentUi?.confirm,
       audit,
       admit,
-      visible,
+      registryFor: registryOf,
       ready,
     });
-  const runner = runnerFor(actions, undefined, visibility);
+  const runner = runnerFor(actions, undefined, registryFor);
   const hub = database ? new SyncHub(database) : undefined;
   const inflight = new Set<Promise<unknown>>();
   let closing: Promise<void> | undefined;
@@ -424,17 +421,13 @@ export function createServer<T extends ActionMap>(
     };
     if (!admits("manifest", caller, callers.enforcing)) return summary;
     const ui = agentUi?.manifest();
-    let described = actions.describe();
-    if (visibility) {
-      let test: VisibleTest;
-      try {
-        test = await visibility(event.req);
-      } catch (error) {
-        return errorResponse(error);
-      }
-      described = described.filter(({ name }) => test(name, actions.get(name)!));
+    let visible: ActionRegistry;
+    try {
+      visible = await registryFor(event.req);
+    } catch (error) {
+      return errorResponse(error);
     }
-    return { ...summary, actions: described, ...(ui ? { ui } : {}) };
+    return { ...summary, actions: visible.describe(), ...(ui ? { ui } : {}) };
   });
 
   app.post(`${basePath}/actions/:name`, async (event) => {
@@ -454,7 +447,7 @@ export function createServer<T extends ActionMap>(
       const reads = decodeReadRequests(event.req.headers.get(REFRESH_HEADER));
       if (!reads) return answer;
       const refreshed = await refreshReads(
-        actions,
+        await registryFor(event.req),
         reads,
         result.writes,
         async (action, actionInput) => {
@@ -534,7 +527,7 @@ export function createServer<T extends ActionMap>(
       runner,
       agentUi,
       callers,
-      visible: visibility,
+      registryFor,
       app: mcpApp,
       ...mcp,
     });
@@ -551,6 +544,11 @@ export function createServer<T extends ActionMap>(
             () => false,
           ));
         return challenged && auth ? auth.challenge(event.req) : errorResponse(refusal);
+      }
+      try {
+        await registryFor(event.req);
+      } catch (error) {
+        return errorResponse(error);
       }
       return handler.fetch(event.req);
     });

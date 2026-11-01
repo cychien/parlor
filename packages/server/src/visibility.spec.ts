@@ -1,5 +1,6 @@
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import {
+  ActionError,
   ANONYMOUS,
   asId,
   defineAction,
@@ -198,7 +199,7 @@ describe("createServer({ visible })", () => {
     expect(ran).toEqual(["listSalaries"]);
   });
 
-  it("answers a hidden read on a write's refresh with not_found, and asks visible once per request", async () => {
+  it("answers a hidden read on a write's refresh as it answers an unknown one, and asks visible once per request", async () => {
     let asked = 0;
     const server = serve((caller, request) => {
       asked += 1;
@@ -213,18 +214,40 @@ describe("createServer({ visible })", () => {
         [REFRESH_HEADER]: encodeReadRequests([
           ["listTasks", {}],
           ["listSalaries", {}],
+          ["doesNotExist", {}],
         ]),
       },
     );
     expect(await answer.json()).toMatchObject({
       data: { id: "t1" },
-      refreshed: [
-        { data: ["t1"] },
-        { error: { code: "not_found", message: 'Unknown action "listSalaries"' } },
-      ],
+      refreshed: [{ data: ["t1"] }, null, null],
     });
     expect(asked).toBe(1);
     expect(ran).toEqual([]);
+  });
+
+  it("answers a refusal from visible with its code on the manifest, actions and MCP alike", async () => {
+    const server = serve(() => {
+      throw new ActionError("forbidden", "Suspended.");
+    });
+    const body = { error: { code: "forbidden", message: "Suspended." } };
+    const manifest = await server.fetch(
+      new Request("http://app.test/_parlor/manifest", {
+        headers: { authorization: "Bearer viewer" },
+      }),
+    );
+    const call = await post(server, "/_parlor/actions/listTasks", "viewer");
+    const mcp = await post(
+      server,
+      "/_parlor/mcp",
+      "viewer-agent",
+      { jsonrpc: "2.0", id: 1, method: "tools/list" },
+      { accept: "application/json, text/event-stream" },
+    );
+    for (const response of [manifest, call, mcp]) {
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual(body);
+    }
   });
 
   it("never filters a plugin's actions", async () => {

@@ -22,7 +22,7 @@ import type { ActionRegistry } from "@parlor/core/registry";
 import type { ActionRunner } from "./actions.js";
 import type { CallerResolver } from "./caller.js";
 import { McpCalls } from "./mcp-calls.js";
-import type { VisibilityResolver } from "./visibility.js";
+import type { RegistryResolver } from "./visibility.js";
 
 export interface McpOptions<T extends ActionMap> {
   readonly actions: ActionRegistry<T>;
@@ -38,8 +38,8 @@ export interface McpOptions<T extends ActionMap> {
     | undefined;
   readonly agentUi?: AgentUi | undefined;
   readonly callers?: CallerResolver | undefined;
-  /** Lists only the actions the request may call. */
-  readonly visible?: VisibilityResolver | undefined;
+  /** The actions a request may see; defaults to all of `actions`. */
+  readonly registryFor?: RegistryResolver | undefined;
 }
 
 /** The public origin first, then the one `parlor dev` serves the app on, then the request's. */
@@ -189,11 +189,10 @@ export function createMcpHandler<T extends ActionMap>(
   options: McpOptions<T>,
 ): McpHttpHandler {
   const {
-    actions,
     runner,
     agentUi,
     callers,
-    visible,
+    registryFor = () => Promise.resolve(options.actions),
     app,
     name = app?.name ?? "parlor",
     version = "0.0.0",
@@ -214,8 +213,7 @@ export function createMcpHandler<T extends ActionMap>(
     );
 
   const factory = async (ctx: McpRequestContext) => {
-    const shows =
-      visible && ctx.requestInfo ? await visible(ctx.requestInfo) : () => true;
+    const registry = await registryFor(ctx.requestInfo);
     const instructions = [
       appIdentity(app, appOrigin(ctx.requestInfo)),
       agentUi?.instructions("mcp"),
@@ -231,9 +229,9 @@ export function createMcpHandler<T extends ActionMap>(
       if (ctx.requestInfo && requestId !== undefined)
         calls.cancel(ctx.requestInfo, requestId, reason);
     });
-    for (const actionName of actions.names()) {
-      const action = actions.get(actionName);
-      if (!action || !shows(actionName, action)) continue;
+    for (const actionName of registry.names()) {
+      const action = registry.get(actionName);
+      if (!action) continue;
       server.registerTool(
         actionName,
         {

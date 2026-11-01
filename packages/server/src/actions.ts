@@ -34,7 +34,7 @@ import {
 } from "./caller.js";
 import type { ActionAudit, ConfirmationAnswer } from "./plugin.js";
 import { DEFAULT_SCOPE, type ScopeResolver } from "./scope.js";
-import type { VisibilityResolver } from "./visibility.js";
+import type { RegistryResolver } from "./visibility.js";
 
 export { clientOf, sourceOf } from "./caller.js";
 
@@ -54,8 +54,8 @@ export interface ActionRunnerOptions<T extends ActionMap> {
   readonly audit?: ((record: ActionAudit) => void) | undefined;
   /** Throws for a caller the surface admits but the actions' owner does not; audited like any refusal. */
   readonly admit?: ((caller: Caller) => Promise<void>) | undefined;
-  /** Which actions a request may call; a hidden one answers `not_found` like an unknown one. */
-  readonly visible?: VisibilityResolver | undefined;
+  /** The actions a request may call; a hidden one answers `not_found` like an unknown one. */
+  readonly registryFor?: RegistryResolver | undefined;
   /** Awaited before every call, so it must memoize; defaults to creating the sync tables. */
   readonly ready?: (() => Promise<void>) | undefined;
 }
@@ -156,8 +156,8 @@ const INTERNAL_CALLER: Caller = {
 export function createActionRunner<T extends ActionMap>(
   options: ActionRunnerOptions<T>,
 ): ActionRunner {
-  const { actions, scope, database, sync, onClient, confirm, audit, admit, visible } =
-    options;
+  const { actions, scope, database, sync, onClient, confirm, audit, admit } = options;
+  const registryFor = options.registryFor ?? (() => Promise.resolve(actions));
   const callers = options.callers ?? createCallerResolver(undefined, scope);
   const pruner = sync && database ? createPruner(database) : undefined;
   let prepared: Promise<void> | undefined;
@@ -171,18 +171,12 @@ export function createActionRunner<T extends ActionMap>(
       return prepared;
     });
 
-  const refuseHidden = async (name: string, request: Request | undefined) => {
-    const action = actions.get(name);
-    if (action && request && visible && !(await visible(request))(name, action)) {
-      throw new ActionError("not_found", `Unknown action "${name}"`);
-    }
-  };
-
   const cursorBefore = async (
+    registry: ActionRegistry,
     name: string,
     caller: Caller,
   ): Promise<string | undefined> => {
-    const action = actions.get(name);
+    const action = registry.get(name);
     if (!sync || !database || !action?.reads || isMutating(action)) return undefined;
     const streams =
       caller.audience === caller.scope ? [caller.scope] : [caller.scope, caller.audience];
@@ -200,14 +194,16 @@ export function createActionRunner<T extends ActionMap>(
   ): Promise<ActionRun> => {
     if (runOptions.surface) requireSurface(caller, runOptions.surface, callers.enforcing);
     await admit?.(caller);
-    await refuseHidden(name, request);
+    const registry = await registryFor(request);
     const client = caller.clientId;
     onClient?.(client, caller.audience);
     const signal = runOptions.signal ?? request?.signal;
     const resolvedScope = caller.scope;
-    const cursor = runOptions.cursor ? await cursorBefore(name, caller) : undefined;
+    const cursor = runOptions.cursor
+      ? await cursorBefore(registry, name, caller)
+      : undefined;
     const result = await invokeAction(
-      actions,
+      registry,
       name,
       input,
       { scope: resolvedScope, source, principal: caller.principal, signal, request },
