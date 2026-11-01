@@ -58,18 +58,18 @@ describe("serve-entry", () => {
       },
     );
     let stdout = "";
-    child.stdout?.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
+    const listening = new Promise<void>((resolve) =>
+      child.stdout?.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+        if (stdout.includes("\n")) resolve();
+      }),
+    );
     const exited = new Promise<void>((resolve) => child.once("close", () => resolve()));
     try {
-      let ready = false;
-      for (let i = 0; i < 100 && !ready; i++) {
-        ready = await fetch(`http://localhost:${port}/`).then(
-          () => true,
-          () => false,
-        );
-        if (!ready) await new Promise((r) => setTimeout(r, 100));
-      }
-      expect(ready).toBe(true);
+      // Another process can take the probed port, so only the child's own line means it is up.
+      await Promise.race([listening, exited]);
+      expect(stdout).toBe(`parlor server listening on http://localhost:${port}\n`);
+      expect(await (await fetch(`http://localhost:${port}/`)).text()).toBe("ok");
 
       const startedAt = Date.now();
       child.kill("SIGTERM");
