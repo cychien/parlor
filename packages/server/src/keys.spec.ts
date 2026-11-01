@@ -333,7 +333,7 @@ describe("an API key principal", () => {
         ]),
     ).toEqual([
       ["key", "mcp", "waived"],
-      ["key", "http", undefined],
+      ["key", "http", "waived"],
       ["user", "ui", undefined],
     ]);
   });

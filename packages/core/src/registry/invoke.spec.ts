@@ -246,7 +246,7 @@ describe("invokeAction confirmation policy", () => {
     expect(log).toEqual([]);
   });
 
-  it("hands the policy the call and follows it, reporting a waived confirmation", async () => {
+  it("hands the policy the call and follows it, reporting what it waived on every surface", async () => {
     log.length = 0;
     const confirm = vi.fn(async () => {});
     const onWaived = vi.fn();
@@ -272,14 +272,24 @@ describe("invokeAction confirmation policy", () => {
       gated,
       "remove",
       { id: "t1" },
-      { ...call, source: "ui" },
+      { ...call, source: "http" },
       {
         data,
         confirmation,
         onWaived,
       },
     );
-    expect(onWaived).toHaveBeenCalledTimes(1);
+    expect(onWaived).toHaveBeenCalledTimes(2);
+
+    const person = { kind: "user", userId: asId("user", "u"), sessionId: "s" } as const;
+    await invokeAction(
+      gated,
+      "remove",
+      { id: "t1" },
+      { scope: "test", source: "ui", principal: person },
+      { data, confirmation, onWaived },
+    );
+    expect(onWaived).toHaveBeenCalledTimes(2);
   });
 
   it("asks when the policy says so, even where the default would not", async () => {

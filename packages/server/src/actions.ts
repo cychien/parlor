@@ -205,7 +205,7 @@ export function createActionRunner<T extends ActionMap>(
     if (runOptions.surface) requireSurface(caller, runOptions.surface, callers.enforcing);
     await admit?.(caller);
     const client = caller.clientId;
-    onClient?.(client, caller.audience);
+    if (caller.principal.kind !== "key") onClient?.(client, caller.audience);
     const signal = runOptions.signal ?? request?.signal;
     const resolvedScope = caller.scope;
     const cursor = runOptions.cursor ? await cursorBefore(name, caller) : undefined;

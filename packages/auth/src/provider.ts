@@ -154,6 +154,20 @@ function checkKeyPrefix({ prefix }: KeyVerifier): void {
   }
 }
 
+function isKeyPrincipal(value: unknown): value is KeyPrincipal {
+  if (typeof value !== "object" || value === null) return false;
+  const key = value as Partial<Record<keyof KeyPrincipal, unknown>>;
+  return (
+    key.kind === "key" &&
+    typeof key.keyId === "string" &&
+    typeof key.scope === "string" &&
+    key.scope !== "" &&
+    typeof key.name === "string" &&
+    typeof key.claims === "object" &&
+    key.claims !== null
+  );
+}
+
 /** Stands in for the instance until the first call needs it. */
 function deferredInstance(options: BetterAuthOptions): BetterAuthInstance {
   let created: BetterAuthInstance | undefined;
@@ -355,11 +369,16 @@ export function betterAuthProvider(provided: BetterAuthProviderOptions): AuthPro
   };
 
   const keyOf = async (secret: string, request: Request): Promise<KeyPrincipal> => {
-    const key = await apiKeys?.verify(secret, request);
+    const key: unknown = await apiKeys?.verify(secret, request);
     if (!key) {
       throw new AuthFailure("invalid", "The API key is invalid or revoked.", {
         challenge: false,
       });
+    }
+    if (!isKeyPrincipal(key)) {
+      throw new TypeError(
+        'keys.verify must answer a key principal: { kind: "key", keyId, scope, name, claims }.',
+      );
     }
     return key;
   };
