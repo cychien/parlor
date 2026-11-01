@@ -54,6 +54,12 @@ import type {
 import { DEFAULT_BASE_PATH, type Manifest, PROTOCOL_VERSION } from "./protocol.js";
 import { refreshReads } from "./refresh.js";
 import { defaultScope, type ScopeResolver } from "./scope.js";
+import {
+  type ActionVisibility,
+  createVisibilityResolver,
+  type VisibilityResolver,
+  type VisibleTest,
+} from "./visibility.js";
 
 export interface SyncOptions {
   readonly transport?: SyncTransport | undefined;
@@ -86,6 +92,13 @@ export interface ServerOptions<T extends ActionMap> {
    * refused them.
    */
   readonly confirmation?: ConfirmationPolicy | undefined;
+  /**
+   * Which of `actions` each caller may see and call, decided once per request. A hidden
+   * action is left out of the manifest and MCP `tools/list`, and a call to it answers
+   * `not_found` like an action that does not exist. Plugins' actions are never filtered.
+   * Absent, every action is visible.
+   */
+  readonly visible?: ActionVisibility | undefined;
 }
 
 type ManifestSummary = Pick<Manifest, "protocol" | "app">;
@@ -344,6 +357,9 @@ export function createServer<T extends ActionMap>(
       for (const { runtime } of runtimes) runtime.start?.();
     })());
   const callers = createCallerResolver(auth, scope, ready);
+  const visibility = options.visible
+    ? createVisibilityResolver(options.visible, callers)
+    : undefined;
   const host: PluginHost = {
     basePath,
     database,
@@ -383,6 +399,7 @@ export function createServer<T extends ActionMap>(
   const runnerFor = (
     registry: ActionRegistry,
     admit?: (caller: Caller) => Promise<void>,
+    visible?: VisibilityResolver,
   ): ActionRunner =>
     createActionRunner({
       actions: registry,
@@ -395,9 +412,10 @@ export function createServer<T extends ActionMap>(
       confirmation,
       audit,
       admit,
+      visible,
       ready,
     });
-  const runner = runnerFor(actions);
+  const runner = runnerFor(actions, undefined, visibility);
   const hub = database ? new SyncHub(database) : undefined;
   const inflight = new Set<Promise<unknown>>();
   let closing: Promise<void> | undefined;
@@ -417,7 +435,17 @@ export function createServer<T extends ActionMap>(
     };
     if (!admits("manifest", caller, callers.enforcing)) return summary;
     const ui = agentUi?.manifest();
-    return { ...summary, actions: actions.describe(), ...(ui ? { ui } : {}) };
+    let described = actions.describe();
+    if (visibility) {
+      let test: VisibleTest;
+      try {
+        test = await visibility(event.req);
+      } catch (error) {
+        return errorResponse(error);
+      }
+      described = described.filter(({ name }) => test(name, actions.get(name)!));
+    }
+    return { ...summary, actions: described, ...(ui ? { ui } : {}) };
   });
 
   app.post(`${basePath}/actions/:name`, async (event) => {
@@ -518,6 +546,7 @@ export function createServer<T extends ActionMap>(
       agentUi,
       callers,
       confirmation,
+      visible: visibility,
       app: mcpApp,
       ...mcp,
     });

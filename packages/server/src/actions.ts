@@ -35,6 +35,7 @@ import {
 } from "./caller.js";
 import type { ActionAudit, ConfirmationAnswer } from "./plugin.js";
 import { DEFAULT_SCOPE, type ScopeResolver } from "./scope.js";
+import type { VisibilityResolver } from "./visibility.js";
 
 export { clientOf, sourceOf } from "./caller.js";
 
@@ -56,6 +57,8 @@ export interface ActionRunnerOptions<T extends ActionMap> {
   readonly audit?: ((record: ActionAudit) => void) | undefined;
   /** Throws for a caller the surface admits but the actions' owner does not; audited like any refusal. */
   readonly admit?: ((caller: Caller) => Promise<void>) | undefined;
+  /** Which actions a request may call; a hidden one answers `not_found` like an unknown one. */
+  readonly visible?: VisibilityResolver | undefined;
   /** Awaited before every call, so it must memoize; defaults to creating the sync tables. */
   readonly ready?: (() => Promise<void>) | undefined;
 }
@@ -168,6 +171,7 @@ export function createActionRunner<T extends ActionMap>(
     confirmation,
     audit,
     admit,
+    visible,
   } = options;
   const callers = options.callers ?? createCallerResolver(undefined, scope);
   const pruner = sync && database ? createPruner(database) : undefined;
@@ -181,6 +185,13 @@ export function createActionRunner<T extends ActionMap>(
           : Promise.resolve();
       return prepared;
     });
+
+  const refuseHidden = async (name: string, request: Request | undefined) => {
+    const action = actions.get(name);
+    if (action && request && visible && !(await visible(request))(name, action)) {
+      throw new ActionError("not_found", `Unknown action "${name}"`);
+    }
+  };
 
   const cursorBefore = async (
     name: string,
@@ -204,6 +215,7 @@ export function createActionRunner<T extends ActionMap>(
   ): Promise<ActionRun> => {
     if (runOptions.surface) requireSurface(caller, runOptions.surface, callers.enforcing);
     await admit?.(caller);
+    await refuseHidden(name, request);
     const client = caller.clientId;
     onClient?.(client, caller.audience);
     const signal = runOptions.signal ?? request?.signal;
