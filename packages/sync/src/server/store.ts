@@ -15,7 +15,7 @@ export type SyncDatabase = PgDatabase<PgQueryResultHKT>;
 export const RETENTION_MS = 24 * 60 * 60 * 1000;
 export const PRUNE_LOCK_KEY = 7_311_207;
 export const NOTIFY_PAYLOAD_LIMIT_BYTES = 8000;
-const MAX_BATCH = 500;
+export const MAX_BATCH = 500;
 
 async function rows<T>(query: Promise<unknown>): Promise<T[]> {
   const result = (await query) as { rows?: T[] } | T[];

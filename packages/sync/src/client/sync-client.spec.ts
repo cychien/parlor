@@ -128,6 +128,7 @@ describe("createSyncClient", () => {
     });
     let held = "7.h";
     const client = createSyncClient({
+      random: () => 1,
       request,
       onEvents: vi.fn(),
       startAt: () => held,
@@ -199,7 +200,12 @@ describe("createSyncClient", () => {
         : Response.json({ events: [], cursor: "" }),
     );
     const onError = vi.fn();
-    const client = createSyncClient({ request, onEvents: vi.fn(), onError });
+    const client = createSyncClient({
+      random: () => 1,
+      request,
+      onEvents: vi.fn(),
+      onError,
+    });
     client.start();
     await vi.advanceTimersByTimeAsync(0);
     expect(onError).toHaveBeenCalledOnce();
@@ -258,6 +264,7 @@ describe("createSyncClient negotiation retries", () => {
   it("keeps negotiating with backoff while the server is down and polls in the meantime", async () => {
     const { request, tokenAttempts, streams } = serverComingUp(Number.POSITIVE_INFINITY);
     const client = createSyncClient({
+      random: () => 1,
       request,
       onEvents: vi.fn(),
       onError: vi.fn(),
@@ -279,10 +286,31 @@ describe("createSyncClient negotiation retries", () => {
     client.stop();
   });
 
+  it("waits a random share of each backoff ceiling, so clients dropped together spread out", async () => {
+    const { request, tokenAttempts } = serverComingUp(Number.POSITIVE_INFINITY);
+    const client = createSyncClient({
+      request,
+      onEvents: vi.fn(),
+      onError: vi.fn(),
+      reconnectBaseMs: 1000,
+      reconnectMaxMs: 4000,
+      random: () => 0.25,
+    });
+    const t0 = Date.now();
+    client.start();
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(tokenAttempts.map((at) => at - t0)).toEqual([
+      0, 250, 750, 1750, 2750, 3750, 4750,
+    ]);
+    client.stop();
+  });
+
   it("joins SSE and opens its channels once the server starts answering", async () => {
     const { request, streams } = serverComingUp(2);
     const ui = channel();
     const client = createSyncClient({
+      random: () => 1,
       request,
       onEvents: vi.fn(),
       onError: vi.fn(),
@@ -349,6 +377,7 @@ describe("createSyncClient refused credentials", () => {
     const onUnauthorized = vi.fn();
     const onError = vi.fn();
     const client = createSyncClient({
+      random: () => 1,
       request,
       onEvents: vi.fn(),
       onError,
@@ -387,6 +416,7 @@ describe("createSyncClient refused credentials", () => {
     });
     const onUnauthorized = vi.fn();
     const client = createSyncClient({
+      random: () => 1,
       request,
       onEvents: vi.fn(),
       onUnauthorized,
@@ -500,6 +530,7 @@ describe("createSyncClient channels", () => {
       "event: ui\ndata: second\n\n",
     ]);
     const client = createSyncClient({
+      random: () => 1,
       request,
       onEvents: vi.fn(),
       channels: [ui.channel, other.channel],
@@ -545,6 +576,7 @@ describe("createSyncClient channels", () => {
       'event: handshake\ndata: {"protocol":1,"capabilities":["ui"]}\n\n',
     ]);
     const client = createSyncClient({
+      random: () => 1,
       request,
       onEvents: vi.fn(),
       reconnectBaseMs: 100,
@@ -881,6 +913,7 @@ describe("createSyncClient reconnectNow", () => {
       return Response.json({ events: [], cursor: "" });
     });
     const client = createSyncClient({
+      random: () => 1,
       request,
       onEvents: vi.fn(),
       onError: vi.fn(),
@@ -994,7 +1027,12 @@ describe("createSyncClient reconnectNow", () => {
       }
       return Response.json({ events: [], cursor: "" });
     });
-    const client = createSyncClient({ request, onEvents: vi.fn(), onError: vi.fn() });
+    const client = createSyncClient({
+      random: () => 1,
+      request,
+      onEvents: vi.fn(),
+      onError: vi.fn(),
+    });
     client.start();
     await vi.advanceTimersByTimeAsync(10);
     client.stop();
@@ -1083,6 +1121,7 @@ describe("createSyncClient request timeouts", () => {
     });
     const onError = vi.fn();
     const client = createSyncClient({
+      random: () => 1,
       request,
       onEvents: vi.fn(),
       onError,
@@ -1234,6 +1273,7 @@ describe("createSyncClient onResume", () => {
     const onResume = vi.fn();
     const onNegotiated = vi.fn();
     const client = createSyncClient({
+      random: () => 1,
       request: server.request,
       onEvents: vi.fn(),
       onError: vi.fn(),

@@ -30,6 +30,8 @@ export interface SyncClientOptions {
   readonly isHidden?: (() => boolean) | undefined;
   readonly setTimeout?: typeof globalThis.setTimeout | undefined;
   readonly clearTimeout?: typeof globalThis.clearTimeout | undefined;
+  /** Picks each reconnect delay below its backoff ceiling. Defaults to `Math.random`. */
+  readonly random?: (() => number) | undefined;
   readonly channels?: readonly ClientChannel[] | undefined;
   /**
    * Read each time the next poll is scheduled; the interval is the larger of this and the
@@ -156,6 +158,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     options.setTimeout ?? ((fn, ms) => globalThis.setTimeout(fn, ms));
   const cancel: (id: ReturnType<typeof setTimeout>) => void =
     options.clearTimeout ?? ((id) => globalThis.clearTimeout(id));
+  const random = options.random ?? Math.random;
   const isHidden = options.isHidden ?? (() => false);
   const channels = new Map((options.channels ?? []).map((c) => [c.event, c]));
   const guarded = (run: () => void) => {
@@ -390,10 +393,11 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     (options.onUnauthorized ?? settings.onError)?.(error);
   };
 
+  // Full jitter, so clients that lost one server together do not return in lockstep.
   const backoff = () => {
-    const delay = reconnectDelay;
+    const ceiling = reconnectDelay;
     reconnectDelay = Math.min(reconnectDelay * 2, settings.reconnectMaxMs);
-    return delay;
+    return Math.round(ceiling * random());
   };
 
   let connecting = false;
