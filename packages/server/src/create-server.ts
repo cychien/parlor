@@ -54,6 +54,11 @@ import type {
 import { DEFAULT_BASE_PATH, type Manifest, PROTOCOL_VERSION } from "./protocol.js";
 import { refreshReads } from "./refresh.js";
 import { defaultScope, type ScopeResolver } from "./scope.js";
+import {
+  type ActionVisibility,
+  createRegistryResolver,
+  type RegistryResolver,
+} from "./visibility.js";
 
 export interface SyncOptions {
   readonly transport?: SyncTransport | undefined;
@@ -86,6 +91,13 @@ export interface ServerOptions<T extends ActionMap> {
    * refused them.
    */
   readonly confirmation?: ConfirmationPolicy | undefined;
+  /**
+   * Which of `actions` each caller may see and call, decided once per request. A hidden
+   * action is left out of the manifest and MCP `tools/list`, and a call to it answers
+   * `not_found` like an action that does not exist. Plugins' actions are never filtered.
+   * Absent, every action is visible.
+   */
+  readonly visible?: ActionVisibility | undefined;
 }
 
 type ManifestSummary = Pick<Manifest, "protocol" | "app">;
@@ -344,6 +356,7 @@ export function createServer<T extends ActionMap>(
       for (const { runtime } of runtimes) runtime.start?.();
     })());
   const callers = createCallerResolver(auth, scope, ready);
+  const registryFor = createRegistryResolver(actions, options.visible, callers);
   const host: PluginHost = {
     basePath,
     database,
@@ -383,6 +396,7 @@ export function createServer<T extends ActionMap>(
   const runnerFor = (
     registry: ActionRegistry,
     admit?: (caller: Caller) => Promise<void>,
+    registryOf?: RegistryResolver,
   ): ActionRunner =>
     createActionRunner({
       actions: registry,
@@ -395,9 +409,10 @@ export function createServer<T extends ActionMap>(
       confirmation,
       audit,
       admit,
+      registryFor: registryOf,
       ready,
     });
-  const runner = runnerFor(actions);
+  const runner = runnerFor(actions, undefined, registryFor);
   const hub = database ? new SyncHub(database) : undefined;
   const inflight = new Set<Promise<unknown>>();
   let closing: Promise<void> | undefined;
@@ -417,7 +432,13 @@ export function createServer<T extends ActionMap>(
     };
     if (!admits("manifest", caller, callers.enforcing)) return summary;
     const ui = agentUi?.manifest();
-    return { ...summary, actions: actions.describe(), ...(ui ? { ui } : {}) };
+    let visible: ActionRegistry;
+    try {
+      visible = await registryFor(event.req);
+    } catch (error) {
+      return errorResponse(error);
+    }
+    return { ...summary, actions: visible.describe(), ...(ui ? { ui } : {}) };
   });
 
   app.post(`${basePath}/actions/:name`, async (event) => {
@@ -437,7 +458,7 @@ export function createServer<T extends ActionMap>(
       const reads = decodeReadRequests(event.req.headers.get(REFRESH_HEADER));
       if (!reads) return answer;
       const refreshed = await refreshReads(
-        actions,
+        await registryFor(event.req),
         reads,
         result.writes,
         async (action, actionInput) => {
@@ -518,6 +539,7 @@ export function createServer<T extends ActionMap>(
       agentUi,
       callers,
       confirmation,
+      registryFor,
       app: mcpApp,
       ...mcp,
     });
@@ -535,6 +557,11 @@ export function createServer<T extends ActionMap>(
             () => false,
           ));
         return challenged && auth ? auth.challenge(event.req) : errorResponse(refusal);
+      }
+      try {
+        await registryFor(event.req);
+      } catch (error) {
+        return errorResponse(error);
       }
       return handler.fetch(event.req);
     });

@@ -27,6 +27,7 @@ import type { ActionRegistry } from "@parlor/core/registry";
 import type { ActionRunner } from "./actions.js";
 import { type CallerResolver, sourceFor } from "./caller.js";
 import { McpCalls } from "./mcp-calls.js";
+import type { RegistryResolver } from "./visibility.js";
 
 export interface McpOptions<T extends ActionMap> {
   readonly actions: ActionRegistry<T>;
@@ -44,6 +45,8 @@ export interface McpOptions<T extends ActionMap> {
   readonly callers?: CallerResolver | undefined;
   /** The server's confirmation policy, so each tool says what a call from this caller meets. */
   readonly confirmation?: ConfirmationPolicy | undefined;
+  /** The actions a request may see; defaults to all of `actions`. */
+  readonly registryFor?: RegistryResolver | undefined;
 }
 
 /** The public origin first, then the one `parlor dev` serves the app on, then the request's. */
@@ -201,11 +204,11 @@ export function createMcpHandler<T extends ActionMap>(
   options: McpOptions<T>,
 ): McpHttpHandler {
   const {
-    actions,
     runner,
     agentUi,
     callers,
     confirmation = defaultConfirmationPolicy,
+    registryFor = () => Promise.resolve(options.actions),
     app,
     name = app?.name ?? "parlor",
     version = "0.0.0",
@@ -233,6 +236,7 @@ export function createMcpHandler<T extends ActionMap>(
       ? sourceFor("mcp", caller, callers?.enforcing === true, "mcp")
       : "mcp";
     const screen = principal.kind === "key" ? undefined : agentUi;
+    const registry = await registryFor(ctx.requestInfo);
     const instructions = [
       appIdentity(app, appOrigin(ctx.requestInfo), principal),
       screen?.instructions("mcp"),
@@ -248,8 +252,8 @@ export function createMcpHandler<T extends ActionMap>(
       if (ctx.requestInfo && requestId !== undefined)
         calls.cancel(ctx.requestInfo, requestId, reason);
     });
-    for (const actionName of actions.names()) {
-      const action = actions.get(actionName);
+    for (const actionName of registry.names()) {
+      const action = registry.get(actionName);
       if (!action) continue;
       server.registerTool(
         actionName,
