@@ -1,6 +1,9 @@
 import { type Principal, userOf } from "@parlor/core";
 
-/** The tenant a request belongs to. Called once per request. */
+/**
+ * The tenant a request belongs to. Called once per request. For a key it must answer the
+ * key's own scope, or the request is refused.
+ */
 export type ScopeResolver = (
   request: Request,
   principal: Principal,
@@ -9,4 +12,4 @@ export type ScopeResolver = (
 export const DEFAULT_SCOPE = "default";
 
 export const defaultScope: ScopeResolver = (_request, principal) =>
-  userOf(principal) ?? DEFAULT_SCOPE;
+  principal.kind === "key" ? principal.scope : (userOf(principal) ?? DEFAULT_SCOPE);

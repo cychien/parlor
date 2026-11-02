@@ -1,5 +1,6 @@
 import type { ActionContext, AnyAction, DataProvider, Tag } from "../action.js";
-import { isMutating, needsConfirmation, needsPrincipal } from "../action.js";
+import { isMutating, needsPrincipal } from "../action.js";
+import { type ConfirmationPolicy, defaultConfirmationPolicy } from "../confirmation.js";
 import { ActionError } from "../errors.js";
 import { ANONYMOUS, type Principal } from "../principal.js";
 import { readTagsFor, writeTagsFor } from "../tags.js";
@@ -29,6 +30,10 @@ export interface InvokeOptions {
   readonly data?: DataProvider | undefined;
   readonly onWrite?: ((event: WriteEvent) => Promise<void>) | undefined;
   readonly confirm?: ((call: PreparedCall) => Promise<void>) | undefined;
+  /** Whether a call is asked about, run or refused before `run`; `defaultConfirmationPolicy` when absent. */
+  readonly confirmation?: ConfirmationPolicy | undefined;
+  /** Called when the policy runs a call the default policy would have asked about or refused. */
+  readonly onWaived?: (() => void) | undefined;
   /** An enforcing auth provider is installed: non-public actions refuse anonymous callers. */
   readonly enforcing?: boolean | undefined;
   /** Called once, right before `run`: every earlier refusal leaves it uncalled. */
@@ -65,15 +70,25 @@ export async function invokeAction(
     });
   }
   const input = parsed.data;
-  const { data, onWrite, confirm } = options;
-  if (needsConfirmation(action, ctx.source)) {
-    if (!confirm) {
+  const { data, onWrite, confirm, confirmation = defaultConfirmationPolicy } = options;
+  const call = { name, action, principal, source: ctx.source };
+  switch (confirmation(call)) {
+    case "proceed":
+      if (defaultConfirmationPolicy(call) !== "proceed") options.onWaived?.();
+      break;
+    case "refuse":
       throw new ActionError(
         "confirmation_unavailable",
-        `"${name}" needs the user's approval, but nothing here can ask for it.`,
+        `"${name}" needs a person's approval, and nobody can give it for this caller. Ask the user to do it in the app themselves.`,
       );
-    }
-    await confirm({ action, name, input, ctx: { ...ctx, principal } });
+    case "ask":
+      if (!confirm) {
+        throw new ActionError(
+          "confirmation_unavailable",
+          `"${name}" needs the user's approval, but nothing here can ask for it.`,
+        );
+      }
+      await confirm({ action, name, input, ctx: { ...ctx, principal } });
   }
   const reads = readTagsFor(action, input);
 

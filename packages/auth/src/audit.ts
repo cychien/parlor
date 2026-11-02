@@ -1,4 +1,4 @@
-import type { DataProvider } from "@parlor/core";
+import { type DataProvider, userOf } from "@parlor/core";
 import type { ActionAudit, Migration } from "@parlor/server";
 import { type SQL, sql } from "drizzle-orm";
 
@@ -39,17 +39,30 @@ export const AUDIT_MIGRATION: Migration = {
       for each row execute function parlor_auth_audit_append_only()`,
 };
 
+export const AUDIT_KEY_MIGRATION: Migration = {
+  id: "auth/0008_audit_key",
+  sql: `
+    alter table parlor_auth_audit add column key_id text, add column key_name text;
+    create index parlor_auth_audit_by_key on parlor_auth_audit (key_id, at)`,
+};
+
 const FLUSH_MS = 250;
 const FLUSH_AT = 100;
 const KEEP_AT_MOST = 10_000;
 
 function audited({ principal, stage, confirmation }: ActionAudit): boolean {
-  return principal.kind === "agent" || stage === "refused" || confirmation !== undefined;
+  return (
+    principal.kind === "agent" ||
+    principal.kind === "key" ||
+    stage === "refused" ||
+    confirmation !== undefined
+  );
 }
 
 function rowOf(audit: ActionAudit): SQL {
   const { principal } = audit;
-  const user = principal.kind === "anonymous" ? undefined : principal.userId;
+  const user = userOf(principal);
+  const key = principal.kind === "key" ? principal : undefined;
   const grant =
     principal.kind === "agent" || principal.kind === "host"
       ? principal.grantId
@@ -65,7 +78,7 @@ function rowOf(audit: ActionAudit): SQL {
     ${principal.kind === "agent" ? principal.agent.verified : null},
     ${turn?.threadId ?? null}, ${turn?.turnId ?? null},
     ${audit.source}, ${audit.scope}, ${audit.inputDigest}, ${audit.stage}, ${audit.outcome},
-    ${audit.confirmation ?? null})`;
+    ${audit.confirmation ?? null}, ${key?.keyId ?? null}, ${key?.name ?? null})`;
 }
 
 export interface AuditLog {
@@ -90,7 +103,7 @@ export function createAuditLog(database: DataProvider): AuditLog {
           insert into parlor_auth_audit
             (at, action, actor_kind, user_id, grant_id, session_id, device_id, host_id,
              agent_name, agent_verified, thread_id, turn_id, source, scope, input_digest,
-             stage, outcome, confirmation)
+             stage, outcome, confirmation, key_id, key_name)
           values ${sql.join(batch.map(rowOf), sql`, `)}`);
       });
     } catch (error) {

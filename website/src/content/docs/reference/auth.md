@@ -30,6 +30,42 @@ import { betterAuthProvider } from "@parlor/auth";
 
 Turns Better Auth into the provider `createServer({ auth })` takes. Pass `options`, the options for `betterAuth()`, and the provider creates the instance on the first request: Better Auth queries the database as soon as it exists, which runtimes such as Cloudflare's forbid while the app loads. Passing a ready `instance` still works on `node-server` and `bun`.
 
+### API keys
+
+Pass `keys` to let programs call the app with keys it issues. A `Bearer` token that starts with `keys.prefix` goes to `keys.verify(secret, request)`, before any other credential, and becomes the `key` principal it answers; `undefined` answers 401. The prefix must hold a character other than a letter or digit, such as `tly_live_`, so no session token starts with it.
+
+```ts
+import { parlorAuth } from "@parlor/auth";
+const options = parlorAuth({ signInPage: "/sign-in" });
+declare function findKey(
+  secret: string,
+): Promise<{ id: string; orgId: string; name: string; role: string } | undefined>;
+// ---cut---
+import { betterAuthProvider } from "@parlor/auth";
+import { asId } from "@parlor/core";
+
+export const auth = betterAuthProvider({
+  options,
+  keys: {
+    prefix: "tly_live_",
+    verify: async (secret) => {
+      const key = await findKey(secret);
+      return (
+        key && {
+          kind: "key",
+          keyId: asId("key", key.id),
+          scope: key.orgId,
+          name: `API key "${key.name}"`,
+          claims: { role: key.role },
+        }
+      );
+    },
+  },
+});
+```
+
+A key reaches actions, MCP and the manifest, never sync, `/ui` or plugins, and only in its own scope. Every call with one is audited with the key's id and name. A `confirm: true` action refuses it unless the server's [confirmation policy](/parlor/reference/server/#confirmation-policy) lets it through.
+
 ## @parlor/auth/client
 
 ```ts

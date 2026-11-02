@@ -3,6 +3,7 @@ import type {
   DeviceId,
   GrantId,
   HostPrincipal,
+  KeyPrincipal,
   Principal,
   ThreadId,
   TurnId,
@@ -53,6 +54,17 @@ export interface AuthProvider extends ServerPlugin {
   device?(userId: UserId, deviceId: DeviceId): Promise<DeviceKeys | undefined>;
   /** Who the agent works for, for the turn's context block. */
   account?(userId: UserId): Promise<AccountProfile | undefined>;
+}
+
+/**
+ * The app's own API keys, which an auth provider routes to it: an `authorization: Bearer`
+ * token that starts with `prefix` is a key, checked before any other credential.
+ */
+export interface KeyVerifier {
+  /** Must hold a character outside `[A-Za-z0-9]`, such as `_`, so no session token starts with it. */
+  readonly prefix: string;
+  /** The key's principal, or undefined for an unknown or revoked key, which is answered 401. */
+  verify(secret: string, request: Request): Promise<KeyPrincipal | undefined>;
 }
 
 /** Announced when a computer's grant is added or removed; whatever lists computers reads it. */
@@ -122,12 +134,23 @@ export interface AccountProfile {
 
 export type AuthFailureReason = "invalid" | "expired" | "revoked";
 
+export interface AuthFailureOptions {
+  /**
+   * False when signing in cannot fix it, such as a bad API key: MCP then answers a plain 401
+   * instead of the provider's `challenge`.
+   */
+  readonly challenge?: boolean | undefined;
+}
+
 export class AuthFailure extends Error {
   override readonly name = "AuthFailure";
+  readonly challenge: boolean;
   constructor(
     readonly reason: AuthFailureReason,
     message: string,
+    options: AuthFailureOptions = {},
   ) {
     super(message);
+    this.challenge = options.challenge ?? true;
   }
 }

@@ -3,6 +3,7 @@ import {
   type DeviceId,
   type GrantId,
   type HostId,
+  type KeyId,
   type ThreadId,
   type TurnId,
   type UserId,
@@ -17,7 +18,8 @@ export type Principal =
   | AnonymousPrincipal
   | UserPrincipal
   | AgentPrincipal
-  | HostPrincipal;
+  | HostPrincipal
+  | KeyPrincipal;
 
 export type PrincipalKind = Principal["kind"];
 
@@ -53,6 +55,21 @@ export interface HostPrincipal {
   readonly hostId: HostId;
 }
 
+/**
+ * A program holding an API key the app issued, bound to one scope. No person stands behind
+ * its calls: it has no user, nobody can approve for it, and it reaches no screen.
+ */
+export interface KeyPrincipal {
+  readonly kind: "key";
+  readonly keyId: KeyId;
+  /** The only scope it acts in; the server refuses a scope resolver that answers another. */
+  readonly scope: string;
+  /** How audit records and approvals name it, such as `API key "CI exporter"`. */
+  readonly name: string;
+  /** The app's own claims, such as a role. The framework never reads them. */
+  readonly claims: Readonly<Record<string, string | boolean>>;
+}
+
 /** `verified` is false when the name is the MCP client's self-declared `clientInfo.name`. */
 export interface AgentIdentity {
   readonly name: string;
@@ -66,7 +83,8 @@ export interface TurnBinding {
   readonly clientId: string;
 }
 
-export type AuthenticatedPrincipal = Exclude<Principal, AnonymousPrincipal>;
+/** A signed-in principal backed by a user: everything but anonymous and a key. */
+export type AuthenticatedPrincipal = UserPrincipal | AgentPrincipal | HostPrincipal;
 
 export const ANONYMOUS: AnonymousPrincipal = { kind: "anonymous" };
 
@@ -76,13 +94,22 @@ export const ANONYMOUS: AnonymousPrincipal = { kind: "anonymous" };
  */
 export const DEV_USER_ID: UserId = asId("user", "default");
 
+export function hasUser(principal: Principal): principal is AuthenticatedPrincipal {
+  return (
+    principal.kind === "user" || principal.kind === "agent" || principal.kind === "host"
+  );
+}
+
+/**
+ * @deprecated Use `hasUser`, or `principal.kind !== "anonymous"` to include a key. Same as
+ * `hasUser`: false for a key, which is signed in but has no user.
+ */
 export function isAuthenticated(
   principal: Principal,
 ): principal is AuthenticatedPrincipal {
-  return principal.kind !== "anonymous";
+  return hasUser(principal);
 }
 
 export function userOf(principal: Principal | undefined): UserId | undefined {
-  if (principal === undefined) return undefined;
-  return principal.kind === "anonymous" ? undefined : principal.userId;
+  return principal !== undefined && hasUser(principal) ? principal.userId : undefined;
 }

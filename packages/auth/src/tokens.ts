@@ -50,7 +50,8 @@ export type Credential =
   | { readonly kind: "turn"; readonly token: TurnToken }
   | { readonly kind: "agent"; readonly token: AgentToken }
   | { readonly kind: "access"; readonly token: string }
-  | { readonly kind: "session"; readonly token: string };
+  | { readonly kind: "session"; readonly token: string }
+  | { readonly kind: "key"; readonly secret: string };
 
 export interface TurnTokenClaims {
   readonly aud: typeof TURN_AUDIENCE;
@@ -91,8 +92,14 @@ function typOf(jws: string): string | undefined {
   }
 }
 
-/** `ParlorHost <jws>` is a host; a `Bearer` JWS whose header says `typ: parlor-turn+jwt` is a turn. */
-export function credentialOf(authorization: string | null): Credential | undefined {
+/**
+ * `ParlorHost <jws>` is a host; a `Bearer` token that starts with `keyPrefix` is an API key,
+ * whatever its shape; a `Bearer` JWS whose header says `typ: parlor-turn+jwt` is a turn.
+ */
+export function credentialOf(
+  authorization: string | null,
+  keyPrefix?: string,
+): Credential | undefined {
   if (authorization === null) return undefined;
   const match = /^([A-Za-z]+)\s+(\S+)$/.exec(authorization);
   const scheme = match?.[1]?.toLowerCase();
@@ -105,6 +112,9 @@ export function credentialOf(authorization: string | null): Credential | undefin
       throw new AuthFailure("invalid", "The host assertion is malformed.");
     }
     return { kind: "host", assertion: brand<typeof HOST_AUDIENCE>(value) };
+  }
+  if (keyPrefix !== undefined && value.startsWith(keyPrefix)) {
+    return { kind: "key", secret: value };
   }
   if (!JWS_SHAPE.test(value)) return { kind: "session", token: value };
   switch (typOf(value)) {

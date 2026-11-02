@@ -24,6 +24,12 @@ export {
   type TagSource,
 } from "./action.js";
 export {
+  type ConfirmationCall,
+  type ConfirmationDecision,
+  type ConfirmationPolicy,
+  defaultConfirmationPolicy,
+} from "./confirmation.js";
+export {
   decodeReadRequests,
   encodeReadRequests,
   MAX_REFRESHED_READS,
@@ -45,6 +51,7 @@ export {
   type Id,
   type IdKind,
   type ItemId,
+  type KeyId,
   type ThreadId,
   type TurnId,
   type UserId,
@@ -56,8 +63,10 @@ export {
   type AnonymousPrincipal,
   type AuthenticatedPrincipal,
   DEV_USER_ID,
+  hasUser,
   type HostPrincipal,
   isAuthenticated,
+  type KeyPrincipal,
   type Principal,
   type PrincipalKind,
   type TurnBinding,

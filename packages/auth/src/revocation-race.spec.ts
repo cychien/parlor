@@ -1,6 +1,7 @@
 import {
   asId,
   type AuthenticatedPrincipal,
+  hasUser,
   type HostPrincipal,
   type Principal,
 } from "@parlor/core";
@@ -52,7 +53,7 @@ const refused = (attempt: () => Promise<Principal>) =>
   );
 
 const signedIn = (principal: Principal): AuthenticatedPrincipal => {
-  if (principal.kind === "anonymous") throw new Error("expected a signed-in principal");
+  if (!hasUser(principal)) throw new Error("expected a signed-in principal");
   return principal;
 };
 

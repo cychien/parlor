@@ -11,8 +11,10 @@ import {
   type ActionErrorCode,
   type ActionMap,
   ANONYMOUS,
+  type ConfirmationPolicy,
   type DataProvider,
   decodeReadRequests,
+  hasUser,
   REFRESH_HEADER,
 } from "@parlor/core";
 import type { ActionRegistry } from "@parlor/core/registry";
@@ -77,6 +79,13 @@ export interface ServerOptions<T extends ActionMap> {
     | undefined;
   readonly sync?: SyncOptions | false | undefined;
   readonly agentUi?: AgentUiOptions | false | undefined;
+  /**
+   * Decides, for each call, whether the user approves it in the app first (`ask`), it runs
+   * (`proceed`) or it fails with `confirmation_unavailable` (`refuse`). Defaults to
+   * `defaultConfirmationPolicy`: agents are asked about `confirm: true` actions and keys are
+   * refused them.
+   */
+  readonly confirmation?: ConfirmationPolicy | undefined;
 }
 
 type ManifestSummary = Pick<Manifest, "protocol" | "app">;
@@ -315,6 +324,7 @@ export function createServer<T extends ActionMap>(
     mcp = {},
     sync = {},
     agentUi: agentUiOptions = {},
+    confirmation,
   } = options;
   const auth = options.auth ?? (process.env.PARLOR_DEV === "1" ? devAuth() : undefined);
   const app = new H3();
@@ -382,6 +392,7 @@ export function createServer<T extends ActionMap>(
       sync: syncEnabled,
       onClient: agentUi?.touch,
       confirm: agentUi?.confirm,
+      confirmation,
       audit,
       admit,
       ready,
@@ -506,6 +517,7 @@ export function createServer<T extends ActionMap>(
       runner,
       agentUi,
       callers,
+      confirmation,
       app: mcpApp,
       ...mcp,
     });
@@ -515,8 +527,9 @@ export function createServer<T extends ActionMap>(
         await guardMcp(event.req);
       } catch (error) {
         const refusal = toActionError(error);
+        const signInHelps = !(error instanceof AuthFailure) || error.challenge;
         const challenged =
-          refusal.code === "unauthenticated" ||
+          (refusal.code === "unauthenticated" && signInHelps) ||
           (await callers(event.req).then(
             ({ principal }) => principal.kind === "host",
             () => false,
@@ -547,9 +560,7 @@ export function createServer<T extends ActionMap>(
             ? true
             : (channel: ServerChannel) =>
                 principal.kind === "host" && channel.hosts === true,
-          ...(auth && principal.kind !== "anonymous"
-            ? { revoked: auth.revoked(principal) }
-            : {}),
+          ...(auth && hasUser(principal) ? { revoked: auth.revoked(principal) } : {}),
         };
       },
       transport: syncOptions?.transport,

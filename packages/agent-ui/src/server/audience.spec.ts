@@ -42,4 +42,16 @@ describe("audienceOf", () => {
   it("makes the dev user the scope's default user", () => {
     expect(DEV_USER_ID).toBe("default");
   });
+
+  it("gives a key an audience of its own, which no person's screen shares", () => {
+    const key: Principal = {
+      kind: "key",
+      keyId: asId("key", "k1"),
+      scope: "acme",
+      name: 'API key "CI"',
+      claims: {},
+    };
+    expect(audienceOf("acme", key)).toBe("acme\u001fkey:k1");
+    expect(audienceOf("acme", key)).not.toBe(audienceOf("acme", ANONYMOUS));
+  });
 });

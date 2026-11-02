@@ -1,19 +1,14 @@
-import {
-  ActionError,
-  type AuthenticatedPrincipal,
-  type Principal,
-  type PrincipalKind,
-} from "@parlor/core";
+import { ActionError, type Principal, type PrincipalKind } from "@parlor/core";
 
 import type { Caller } from "./caller.js";
 
-type SignedInKind = AuthenticatedPrincipal["kind"];
+type SignedInKind = Exclude<PrincipalKind, "anonymous">;
 
 export const ROUTE_ACCESS = {
-  manifest: ["user", "agent"],
-  actions: ["user", "agent"],
+  manifest: ["user", "agent", "key"],
+  actions: ["user", "agent", "key"],
   pluginActions: ["user", "host"],
-  mcp: ["agent"],
+  mcp: ["agent", "key"],
   sync: ["user", "host"],
   channels: ["user"],
   ui: ["user"],

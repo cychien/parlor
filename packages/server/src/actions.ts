@@ -5,6 +5,7 @@ import {
   type ActionMap,
   ANONYMOUS,
   type ActionSource,
+  type ConfirmationPolicy,
   type DataProvider,
   isMutating,
   type Principal,
@@ -50,6 +51,8 @@ export interface ActionRunnerOptions<T extends ActionMap> {
     | ((clientId: string | undefined, audience: string) => void)
     | undefined;
   readonly confirm?: Confirm | undefined;
+  /** Which calls are asked about, run or refused; `defaultConfirmationPolicy` when absent. */
+  readonly confirmation?: ConfirmationPolicy | undefined;
   readonly audit?: ((record: ActionAudit) => void) | undefined;
   /** Throws for a caller the surface admits but the actions' owner does not; audited like any refusal. */
   readonly admit?: ((caller: Caller) => Promise<void>) | undefined;
@@ -93,7 +96,9 @@ interface Gate {
 
 function originOf(source: ActionSource, principal: Principal): AgentOrigin {
   const via = source === "agent" ? "agent" : "mcp";
-  return principal.kind === "agent" ? { via, name: principal.agent.name } : { via };
+  if (principal.kind === "agent") return { via, name: principal.agent.name };
+  if (principal.kind === "key") return { via, name: principal.name };
+  return { via };
 }
 
 function confirmationGate(gate: Gate): (call: PreparedCall) => Promise<void> {
@@ -153,7 +158,17 @@ const INTERNAL_CALLER: Caller = {
 export function createActionRunner<T extends ActionMap>(
   options: ActionRunnerOptions<T>,
 ): ActionRunner {
-  const { actions, scope, database, sync, onClient, confirm, audit, admit } = options;
+  const {
+    actions,
+    scope,
+    database,
+    sync,
+    onClient,
+    confirm,
+    confirmation,
+    audit,
+    admit,
+  } = options;
   const callers = options.callers ?? createCallerResolver(undefined, scope);
   const pruner = sync && database ? createPruner(database) : undefined;
   let prepared: Promise<void> | undefined;
@@ -190,7 +205,7 @@ export function createActionRunner<T extends ActionMap>(
     if (runOptions.surface) requireSurface(caller, runOptions.surface, callers.enforcing);
     await admit?.(caller);
     const client = caller.clientId;
-    onClient?.(client, caller.audience);
+    if (caller.principal.kind !== "key") onClient?.(client, caller.audience);
     const signal = runOptions.signal ?? request?.signal;
     const resolvedScope = caller.scope;
     const cursor = runOptions.cursor ? await cursorBefore(name, caller) : undefined;
@@ -204,6 +219,10 @@ export function createActionRunner<T extends ActionMap>(
         enforcing: callers.enforcing,
         onRun: () => {
           trace.stage = "ran";
+        },
+        confirmation,
+        onWaived: () => {
+          trace.confirmation = "waived";
         },
         confirm: confirm
           ? confirmationGate({
@@ -239,7 +258,7 @@ export function createActionRunner<T extends ActionMap>(
     async run(name, input, request, declared, runOptions = {}) {
       await ready();
       const caller = request ? await callers(request) : INTERNAL_CALLER;
-      const source = sourceFor(declared, caller, callers.enforcing);
+      const source = sourceFor(declared, caller, callers.enforcing, runOptions.surface);
       const trace: Trace = { stage: "refused", confirmation: undefined };
       if (!audit) return invoke(name, input, request, caller, source, runOptions, trace);
       const at = Date.now();

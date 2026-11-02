@@ -201,6 +201,108 @@ describe("invokeAction confirmation", () => {
   });
 });
 
+describe("invokeAction confirmation policy", () => {
+  const log: string[] = [];
+  const data = {
+    read: () => "read-db",
+    transaction: async <T>(run: (tx: unknown) => Promise<T>) => {
+      log.push("begin");
+      return run("tx-db");
+    },
+  };
+  const gated = createRegistry({
+    remove: defineAction({
+      description: "remove",
+      input: z.object({ id: z.string() }),
+      writes: ["tasks"],
+      confirm: true,
+      run: ({ id }) => {
+        log.push("run");
+        return { id };
+      },
+    }),
+  });
+  const key = {
+    kind: "key",
+    keyId: asId("key", "k1"),
+    scope: "test",
+    name: 'API key "CI"',
+    claims: {},
+  } as const;
+  const from = (source: "ui" | "http") => ({ scope: "test", source });
+
+  it("refuses a key at once by default, without asking, opening a transaction or running", async () => {
+    log.length = 0;
+    const confirm = vi.fn(async () => {});
+    const error = await invokeAction(
+      gated,
+      "remove",
+      { id: "t1" },
+      { scope: "test", source: "http", principal: key },
+      { data, confirm },
+    ).catch((e: unknown) => e);
+    expect((error as ActionError).code).toBe("confirmation_unavailable");
+    expect(confirm).not.toHaveBeenCalled();
+    expect(log).toEqual([]);
+  });
+
+  it("hands the policy the call and follows it, reporting what it waived on every surface", async () => {
+    log.length = 0;
+    const confirm = vi.fn(async () => {});
+    const onWaived = vi.fn();
+    const confirmation = vi.fn(() => "proceed" as const);
+    const call = { scope: "test", source: "mcp", principal: key } as const;
+    await invokeAction(gated, "remove", { id: "t1" }, call, {
+      data,
+      confirm,
+      confirmation,
+      onWaived,
+    });
+    expect(confirmation).toHaveBeenCalledWith({
+      name: "remove",
+      action: gated.get("remove"),
+      principal: key,
+      source: "mcp",
+    });
+    expect(confirm).not.toHaveBeenCalled();
+    expect(onWaived).toHaveBeenCalledTimes(1);
+    expect(log).toEqual(["begin", "run"]);
+
+    await invokeAction(
+      gated,
+      "remove",
+      { id: "t1" },
+      { ...call, source: "http" },
+      {
+        data,
+        confirmation,
+        onWaived,
+      },
+    );
+    expect(onWaived).toHaveBeenCalledTimes(2);
+
+    const person = { kind: "user", userId: asId("user", "u"), sessionId: "s" } as const;
+    await invokeAction(
+      gated,
+      "remove",
+      { id: "t1" },
+      { scope: "test", source: "ui", principal: person },
+      { data, confirmation, onWaived },
+    );
+    expect(onWaived).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks when the policy says so, even where the default would not", async () => {
+    const confirm = vi.fn(async () => {});
+    await invokeAction(gated, "remove", { id: "t1" }, from("ui"), {
+      data,
+      confirm,
+      confirmation: () => "ask",
+    });
+    expect(confirm).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("invokeAction identity", () => {
   const alice = { kind: "user", userId: asId("user", "alice"), sessionId: "s" } as const;
   const gated = createRegistry({

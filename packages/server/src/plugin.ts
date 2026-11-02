@@ -1,9 +1,9 @@
 import type {
   ActionErrorCode,
   ActionSource,
-  AuthenticatedPrincipal,
   DataProvider,
   Principal,
+  PrincipalKind,
   Tag,
 } from "@parlor/core";
 import type { ActionRegistry } from "@parlor/core/registry";
@@ -71,9 +71,18 @@ export interface ActionAudit {
   readonly confirmation?: ConfirmationAnswer | undefined;
 }
 
-export type ConfirmationAnswer = "approved" | "declined" | "timeout" | "unavailable";
+/**
+ * How a call's confirmation went. `waived` means the server's confirmation policy ran a call
+ * that the default would have asked the user about.
+ */
+export type ConfirmationAnswer =
+  | "approved"
+  | "declined"
+  | "timeout"
+  | "unavailable"
+  | "waived";
 
-type SignedInKind = AuthenticatedPrincipal["kind"];
+type SignedInKind = Exclude<PrincipalKind, "anonymous">;
 
 /**
  * A plain route with no transaction or sync event. `access` decides who may call it and

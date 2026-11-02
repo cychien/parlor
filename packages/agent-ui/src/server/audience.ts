@@ -2,9 +2,11 @@ import { DEV_USER_ID, type Principal, type UserId, userOf } from "@parlor/core";
 
 /**
  * Whose screens a request may see and drive: its scope and, once signed in, its user.
- * Without auth, or as the dev user, it is the scope itself.
+ * Without auth, or as the dev user, it is the scope itself. A key has its own, which no
+ * screen joins.
  */
 export function audienceOf(scope: string, principal: Principal | undefined): string {
+  if (principal?.kind === "key") return `${scope}\u001fkey:${principal.keyId}`;
   return userAudience(scope, userOf(principal));
 }
 

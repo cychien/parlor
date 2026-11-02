@@ -7,6 +7,7 @@ import {
   type AuthProvider,
   createServer,
   type FrameworkServer,
+  type KeyVerifier,
   type ServerPlugin,
 } from "@parlor/server";
 import { betterAuth } from "better-auth";
@@ -53,6 +54,7 @@ export interface TestAppOptions {
   readonly secret?: string | undefined;
   /** More Better Auth options, such as social providers and plugins. */
   readonly auth?: Partial<ParlorAuthOptions> | undefined;
+  readonly keys?: KeyVerifier | undefined;
 }
 
 /** A hello-like app on Better Auth's memory adapter, with revocations in `database`. */
@@ -83,7 +85,10 @@ export function createTestApp(
     ...authOptions,
     database: memoryAdapter(Object.fromEntries(tables)),
   });
-  const provider = betterAuthProvider({ instance });
+  const provider = betterAuthProvider({
+    instance,
+    ...(options.keys ? { keys: options.keys } : {}),
+  });
   const server = createServer({
     actions: options.actions ?? actions,
     auth: provider,
