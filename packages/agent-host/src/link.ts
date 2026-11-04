@@ -17,6 +17,7 @@ import {
   type PluginClient,
 } from "@parlor/client";
 import type { TurnId } from "@parlor/core";
+import { BUILD_HEADER } from "@parlor/sync";
 import { createSyncClient, type SyncClient } from "@parlor/sync/client";
 
 import type { AppGrant, HostKeys } from "./grants.js";
@@ -201,6 +202,7 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
     const headers = new Headers(request.headers);
     headers.set("authorization", `ParlorHost ${assertion}`);
     const response = await deps.fetch(new Request(request, { headers }));
+    sync?.observeBuild(response.headers.get(BUILD_HEADER));
     logEvent("http_request", {
       method,
       path: new URL(request.url).pathname,

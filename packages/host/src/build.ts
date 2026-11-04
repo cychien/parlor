@@ -41,6 +41,10 @@ import {
 } from "./presets.js";
 
 export const SYNC_TRANSPORT_ENV = "PARLOR_SYNC_TRANSPORT";
+/** Names one `parlor build`, so a client can tell a deploy happened (`@parlor/server` reads it). */
+export const BUILD_ID_ENV = "PARLOR_BUILD_ID";
+
+const buildId = () => `${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
 export const MIGRATIONS_PLACEHOLDER = "__PARLOR_MIGRATIONS__";
 const TRACED_DEPENDENCIES = ["@electric-sql/pglite", "pg"] as const;
 const DEFAULT_COMPATIBILITY_DATE =
@@ -173,6 +177,7 @@ export async function buildServer(
       [UI_MANIFEST_PLACEHOLDER]: manifest ? JSON.stringify(manifest) : "undefined",
       [PAGE_ROUTES_PLACEHOLDER]: pageRoutesSource(manifest),
       [`process.env.${SYNC_TRANSPORT_ENV}`]: JSON.stringify(syncTransport),
+      [`process.env.${BUILD_ID_ENV}`]: JSON.stringify(buildId()),
       ...(cloudflare ? { [MIGRATIONS_PLACEHOLDER]: cloudflare.migrations } : {}),
       ...Object.fromEntries(
         Object.entries(appServerEnv(config)).map(([name, value]) => [

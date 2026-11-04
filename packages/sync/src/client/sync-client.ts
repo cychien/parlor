@@ -1,5 +1,6 @@
 import type { ClientChannel } from "../channel.js";
 import {
+  BUILD_HEADER,
   compareCursors,
   cursorOf,
   decodeCursor,
@@ -106,6 +107,12 @@ export interface SyncClient {
    * polling it polls at once; with a stream open or a request in flight it does nothing.
    */
   reconnectNow(): void;
+  /**
+   * A response's `BUILD_HEADER`, from any request to the app. When the open stream came from
+   * another build, a deploy left it on the old one's instance: the stream reopens, once per
+   * build seen. The client reads its own sync responses itself.
+   */
+  observeBuild(build: string | null | undefined): void;
   readonly cursor: string;
   readonly transport: "sse" | "poll" | undefined;
 }
@@ -122,13 +129,15 @@ const DEFAULTS = {
 interface Handshake {
   readonly capabilities: readonly string[];
   readonly keepAliveMs: number | undefined;
+  readonly build: string | undefined;
 }
 
 function parseHandshake(handshake: string): Handshake {
   try {
-    const { capabilities, keepAliveMs } = JSON.parse(handshake) as {
+    const { capabilities, keepAliveMs, build } = JSON.parse(handshake) as {
       capabilities?: unknown;
       keepAliveMs?: unknown;
+      build?: unknown;
     };
     return {
       capabilities: Array.isArray(capabilities)
@@ -136,9 +145,10 @@ function parseHandshake(handshake: string): Handshake {
         : [],
       keepAliveMs:
         typeof keepAliveMs === "number" && keepAliveMs > 0 ? keepAliveMs : undefined,
+      build: typeof build === "string" && build !== "" ? build : undefined,
     };
   } catch {
-    return { capabilities: [], keepAliveMs: undefined };
+    return { capabilities: [], keepAliveMs: undefined, build: undefined };
   }
 }
 
@@ -252,6 +262,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
       const response = await options.request(`${basePath}/sync?${missedSince()}`, {
         signal,
       });
+      observeBuild(response.headers.get(BUILD_HEADER));
       if (refused(response)) throw new SyncUnauthorized(response.status);
       if (!response.ok) throw new Error(`sync poll failed with HTTP ${response.status}`);
       return (await response.json()) as SyncBatch;
@@ -308,6 +319,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
         method: "POST",
         signal,
       });
+      observeBuild(response.headers.get(BUILD_HEADER));
       if (refused(response)) throw new SyncUnauthorized(response.status);
       if (!response.ok)
         throw new Error(`sync negotiation failed with HTTP ${response.status}`);
@@ -318,14 +330,30 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
   interface LiveStream {
     listed: ReadonlySet<string>;
     readonly open: Set<ClientChannel>;
+    build: string | undefined;
+    /** Ends the stream to reopen it at once, on the build that answers now. */
+    readonly move: () => void;
   }
   let live: LiveStream | undefined;
+  /** Builds a stream moved for or away from, so a deploy that keeps both answering moves it once. */
+  const settled = new Set<string>();
 
-  const stream = async (endpoint: string) => {
+  const observeBuild = (build: string | null | undefined) => {
+    const current = live;
+    if (!build || !current?.build || current.build === build || settled.has(build))
+      return;
+    settled.add(build);
+    settled.add(current.build);
+    current.move();
+  };
+
+  /** Resolves `"moved"` when the stream ended to follow a deploy, which reconnects at once. */
+  const stream = async (endpoint: string): Promise<"ended" | "moved"> => {
     const own = new AbortController();
     controller = own;
     let keepAliveMs = LEGACY_KEEP_ALIVE_MS;
     let silent = false;
+    let moved = false;
     let watchdog: ReturnType<typeof setTimeout> | undefined;
     const rearm = () => {
       if (watchdog !== undefined) cancel(watchdog);
@@ -335,7 +363,15 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
       }, streamLivenessMs(keepAliveMs));
     };
     const open = new Set<ClientChannel>();
-    const current: LiveStream = { listed: new Set(), open };
+    const current: LiveStream = {
+      listed: new Set(),
+      open,
+      build: undefined,
+      move: () => {
+        moved = true;
+        own.abort();
+      },
+    };
     live = current;
     rearm();
     try {
@@ -347,6 +383,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
       if (!response.ok || !response.body) {
         throw new Error(`sync stream failed with HTTP ${response.status}`);
       }
+      current.build = response.headers.get(BUILD_HEADER) ?? undefined;
       reconnectDelay = settings.reconnectBaseMs;
       resumed();
       await readSse(
@@ -362,6 +399,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
           if (frame.event === "handshake") {
             const handshake = parseHandshake(frame.data);
             keepAliveMs = handshake.keepAliveMs ?? LEGACY_KEEP_ALIVE_MS;
+            current.build = handshake.build ?? current.build;
             rearm();
             current.listed = new Set(handshake.capabilities);
             for (const event of handshake.capabilities) {
@@ -379,12 +417,13 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
         rearm,
       );
     } catch (error) {
-      if (!silent) throw error;
+      if (!silent && !moved) throw error;
     } finally {
       if (watchdog !== undefined) cancel(watchdog);
       if (live === current) live = undefined;
       for (const channel of open) guarded(() => channel.closed());
     }
+    return moved ? "moved" : "ended";
   };
 
   const unauthorized = (error: SyncUnauthorized) => {
@@ -446,14 +485,16 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
       if (endpoint !== undefined) {
         transport = "sse";
         schedulePoll(settings.safetyPollMs);
+        let ended: "ended" | "moved" = "ended";
         try {
-          await stream(endpoint);
+          ended = await stream(endpoint);
         } catch (error) {
           if (!active()) return;
           if (error instanceof SyncUnauthorized) unauthorized(error);
           else settings.onError?.(error);
         }
         interrupted = true;
+        if (ended === "moved" && active()) continue;
       }
       if (!active()) return;
       const delay = backoff();
@@ -516,6 +557,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
   return {
     start,
     stop,
+    observeBuild,
     addChannel(channel) {
       const replaced = channels.get(channel.event);
       if (replaced === channel) return () => detachChannel(channel);

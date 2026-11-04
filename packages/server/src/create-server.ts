@@ -18,7 +18,7 @@ import {
   REFRESH_HEADER,
 } from "@parlor/core";
 import type { ActionRegistry } from "@parlor/core/registry";
-import type { ServerChannel } from "@parlor/sync";
+import { BUILD_HEADER, type ServerChannel } from "@parlor/sync";
 import {
   ensureSyncTables,
   recordSyncEvent,
@@ -32,6 +32,7 @@ import { H3, type H3Event, readBody } from "h3";
 import { admits, requireAccess, requireSurface, type Surface } from "./access.js";
 import { type ActionRunner, createActionRunner } from "./actions.js";
 import { AuthFailure, type AuthProvider } from "./auth.js";
+import { serverBuild } from "./build.js";
 import {
   type Caller,
   type CallerResolver,
@@ -593,6 +594,7 @@ export function createServer<T extends ActionMap>(
       },
       transport: syncOptions?.transport,
       pollIntervalMs: syncOptions?.pollIntervalMs,
+      build: serverBuild,
       channels: [
         ...(agentUi ? [agentUi.channel] : []),
         ...runtimes.flatMap((entry): ServerChannel[] =>
@@ -630,7 +632,7 @@ export function createServer<T extends ActionMap>(
       agentUi?.install(source);
     },
     fetch: (request) => {
-      const response = Promise.resolve(app.fetch(request));
+      const response = Promise.resolve(app.fetch(request)).then(stampBuild);
       const settled = () => void inflight.delete(response);
       inflight.add(response);
       response.then(settled, settled);
@@ -644,4 +646,16 @@ export function createServer<T extends ActionMap>(
         await database?.close?.();
       })()),
   };
+}
+
+/** Names the build on a response, copying one whose headers cannot change, such as a proxied fetch's. */
+function stampBuild(response: Response): Response {
+  try {
+    response.headers.set(BUILD_HEADER, serverBuild());
+    return response;
+  } catch {
+    const copy = new Response(response.body, response);
+    copy.headers.set(BUILD_HEADER, serverBuild());
+    return copy;
+  }
 }

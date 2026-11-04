@@ -65,6 +65,8 @@ export interface ActionClient<T extends ActionMap> {
     options?: CallOptions,
   ): Promise<ActionEnvelope<ActionOutput<T[K]>>>;
   request(path: string, init?: RequestInit): Promise<Response>;
+  /** Hears every response the client gets, such as the sync client reading the server's build. */
+  onResponse?(listener: (response: Response) => void): () => void;
 }
 
 async function resolveHeaders(
@@ -173,12 +175,16 @@ export function createActionClient<T extends ActionMap>(
   let clientId = options.clientId;
   const ownId = () => (clientId ??= generateClientId());
   const fetchImpl = options.fetch ?? globalThis.fetch;
+  const listeners = new Set<(response: Response) => void>();
 
-  const request = async (path: string, init: RequestInit = {}) =>
-    fetchImpl(`${baseUrl}${path}`, {
+  const request = async (path: string, init: RequestInit = {}) => {
+    const response = await fetchImpl(`${baseUrl}${path}`, {
       ...init,
       headers: await resolveHeaders(headers, ownId(), init.headers),
     });
+    for (const listener of listeners) listener(response);
+    return response;
+  };
 
   const invoke = async <K extends keyof T & string>(
     name: K,
@@ -195,6 +201,10 @@ export function createActionClient<T extends ActionMap>(
     basePath,
     request,
     invoke,
+    onResponse(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
     call: async (name, input, callOptions) =>
       (await invoke(name, input, callOptions)).data,
   };

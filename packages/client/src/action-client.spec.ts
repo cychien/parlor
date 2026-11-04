@@ -25,6 +25,20 @@ describe("createActionClient", () => {
     expect(headers.get("x-parlor-source")).toBe("ui");
   });
 
+  it("lets a listener hear every response until it stops listening", async () => {
+    const client = createActionClient({
+      baseUrl: "https://api.test",
+      fetch: fakeFetch(200, { data: 1 }),
+    });
+    const heard: number[] = [];
+    const stop = client.onResponse!((response) => heard.push(response.status));
+    await client.call("hello", {});
+    await client.request("/_parlor/sync");
+    stop();
+    await client.call("hello", {});
+    expect(heard).toEqual([200, 200]);
+  });
+
   it("merges static and async custom headers", async () => {
     const fetch = fakeFetch(200, { data: null });
     const client = createActionClient({
