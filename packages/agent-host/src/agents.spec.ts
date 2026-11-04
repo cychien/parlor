@@ -45,6 +45,11 @@ describe("agent profiles", () => {
           version: "0.93.0",
         },
         binary: "claude",
+        sessionMeta: {
+          claudeCode: {
+            options: { thinking: { type: "adaptive", display: "summarized" } },
+          },
+        },
       },
       {
         id: "codex",

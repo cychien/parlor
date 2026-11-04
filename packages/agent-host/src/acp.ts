@@ -835,12 +835,14 @@ export function acpLauncher(): AgentLauncher {
 
       const open = async (input: OpenSessionInput) => {
         const mcpServers = input.mcpServers.map(stdioServerOf);
+        const meta = profile.sessionMeta ? { _meta: { ...profile.sessionMeta } } : {};
         if (input.resume && capabilities.resume) {
           try {
             const resumed = await context.request(methods.agent.session.resume, {
               sessionId: input.resume,
               cwd: input.cwd,
               mcpServers,
+              ...meta,
             });
             return {
               id: input.resume,
@@ -853,6 +855,7 @@ export function acpLauncher(): AgentLauncher {
         const created = await context.request(methods.agent.session.new, {
           cwd: input.cwd,
           mcpServers,
+          ...meta,
         });
         return {
           id: created.sessionId,

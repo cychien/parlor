@@ -482,3 +482,48 @@ describe("acpLauncher against the fake agent over real stdio", () => {
     expect(existsSync(marker)).toBe(false);
   });
 });
+
+describe("an agent's session options", () => {
+  it("send the profile's session meta when a session opens, new or resumed", async () => {
+    const log = join(dir, "meta.log");
+    const meta = {
+      claudeCode: { options: { thinking: { type: "adaptive", display: "summarized" } } },
+    };
+    const resumable = join(dir, "resumable.json");
+    await writeFile(
+      resumable,
+      JSON.stringify({ ...script, advertise: { resume: true } }),
+    );
+    const connection = await acpLauncher().launch(
+      { ...fakeAgentProfile(ENTRY, resumable), sessionMeta: meta },
+      {
+        cwd: dir,
+        env: { PATH: process.env.PATH ?? "", FAKE_AGENT_LOG: log },
+        signal: new AbortController().signal,
+      },
+    );
+    launched.push(connection);
+    const first = await connection.openSession({
+      cwd: dir,
+      mcpServers: [],
+      pinAskMode: false,
+    });
+    await connection.openSession({
+      cwd: dir,
+      mcpServers: [],
+      pinAskMode: false,
+      resume: first.id,
+    });
+    const opened = readFileSync(log, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { method: string; meta?: unknown })
+      .filter(
+        (entry) => entry.method === "session/new" || entry.method === "session/resume",
+      );
+    expect(opened).toEqual([
+      expect.objectContaining({ method: "session/new", meta }),
+      expect.objectContaining({ method: "session/resume", meta }),
+    ]);
+  });
+});

@@ -17,6 +17,8 @@ export interface AgentProfile {
    * PATH: the app reads the CLI's own settings, so the agent behaves the same either way.
    */
   readonly apps?: readonly string[] | undefined;
+  /** ACP `_meta` for every session it opens, for what its adapter takes only there. */
+  readonly sessionMeta?: Readonly<Record<string, unknown>> | undefined;
 }
 
 /**
@@ -46,6 +48,10 @@ export const AGENT_PROFILES: readonly AgentProfile[] = [
       version: "0.93.0",
     },
     binary: "claude",
+    // Recent models omit their thinking unless asked, which leaves the sidebar blank while they think.
+    sessionMeta: {
+      claudeCode: { options: { thinking: { type: "adaptive", display: "summarized" } } },
+    },
   },
   {
     id: "codex",
