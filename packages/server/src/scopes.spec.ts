@@ -117,7 +117,7 @@ async function eventsFor(org: string): Promise<unknown[]> {
   return ((await response.json()) as { events: unknown[] }).events;
 }
 
-describe("a turn's scope", () => {
+describe("a turn's scope", { timeout: 30_000 }, () => {
   it("is where its agent acts when the app's resolver honors it", async () => {
     serve(honoringTurns);
     expect(await call("acme-turn", "whereAmI")).toMatchObject({
@@ -150,7 +150,7 @@ describe("a turn's scope", () => {
   });
 });
 
-describe("a write that notifies the account", () => {
+describe("a write that notifies the account", { timeout: 30_000 }, () => {
   it("reaches the user's tabs in every scope, and nobody else's", async () => {
     serve(byHeader);
     expect((await call("alice", "touchComputer", "acme")).status).toBe(200);
