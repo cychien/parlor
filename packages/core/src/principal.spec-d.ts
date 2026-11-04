@@ -35,6 +35,7 @@ test("an inline agent's calls carry the chat turn, and the tab it came from", ()
     readonly turnId: TurnId;
     readonly hostId: HostId;
     readonly clientId: string;
+    readonly scope?: string | undefined;
   }>();
 });
 

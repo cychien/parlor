@@ -34,6 +34,13 @@ export interface SyncRouteOptions {
    * action with `notifies: "user"`); read and pushed alongside the scope's.
    */
   readonly audience?: ((request: Request) => string | Promise<string>) | undefined;
+  /**
+   * The caller's user across every scope, for events about the person rather than the scope
+   * (an action with `notifies: "account"`); read and pushed alongside the others when set.
+   */
+  readonly account?:
+    | ((request: Request) => string | undefined | Promise<string | undefined>)
+    | undefined;
   readonly transport?: SyncTransport | undefined;
   readonly pollIntervalMs?: number | undefined;
   readonly keepAliveMs?: number | undefined;
@@ -123,7 +130,8 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
   const streamsOf = async (request: Request): Promise<readonly string[]> => {
     const own = await scope(request);
     const audience = await options.audience?.(request);
-    return audience === undefined || audience === own ? [own] : [own, audience];
+    const account = await options.account?.(request);
+    return [...new Set([own, audience, account].filter((name) => name !== undefined))];
   };
   const transport: SyncTransport =
     options.transport ?? transportFromEnv() ?? (hub.canPush ? "sse" : "poll");

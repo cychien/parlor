@@ -1,10 +1,11 @@
-import { audienceOf } from "@parlor/agent-ui/server";
+import { accountAudience, audienceOf } from "@parlor/agent-ui/server";
 import {
   ActionError,
   ANONYMOUS,
   type ActionSource,
   type Principal,
   sourceOfPrincipal,
+  userOf,
 } from "@parlor/core";
 
 import type { Surface } from "./access.js";
@@ -17,8 +18,21 @@ export interface Caller {
   readonly scope: string;
   /** Scope plus user: whose screens this caller may see and drive (`audienceOf`). */
   readonly audience: string;
+  /** The user's stream across scopes (`accountAudience`); undefined for a key or no user. */
+  readonly account: string | undefined;
   /** The tab or app the request came from: a routing hint, never an identity. */
   readonly clientId: string | undefined;
+}
+
+/** The sync streams a caller hears: its scope's, its own in the scope, and its account's. */
+export function streamsOf(caller: Caller): string[] {
+  return [
+    ...new Set(
+      [caller.scope, caller.audience, caller.account].filter(
+        (stream) => stream !== undefined,
+      ),
+    ),
+  ];
 }
 
 export interface CallerResolver {
@@ -69,10 +83,18 @@ export function createCallerResolver(
     if (principal.kind === "key" && resolvedScope !== principal.scope) {
       throw new ActionError("forbidden", "This key acts only in its own scope.");
     }
+    const turnScope = principal.kind === "agent" ? principal.turn?.scope : undefined;
+    if (turnScope !== undefined && resolvedScope !== turnScope) {
+      throw new ActionError(
+        "forbidden",
+        "This turn acts only in its conversation's scope.",
+      );
+    }
     return {
       principal,
       scope: resolvedScope,
       audience: audienceOf(resolvedScope, principal),
+      account: principal.kind === "key" ? undefined : accountAudience(userOf(principal)),
       clientId: clientOf(request),
     };
   };

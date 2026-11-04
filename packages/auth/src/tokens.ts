@@ -66,6 +66,8 @@ export interface TurnTokenClaims {
   /** the client the prompt came from; `ui_*` binds to it */
   readonly cid: string;
   readonly agt: string;
+  /** the conversation's scope, the only one the turn's agent acts in */
+  readonly scp?: string | undefined;
   readonly iat: number;
   /** as long as the turn's lease */
   readonly exp: number;
@@ -147,6 +149,7 @@ export async function delegate(
     trn: turn.turnId,
     cid: turn.clientId,
     agt: turn.agent,
+    ...(turn.scope === undefined ? {} : { scp: turn.scope }),
     iat,
     exp,
   };
@@ -166,6 +169,7 @@ const claimsSchema = z.object({
   trn: z.string().min(1),
   cid: z.string(),
   agt: z.string().min(1),
+  scp: z.string().min(1).optional(),
   iat: z.number().int(),
   exp: z.number().int(),
 });
@@ -222,6 +226,7 @@ export function agentPrincipalOf(
       turnId: asId("turn", claims.trn),
       hostId: asId("host", claims.hid),
       clientId: claims.cid,
+      ...(claims.scp === undefined ? {} : { scope: claims.scp }),
     },
   };
 }

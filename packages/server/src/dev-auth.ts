@@ -37,6 +37,7 @@ interface TurnClaims {
   readonly trn: string;
   readonly cid: string;
   readonly agt: string;
+  readonly scp?: string | undefined;
   readonly iat: number;
   readonly exp: number;
 }
@@ -123,6 +124,7 @@ export function devAuth(options: DevAuthOptions = {}): AuthProvider {
         turnId: asId("turn", claims.trn),
         hostId: asId("host", claims.hid),
         clientId: claims.cid,
+        ...(typeof claims.scp === "string" ? { scope: claims.scp } : {}),
       },
     };
   };
@@ -177,6 +179,7 @@ export function devAuth(options: DevAuthOptions = {}): AuthProvider {
         trn: turn.turnId,
         cid: turn.clientId,
         agt: turn.agent,
+        ...(turn.scope === undefined ? {} : { scp: turn.scope }),
         iat,
         exp,
       };

@@ -81,6 +81,11 @@ export interface TurnBinding {
   readonly turnId: TurnId;
   readonly hostId: HostId;
   readonly clientId: string;
+  /**
+   * The scope of the conversation the turn answers, the only one its agent acts in: the
+   * server refuses a scope resolver that answers another. Absent on a token minted before it.
+   */
+  readonly scope?: string | undefined;
 }
 
 /** A signed-in principal backed by a user: everything but anonymous and a key. */

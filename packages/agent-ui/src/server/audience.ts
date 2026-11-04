@@ -16,3 +16,12 @@ export function userAudience(scope: string, userId: UserId | undefined): string 
     ? scope
     : `${scope}\u001f${userId}`;
 }
+
+/**
+ * The stream every tab and computer of one signed-in user hears, whatever scope each is in:
+ * what belongs to the person rather than to a scope, such as their computers. Undefined
+ * without a user, where `userAudience` already reaches everyone.
+ */
+export function accountAudience(userId: UserId | undefined): string | undefined {
+  return userId === undefined || userId === DEV_USER_ID ? undefined : `\u001f${userId}`;
+}
