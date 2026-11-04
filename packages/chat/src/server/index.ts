@@ -1,4 +1,4 @@
-import { userAudience } from "@parlor/agent-ui/server";
+import { accountAudience, userAudience } from "@parlor/agent-ui/server";
 import {
   type DataProvider,
   DEV_USER_ID,
@@ -148,7 +148,8 @@ export function chat(options: ChatOptions = {}): ServerPlugin {
       }
       const relay = (options.relay ?? inProcessRelay)();
       const db = () => database.read() as ChatDb;
-      const ownStream = (owner: ChatOwner) => userAudience(owner.scope, owner.userId);
+      const ownStream = (owner: ChatOwner) =>
+        accountAudience(owner.userId) ?? userAudience(owner.scope, owner.userId);
       const transact: ChatActionDeps["transact"] = (owner, work) =>
         database.transaction(async (tx) => {
           const { result, threadId } = await work(tx as ChatDb);

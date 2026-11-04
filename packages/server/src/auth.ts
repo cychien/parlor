@@ -76,6 +76,8 @@ export interface TurnDelegation {
   readonly clientId: string;
   readonly agent: string;
   readonly ttlMs: number;
+  /** The conversation's scope; a provider puts it in the token as `TurnBinding.scope`. */
+  readonly scope?: string | undefined;
 }
 
 export interface AgentDelegation {

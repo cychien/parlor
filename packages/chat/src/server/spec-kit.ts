@@ -218,8 +218,18 @@ export interface Reply {
 export interface ChatServer {
   readonly server: FrameworkServer;
   readonly auth: TestAuth;
-  post(token: string | undefined, path: string, body: unknown): Promise<Reply>;
-  action(token: string | undefined, name: string, input: unknown): Promise<Reply>;
+  post(
+    token: string | undefined,
+    path: string,
+    body: unknown,
+    headers?: Record<string, string>,
+  ): Promise<Reply>;
+  action(
+    token: string | undefined,
+    name: string,
+    input: unknown,
+    headers?: Record<string, string>,
+  ): Promise<Reply>;
 }
 
 export function serveChat(
@@ -243,13 +253,14 @@ export function serveChat(
     },
     plugins: [chat(options.chat)],
   });
-  const post: ChatServer["post"] = async (token, path, body) => {
+  const post: ChatServer["post"] = async (token, path, body, headers = {}) => {
     const response = await server.fetch(
       new Request(`http://app.test/_parlor/chat/${path}`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
           ...(token ? { authorization: `Bearer ${token}` } : {}),
+          ...headers,
         },
         body: JSON.stringify(body),
       }),
@@ -267,7 +278,8 @@ export function serveChat(
     server,
     auth,
     post,
-    action: (token, name, input) => post(token, `actions/${name}`, input),
+    action: (token, name, input, headers) =>
+      post(token, `actions/${name}`, input, headers),
   };
 }
 

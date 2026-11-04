@@ -119,6 +119,7 @@ describe.each(drivers)("exactly-once turns on $name", (driver) => {
         clientId: "tab-1",
         agent: "Claude",
         ttlMs: 60_000,
+        scope: "alice",
       },
     ]);
   });

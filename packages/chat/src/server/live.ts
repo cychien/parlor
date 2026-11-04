@@ -29,8 +29,8 @@ export interface LiveRelay {
   settle(owner: ChatOwner, threadId: ThreadId, turnId: TurnId): void;
   open(owner: ChatOwner, threadId: ThreadId): readonly OpenTurn[];
   /**
-   * The open streams of one of the owner's computers, by its principal: a turn pushed to it
-   * goes to these only, never to the user's tabs.
+   * The open streams of one of the owner's computers, by its principal, whatever scope each
+   * connected in: a turn pushed to it goes to these only, never to the user's tabs.
    */
   computer(owner: ChatOwner, hostId: HostId): readonly ChannelConnection[];
   close(): void;
@@ -51,8 +51,8 @@ function ownerKey(scope: string, userId: UserId | undefined): string {
   return `${scope}\u001f${userId ?? DEV_USER_ID}`;
 }
 
-function computerKey(scope: string, userId: UserId, hostId: HostId): string {
-  return `${ownerKey(scope, userId)}\u001f${hostId}`;
+function computerKey(userId: UserId, hostId: HostId): string {
+  return `${userId}\u001f${hostId}`;
 }
 
 function sizeOf(frame: Extract<ChatFrame, { type: "delta" | "item" }>): number {
@@ -90,7 +90,7 @@ export function inProcessRelay(): LiveRelay {
       const { principal } = connection;
       const [joined, key] =
         principal?.kind === "host"
-          ? [computers, computerKey(connection.scope, principal.userId, principal.hostId)]
+          ? [computers, computerKey(principal.userId, principal.hostId)]
           : [connections, ownerKey(connection.scope, userOf(principal))];
       let audience = joined.get(key);
       if (!audience) {
@@ -160,7 +160,7 @@ export function inProcessRelay(): LiveRelay {
       push(owner, { type: "settled", threadId, turnId });
     },
     computer(owner, hostId) {
-      return [...(computers.get(computerKey(owner.scope, owner.userId, hostId)) ?? [])];
+      return [...(computers.get(computerKey(owner.userId, hostId)) ?? [])];
     },
     open(owner, threadId) {
       const open: OpenTurn[] = [];

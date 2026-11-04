@@ -72,7 +72,7 @@ A `confirm: true` call from source `mcp` or `agent` that the policy runs without
 
 ## API keys
 
-A `key` principal, from an auth provider's [API keys](/parlor/reference/auth/#api-keys), reaches the actions, the manifest and MCP, and gets `forbidden` from sync, `/ui`, plugin actions and every plugin route whose `access` does not list `key`, as they assume a user. A key acts only in its own `scope`: when the scope resolver answers another, every request with it is refused with `forbidden`. Its source is `mcp` over MCP and `http` elsewhere. Its MCP session has no `ui_*` tools and no screen instructions, as it has no screen, and a bad key gets a plain 401 without the OAuth challenge.
+A `key` principal, from an auth provider's [API keys](/parlor/reference/auth/#api-keys), reaches the actions, the manifest and MCP, and gets `forbidden` from sync, `/ui`, plugin actions and every plugin route whose `access` does not list `key`, as they assume a user. A key acts only in its own `scope`: when the scope resolver answers another, every request with it is refused with `forbidden`. The same holds for an inline agent: its turn token carries the scope of the conversation it answers, as `principal.turn.scope`, and a resolver that answers another scope for it gets `forbidden`. Its source is `mcp` over MCP and `http` elsewhere. Its MCP session has no `ui_*` tools and no screen instructions, as it has no screen, and a bad key gets a plain 401 without the OAuth challenge.
 
 ## Routes it serves
 

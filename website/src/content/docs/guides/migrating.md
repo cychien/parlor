@@ -79,6 +79,21 @@ export default createServer({
 
 For one scope per organization, `scope` receives the request and the caller and may be async: look up the caller's organization with `userOf(principal)` from `@parlor/core`, and return its id. Each user's agent sidebar, chats and computers stay private to that user whatever the scope is.
 
+When a user belongs to several organizations and picks one per request, such as with a header, two callers carry no choice of their own. A connected computer serves its user in every organization, so whatever the resolver answers for it is fine. An inline agent's turn belongs to the conversation it answers, so return `principal.turn.scope` when it is set; the server refuses any other answer for it:
+
+```ts
+import type { ScopeResolver } from "@parlor/server";
+
+declare function organizationOf(request: Request, userId: string): Promise<string>;
+
+export const scope: ScopeResolver = async (request, principal) => {
+  if (principal.kind === "agent" && principal.turn?.scope) return principal.turn.scope;
+  if (principal.kind === "anonymous") return "anonymous";
+  if (principal.kind === "key") return principal.scope;
+  return organizationOf(request, principal.userId);
+};
+```
+
 ## 4. Describe the tables
 
 Port each table to Drizzle in `schema/`, add `scope`, and export it from `schema/index.ts`. Keep the old column names with `text("old_name")` if other systems read the database. Use text ids; imported rows keep their old id with a prefix.

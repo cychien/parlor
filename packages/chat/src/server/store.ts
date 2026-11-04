@@ -139,12 +139,17 @@ export interface ChatStore {
       readonly turn?: NewTurn | undefined;
     },
   ): Promise<LoggedItem[]>;
+  /**
+   * The host's next queued turn in any of its user's scopes. The host-side calls below match
+   * a turn by its user and computer alone, since a computer serves its user everywhere, and
+   * answer with the turn's own `owner`.
+   */
   claimTurn(
     tx: ChatDb,
     owner: ChatOwner,
     host: HostPrincipal,
     leaseMs: number,
-  ): Promise<Omit<ClaimedTurn, "context" | "token" | "device"> | undefined>;
+  ): Promise<StoredClaim | undefined>;
   /** Whether anything waits for `expireLapsed`; one read, so the idle path writes nothing. */
   hasLapsed(db: ChatDb, owner: ChatOwner | undefined): Promise<boolean>;
   /**
@@ -176,6 +181,7 @@ export interface ChatStore {
     /** What the renewed turn token binds, so the caller need not read the turn again. */
     readonly clientId: string;
     readonly agentId: string;
+    readonly owner?: ChatOwner | undefined;
   }>;
   /** Once per turn; a second call with any outcome is refused and changes nothing. */
   finishTurn(
@@ -184,7 +190,7 @@ export interface ChatStore {
     host: HostPrincipal,
     turnId: TurnId,
     outcome: TurnOutcome,
-  ): Promise<{ readonly threadId: ThreadId }>;
+  ): Promise<{ readonly threadId: ThreadId; readonly owner?: ChatOwner | undefined }>;
   readSignals(
     db: ChatDb,
     owner: ChatOwner,
@@ -220,11 +226,17 @@ export interface ChatStore {
     host: HostPrincipal,
     ttlMs: number,
   ): Promise<{ readonly returned: boolean }>;
+  /** The user's computers, whatever scope `owner` is in: a computer serves its user everywhere. */
   listHosts(db: ChatDb, owner: ChatOwner): Promise<StoredHost[]>;
-  /** Drops the owner's computer rows whose grant is gone. */
+  /** Drops the user's computer rows whose grant is gone. */
   pruneHosts(tx: ChatDb, owner: ChatOwner, hostIds: readonly HostId[]): Promise<void>;
   turnHolder(db: ChatDb, turnId: TurnId): Promise<StreamTurn | undefined>;
 }
+
+export type StoredClaim = Omit<ClaimedTurn, "context" | "token" | "device"> & {
+  /** The turn's scope and user; absent from a store that predates it, which means `owner`. */
+  readonly owner?: ChatOwner | undefined;
+};
 
 export interface StoredHost extends HostSummary {
   readonly grantId: GrantId;
@@ -494,7 +506,7 @@ async function admitsUserItem(
 const lostItemId = () => asId("item", `lost.${randomUUID()}`);
 
 const ownedBy = (owner: ChatOwner | undefined) =>
-  owner ? sql`and owner_id = ${owner.userId} and scope = ${owner.scope}` : sql``;
+  owner ? sql`and owner_id = ${owner.userId}` : sql``;
 
 async function lapsedFor(db: ChatDb, owner: ChatOwner | undefined): Promise<boolean> {
   const [found] = await query(
@@ -574,26 +586,29 @@ async function lockRunningTurn(
   turnId: TurnId,
 ): Promise<{
   readonly threadId: ThreadId;
+  readonly owner: ChatOwner;
   readonly lastSeq: number;
   readonly clientId: string;
   readonly agentId: string;
 }> {
   const [found] = await query(
     tx,
-    sql`select thread_id, client_id, agent_id from parlor_chat_turns
-      where id = ${turnId} and host_id = ${host.hostId}
-        and owner_id = ${owner.userId} and scope = ${owner.scope}`,
+    sql`select thread_id, scope, client_id, agent_id from parlor_chat_turns
+      where id = ${turnId} and host_id = ${host.hostId} and owner_id = ${owner.userId}`,
     z.object({
       thread_id: idSchema("thread"),
+      scope: z.string(),
       client_id: z.string(),
       agent_id: z.string(),
     }),
   );
   if (!found) throw turnMissing();
-  const { lastSeq, leased } = await lockLog(tx, owner, found.thread_id, turnId);
+  const turnOwner = { scope: found.scope, userId: owner.userId };
+  const { lastSeq, leased } = await lockLog(tx, turnOwner, found.thread_id, turnId);
   if (!leased) throw new ActionError("forbidden", "The turn is not running.");
   return {
     threadId: found.thread_id,
+    owner: turnOwner,
     lastSeq,
     clientId: found.client_id,
     agentId: found.agent_id,
@@ -796,10 +811,10 @@ export const sqlChatStore: ChatStore = {
   async claimTurn(tx, owner, host, leaseMs) {
     const [claimed] = await query(
       tx,
-      sql`select t.id, t.thread_id, t.agent_id, t.client_id, t.prompt_item_id
+      sql`select t.id, t.thread_id, t.scope, t.agent_id, t.client_id, t.prompt_item_id
         from parlor_chat_turns t
         where t.host_id = ${host.hostId} and t.owner_id = ${owner.userId}
-          and t.scope = ${owner.scope} and t.state = 'queued'
+          and t.state = 'queued'
           and not exists (
             select 1 from parlor_chat_turns earlier
             where earlier.thread_id = t.thread_id and earlier.state in ('queued', 'running')
@@ -810,6 +825,7 @@ export const sqlChatStore: ChatStore = {
       z.object({
         id: idSchema("turn"),
         thread_id: idSchema("thread"),
+        scope: z.string(),
         agent_id: z.string(),
         client_id: z.string(),
         prompt_item_id: idSchema("item"),
@@ -834,6 +850,7 @@ export const sqlChatStore: ChatStore = {
       clientId: claimed.client_id,
       prompt,
       leaseUntil: lease.lease_until,
+      owner: { scope: claimed.scope, userId: owner.userId },
     };
   },
 
@@ -842,7 +859,7 @@ export const sqlChatStore: ChatStore = {
       tx,
       sql`update parlor_chat_turns set state = 'queued', lease_until = null
         where id = ${turnId} and host_id = ${host.hostId} and owner_id = ${owner.userId}
-          and scope = ${owner.scope} and state = 'running' and lease_until >= now()
+          and state = 'running' and lease_until >= now()
           and not exists (
             select 1 from parlor_chat_items i
             where i.turn_id = parlor_chat_turns.id and i.author <> 'user')
@@ -853,12 +870,13 @@ export const sqlChatStore: ChatStore = {
   },
 
   async appendHostItems(tx, owner, host, turnId, items, leaseMs) {
-    const { threadId, lastSeq, clientId, agentId } = await lockRunningTurn(
-      tx,
-      owner,
-      host,
-      turnId,
-    );
+    const {
+      threadId,
+      lastSeq,
+      clientId,
+      agentId,
+      owner: turnOwner,
+    } = await lockRunningTurn(tx, owner, host, turnId);
     const known = await itemThreads(
       tx,
       items.map((draft) => draft.id),
@@ -887,11 +905,17 @@ export const sqlChatStore: ChatStore = {
         where id = ${turnId} returning ${ms("lease_until")} as lease_until`,
       z.object({ lease_until: count }),
     );
-    return { threadId, leaseUntil: lease?.lease_until ?? 0, clientId, agentId };
+    return {
+      threadId,
+      leaseUntil: lease?.lease_until ?? 0,
+      clientId,
+      agentId,
+      owner: turnOwner,
+    };
   },
 
   async finishTurn(tx, owner, host, turnId, outcome) {
-    const { threadId } = await lockRunningTurn(tx, owner, host, turnId);
+    const { threadId, owner: turnOwner } = await lockRunningTurn(tx, owner, host, turnId);
     await tx.execute(
       sql`update parlor_chat_turns
         set state = ${outcome.state}, outcome = ${JSON.stringify(outcome)}::jsonb, finished_at = now()
@@ -900,7 +924,7 @@ export const sqlChatStore: ChatStore = {
     await tx.execute(
       sql`update parlor_chat_threads set updated_at = now() where id = ${threadId}`,
     );
-    return { threadId };
+    return { threadId, owner: turnOwner };
   },
 
   async readSignals(db, owner, host, turns) {
@@ -916,7 +940,7 @@ export const sqlChatStore: ChatStore = {
         join (values ${sql.join(wanted, sql`, `)}) as q(turn_id, after_seq)
           on q.turn_id = i.turn_id
         where t.host_id = ${host.hostId} and t.owner_id = ${owner.userId}
-          and t.scope = ${owner.scope} and i.kind in ('answer', 'cancel')
+          and i.kind in ('answer', 'cancel')
           and i.seq > q.after_seq
         order by i.turn_id, i.seq`,
       itemRow,
@@ -952,9 +976,8 @@ export const sqlChatStore: ChatStore = {
           presence_due = coalesce(excluded.presence_due, parlor_chat_hosts.presence_due),
           agents_checked_at = coalesce(excluded.agents_checked_at, parlor_chat_hosts.agents_checked_at),
           online_until = excluded.online_until,
-          announced_online = excluded.announced_online
+          announced_online = excluded.announced_online, scope = excluded.scope
         where parlor_chat_hosts.owner_id = excluded.owner_id
-          and parlor_chat_hosts.scope = excluded.scope
         returning ${ms("online_until")} as online_until`,
       z.object({ online_until: count }),
     );
@@ -970,7 +993,7 @@ export const sqlChatStore: ChatStore = {
         set online_until = ${leaseSql(ttlMs)}, announced_online = true
         from (select announced_online as was from parlor_chat_hosts where id = ${host.hostId}) as prev
         where h.id = ${host.hostId} and h.owner_id = ${owner.userId}
-          and h.scope = ${owner.scope} and h.grant_id = ${host.grantId}
+          and h.grant_id = ${host.grantId}
         returning prev.was as was`,
       z.object({ was: z.boolean() }),
     );
@@ -983,7 +1006,7 @@ export const sqlChatStore: ChatStore = {
       sql`select id, grant_id, protocol, name, platform, agents, devices, presence_due,
           ${ms("agents_checked_at")} as agents_checked_at, online_until > now() as online
         from parlor_chat_hosts
-        where owner_id = ${owner.userId} and scope = ${owner.scope}
+        where owner_id = ${owner.userId}
         order by name, id`,
       z
         .object({
@@ -1012,7 +1035,7 @@ export const sqlChatStore: ChatStore = {
     if (hostIds.length === 0) return;
     await tx.execute(
       sql`delete from parlor_chat_hosts
-        where owner_id = ${owner.userId} and scope = ${owner.scope} and id in (${inList(hostIds)})`,
+        where owner_id = ${owner.userId} and id in (${inList(hostIds)})`,
     );
   },
 

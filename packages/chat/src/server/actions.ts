@@ -331,7 +331,13 @@ export function hostSession(deps: ChatActionDeps) {
   const mint = async (
     host: ChatHost,
     db: ChatDb,
-    turn: { threadId: ThreadId; turnId: TurnId; clientId: string; agentId: string },
+    turn: {
+      threadId: ThreadId;
+      turnId: TurnId;
+      clientId: string;
+      agentId: string;
+      scope: string;
+    },
   ) => {
     if (!deps.auth.delegate) {
       throw new ActionError("internal", "The auth provider cannot mint turn tokens.");
@@ -342,17 +348,19 @@ export function hostSession(deps: ChatActionDeps) {
       clientId: turn.clientId,
       agent: await agentNameOf(host, db, turn.agentId),
       ttlMs: deps.leaseMs,
+      scope: turn.scope,
     });
   };
   /** The next turn waiting for `host`, claimed for it with its token and context; undefined when none waits. */
   const claim = async (host: ChatHost, db: ChatDb): Promise<ClaimedTurn | undefined> => {
     await requireWelcome(host, db);
     await deps.reconcile(host);
-    const claimed = await deps.transact(host, async (tx) => {
+    const stored = await deps.transact(host, async (tx) => {
       const taken = await deps.store.claimTurn(tx, host, host.host, deps.leaseMs);
       return { result: taken, threadId: taken?.id };
     });
-    if (!claimed) return undefined;
+    if (!stored) return undefined;
+    const { owner = host, ...claimed } = stored;
     try {
       const deviceId = claimed.prompt.body.signed?.deviceId;
       const [token, device, account, page] = await Promise.all([
@@ -361,10 +369,11 @@ export function hostSession(deps: ChatActionDeps) {
           turnId: claimed.turnId,
           clientId: claimed.clientId,
           agentId: claimed.agent.agentId,
+          scope: owner.scope,
         }),
         deviceId ? deps.auth.device?.(host.userId, deviceId) : undefined,
         deps.auth.account?.(host.userId),
-        deps.store.readPage(db, host, claimed.id, CONTEXT_HISTORY_ITEMS),
+        deps.store.readPage(db, owner, claimed.id, CONTEXT_HISTORY_ITEMS),
       ]);
       const context = turnContext({
         appName: deps.appName,
@@ -573,7 +582,11 @@ export function hostChatActions(
             threadId: input.items.length > 0 ? result.threadId : undefined,
           };
         });
-        const token = await mint(host, dbOf(ctx), { ...appended, turnId: input.turnId });
+        const token = await mint(host, dbOf(ctx), {
+          ...appended,
+          turnId: input.turnId,
+          scope: (appended.owner ?? host).scope,
+        });
         return { id: appended.threadId, leaseUntil: appended.leaseUntil, token };
       },
     }),
@@ -600,7 +613,7 @@ export function hostChatActions(
           );
           return { result, threadId: result.threadId };
         });
-        deps.relay.settle(host, finished.threadId, input.turnId);
+        deps.relay.settle(finished.owner ?? host, finished.threadId, input.turnId);
         return { id: finished.threadId };
       },
     }),

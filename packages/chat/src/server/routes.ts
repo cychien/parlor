@@ -91,8 +91,7 @@ export function chatRoutes(deps: ChatRouteDeps): readonly AnyPluginRoute[] {
         const owns =
           holder !== undefined &&
           holder.hostId === principal.hostId &&
-          holder.owner.userId === principal.userId &&
-          holder.owner.scope === caller.scope;
+          holder.owner.userId === principal.userId;
         if (!owns) throw new ActionError("forbidden", "This turn is not yours.");
         const { live, ...heldBy } = holder;
         if (!live) throw new ActionError("forbidden", "The turn is not running.");

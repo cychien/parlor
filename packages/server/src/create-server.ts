@@ -578,6 +578,7 @@ export function createServer<T extends ActionMap>(
       hub,
       scope: async (request) => (await callers(request)).scope,
       audience: async (request) => (await callers(request)).audience,
+      account: async (request) => (await callers(request)).account,
       authority: async (request) => {
         const caller = await callers(request);
         const { principal } = caller;

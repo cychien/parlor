@@ -32,6 +32,7 @@ import {
   type CallerResolver,
   createCallerResolver,
   sourceFor,
+  streamsOf,
 } from "./caller.js";
 import type { ActionAudit, ConfirmationAnswer } from "./plugin.js";
 import { DEFAULT_SCOPE, type ScopeResolver } from "./scope.js";
@@ -155,6 +156,7 @@ const INTERNAL_CALLER: Caller = {
   principal: ANONYMOUS,
   scope: DEFAULT_SCOPE,
   audience: DEFAULT_SCOPE,
+  account: undefined,
   clientId: undefined,
 };
 
@@ -193,9 +195,9 @@ export function createActionRunner<T extends ActionMap>(
   ): Promise<string | undefined> => {
     const action = registry.get(name);
     if (!sync || !database || !action?.reads || isMutating(action)) return undefined;
-    const streams =
-      caller.audience === caller.scope ? [caller.scope] : [caller.scope, caller.audience];
-    return encodeCursor(await readSyncCursor(database.read() as SyncDatabase, streams));
+    return encodeCursor(
+      await readSyncCursor(database.read() as SyncDatabase, streamsOf(caller)),
+    );
   };
 
   const invoke = async (
@@ -249,7 +251,7 @@ export function createActionRunner<T extends ActionMap>(
             ? async ({ action, tags, tx }) => {
                 if (tags.length === 0) return;
                 await recordSyncEvent(tx as SyncDatabase, {
-                  scope: action.notifies === "user" ? caller.audience : resolvedScope,
+                  scope: notifiedStream(action.notifies, caller),
                   tags,
                   source: client,
                 });
@@ -323,4 +325,18 @@ async function digest(input: unknown): Promise<string> {
   const bytes = new TextEncoder().encode(JSON.stringify(input ?? null));
   const hash = await crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function notifiedStream(
+  notifies: "scope" | "user" | "account" | undefined,
+  caller: Caller,
+): string {
+  switch (notifies) {
+    case "user":
+      return caller.audience;
+    case "account":
+      return caller.account ?? caller.audience;
+    default:
+      return caller.scope;
+  }
 }
