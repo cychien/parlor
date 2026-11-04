@@ -2,22 +2,26 @@ import { z } from "zod";
 
 import { idSchema } from "../id-schemas.js";
 import { chatItemBodies, type LoggedItem } from "../items.js";
+import { clipAgentOptions } from "../limits.js";
 import type { AgentRef, ThreadSummary, TurnFailure, TurnState } from "../model.js";
 
+const MAX_REPORTED_TEXT = 20_000;
+const MAX_REPORTED_VALUES = 1_000;
+
 const agentOptionSchema = z.object({
-  id: z.string().min(1).max(100),
-  name: z.string().max(100),
-  category: z.string().max(50).optional(),
-  current: z.string().max(200),
+  id: z.string().min(1).max(MAX_REPORTED_TEXT),
+  name: z.string().max(MAX_REPORTED_TEXT),
+  category: z.string().max(MAX_REPORTED_TEXT).optional(),
+  current: z.string().max(MAX_REPORTED_TEXT),
   values: z
     .array(
       z.object({
-        id: z.string().min(1).max(200),
-        name: z.string().max(200),
-        description: z.string().max(500).optional(),
+        id: z.string().min(1).max(MAX_REPORTED_TEXT),
+        name: z.string().max(MAX_REPORTED_TEXT),
+        description: z.string().max(MAX_REPORTED_TEXT).optional(),
       }),
     )
-    .max(50)
+    .max(MAX_REPORTED_VALUES)
     .readonly(),
 });
 
@@ -42,7 +46,12 @@ export const agentInfoSchema = z.object({
   version: z.string().optional(),
   ready: z.boolean(),
   problem: z.string().optional(),
-  options: z.array(agentOptionSchema).max(10).readonly().optional(),
+  options: z
+    .array(agentOptionSchema)
+    .max(MAX_REPORTED_VALUES)
+    .transform(clipAgentOptions)
+    .readonly()
+    .optional(),
   usage: agentUsageSchema.optional(),
   outsideName: z
     .string()
