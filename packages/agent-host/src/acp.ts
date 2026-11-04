@@ -27,7 +27,7 @@ import {
   type ToolCallUpdate,
   type ToolKind as AcpToolKind,
 } from "@agentclientprotocol/sdk";
-import type { AgentOption, AgentUsage } from "@parlor/chat";
+import { type AgentOption, type AgentUsage, clipAgentOptions } from "@parlor/chat";
 
 import { commandOf, launchEnvironment } from "./adapter-launch.js";
 import { agentUsageOf } from "./agent-options.js";
@@ -455,6 +455,12 @@ const HIDDEN_CATEGORIES = new Set(["mode", "model_config"]);
 
 /** The agent's select options a prompt may choose, its groups flattened. */
 export function agentOptionsOf(
+  configOptions: readonly SessionConfigOption[] | null | undefined,
+): AgentOption[] {
+  return clipAgentOptions(optionsOf(configOptions));
+}
+
+function optionsOf(
   configOptions: readonly SessionConfigOption[] | null | undefined,
 ): AgentOption[] {
   return (configOptions ?? []).flatMap((option): AgentOption[] => {
