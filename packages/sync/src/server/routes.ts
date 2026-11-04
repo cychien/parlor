@@ -12,6 +12,8 @@ import {
   type SyncEvent,
   type SyncNegotiation,
   SYNC_PROTOCOL_VERSION,
+  BUILD_HEADER,
+  DEFAULT_MAX_STREAM_MS,
 } from "../protocol.js";
 import { createEventStream, DEFAULT_MAX_QUEUED_BYTES } from "./event-stream.js";
 import type { SyncHub } from "./hub.js";
@@ -51,6 +53,13 @@ export interface SyncRouteOptions {
   readonly maxQueuedBytes?: number | undefined;
   readonly channels?: readonly ServerChannel[] | undefined;
   readonly clientId?: ((request: Request) => string | undefined) | undefined;
+  /** This server's build, sent as `BUILD_HEADER` and in the stream's handshake; read per request. */
+  readonly build?: (() => string | undefined) | undefined;
+  /**
+   * How long a stream lives, give or take a tenth, before the server ends it and the client
+   * reopens it, so an instance an old deploy left behind drains. Defaults to 15 minutes.
+   */
+  readonly maxStreamMs?: number | undefined;
   /**
    * Who holds a stream and until when. A stream closes when `revoked` aborts, and a
    * stream without `channels` carries sync events only. Refusing a caller happens before
@@ -140,13 +149,21 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
   const maxQueuedBytes = options.maxQueuedBytes ?? DEFAULT_MAX_QUEUED_BYTES;
   const db = () => data.read() as SyncDatabase;
   const channels = options.channels ?? [];
+  const maxStreamMs = options.maxStreamMs ?? DEFAULT_MAX_STREAM_MS;
+  const stamp = (event: H3Event) => {
+    const build = options.build?.();
+    if (build !== undefined) event.res.headers.set(BUILD_HEADER, build);
+  };
 
-  app.post(`${basePath}/sync/token`, (): SyncNegotiation => ({
-    protocol: SYNC_PROTOCOL_VERSION,
-    transport,
-    endpoint: `${basePath}/sync/stream`,
-    pollIntervalMs,
-  }));
+  app.post(`${basePath}/sync/token`, (event: H3Event): SyncNegotiation => {
+    stamp(event);
+    return {
+      protocol: SYNC_PROTOCOL_VERSION,
+      transport,
+      endpoint: `${basePath}/sync/stream`,
+      pollIntervalMs,
+    };
+  });
 
   app.get(`${basePath}/sync`, async (event: H3Event) => {
     const missed = await missedSince(
@@ -155,12 +172,14 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
       missedQuery(event),
     );
     event.res.headers.set("cache-control", "no-store");
+    stamp(event);
     return missed;
   });
 
   app.get(`${basePath}/sync/stream`, async (event: H3Event) => {
     const streams = await streamsOf(event.req);
     const currentScope = streams[0]!;
+    const build = options.build?.();
     const authority = await options.authority?.(event.req);
     const admitted = authority?.channels ?? true;
     const carried = channels.filter((channel) =>
@@ -190,6 +209,10 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
       ),
     );
     const keepAlive = setInterval(() => stream.comment("keep-alive"), keepAliveMs);
+    const lifetime = setTimeout(
+      () => stream.close(),
+      maxStreamMs * (0.9 + 0.2 * Math.random()),
+    );
     const disconnects: (() => void)[] = [];
     const ended = new AbortController();
     const revoked = authority?.revoked;
@@ -198,6 +221,7 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
       if (ended.signal.aborted) return;
       ended.abort();
       clearInterval(keepAlive);
+      clearTimeout(lifetime);
       revoked?.removeEventListener("abort", closeRevoked);
       for (const unsubscribe of unsubscribes) unsubscribe();
       for (const disconnect of disconnects) disconnect();
@@ -212,6 +236,7 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
         protocol: SYNC_PROTOCOL_VERSION,
         capabilities: carried.map((channel) => channel.event),
         keepAliveMs,
+        ...(build === undefined ? {} : { build }),
       }),
     });
     const clientId = options.clientId?.(event.req);
@@ -258,6 +283,7 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
     });
 
     event.res.headers.set("content-type", "text/event-stream");
+    stamp(event);
     event.res.headers.set("cache-control", "no-cache, no-store, no-transform");
     event.res.headers.set("x-accel-buffering", "no");
     if (event.req.headers.get("connection") === "keep-alive") {

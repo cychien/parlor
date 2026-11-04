@@ -1,4 +1,5 @@
 import type { AgentUiClient } from "@parlor/agent-ui/client";
+import { BUILD_HEADER } from "@parlor/sync";
 import { createSyncClient, type SyncClient } from "@parlor/sync/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AnyRouter } from "@tanstack/react-router";
@@ -229,9 +230,13 @@ function SyncConnection({
     globalThis.document?.addEventListener("visibilitychange", reconnectWhenVisible);
     const detach = value.bridge.attach(syncClient);
     const unfollow = auth?.subscribe(follow);
+    const unheard = client.onResponse?.((response) =>
+      syncClient.observeBuild(response.headers.get(BUILD_HEADER)),
+    );
     follow();
     return () => {
       unfollow?.();
+      unheard?.();
       globalThis.removeEventListener?.("online", reconnect);
       globalThis.document?.removeEventListener("visibilitychange", reconnectWhenVisible);
       syncClient.stop();

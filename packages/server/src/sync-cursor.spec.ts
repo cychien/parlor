@@ -76,3 +76,24 @@ describe("the sync cursor of a read", () => {
     expect(await call("hello")).not.toHaveProperty("cursor");
   });
 });
+
+describe("the server's build", () => {
+  it("names one build on every response, so a client can tell a deploy happened", async () => {
+    const action = await server.fetch(
+      new Request("http://app.test/_parlor/actions/hello", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      }),
+    );
+    const sync = await server.fetch(new Request("http://app.test/_parlor/sync?since=0"));
+    const missing = await server.fetch(
+      new Request("http://app.test/_parlor/nothing-here"),
+    );
+    const builds = [action, sync, missing].map((response) =>
+      response.headers.get("x-parlor-build"),
+    );
+    expect(builds[0]).toMatch(/.+/);
+    expect(new Set(builds)).toEqual(new Set([builds[0]]));
+  });
+});

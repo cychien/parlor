@@ -4,6 +4,14 @@ export const SYNC_PROTOCOL_VERSION = 1;
 export const SYNC_CHANNEL = "parlor_sync";
 export const DEFAULT_KEEP_ALIVE_MS = 10_000;
 export const LEGACY_KEEP_ALIVE_MS = 25_000;
+/**
+ * The server build that answered, on every sync response and in the stream's handshake. A
+ * client whose stream came from another build than its latest response reopens the stream,
+ * so a deploy does not leave it on the old build's instance.
+ */
+export const BUILD_HEADER = "x-parlor-build";
+/** How long a stream lives before the server ends it and the client reopens it. */
+export const DEFAULT_MAX_STREAM_MS = 15 * 60_000;
 
 const STREAM_LIVENESS_MARGIN_MS = 5000;
 
