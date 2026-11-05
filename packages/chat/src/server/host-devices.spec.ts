@@ -97,6 +97,26 @@ describe.each(drivers)("the devices a computer runs prompts from on $name", (dri
     expect(await checkedAt()).toBe(reported);
   });
 
+  it("hear a tab ask one of them to start an agent, on the user's own stream, with nothing written", async () => {
+    const asked = await app.action("alice", "warmAgent", {
+      hostId: "mac",
+      agentId: "claude",
+    });
+    expect(asked.status).toBe(200);
+    expect(
+      await rows(
+        handle,
+        "select scope, tags from sync_events order by version desc limit 1",
+      ),
+    ).toEqual([
+      { scope: "\u001falice", tags: [["parlor_chat_agent_warm", "mac", "claude"]] },
+    ]);
+    expect(await rows(handle, "select id from parlor_chat_hosts")).toEqual([]);
+    expect(
+      (await app.action("alice", "warmAgent", { hostId: "mac", agentId: "" })).status,
+    ).toBe(400);
+  });
+
   it("carry when each device must confirm with Face ID or Touch ID again, kept by a report that omits it", async () => {
     await app.action("alice-host", "hostHello", {
       protocols: { min: 2, max: 2 },

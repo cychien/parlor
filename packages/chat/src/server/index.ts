@@ -185,6 +185,7 @@ export function chat(options: ChatOptions = {}): ServerPlugin {
         transact,
         reconcile,
         pruneHosts,
+        announce: (owner, tags) => host.announce(ownStream(owner), tags),
         auth,
         store: sqlChatStore,
         relay,

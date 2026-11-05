@@ -33,6 +33,22 @@ export interface SessionPool {
     agentId: string,
     session: LiveSession,
   ): void;
+  /**
+   * Keeps a session opened before any thread asked for it, so a thread's first turn skips
+   * the agent's startup. `fit` names what it was opened under; one per grant and agent,
+   * closed once `idleMs` pass untaken or another replaces it.
+   */
+  keepWarm(
+    grant: PooledGrant,
+    agentId: string,
+    live: LiveSession,
+    fit: string,
+    idleMs: number,
+  ): void;
+  /** Whether a warm session opened under `fit` waits; it waits `idleMs` longer from now. */
+  warm(grant: PooledGrant, agentId: string, fit: string, idleMs: number): boolean;
+  /** The warm session opened under `fit`, now the caller's; one opened otherwise is closed. */
+  takeWarm(grant: PooledGrant, agentId: string, fit: string): LiveSession | undefined;
   /** The last session id, from `sessions.json`, for `session/resume` after a restart. */
   resumable(
     grant: PooledGrant,
@@ -48,6 +64,15 @@ const keyOf = (...parts: readonly string[]) => parts.join("\u0000");
 
 const sessionKeyOf = (grant: PooledGrant, threadId: string, agentId: string) =>
   keyOf(grant.appOrigin, grant.grantId, threadId, agentId);
+
+const warmKeyOf = (grant: PooledGrant, agentId: string) =>
+  keyOf(grant.appOrigin, grant.grantId, agentId);
+
+interface Warm {
+  readonly live: LiveSession;
+  readonly owner: string;
+  readonly fit: string;
+}
 
 interface Launching {
   readonly controller: AbortController;
@@ -67,6 +92,29 @@ export function createSessionPool(stateFile: string): SessionPool {
     { readonly live: LiveSession; readonly owner: string }
   >();
   const remembered = jsonFile<Record<string, string>>(stateFile);
+  const warmed = new Map<string, Warm>();
+  const expiries = new Map<string, ReturnType<typeof setTimeout>>();
+
+  const unwarm = (key: string): Warm | undefined => {
+    const entry = warmed.get(key);
+    warmed.delete(key);
+    clearTimeout(expiries.get(key));
+    expiries.delete(key);
+    return entry;
+  };
+
+  const close = (entry: Warm | undefined) => {
+    if (!entry) return;
+    entry.live.proxy.dispose();
+    void entry.live.session.close().catch(() => undefined);
+  };
+
+  const expireAfter = (key: string, idleMs: number) => {
+    clearTimeout(expiries.get(key));
+    const timer = setTimeout(() => close(unwarm(key)), idleMs);
+    timer.unref?.();
+    expiries.set(key, timer);
+  };
 
   const discard = (owner: string) => {
     processes.delete(owner);
@@ -74,6 +122,11 @@ export function createSessionPool(stateFile: string): SessionPool {
       if (entry.owner !== owner) continue;
       entry.live.proxy.dispose();
       sessions.delete(key);
+    }
+    for (const [key, entry] of [...warmed]) {
+      if (entry.owner !== owner) continue;
+      unwarm(key);
+      entry.live.proxy.dispose();
     }
   };
 
@@ -138,6 +191,28 @@ export function createSessionPool(stateFile: string): SessionPool {
       void remembered
         .change((all) => void (all[key] = live.session.id))
         .catch(() => undefined);
+    },
+    keepWarm(grant, agentId, live, fit, idleMs) {
+      const owner = keyOf(grant.appOrigin, agentId);
+      if (owners.get(live.session) !== owner || processes.get(owner) === undefined) {
+        throw new Error("Keep warm a session opened through the pool's own process.");
+      }
+      const key = warmKeyOf(grant, agentId);
+      close(unwarm(key));
+      warmed.set(key, { live, owner, fit });
+      expireAfter(key, idleMs);
+    },
+    warm(grant, agentId, fit, idleMs) {
+      const key = warmKeyOf(grant, agentId);
+      if (warmed.get(key)?.fit !== fit) return false;
+      expireAfter(key, idleMs);
+      return true;
+    },
+    takeWarm(grant, agentId, fit) {
+      const entry = unwarm(warmKeyOf(grant, agentId));
+      if (entry?.fit === fit) return entry.live;
+      close(entry);
+      return undefined;
     },
     resumable: async (grant, threadId, agentId) => {
       const all = await remembered.read().catch(() => ({}) as Record<string, string>);

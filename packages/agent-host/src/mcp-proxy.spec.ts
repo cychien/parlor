@@ -324,6 +324,45 @@ describe("the MCP proxy's handshake", () => {
     second.opened.dispose();
   });
 
+  it("lets a session opened before its turn answer the handshake it knows, asking the app once the turn begins", async () => {
+    const at = `${appOrigin}/warm`;
+    const tools = (name: string) => (method: string) => ({
+      status: 200,
+      result: method === "tools/list" ? { tools: [{ name }] } : { said: method },
+    });
+    expect(proxy.knowsHandshake(at)).toBe(false);
+    answer = tools("old");
+    const first = session(at);
+    await timed(first.agent, request(1, "initialize"));
+    expect(proxy.knowsHandshake(at)).toBe(false);
+    await timed(first.agent, request(2, "tools/list"));
+    first.opened.dispose();
+    expect(proxy.knowsHandshake(at)).toBe(true);
+
+    asked.length = 0;
+    answer = tools("new");
+    const warm = proxy.open("courses", at);
+    const agent = agentSide(warm.server.env);
+    expect((await timed(agent, request(11, "initialize"))).reply).toEqual({
+      jsonrpc: "2.0",
+      id: 11,
+      result: { said: "initialize" },
+    });
+    expect((await timed(agent, request(12, "tools/list"))).reply).toMatchObject({
+      result: { tools: [{ name: "old" }] },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(asked).toEqual([]);
+
+    warm.begin({ token: "turn", expiresAt: Date.now() + 60_000 });
+    expect(JSON.parse(await agent.next())).toEqual({
+      jsonrpc: "2.0",
+      method: "notifications/tools/list_changed",
+    });
+    expect(asked.sort()).toEqual(["initialize", "tools/list"]);
+    warm.dispose();
+  });
+
   it("replays a request the app refuses as malformed, the way it refused it", async () => {
     const at = `${appOrigin}/discover`;
     answer = () => ({ status: 400, raw: '{"error":"bad request"}' });
