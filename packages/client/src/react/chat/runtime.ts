@@ -1030,6 +1030,8 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
               turnId: mint("turn"),
               itemId: mint("item"),
             });
+      // A new thread's first prompt takes the warm session, so the next new thread warms again.
+      if (attempt.openedIn === undefined) warmedAt.delete(target.key);
       await whenSetUp(async () => {
         let delivered = false;
         shownSend = attempt;
