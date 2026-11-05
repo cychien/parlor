@@ -65,7 +65,7 @@ beforeAll(async () => {
   });
   await new Promise<void>((resolve) => stub.listen(0, "127.0.0.1", resolve));
   origin = `http://127.0.0.1:${(stub.address() as AddressInfo).port}`;
-  proxy = createMcpProxy("parlor-host");
+  proxy = createMcpProxy("parlor-host", { tokenWaitMs: 300 });
   proxy.serveOutside((appOrigin) => (appOrigin === origin ? served : undefined));
   await proxy.listen(hostPaths(join(home, ".parlor", "host")).proxy);
 });
@@ -141,6 +141,19 @@ const textOf = (message: Record<string, unknown>) =>
   (message.result as { content: { text: string }[] }).content[0]!.text;
 
 describe("an agent outside any turn", () => {
+  it("is told at once that an app which is not answering is down, so it starts without waiting on it", async () => {
+    served = { ...served!, token: () => new Promise<string>(() => undefined) };
+    const agent = agentOutside(origin);
+    const asked = Date.now();
+    const answer = await agent.initialize(true);
+    expect(Date.now() - asked).toBeLessThan(3_000);
+    expect(answer.error).toEqual({
+      code: -32001,
+      message: `Hello (${origin}) is not answering, so its tools are unavailable in this conversation. Start it, or stop its tools with \`parlor-host tools --off ${origin}\`.`,
+    });
+    expect(received).toEqual([]);
+  }, 30_000);
+
   it("is told to use the app only when the user names it, before a browser, and reads with its own token", async () => {
     const agent = agentOutside(origin);
     const initialized = await agent.initialize(true);
