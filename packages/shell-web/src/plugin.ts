@@ -12,6 +12,7 @@ import { VitePWA } from "vite-plugin-pwa";
 import { appCsp, metaCsp, serializeCsp } from "./csp.js";
 import { routeGeneratorOptions, routesDirectory, routeTreeFile } from "./route-tree.js";
 import { pageMatcher, serverRoutes } from "./server-routes.js";
+import { serviceWorkerRegistration } from "./service-worker.js";
 import { renderModule } from "./ssr.js";
 
 export const FRAMEWORK_ROUTE_PREFIX = "/_parlor";
@@ -158,10 +159,14 @@ export function parlorWeb(
   if (config.web.ssr) plugins.push(renderModule(config, root));
   if (config.web.pwa && !options.render) {
     plugins.push(
+      serviceWorkerRegistration(),
       VitePWA({
         registerType: "autoUpdate",
+        injectRegister: false,
         manifest: webManifest(config),
         workbox: {
+          skipWaiting: true,
+          clientsClaim: true,
           navigateFallbackDenylist: [
             FRAMEWORK_ROUTE_PREFIX,
             ...OAUTH_DISCOVERY_PREFIXES,

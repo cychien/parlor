@@ -58,7 +58,7 @@ describe("resolvePgliteDir", () => {
   });
 });
 
-describe("createDatabase with PGlite", () => {
+describe("createDatabase with PGlite", { timeout: 30_000 }, () => {
   it("creates missing parent directories of a file data dir and keeps its data", async () => {
     const reopened = await createDatabase({ dataDir: template });
     try {

@@ -219,6 +219,6 @@ describe("the service worker of an app with web.ssr", () => {
     const worker = await readFile(join(outDir, "sw.js"), "utf8");
     expect(worker).not.toContain("NavigationRoute");
     expect(worker).not.toContain('url:"index.html"');
-    expect(worker).toContain("registerSW.js");
+    expect(worker).toContain("register-sw.js");
   }, 60_000);
 });
