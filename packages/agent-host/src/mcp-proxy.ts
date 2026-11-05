@@ -70,6 +70,8 @@ const SOCKET_ENV = "PARLOR_HOST_PROXY_SOCKET";
 const NONCE_ENV = "PARLOR_HOST_PROXY_NONCE";
 const NO_TURN_CODE = -32000;
 const REFUSED_CODE = -32001;
+/** An agent waits for its MCP servers before its first answer; an app that is down must not hold it. */
+const OUTSIDE_TOKEN_WAIT_MS = 5_000;
 
 type JsonRpcId = string | number | null;
 
@@ -359,6 +361,7 @@ function outsideSession(
   app: OutsideApp,
   socket: Socket,
   reply: (line: string) => void,
+  tokenWaitMs: number,
 ): (line: string) => void {
   const live: Live = {
     appOrigin: app.appOrigin.replace(/\/+$/, ""),
@@ -379,11 +382,17 @@ function outsideSession(
   const send = async (line: string, message: Message, onReply = reply) => {
     let token: string;
     try {
-      token = await app.token(agent);
+      token = await answeredWithin(app.token(agent), tokenWaitMs);
     } catch (error) {
       if (message.id !== undefined) {
         onReply(
-          failure(message.id, REFUSED_CODE, `${app.appName} refused: ${String(error)}`),
+          failure(
+            message.id,
+            REFUSED_CODE,
+            error instanceof AppNotAnswering
+              ? notAnsweringMessage(app)
+              : `${app.appName} refused: ${String(error)}`,
+          ),
         );
       }
       return;
@@ -478,6 +487,23 @@ function outsideSession(
   };
 }
 
+/** `OutsideApp.token` throws it while the app does not answer this computer at all. */
+export class AppNotAnswering extends Error {
+  override readonly name = "AppNotAnswering";
+}
+
+function answeredWithin<T>(pending: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new AppNotAnswering()), ms);
+    timer.unref?.();
+  });
+  return Promise.race([pending, late]).finally(() => clearTimeout(timer));
+}
+
+const notAnsweringMessage = (app: OutsideApp) =>
+  `${app.appName} (${app.appOrigin}) is not answering, so its tools are unavailable in this conversation. Start it, or stop its tools with \`parlor-host tools --off ${app.appOrigin}\`.`;
+
 interface ToolEntry {
   readonly name?: string;
   readonly annotations?: { readonly readOnlyHint?: boolean };
@@ -502,7 +528,16 @@ function withGuidance(line: string, app: OutsideApp, agent: string): string {
   });
 }
 
-export function createMcpProxy(hostBinary: string): McpProxy {
+export interface McpProxyOptions {
+  /** How long an agent outside a turn waits for its app's token before it is told the app is down. */
+  readonly tokenWaitMs?: number | undefined;
+}
+
+export function createMcpProxy(
+  hostBinary: string,
+  options: McpProxyOptions = {},
+): McpProxy {
+  const tokenWaitMs = options.tokenWaitMs ?? OUTSIDE_TOKEN_WAIT_MS;
   const sessions = new Map<string, Live>();
   const handshakes = new Map<string, Map<string, KnownAnswer>>();
   let server: Server | undefined;
@@ -533,7 +568,7 @@ export function createMcpProxy(hostBinary: string): McpProxy {
           socket.end();
           return;
         }
-        outsideLine = outsideSession(app, socket, reply);
+        outsideLine = outsideSession(app, socket, reply, tokenWaitMs);
         return;
       }
       live = sessions.get(first);

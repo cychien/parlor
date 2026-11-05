@@ -167,6 +167,106 @@ describe("the host daemon", () => {
 });
 
 describe("an app the host cannot speak to", () => {
+  it("tells a coding agent outside the sidebar at once that the app is not answering, so the agent starts without it", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pn-"));
+    const app = await stubApp((_request, _body, response) => {
+      response.writeHead(503).end();
+      return true;
+    });
+    const keys = memoryHostKeys();
+    await (await keys.create(app.origin)).keep(asId("grant", "host:H"));
+    const paths = hostPaths(join(root, ".parlor", "host"));
+    mkdirSync(paths.root, { recursive: true });
+    const claude = join(root, "claude");
+    await writeFile(
+      claude,
+      `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "claude 1.0.0"; fi\nexit 0\n`,
+    );
+    await chmod(claude, 0o755);
+    await writeFile(
+      paths.agents,
+      JSON.stringify([
+        {
+          id: "claude",
+          name: "Claude Code",
+          binary: claude,
+          launch: { kind: "native", command: "true", args: [] },
+        },
+      ]),
+    );
+    const grants = fileGrantStore(paths.grants);
+    await grants.save({
+      ...grantFor(app.origin, "Hello", join(root, "Parlor", "hello")),
+      agentTools: { on: true, name: "hello-local", agents: ["claude"] },
+    });
+    const host = createHostDaemon({
+      release: {
+        version: "0.0.0",
+        protocols: { min: 1, max: HOST_PROTOCOL },
+        control: 1,
+      },
+      paths,
+      grants,
+      keys,
+      trust: fileTrustStore(paths.trust),
+      pool: createSessionPool(paths.sessions),
+      proxy: createMcpProxy("parlor-host"),
+      launcher: acpLauncher(),
+      prompter: {
+        answerHere: async () => undefined,
+        turnStarted: () => undefined,
+      },
+      policy: DEFAULT_POLICY,
+    });
+    const agentOutside = () =>
+      spawn(process.execPath, [BIN, "mcp-proxy", "--app", app.origin], {
+        env: { PATH: process.env.PATH ?? "", HOME: root },
+        stdio: ["pipe", "pipe", "ignore"],
+      });
+    let agent: ReturnType<typeof agentOutside> | undefined;
+    try {
+      await host.start();
+      await vi.waitFor(() =>
+        expect(app.seen.some((seen) => seen.path.endsWith("/hostHello"))).toBe(true),
+      );
+      agent = agentOutside();
+      const answered = new Promise<Record<string, unknown>>((resolve) =>
+        agent!.stdout.once("data", (chunk: Buffer) =>
+          resolve(
+            JSON.parse(chunk.toString().split("\n")[0]!) as Record<string, unknown>,
+          ),
+        ),
+      );
+      const asked = Date.now();
+      agent.stdin.write(
+        `${JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "claude-code", version: "1" },
+          },
+        })}\n`,
+      );
+      expect(await answered).toEqual({
+        jsonrpc: "2.0",
+        id: 1,
+        error: {
+          code: -32001,
+          message: `Hello (${app.origin}) is not answering, so its tools are unavailable in this conversation. Start it, or stop its tools with \`parlor-host tools --off ${app.origin}\`.`,
+        },
+      });
+      expect(Date.now() - asked).toBeLessThan(1_000);
+    } finally {
+      agent?.kill();
+      await host.stop();
+      await app.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it("T4-01: shows the update message locally and leaves the link down", async () => {
     const root = await mkdtemp(join(tmpdir(), "pi-"));
     const refused = {
