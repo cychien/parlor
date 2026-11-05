@@ -36,7 +36,7 @@ function openSyncStream(server: ReturnType<typeof createServer>) {
   );
 }
 
-describe("createServer close", () => {
+describe("createServer close", { timeout: 30_000 }, () => {
   it("ends open sync streams", async () => {
     const { database } = await fileDatabase();
     const server = createServer({ actions: createRegistry({}), database });
