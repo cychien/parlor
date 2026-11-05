@@ -19,6 +19,8 @@ import { logEvent } from "./log.js";
 export interface McpProxy {
   listen(socketPath: string): Promise<void>;
   open(appServer: string, appOrigin: string): ProxySession;
+  /** Whether a session opened before its turn can answer the agent's handshake for the app. */
+  knowsHandshake(appOrigin: string): boolean;
   /**
    * Serves `parlor-host mcp-proxy --app <origin>`: a coding agent on this computer outside
    * any turn, such as Claude Code in a terminal. `undefined` refuses the app.
@@ -95,6 +97,8 @@ interface Live {
   tools: unknown;
   readonly inflight: Set<AbortController>;
   readonly sockets: Set<Socket>;
+  /** Handshake requests answered from `known` before a turn, asked again once one begins. */
+  readonly unconfirmed: Map<string, string>;
 }
 
 function parse(text: string): Message | undefined {
@@ -317,9 +321,21 @@ function replay(
   known: KnownAnswer,
   reply: (line: string) => void,
 ): void {
-  const method = message.method as string;
-  learn(live, method, known);
+  learn(live, message.method as string, known);
   reply(JSON.stringify({ jsonrpc: "2.0", id: message.id, ...known }));
+  confirm(live, token, line, message, key, known);
+}
+
+/** Asks the app what a known answer said, and tells the agent when a list changed since. */
+function confirm(
+  live: Live,
+  token: string,
+  line: string,
+  message: Message,
+  key: string,
+  known: KnownAnswer,
+): void {
+  const method = message.method as string;
   void forward(live, token, line, message, () => undefined).then((outcome) => {
     const fresh = remember(live, key, outcome);
     const changed = LIST_CHANGED[method];
@@ -336,6 +352,8 @@ function handle(live: Live, line: string, reply: (line: string) => void): void {
   if (token === undefined) {
     const answer = betweenTurns(live, message);
     if (answer) reply(answer);
+    const key = message.id === undefined ? undefined : handshakeKey(message);
+    if (key !== undefined && live.known?.has(key)) live.unconfirmed.set(key, line);
     return;
   }
   const key = message.id === undefined ? undefined : handshakeKey(message);
@@ -372,6 +390,7 @@ function outsideSession(
     tools: undefined,
     inflight: new Set(),
     sockets: new Set([socket]),
+    unconfirmed: new Map(),
   };
   let agent = "A coding agent";
   let elicits = false;
@@ -595,6 +614,12 @@ export function createMcpProxy(
     serveOutside(resolve) {
       outside = resolve;
     },
+    knowsHandshake(appOrigin) {
+      const keys = [...(handshakes.get(appOrigin.replace(/\/+$/, ""))?.keys() ?? [])];
+      return ["initialize ", "tools/list "].every((method) =>
+        keys.some((key) => key.startsWith(method)),
+      );
+    },
     open(appServer, appOrigin) {
       if (socketPath === undefined)
         throw new Error("The MCP proxy is not listening yet.");
@@ -614,6 +639,7 @@ export function createMcpProxy(
         tools: undefined,
         inflight: new Set(),
         sockets: new Set(),
+        unconfirmed: new Map(),
       };
       sessions.set(nonce, live);
       const end = () => {
@@ -630,6 +656,13 @@ export function createMcpProxy(
         },
         begin: (token) => {
           live.token = token.token;
+          for (const [key, line] of live.unconfirmed) {
+            const message = parse(line);
+            const answered = live.known?.get(key);
+            if (message && answered)
+              confirm(live, token.token, line, message, key, answered);
+          }
+          live.unconfirmed.clear();
         },
         renew: (token) => {
           if (live.token !== undefined) live.token = token.token;

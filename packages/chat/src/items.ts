@@ -25,7 +25,10 @@ const signed = z.object({
     .optional(),
 });
 
-const agentRef = z.object({ hostId: idSchema("host"), agentId: z.string().min(1) });
+export const agentRef = z.object({
+  hostId: idSchema("host"),
+  agentId: z.string().min(1),
+});
 
 const askChoice = z.object({
   id: z.string().min(1),

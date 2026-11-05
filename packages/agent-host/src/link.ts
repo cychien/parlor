@@ -1,5 +1,6 @@
 import {
   CHAT_ACTIVITY_TAG,
+  CHAT_AGENT_WARM_TAG,
   CHAT_AGENTS_CHECK_TAG,
   CHAT_CHANNEL,
   CHAT_TAG,
@@ -48,6 +49,8 @@ export interface AppLinkDeps {
   readonly onWake: (link: AppLink) => void;
   /** A tab asked this computer to look again for the agents installed on it. */
   readonly onAgentsCheck?: ((link: AppLink) => void) | undefined;
+  /** A tab may soon start a thread with this agent here, so it may start now. */
+  readonly onWarm?: ((link: AppLink, agentId: string) => void) | undefined;
   /** The app claimed a turn for this computer and pushed it, saving the claim. */
   readonly onPushed?: ((link: AppLink, turn: ClaimedTurn) => void) | undefined;
   /** Whether a turn runs on this link, which keeps a poll deployment's `/sync` at the active interval. */
@@ -93,6 +96,21 @@ class LinkDown extends Error {
 interface TurnStream {
   pending: HostFrame[];
   posting: Promise<void> | undefined;
+}
+
+/** The agents tabs asked this computer, of all the user's, to start. */
+function warmedHere(
+  events: readonly { readonly tags: readonly (readonly (string | number)[])[] }[],
+  hostId: string,
+): Set<string> {
+  const agents = new Set<string>();
+  for (const event of events) {
+    for (const [head, host, agentId] of event.tags) {
+      if (head === CHAT_AGENT_WARM_TAG && host === hostId && typeof agentId === "string")
+        agents.add(agentId);
+    }
+  }
+  return agents;
 }
 
 function coalesce(frames: readonly HostFrame[]): HostFrame[] {
@@ -351,6 +369,10 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
             if (modeNow() === "serving" && heads.includes(CHAT_TAG)) deps.onWake(link);
             if (modeNow() === "serving" && heads.includes(CHAT_AGENTS_CHECK_TAG))
               deps.onAgentsCheck?.(link);
+            if (modeNow() === "serving") {
+              for (const agentId of warmedHere(events, grant.hostId))
+                deps.onWarm?.(link, agentId);
+            }
           },
           channels: [
             {

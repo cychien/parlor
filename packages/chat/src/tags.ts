@@ -6,3 +6,5 @@ export const HOSTS_TAG = "parlor_chat_hosts";
 export const CHAT_ACTIVITY_TAG = "parlor_chat_activity";
 /** Emitted when a tab asks the user's computers to look again for the agents installed on them. */
 export const CHAT_AGENTS_CHECK_TAG = "parlor_chat_agents_check";
+/** `[tag, hostId, agentId]`: a tab may soon start a thread with that agent, so its computer starts it now. */
+export const CHAT_AGENT_WARM_TAG = "parlor_chat_agent_warm";

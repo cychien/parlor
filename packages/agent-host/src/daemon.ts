@@ -56,6 +56,7 @@ import { type HostRelease, installLoginItem, installRelease } from "./service.js
 import { agentEnvironment, rereadAgentPath } from "./shell-path.js";
 import type { TrustStore } from "./trust.js";
 import { runTurn } from "./turn.js";
+import { warmAgent } from "./warm.js";
 
 export interface DaemonDeps {
   readonly release: HostRelease;
@@ -250,6 +251,33 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
   /** A turn runs once here, even when a pushed turn its app took back is claimed again. */
   const runningTurns = new Set<string>();
 
+  const policyFor = (grant: AppGrant) =>
+    grant.dev ? Promise.resolve(DEV_POLICY) : loadPolicy(paths.policy, deps.policy);
+
+  const warming = new Set<string>();
+  const warm = (state: LinkState, agentId: string) => {
+    const { link } = state;
+    const key = `${link.grant.appOrigin}\n${agentId}`;
+    if (warming.has(key) || stopping.signal.aborted) return;
+    warming.add(key);
+    void policyFor(link.grant)
+      .then((policy) =>
+        warmAgent(agentId, {
+          link,
+          profiles,
+          launcher: deps.launcher,
+          pool: deps.pool,
+          proxy: deps.proxy,
+          policy,
+        }),
+      )
+      .then((outcome) =>
+        logEvent("agent_warmed", { appOrigin: link.grant.appOrigin, agentId, outcome }),
+      )
+      .catch(() => undefined)
+      .finally(() => warming.delete(key));
+  };
+
   const run = (
     state: LinkState,
     claimed: ClaimedTurn,
@@ -263,9 +291,7 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
       turnId: claimed.turnId,
     });
     state.turns += 1;
-    const turn = (
-      link.grant.dev ? Promise.resolve(DEV_POLICY) : loadPolicy(paths.policy, deps.policy)
-    )
+    const turn = policyFor(link.grant)
       .then((policy) =>
         runTurn(claimed, {
           link,
@@ -555,6 +581,7 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
       fetch: (input, init) => fetch(input, init),
       onWake: () => wake(state),
       onAgentsCheck: () => void checkAgents(),
+      onWarm: (_link, agentId) => warm(state, agentId),
       onPushed: (_link, turn) => {
         // Tells the app this computer has the turn, while it already starts on it.
         void link.api.calls

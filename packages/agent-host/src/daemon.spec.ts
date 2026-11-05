@@ -325,6 +325,90 @@ describe("an app the host cannot speak to", () => {
   }, 30_000);
 });
 
+describe("a tab about to start a thread", () => {
+  it("starts that agent on the computer the tab names, and on no other", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pw-"));
+    const log = join(root, "agent.log");
+    vi.stubEnv("FAKE_AGENT_LOG", log);
+    let send: ((tags: readonly (readonly string[])[]) => void) | undefined;
+    const app = await stubApp(
+      hostRoutes({ wake: false, stream: (sender) => (send = sender) }),
+    );
+    const keys = memoryHostKeys();
+    await (await keys.create(app.origin)).keep(asId("grant", "host:Hello"));
+    const paths = hostPaths(join(root, ".parlor", "host"));
+    mkdirSync(paths.root, { recursive: true });
+    const script = join(root, "script.json");
+    await writeFile(script, JSON.stringify({ steps: {} }));
+    await writeFile(
+      paths.agents,
+      JSON.stringify([
+        {
+          id: "fake",
+          name: "Fake agent",
+          launch: { kind: "native", command: process.execPath, args: [FAKE, script] },
+          binary: process.execPath,
+        },
+      ]),
+    );
+    await writeFile(
+      paths.learned,
+      JSON.stringify({
+        fake: {
+          options: [
+            {
+              id: "model",
+              name: "Model",
+              current: "a",
+              values: [{ id: "a", name: "A" }],
+            },
+          ],
+        },
+      }),
+    );
+    const grants = fileGrantStore(paths.grants);
+    await grants.save(grantFor(app.origin, "Hello", join(root, "Parlor", "hello")));
+    const host = createHostDaemon({
+      release: {
+        version: "0.0.0",
+        protocols: { min: 1, max: HOST_PROTOCOL },
+        control: 1,
+      },
+      paths,
+      grants,
+      keys,
+      trust: fileTrustStore(paths.trust),
+      pool: createSessionPool(paths.sessions),
+      proxy: createMcpProxy("parlor-host"),
+      launcher: acpLauncher(),
+      prompter: { answerHere: async () => undefined, turnStarted: () => undefined },
+      policy: DEFAULT_POLICY,
+    });
+    const started = () =>
+      (existsSync(log) ? readFileSync(log, "utf8") : "")
+        .split("\n")
+        .filter((line) => line.includes('"method":"initialize"')).length;
+    try {
+      await host.start();
+      await vi.waitFor(() => expect(send).toBeDefined());
+      send!([["parlor_chat_agent_warm", "h-Other", "fake"]]);
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      expect(started()).toBe(0);
+
+      send!([["parlor_chat_agent_warm", "h-Hello", "fake"]]);
+      await vi.waitFor(() => expect(started()).toBe(1), { timeout: 15_000 });
+      send!([["parlor_chat_agent_warm", "h-Hello", "fake"]]);
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      expect(started()).toBe(1);
+    } finally {
+      await host.stop();
+      await app.close();
+      vi.unstubAllEnvs();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
+
 describe("disconnecting through the daemon", () => {
   it("T4-12: a revoke the app refuses keeps the link, the grant and the key", async () => {
     const root = await mkdtemp(join(tmpdir(), "pk-"));

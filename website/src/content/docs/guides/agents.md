@@ -35,6 +35,8 @@ The agents reach the app through Parlor Host, with a short-lived token the compu
 
 Parlor Host finds Claude Code and Codex on the login-shell `PATH`, and Codex inside the ChatGPT desktop app when it is not there: the app ships the same CLI and reads its settings, so registering the app works for both. An agent installed after the computer connected is found when a sidebar asks (`useChat().checkAgents()`; a sidebar without agents asks on its own when it comes back into view), and gets the app outside the sidebar too if the user chose it.
 
+A new thread's first prompt does not wait for the agent to start: while the sidebar shows a new thread, the computer starts the chosen agent and opens its session, and the first prompt runs in it. After Parlor Host restarts, the first thread with an app only starts the agent ahead, because a session opened before its turn answers the agent's handshake from what the app said in an earlier turn.
+
 The connection ends in one place for both uses: **Disconnect** in the sidebar (`useChat().disconnect(hostId)`) or `npx @parlor/agent-host disconnect <app url>` revokes the grant and removes the app from the agents, and the computer posts a notification when the app was the one to end it. `npx @parlor/agent-host tools <app url> --off` stops only the agents outside the sidebar; without `--off` it hands the app to them again.
 
 ## Several apps in one agent

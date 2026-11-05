@@ -31,6 +31,7 @@ import { memoryTrust, TestDevice } from "./spec-kit.js";
 import { type FakeAgentScript, fakeAgentProfile } from "./testing/fake-agent.js";
 import type { TrustedDevice, TrustStore } from "./trust.js";
 import { PROMPT_MAX_AGE_MS, runTurn, type TurnDeps } from "./turn.js";
+import { warmAgent } from "./warm.js";
 
 const ENTRY = fileURLToPath(new URL("../bin/fake-agent.mjs", import.meta.url));
 const BIN = fileURLToPath(new URL("../bin/parlor-host-dev.mjs", import.meta.url));
@@ -671,6 +672,59 @@ describe("runTurn against the fake agent over real stdio", () => {
       await pool.drop(b.origin);
       await appProxy.close();
       await Promise.all([a.close(), b.close()]);
+    }
+  }, 60_000);
+
+  it("a new thread's first turn runs in the session warmed for it, once a turn taught the app's handshake", async () => {
+    const app = await stubMcpApp();
+    const appProxy = createMcpProxy(BIN);
+    await appProxy.listen(join(dir, "run", "warm.sock"));
+    const done = { state: "done", stopReason: "end_turn" };
+    try {
+      const first = harness(undefined, { appOrigin: app.origin, proxy: appProxy });
+      const warmDeps = { ...first.deps, proxy: appProxy };
+      const cold = agentLogEntries().length;
+      expect(await warmAgent("fake-a", warmDeps)).toBe("launched");
+      expect(
+        agentLogEntries()
+          .slice(cold)
+          .map((entry) => entry.method),
+      ).not.toContain("session/new");
+      expect(
+        await runTurn(
+          claim(asId("thread", "w1"), "fake-a", "probe", "turn-w1"),
+          first.deps,
+        ),
+      ).toEqual(done);
+
+      const before = agentLogEntries().length;
+      expect(await warmAgent("fake-a", warmDeps)).toBe("warmed");
+      expect(await warmAgent("fake-a", warmDeps)).toBe("kept");
+      const opened = agentLogEntries()
+        .slice(before)
+        .filter((entry) => entry.method === "session/new");
+      expect(opened).toHaveLength(1);
+
+      const next = harness(undefined, { appOrigin: app.origin, proxy: appProxy });
+      const afterWarm = agentLogEntries().length;
+      expect(
+        await runTurn(
+          claim(asId("thread", "w2"), "fake-a", "probe", "turn-w2"),
+          next.deps,
+        ),
+      ).toEqual(done);
+      const turn = agentLogEntries().slice(afterWarm);
+      expect(turn.map((entry) => entry.method)).not.toContain("session/new");
+      const prompt = turn.find((entry) => entry.method === "session/prompt")!;
+      expect(prompt.pid).toBe(opened[0]!.pid);
+      expect(prompt.text!.startsWith(CONTEXT)).toBe(true);
+      expect(["turn-w2", ...next.issued].map((token) => `Bearer ${token}`)).toContain(
+        app.bearers.at(-1),
+      );
+    } finally {
+      await pool.drop(app.origin);
+      await appProxy.close();
+      await app.close();
     }
   }, 60_000);
 
