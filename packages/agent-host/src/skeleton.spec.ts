@@ -414,6 +414,10 @@ const DIFFERENCES_7: Readonly<
     agreed: true,
     why: "spec 8.7: `wait` names the computer a waiting chat waits for and why",
   },
+  "sync/src/client/sync-client.ts SyncClient changed": {
+    agreed: true,
+    why: "`observeBuild`: a stream a deploy left on the old build's instance reopens on the new one",
+  },
   "sync/src/client/sync-client.ts SyncClientOptions changed": {
     agreed: true,
     why: "spec 8.7: `pollEveryMs`, `requestTimeoutMs` and `onResume`, so the host adapts its interval and a dropped connection cannot hang; `onNegotiated` is the source of FrameworkSync.transport()",
