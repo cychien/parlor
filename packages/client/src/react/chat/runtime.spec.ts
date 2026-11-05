@@ -2815,6 +2815,17 @@ describe("createChatRuntime warming a new thread's agent", () => {
     expect(warms(h)).toHaveLength(2);
   });
 
+  it("asks again for the next new thread once a new thread's first prompt took the warm session", async () => {
+    const h = setup();
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    h.runtime.newThread();
+    expect(warms(h)).toHaveLength(1);
+    await h.runtime.send("compare this week");
+    h.runtime.newThread();
+    expect(warms(h)).toHaveLength(2);
+  });
+
   it("asks nothing while the chosen agent is not ready", async () => {
     const notReady: HostSummary = {
       ...claudeOnMac(),
