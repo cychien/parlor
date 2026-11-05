@@ -29,6 +29,7 @@ function record(line) {
   if (typeof message.params?.sessionId === "string")
     entry.sessionId = message.params.sessionId;
   if (typeof message.params?.modeId === "string") entry.modeId = message.params.modeId;
+  if (message.params?._meta !== undefined) entry.meta = message.params._meta;
   if (typeof message.params?.configId === "string") {
     entry.configId = message.params.configId;
     entry.value = message.params.value;
