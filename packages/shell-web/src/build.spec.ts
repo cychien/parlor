@@ -6,6 +6,7 @@ import { parseConfig } from "@parlor/config";
 import { describe, expect, it } from "vitest";
 
 import { buildWeb } from "./build.js";
+import { serviceWorkerRegistrationSource } from "./service-worker.js";
 
 describe("buildWeb", () => {
   it("emits a static site with a web manifest and service worker", async () => {
@@ -22,8 +23,24 @@ describe("buildWeb", () => {
     const files = await readdir(outDir);
     expect(outDir).toBe(join(rootDir, ".parlor", "web"));
     expect(files).toEqual(
-      expect.arrayContaining(["index.html", "manifest.webmanifest", "sw.js"]),
+      expect.arrayContaining([
+        "index.html",
+        "manifest.webmanifest",
+        "sw.js",
+        "register-sw.js",
+      ]),
     );
+    expect(files).not.toContain("registerSW.js");
+    const html = await readFile(join(outDir, "index.html"), "utf8");
+    expect(html).toContain('<script src="/register-sw.js" defer></script>');
+    expect(html).not.toContain("registerSW.js");
+    expect(await readFile(join(outDir, "register-sw.js"), "utf8")).toBe(
+      serviceWorkerRegistrationSource("/"),
+    );
+    const worker = await readFile(join(outDir, "sw.js"), "utf8");
+    expect(worker).toContain("self.skipWaiting()");
+    expect(worker).toMatch(/\.clientsClaim\(\)/);
+    expect(worker).not.toContain("SKIP_WAITING");
     const manifest = JSON.parse(
       await readFile(join(outDir, "manifest.webmanifest"), "utf8"),
     );
