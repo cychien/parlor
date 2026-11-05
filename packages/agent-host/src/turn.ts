@@ -1,5 +1,3 @@
-import { mkdir } from "node:fs/promises";
-
 import {
   answerStatement,
   checkPairingProof,
@@ -48,8 +46,8 @@ import { appServerOf, computerName } from "./naming.js";
 import { approvalFor, isAppTool, presenceDueAt, type RemotePolicy } from "./policy.js";
 import type { LiveSession, SessionPool } from "./pool.js";
 import type { LocalPrompter } from "./prompter.js";
-import { agentEnvironment } from "./shell-path.js";
 import type { TrustedDevice, TrustStore } from "./trust.js";
+import { launchAgent, sessionFit, sessionInput } from "./warm.js";
 
 export interface TurnDeps {
   readonly link: AppLink;
@@ -505,26 +503,30 @@ export async function runTurn(
       );
       if (switched) await event("agent_switched", profile.name);
       try {
-        connection = await pool.launch(origin, agentId, async (signal) => {
-          await mkdir(grant.workspace, { recursive: true, mode: 0o700 });
-          return deps.launcher.launch(profile, {
-            cwd: grant.workspace,
-            env: await agentEnvironment(),
-            signal,
-          });
-        });
-        proxy = deps.proxy.open(appServer, origin);
-        proxy.begin(claimed.token);
-        const session: AgentSession = await connection.openSession({
-          cwd: grant.workspace,
-          mcpServers: [proxy.server],
-          resume: await pool.resumable(grant, threadId, agentId),
-          pinAskMode: true,
-          strictAsk: deps.policy.answers !== "off",
-          autoMode: deps.policy.agentMode !== "ask",
-        });
-        live = { session, proxy };
+        connection = await launchAgent(pool, deps.launcher, profile, grant);
+        const resume = await pool.resumable(grant, threadId, agentId);
+        const warm =
+          resume === undefined
+            ? pool.takeWarm(grant, agentId, sessionFit(grant, deps.policy))
+            : undefined;
+        if (warm) {
+          proxy = warm.proxy;
+          proxy.begin(claimed.token);
+          live = warm;
+        } else {
+          proxy = deps.proxy.open(appServer, origin);
+          proxy.begin(claimed.token);
+          const session: AgentSession = await connection.openSession(
+            sessionInput(grant, deps.policy, proxy, resume),
+          );
+          live = { session, proxy };
+        }
         pool.remember(grant, threadId, agentId, live);
+        logEvent("session_opened", {
+          appOrigin: origin,
+          agentId,
+          warm: warm !== undefined,
+        });
       } catch (error) {
         proxy?.dispose();
         proxy = undefined;

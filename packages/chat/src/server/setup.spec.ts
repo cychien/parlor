@@ -89,6 +89,7 @@ describe("chat() setup", () => {
       "cancel",
       "userActive",
       "checkAgents",
+      "warmAgent",
       "hostHello",
       "hostReport",
       "hostAgentToken",

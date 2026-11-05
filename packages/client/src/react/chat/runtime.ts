@@ -266,6 +266,8 @@ const ACTIVITY_PING_MS = 60_000;
 const AGENTS_CHECK_MS = 8_000;
 /** The least time between the looks a sidebar without agents asks for on its own. */
 const AUTO_CHECK_MS = 10_000;
+/** How often a new thread's composer asks its agent's computer to start it, while it is shown. */
+const WARM_EVERY_MS = 5 * 60_000;
 const UNFIXABLE_BY_RETRY: ReadonlySet<string> = new Set([
   "not_found",
   "unauthenticated",
@@ -370,6 +372,8 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
   let retryDelay = READ_RETRY_BASE_MS;
   let lastPing: number | undefined;
   let pingRefused = false;
+  const warmedAt = new Map<string, number>();
+  let warmRefused = false;
   let generation = 0;
   let device: SessionDevice | undefined;
   let linkInfo: Awaited<ReturnType<DeviceLinker["linkState"]>> | undefined;
@@ -650,10 +654,36 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
     presenceTimer = setTimeout(emit, Math.min(due - Date.now(), LONGEST_TIMEOUT_MS));
   };
 
+  /** A new thread's agent starts on its computer while the user writes the first prompt. */
+  const warmOnSight = () => {
+    if (!running || warmRefused || loaded !== "yes" || threadId !== undefined) return;
+    if (sending || deps.isHidden?.() === true) return;
+    const agent = state.agent;
+    if (!agent?.online || !agent.ready) return;
+    const now = Date.now();
+    if (now - (warmedAt.get(agent.key) ?? -Infinity) < WARM_EVERY_MS) return;
+    warmedAt.set(agent.key, now);
+    const split = agent.key.indexOf("/");
+    calls
+      .call("warmAgent", {
+        hostId: asId("host", agent.key.slice(0, split)),
+        agentId: agent.key.slice(split + 1),
+      })
+      .catch((error: unknown) => {
+        if (
+          error instanceof ActionError &&
+          (error.code === "not_found" || error.code === "forbidden")
+        ) {
+          warmRefused = true;
+        }
+      });
+  };
+
   let state = compute();
   const emit = () => {
     state = compute();
     watchPresence();
+    warmOnSight();
     for (const listener of [...listeners]) listener();
   };
 
@@ -1297,8 +1327,10 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
       const offConfirmations = agentUi.confirmations.subscribe(emit);
       // Back from installing an agent in a terminal, the window regains focus without the tab ever hiding.
       const onSight = () => {
-        if (typeof document === "undefined" || document.visibilityState === "visible")
+        if (typeof document === "undefined" || document.visibilityState === "visible") {
           checkAgentsOnSight();
+          warmOnSight();
+        }
       };
       const watchesSight =
         typeof window !== "undefined" &&

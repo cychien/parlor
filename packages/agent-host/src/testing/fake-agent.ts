@@ -139,7 +139,10 @@ class McpStdioClient {
       protocolVersion: "2025-06-18",
       capabilities: {},
       clientInfo: { name: "fake-agent", version: "0.0.0" },
-    }).then(() => this.#send({ jsonrpc: "2.0", method: "notifications/initialized" }));
+    })
+      .then(() => this.#send({ jsonrpc: "2.0", method: "notifications/initialized" }))
+      .then(() => this.request("tools/list", {}))
+      .then(() => undefined);
   }
 
   #send(message: unknown) {

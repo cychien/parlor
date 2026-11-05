@@ -108,6 +108,7 @@ function setup(
     hosts?: () => HostSummary[];
     history?: (input: { threadId: string; beforeSeq: number }) => ThreadHistory;
     threadsBefore?: (input: { before: { updatedAt: number; id: string } }) => ThreadList;
+    warmAgent?: () => unknown;
   } = {},
 ) {
   let negotiatedTransport = options.transport;
@@ -123,6 +124,7 @@ function setup(
     userActive: () => ({ ok: true }),
     history: options.history ?? (() => ({ items: [], turns: [], hasMore: false })),
     threadsBefore: options.threadsBefore ?? (() => ({ threads: [], hasMore: false })),
+    warmAgent: options.warmAgent ?? (() => ({ ok: true })),
   };
   const call = vi.fn(async (name: string, input: unknown) => {
     calls.push({ name, input });
@@ -923,7 +925,7 @@ describe("createChatRuntime a new thread", () => {
     expect(state.threads.map((t) => t.id)).toEqual(["thr_2", "thr_1"]);
     expect(state.agents.map((a) => a.key)).toEqual(["host_mac/claude"]);
     expect(state.draft).toBe("half typed");
-    expect(h.names()).toEqual(["open"]);
+    expect(h.names()).toEqual(["open", "warmAgent"]);
     expect(h.stopWatching).toHaveBeenCalledOnce();
   });
 
@@ -2783,5 +2785,66 @@ describe("createChatRuntime looking for agents again", () => {
     await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
     window.dispatchEvent(new Event("focus"));
     expect(asked()).toBe(0);
+  });
+});
+
+describe("createChatRuntime warming a new thread's agent", () => {
+  const MINUTE = 60_000;
+  const warms = (h: ReturnType<typeof setup>) =>
+    h.calls.filter((c) => c.name === "warmAgent").map((c) => c.input);
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("asks the chosen agent's computer to start it while a new thread is shown, at most every five minutes", async () => {
+    const h = setup();
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    expect(warms(h)).toEqual([]);
+
+    h.runtime.newThread();
+    expect(warms(h)).toEqual([{ hostId: "host_mac", agentId: "claude" }]);
+    h.runtime.setDraft("compare this");
+    h.runtime.setDraft("compare this week");
+    expect(warms(h)).toHaveLength(1);
+
+    const later = Date.now() + 5 * MINUTE;
+    vi.spyOn(Date, "now").mockReturnValue(later);
+    h.runtime.setDraft("compare this week with last");
+    expect(warms(h)).toHaveLength(2);
+  });
+
+  it("asks nothing while the chosen agent is not ready", async () => {
+    const notReady: HostSummary = {
+      ...claudeOnMac(),
+      agents: [{ id: "claude", name: "Claude Code", ready: false }],
+    };
+    const h = setup({
+      open: async () => ({ ...snapshot(), hosts: [notReady] }),
+      hosts: () => [notReady],
+    });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    h.runtime.newThread();
+    h.runtime.setDraft("hi");
+    expect(warms(h)).toEqual([]);
+  });
+
+  it("stops asking once the server has no warmAgent", async () => {
+    const h = setup({
+      warmAgent: () => {
+        throw new ActionError("not_found", "No action warmAgent.");
+      },
+    });
+    h.runtime.start();
+    await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
+    h.runtime.newThread();
+    await vi.waitFor(() => expect(warms(h)).toHaveLength(1));
+    await Promise.resolve();
+
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 5 * MINUTE);
+    h.runtime.setDraft("hi");
+    expect(warms(h)).toHaveLength(1);
   });
 });

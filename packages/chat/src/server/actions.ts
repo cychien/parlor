@@ -2,6 +2,7 @@ import {
   type ActionContext,
   ActionError,
   type HostId,
+  type Tag,
   type ThreadId,
   type TurnId,
 } from "@parlor/core";
@@ -10,7 +11,7 @@ import { type AuthProvider, type Delegation, HOST_GRANTS_TAG } from "@parlor/ser
 import { z } from "zod";
 
 import { idSchema } from "../id-schemas.js";
-import { chatItemBodies, hostItemDraft, type LoggedItem } from "../items.js";
+import { agentRef, chatItemBodies, hostItemDraft, type LoggedItem } from "../items.js";
 import type {
   AgentInfo,
   ChatOwner,
@@ -24,6 +25,7 @@ import type {
 import { HOST_PROTOCOL, type HostWelcome, PUSHED_TURNS_PROTOCOL } from "../protocol.js";
 import {
   CHAT_ACTIVITY_TAG,
+  CHAT_AGENT_WARM_TAG,
   CHAT_AGENTS_CHECK_TAG,
   CHAT_TAG,
   HOSTS_TAG,
@@ -67,6 +69,8 @@ export interface ChatActionDeps {
   readonly reconcile: (owner: ChatOwner) => Promise<void>;
   /** Drops the owner's computer rows whose grant is gone; best effort, never fails a read. */
   readonly pruneHosts: (owner: ChatOwner, hostIds: readonly HostId[]) => Promise<void>;
+  /** Wakes `owner`'s tabs and computers with tags that no write carries. */
+  readonly announce: (owner: ChatOwner, tags: readonly Tag[]) => Promise<void>;
   readonly auth: AuthProvider;
   readonly store: ChatStore;
   readonly relay: LiveRelay;
@@ -291,6 +295,15 @@ export function userChatActions(deps: ChatActionDeps) {
       input: z.object({}),
       writes: [CHAT_AGENTS_CHECK_TAG],
       run: (): { readonly askedAt: number } => ({ askedAt: Date.now() }),
+    }),
+    warmAgent: chatAction("user", enforcing, {
+      description:
+        "Tell one of the user's computers a thread with this agent may start soon, so it starts the agent now; carries no content and writes no table.",
+      input: agentRef,
+      run: async (input, user): Promise<{ readonly ok: true }> => {
+        await deps.announce(user, [[CHAT_AGENT_WARM_TAG, input.hostId, input.agentId]]);
+        return { ok: true };
+      },
     }),
   };
 }
