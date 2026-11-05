@@ -363,6 +363,34 @@ describe("the MCP proxy's handshake", () => {
     warm.dispose();
   });
 
+  it("answers a session opened before its turn whose initialize asks otherwise, then asks the app with its own once the turn begins", async () => {
+    const at = `${appOrigin}/other-params`;
+    answer = (method) => ({ status: 200, result: { said: method } });
+    const first = session(at);
+    await timed(first.agent, request(1, "initialize", { protocolVersion: "2025-06-18" }));
+    await timed(first.agent, request(2, "tools/list"));
+    first.opened.dispose();
+
+    asked.length = 0;
+    const warm = proxy.open("courses", at);
+    const agent = agentSide(warm.server.env);
+    expect(
+      (await timed(agent, request(11, "initialize", { protocolVersion: "2025-11-25" })))
+        .reply,
+    ).toEqual({ jsonrpc: "2.0", id: 11, result: { said: "initialize" } });
+    expect((await timed(agent, request(12, "tools/list"))).reply).toEqual({
+      jsonrpc: "2.0",
+      id: 12,
+      result: { said: "tools/list" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(asked).toEqual([]);
+
+    warm.begin({ token: "turn", expiresAt: Date.now() + 60_000 });
+    await vi.waitFor(() => expect(asked.sort()).toEqual(["initialize", "tools/list"]));
+    warm.dispose();
+  });
+
   it("replays a request the app refuses as malformed, the way it refused it", async () => {
     const at = `${appOrigin}/discover`;
     answer = () => ({ status: 400, raw: '{"error":"bad request"}' });

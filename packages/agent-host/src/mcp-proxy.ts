@@ -98,7 +98,10 @@ interface Live {
   readonly inflight: Set<AbortController>;
   readonly sockets: Set<Socket>;
   /** Handshake requests answered from `known` before a turn, asked again once one begins. */
-  readonly unconfirmed: Map<string, string>;
+  readonly unconfirmed: Map<
+    string,
+    { readonly line: string; readonly answer: KnownAnswer }
+  >;
 }
 
 function parse(text: string): Message | undefined {
@@ -167,11 +170,28 @@ function learn(live: Live, method: string, answer: KnownAnswer): void {
 const asLine = (text: string) =>
   text.includes("\n") ? JSON.stringify(JSON.parse(text)) : text;
 
-function betweenTurns(live: Live, message: Message): string | undefined {
+/**
+ * What the app last said to this handshake request, or to the same method asked otherwise:
+ * an agent's later sessions ask `initialize` with other parameters than its first did.
+ */
+function answerBeforeTurn(live: Live, message: Message): KnownAnswer | undefined {
+  const key = handshakeKey(message);
+  if (key === undefined || !live.known) return undefined;
+  const exact = live.known.get(key);
+  if (exact) return exact;
+  const method = `${message.method as string} `;
+  let latest: KnownAnswer | undefined;
+  for (const [known, answer] of live.known) if (known.startsWith(method)) latest = answer;
+  return latest;
+}
+
+function betweenTurns(
+  live: Live,
+  message: Message,
+  known: KnownAnswer | undefined,
+): string | undefined {
   if (message.id === undefined || typeof message.method !== "string") return undefined;
   const { id } = message;
-  const key = handshakeKey(message);
-  const known = key === undefined ? undefined : live.known?.get(key);
   if (known) {
     learn(live, message.method, known);
     return JSON.stringify({ jsonrpc: "2.0", id, ...known });
@@ -350,10 +370,11 @@ function handle(live: Live, line: string, reply: (line: string) => void): void {
   if (!message) return;
   const token = live.token;
   if (token === undefined) {
-    const answer = betweenTurns(live, message);
+    const known = message.id === undefined ? undefined : answerBeforeTurn(live, message);
+    const answer = betweenTurns(live, message, known);
     if (answer) reply(answer);
-    const key = message.id === undefined ? undefined : handshakeKey(message);
-    if (key !== undefined && live.known?.has(key)) live.unconfirmed.set(key, line);
+    const key = handshakeKey(message);
+    if (known && key !== undefined) live.unconfirmed.set(key, { line, answer: known });
     return;
   }
   const key = message.id === undefined ? undefined : handshakeKey(message);
@@ -656,11 +677,9 @@ export function createMcpProxy(
         },
         begin: (token) => {
           live.token = token.token;
-          for (const [key, line] of live.unconfirmed) {
+          for (const [key, { line, answer }] of live.unconfirmed) {
             const message = parse(line);
-            const answered = live.known?.get(key);
-            if (message && answered)
-              confirm(live, token.token, line, message, key, answered);
+            if (message) confirm(live, token.token, line, message, key, answer);
           }
           live.unconfirmed.clear();
         },
