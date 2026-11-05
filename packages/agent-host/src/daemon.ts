@@ -37,7 +37,7 @@ import { onLines } from "./lines.js";
 import { type AppLink, createAppLink } from "./link.js";
 import { withInheritedLock } from "./lock.js";
 import { logEvent, openHostLog } from "./log.js";
-import type { McpProxy } from "./mcp-proxy.js";
+import { AppNotAnswering, type McpProxy } from "./mcp-proxy.js";
 import { computerName, platformName, workspaceOf } from "./naming.js";
 import {
   type LocalPairing,
@@ -509,6 +509,7 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
         const held = agentTokens.get(key);
         if (held && held.expiresAt - AGENT_TOKEN_MARGIN_MS > Date.now())
           return held.token;
+        if (state.link.protocol === undefined) throw new AppNotAnswering();
         const fresh = await state.link.api.calls.call("hostAgentToken", {
           agent: `${agent} on ${name}`.slice(0, 120),
         });
