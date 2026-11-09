@@ -32,7 +32,15 @@ export interface DatabaseOptions {
   readonly directUrl?: string | undefined;
   readonly dataDir?: string | undefined;
   readonly migrationsFolder?: string | undefined;
+  /**
+   * How often a LISTEN connection is asked to answer, and how long it has to. One that does not
+   * answer is reported lost, since a connection can die without closing, e.g. when the database
+   * restarts behind a proxy. Defaults to 10 seconds.
+   */
+  readonly listenCheckMs?: number | undefined;
 }
+
+const DEFAULT_LISTEN_CHECK_MS = 10_000;
 
 /** Runs one parameterized statement (`$1`, `$2`, ...) and answers its rows, as `pg` does. */
 export interface DatabaseClient {
@@ -139,7 +147,11 @@ function scopedDatabase(current: () => Database): Database {
   });
 }
 
-function nodePostgresHandle(url: string, directUrl: string): DatabaseHandle {
+function nodePostgresHandle(
+  url: string,
+  directUrl: string,
+  listenCheckMs: number,
+): DatabaseHandle {
   const key = {};
   const outside = new ConnectionOwner();
   const opened = new Set<PgConnections>();
@@ -157,12 +169,23 @@ function nodePostgresHandle(url: string, directUrl: string): DatabaseHandle {
     transaction: (run) => connections().db.transaction((tx) => run(tx)),
     listen: async (channel, handler, options = {}) => {
       const { listeners } = connections();
-      const client = new pg.Client({ connectionString: directUrl });
+      const client = new pg.Client({
+        connectionString: directUrl,
+        keepAlive: true,
+        query_timeout: listenCheckMs,
+      });
       let state: "listening" | "lost" | "closed" = "listening";
       const current = () => state;
+      let checking = false;
+      const check = setInterval(() => {
+        if (checking) return;
+        checking = true;
+        client.query("select 1").then(() => (checking = false), lose);
+      }, listenCheckMs);
       const lose = () => {
         if (state !== "listening") return;
         state = "lost";
+        clearInterval(check);
         listeners.delete(client);
         client.end().catch(() => {});
         options.onLost?.();
@@ -178,6 +201,7 @@ function nodePostgresHandle(url: string, directUrl: string): DatabaseHandle {
         await client.query(`LISTEN ${identifier}`);
       } catch (error) {
         state = "closed";
+        clearInterval(check);
         await client.end().catch(() => {});
         throw error;
       }
@@ -187,6 +211,7 @@ function nodePostgresHandle(url: string, directUrl: string): DatabaseHandle {
       return async () => {
         if (state !== "listening") return;
         state = "closed";
+        clearInterval(check);
         listeners.delete(client);
         await client.query(`UNLISTEN ${identifier}`).catch(() => {});
         await client.end();
@@ -230,7 +255,11 @@ export async function createDatabase(
 ): Promise<DatabaseHandle> {
   const url = options.url ?? resolveDatabaseUrl();
   const handle = url
-    ? nodePostgresHandle(url, options.directUrl ?? resolveDirectUrl() ?? url)
+    ? nodePostgresHandle(
+        url,
+        options.directUrl ?? resolveDirectUrl() ?? url,
+        options.listenCheckMs ?? DEFAULT_LISTEN_CHECK_MS,
+      )
     : await pgliteHandle(options.dataDir ?? resolvePgliteDir());
   const folder = options.migrationsFolder;
   if (!folder) return handle;
