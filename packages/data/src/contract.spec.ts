@@ -1,3 +1,5 @@
+import net from "node:net";
+
 import { sql } from "drizzle-orm";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -148,5 +150,75 @@ describe.runIf(postgresUrl)("node-postgres when the server drops a connection", 
     await new Promise((resolve) => setTimeout(resolve, 100));
     const result = await handle.db.execute(sql`select 2 as n`);
     expect(result.rows).toEqual([{ n: 2 }]);
+  });
+});
+
+/** A TCP hop to Postgres that can stop carrying bytes while every socket stays open, as a dead NAT or proxy does. */
+async function freezableProxy(target: URL) {
+  const pairs: [net.Socket, net.Socket][] = [];
+  const sockets = new Set<net.Socket>();
+  const server = net.createServer((client) => {
+    const upstream = net.connect(Number(target.port || 5432), target.hostname);
+    client.pipe(upstream);
+    upstream.pipe(client);
+    const drop = () => {
+      client.destroy();
+      upstream.destroy();
+    };
+    client.on("error", drop);
+    upstream.on("error", drop);
+    pairs.push([client, upstream]);
+    sockets.add(client).add(upstream);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const url = new URL(target);
+  url.hostname = "127.0.0.1";
+  url.port = String((server.address() as net.AddressInfo).port);
+  return {
+    url: url.toString(),
+    freeze() {
+      for (const [client, upstream] of pairs.splice(0)) {
+        client.unpipe(upstream);
+        upstream.unpipe(client);
+        client.pause();
+        upstream.pause();
+      }
+    },
+    close: () =>
+      new Promise<void>((resolve) => {
+        for (const socket of sockets) socket.destroy();
+        server.close(() => resolve());
+      }),
+  };
+}
+
+describe.runIf(postgresUrl)("node-postgres when a LISTEN connection goes silent", () => {
+  it("reports it lost, so the listener listens again", async () => {
+    const proxy = await freezableProxy(new URL(postgresUrl!));
+    const handle = await createDatabase({
+      url: postgresUrl,
+      directUrl: proxy.url,
+      listenCheckMs: 200,
+    });
+    try {
+      const name = channel();
+      let reported!: () => void;
+      const lost = new Promise<void>((resolve) => (reported = resolve));
+      await handle.listen(name, () => {}, { onLost: () => reported() });
+      proxy.freeze();
+      await expect(
+        Promise.race([
+          lost.then(() => "lost"),
+          new Promise((resolve) => setTimeout(() => resolve("still listening"), 2000)),
+        ]),
+      ).resolves.toBe("lost");
+      const inbox = received();
+      await handle.listen(name, inbox.handler);
+      await handle.db.execute(sql`select pg_notify(${name}, 'again')`);
+      await inbox.until(1);
+    } finally {
+      await handle.close();
+      await proxy.close();
+    }
   });
 });
