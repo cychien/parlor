@@ -60,6 +60,30 @@ describe("web.csp", () => {
   });
 });
 
+describe("web.icons", () => {
+  const app = { id: "com.example.todo", name: "T" };
+
+  it("is unset by default, so the manifest stays as it was", () => {
+    expect(parseConfig({ app }).web.icons).toBeUndefined();
+  });
+
+  it("keeps icons that name a file under public/ and its sizes", () => {
+    const icons = [
+      { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
+    ];
+    expect(parseConfig({ app, web: { icons } }).web.icons).toEqual(icons);
+  });
+
+  it("rejects a relative path or sizes the manifest cannot read", () => {
+    expect(() =>
+      parseConfig({ app, web: { icons: [{ src: "icon.png", sizes: "512x512" }] } }),
+    ).toThrow();
+    expect(() =>
+      parseConfig({ app, web: { icons: [{ src: "/icon.png", sizes: "512" }] } }),
+    ).toThrow();
+  });
+});
+
 describe("web.ssr", () => {
   const app = { id: "com.example.todo", name: "T" };
 

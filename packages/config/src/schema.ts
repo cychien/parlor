@@ -54,6 +54,27 @@ export const parlorConfigSchema = z.object({
       pwa: z.boolean().default(true),
       themeColor: z.string().default("#ffffff"),
       backgroundColor: z.string().default("#ffffff"),
+      /** The installed app's icons, files under `public/`; Android needs 192 and 512 px to install. */
+      icons: z
+        .array(
+          z.object({
+            src: z
+              .string()
+              .startsWith(
+                "/",
+                "web.icons[].src is a path under public/, such as /icon-512.png",
+              ),
+            sizes: z
+              .string()
+              .regex(
+                /^(any|\d+x\d+( \d+x\d+)*)$/,
+                "web.icons[].sizes is like 192x192 or any",
+              ),
+            type: z.string().optional(),
+            purpose: z.enum(["any", "maskable", "monochrome"]).optional(),
+          }),
+        )
+        .optional(),
       routeTree: z.string().optional(),
       csp: z.partialRecord(z.enum(CSP_DIRECTIVES), z.array(z.string())).optional(),
       /**

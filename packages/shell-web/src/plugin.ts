@@ -79,6 +79,16 @@ export function webManifest(config: ParlorConfig) {
     display: "standalone" as const,
     theme_color: config.web.themeColor,
     background_color: config.web.backgroundColor,
+    ...(config.web.icons
+      ? {
+          icons: config.web.icons.map(({ src, sizes, type, purpose }) => ({
+            src,
+            sizes,
+            ...(type ? { type } : {}),
+            ...(purpose ? { purpose } : {}),
+          })),
+        }
+      : {}),
   };
 }
 
