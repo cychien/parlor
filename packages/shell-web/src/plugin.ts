@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { pagePattern } from "@parlor/agent-ui";
@@ -69,7 +69,14 @@ function cspPlugin(config: ParlorConfig, options: WebOptions): PluginOption {
   };
 }
 
-export function webManifest(config: ParlorConfig) {
+/** The language the app's `index.html` declares on `<html lang>`, which its manifest then shares. */
+export function documentLang(root: string): string | undefined {
+  const page = resolve(root, "index.html");
+  if (!existsSync(page)) return undefined;
+  return /<html\b[^>]*\blang=["']([^"']+)["']/i.exec(readFileSync(page, "utf8"))?.[1];
+}
+
+export function webManifest(config: ParlorConfig, lang?: string) {
   return {
     id: config.app.id,
     name: config.app.name,
@@ -79,6 +86,7 @@ export function webManifest(config: ParlorConfig) {
     display: "standalone" as const,
     theme_color: config.web.themeColor,
     background_color: config.web.backgroundColor,
+    ...(lang ? { lang } : {}),
     ...(config.web.icons
       ? {
           icons: config.web.icons.map(({ src, sizes, type, purpose }) => ({
@@ -173,7 +181,7 @@ export function parlorWeb(
       VitePWA({
         registerType: "autoUpdate",
         injectRegister: false,
-        manifest: webManifest(config),
+        manifest: webManifest(config, documentLang(root)),
         workbox: {
           skipWaiting: true,
           clientsClaim: true,
