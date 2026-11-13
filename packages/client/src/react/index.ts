@@ -13,6 +13,7 @@ export type {
 } from "./chat/chat-ask.js";
 export type { ChatRootProps } from "./chat/chat-root.js";
 export type { ChatThreadProps } from "./chat/chat-thread.js";
+export type { ChatUiComponents, ChatUiProps } from "./chat/chat-ui.js";
 export type {
   AgentChoice,
   AgentChoiceOption,
