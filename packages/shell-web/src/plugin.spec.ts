@@ -1,4 +1,12 @@
-import { mkdir, mkdtemp, readdir, readFile, realpath, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,7 +15,7 @@ import { parseConfig } from "@parlor/config";
 import { createServer, resolveConfig, build } from "vite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { parlorWeb, webManifest } from "./plugin.js";
+import { documentLang, parlorWeb, webManifest } from "./plugin.js";
 
 const config = parseConfig({
   app: { id: "com.example.todo", name: "Todo", description: "A todo app" },
@@ -77,6 +85,21 @@ describe("parlorWeb", () => {
       theme_color: "#ffffff",
       background_color: "#ffffff",
     });
+  });
+
+  it("gives the web manifest the language the app's index.html declares", async () => {
+    const root = await mkdtemp(join(tmpdir(), "parlor-lang-"));
+    try {
+      expect(documentLang(root)).toBeUndefined();
+      await writeFile(
+        join(root, "index.html"),
+        '<!doctype html>\n<html lang="zh-Hant" dir="ltr">\n<head></head></html>',
+      );
+      expect(documentLang(root)).toBe("zh-Hant");
+      expect(webManifest(config, documentLang(root)).lang).toBe("zh-Hant");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("lists the app's icons in the web manifest, so Android can install it", () => {

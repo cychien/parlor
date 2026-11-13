@@ -24,7 +24,7 @@ import { defineConfig } from "@parlor/config";
 | `server.url`                                           | none                         | the public server origin native shells call                                                                    |
 | `server.sync.transport`                                | by preset                    | `sse` or `poll`                                                                                                |
 | `web.port`                                             | `5173`                       | the web app's port in development, or the next free one                                                        |
-| `web.pwa`, `web.themeColor`, `web.backgroundColor`     | `true`, `#ffffff`, `#ffffff` | the installable web app                                                                                        |
+| `web.pwa`, `web.themeColor`, `web.backgroundColor`     | `true`, `#ffffff`, `#ffffff` | the installable web app; its manifest takes its language from `<html lang>` in `index.html`                    |
 | `web.icons`                                            | none                         | the installed app's icons: `{ src, sizes, type?, purpose? }`, files in `public/`; Android needs 192 and 512 px |
 | `web.routeTree`, `web.csp`                             | `src/routeTree.gen.ts`, none | the generated route tree; extra CSP sources                                                                    |
 | `web.ssr.app`                                          | none                         | the module that builds the app; renders `ssr: true` routes on the server                                       |
