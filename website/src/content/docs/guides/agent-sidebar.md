@@ -64,3 +64,74 @@ export const notePanel = defineAgentView({
 Then bind it where the UI renders, with `useAgentView(view, { get })`, and attach the returned `ref` to the element. While the element is on screen, the agent reads its current value. List the views a route shows in its `staticData.views`.
 
 Two options make a view more than something to read. `keyed: true` is for a list's rows: bind each row with `key` set to the id your actions take, and "delete this one" resolves to that id. `writable: true` with a `set` in the binding lets the agent fill a form for the user, who submits it. The template's todo page does both, with a `todo` view per row and a `newTodo` view on the New todo field; start from it.
+
+## Showing UI in the chat
+
+The agent can answer with more than text: a chart, a few key numbers, a comparison, built from components you define. Give `chat()` a catalog:
+
+```ts
+// chat-ui.ts
+import { defineChatUi } from "@parlor/chat";
+import { z } from "zod";
+
+export const chatUi = defineChatUi({
+  Card: {
+    description: "A titled group of other elements, such as a few stats side by side.",
+    props: z.object({ title: z.string() }),
+    children: true,
+  },
+  Stat: {
+    description: "One number with its label.",
+    props: z.object({ label: z.string(), value: z.number() }),
+  },
+});
+```
+
+```ts
+import type { ChatUiCatalog } from "@parlor/chat";
+declare const chatUi: ChatUiCatalog;
+// ---cut---
+// server.ts
+import { chat } from "@parlor/chat/server";
+
+chat({ ui: chatUi });
+```
+
+The agent then has a `chat_show` tool, listed only while it answers a chat turn, whose description holds the catalog: each component's description and its props as a JSON schema. It builds a flat tree the way [json-render](https://github.com/vercel-labs/json-render) does, `{ root, elements }`, every element `{ type, props, children? }`. The server checks every element against its component, and a spec that does not fit comes back to the agent with what to fix. One that fits is shown in the conversation where the agent called it, between the text before and after it.
+
+Render it in the sidebar with `Chat.Ui` and a component for each catalog entry. Each element's props are parsed by its schema again, so a component gets defaults filled in:
+
+```tsx
+import { defineChatUi } from "@parlor/chat";
+import { z } from "zod";
+const chatUi = defineChatUi({
+  Card: { description: "", props: z.object({ title: z.string() }), children: true },
+  Stat: { description: "", props: z.object({ label: z.string(), value: z.number() }) },
+});
+// ---cut---
+import { Chat, type ChatItem, type ChatUiComponents } from "@parlor/client/react";
+import type { ReactNode } from "react";
+
+const components: ChatUiComponents<typeof chatUi> = {
+  Card: ({ title, children }) => (
+    <section aria-label={title}>
+      <h3>{title}</h3>
+      {children}
+    </section>
+  ),
+  Stat: ({ label, value }) => (
+    <p>
+      {label}: <strong>{value}</strong>
+    </p>
+  ),
+};
+
+function Item({ item }: { readonly item: ChatItem }): ReactNode {
+  if (item.kind === "ui") {
+    return <Chat.Ui spec={item.spec} catalog={chatUi} components={components} />;
+  }
+  return null;
+}
+```
+
+The components are your own React code, so one can call your actions or change the page like any other component. An old message keeps the spec it was shown with; an element your catalog no longer describes renders `fallback`, nothing by default. It takes a Parlor Host from this release on; an older one shows `chat_show` as an ordinary tool step.

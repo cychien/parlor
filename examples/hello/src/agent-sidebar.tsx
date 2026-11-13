@@ -3,6 +3,7 @@ import {
   type AgentConfirmation,
   Chat,
   type ChatItem,
+  type ChatUiComponents,
   useChat,
   useDevices,
   useLinkDevice,
@@ -12,6 +13,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { encode } from "uqr";
 
+import { chatUi } from "../chat-ui.js";
 import { ConfirmationCard, focusComposer } from "./agent-requests.js";
 import { sidebarView } from "./sidebar-view.js";
 
@@ -572,6 +574,35 @@ const EVENTS = {
   answer_rejected: "Your answer was not accepted",
 } as const;
 
+const CHAT_UI: ChatUiComponents<typeof chatUi> = {
+  Card: ({ title, children }) => (
+    <section className="ui-card" aria-label={title}>
+      <h3>{title}</h3>
+      <div className="ui-card-body">{children}</div>
+    </section>
+  ),
+  Stat: ({ label, value }) => (
+    <p className="ui-stat">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </p>
+  ),
+  Bars: ({ rows }) => {
+    const top = Math.max(...rows.map((row) => row.value), 1);
+    return (
+      <ul className="ui-bars">
+        {rows.map((row) => (
+          <li key={row.label}>
+            <span>{row.label}</span>
+            <span className="ui-bar" style={{ width: `${(row.value / top) * 100}%` }} />
+            <strong>{row.value}</strong>
+          </li>
+        ))}
+      </ul>
+    );
+  },
+};
+
 function Item({ item }: { readonly item: ChatItem<AgentConfirmation> }) {
   switch (item.kind) {
     case "prompt":
@@ -607,6 +638,12 @@ function Item({ item }: { readonly item: ChatItem<AgentConfirmation> }) {
             </li>
           ))}
         </ul>
+      );
+    case "ui":
+      return (
+        <div className="chat-ui">
+          <Chat.Ui spec={item.spec} catalog={chatUi} components={CHAT_UI} />
+        </div>
       );
     case "ask":
       return <AskCard item={item} />;
