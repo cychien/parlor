@@ -36,6 +36,44 @@ When it cannot edit a file safely, for example a `server.ts` that builds its opt
 - The computer that runs the agents must be a Mac for now: `npx @parlor/agent-host connect` refuses on Windows and Linux before it pairs, because Parlor Host keeps its keys in the macOS Keychain. `parlor dev` works on every platform, and the app itself, with its sidebar, runs in any browser and on iPhone.
 - MCP clients sign in through OAuth. See [Agents](/parlor/guides/agents/).
 
+## Your own page for connecting a computer
+
+`connect` opens a page where the user approves the computer. Parlor's own page is plain and in English. To show it in the app's design and language, give `parlorAuth` a page of the app:
+
+```ts
+import { parlorAuth } from "@parlor/auth";
+
+export const authOptions = parlorAuth({
+  appName: "Courses",
+  signInPage: "/sign-in",
+  connectComputerPage: "/connect-computer",
+});
+```
+
+Parlor then sends the browser there twice, with the request in the query: first to approve, then, once the computer has its key, to say it is connected. The page reads which with `parseComputerConnection`, and answers with the auth client, then goes where the answer says, which is the computer waiting for it:
+
+```ts
+import { createAuthClient, parseComputerConnection } from "@parlor/auth/client";
+
+const auth = createAuthClient();
+const connection = parseComputerConnection(window.location.search);
+
+if (connection?.step === "confirm") {
+  // Show connection.request.hostName and its platform; offer agent tools when
+  // connection.request.offersAgentTools is true. On Connect:
+  window.location.assign(
+    await auth.answerComputerConnection(connection.request, "connect", {
+      agentTools: true,
+    }),
+  );
+}
+if (connection?.step === "connected") {
+  // The computer is connected; connection.agentTools names the app to Claude Code and Codex there.
+}
+```
+
+The page is an ordinary signed-in page: send a signed-out visitor to sign in and back, as the app's other pages do. The server checks the request again, and only accepts the answer from the app's own origin. The browser keeps the computer's pairing on its way back, so that tab's sidebar sends without linking.
+
 ## Email codes and Google
 
 `parlor add auth` signs in with a password. To sign in with a code sent by email, or with Google, add Better Auth's `emailOTP` plugin and `socialProviders` in `auth.ts` and turn passwords off:
