@@ -30,6 +30,8 @@ export interface FakeAgentScript {
         readonly resume?: boolean | undefined;
         readonly close?: boolean | undefined;
         readonly mcpHttp?: boolean | undefined;
+        /** Takes `_session/steering`; a `wait_for_steer` step then hears what was sent in. */
+        readonly steering?: boolean | undefined;
         readonly modes?: AgentModes | undefined;
         readonly options?: readonly AgentOption[] | undefined;
       }
@@ -68,6 +70,8 @@ export type FakeStep =
       readonly schema: Readonly<Record<string, unknown>>;
     }
   | { readonly kind: "wait_for_cancel" }
+  /** Waits for a prompt steered into this turn, and replies `Heard: <its text>`. */
+  | { readonly kind: "wait_for_steer" }
   | { readonly kind: "exit"; readonly code: number }
   | { readonly kind: "stop"; readonly reason: Exclude<StopReason, "cancelled"> };
 
@@ -186,7 +190,24 @@ function resultText(message: Record<string, unknown>): { text: string; failed: b
 export function serveFakeAgent(script: FakeAgentScript, io: AcpStdio): Promise<void> {
   const sessions = new Map<string, readonly StdioMcpServer[]>();
   const clients = new Map<string, McpStdioClient>();
+  const steered = new Map<string, string[]>();
+  const hearing = new Map<string, () => void>();
   let tools = 0;
+
+  const nextSteer = async (
+    sessionId: string,
+    cancelled: AbortSignal,
+  ): Promise<string | undefined> => {
+    for (;;) {
+      const heard = steered.get(sessionId)?.shift();
+      if (heard !== undefined) return heard;
+      if (cancelled.aborted) return undefined;
+      await new Promise<void>((resolve) => {
+        hearing.set(sessionId, resolve);
+        cancelled.addEventListener("abort", () => resolve(), { once: true });
+      });
+    }
+  };
 
   const permit = async (
     peer: Peer,
@@ -294,6 +315,12 @@ export function serveFakeAgent(script: FakeAgentScript, io: AcpStdio): Promise<v
       case "question":
         await peer.ask({ kind: "question", message: step.message, schema: step.schema });
         return undefined;
+      case "wait_for_steer": {
+        const heard = await nextSteer(sessionId, peer.cancelled);
+        if (heard === undefined) return "cancelled";
+        await peer.update({ kind: "text", text: `Heard: ${heard}` });
+        return undefined;
+      }
       case "wait_for_cancel":
         await new Promise<void>((resolve) => {
           if (peer.cancelled.aborted) return resolve();
@@ -313,6 +340,7 @@ export function serveFakeAgent(script: FakeAgentScript, io: AcpStdio): Promise<v
         resume: script.advertise?.resume === true,
         close: script.advertise?.close === true,
         mcpHttp: script.advertise?.mcpHttp === true,
+        steering: script.advertise?.steering === true,
       },
       newSession: async (input) => {
         const id = `fake-session-${sessions.size + 1}`;
@@ -331,6 +359,13 @@ export function serveFakeAgent(script: FakeAgentScript, io: AcpStdio): Promise<v
           if (stop) return stop;
         }
         return peer.cancelled.aborted ? "cancelled" : "end_turn";
+      },
+      steer: (sessionId, blocks) => {
+        const list = steered.get(sessionId) ?? [];
+        list.push(blocks.map((block) => block.text).join("\n"));
+        steered.set(sessionId, list);
+        hearing.get(sessionId)?.();
+        return true;
       },
     },
     io,
