@@ -23,6 +23,7 @@ import type {
   TurnOutcome,
   TurnSignals,
 } from "@parlor/chat";
+import { parseUiSpec, UI_ITEMS_PROTOCOL } from "@parlor/chat";
 import { ActionError, asId, type ItemId } from "@parlor/core";
 import type { DeviceKeys } from "@parlor/server";
 
@@ -38,7 +39,7 @@ import {
 } from "./acp.js";
 import { optionChanges } from "./agent-options.js";
 import type { AgentProfile } from "./agents.js";
-import { finishFold, foldUpdate, startFold, type TurnFold } from "./fold.js";
+import { finishFold, foldShown, foldUpdate, startFold, type TurnFold } from "./fold.js";
 import type { AppLink } from "./link.js";
 import { logEvent } from "./log.js";
 import type { McpProxy, ProxySession } from "./mcp-proxy.js";
@@ -196,7 +197,9 @@ export async function runTurn(
   const threadId = claimed.id;
   const turnId = claimed.turnId;
 
-  let fold: TurnFold = startFold(turnId);
+  let fold: TurnFold = startFold(turnId, {
+    showsUi: (link.protocol ?? 0) >= UI_ITEMS_PROTOCOL,
+  });
   let proxy: ProxySession | undefined;
   let lost = false;
   const lostOver = new AbortController();
@@ -275,6 +278,14 @@ export async function runTurn(
       }
     });
     return appending;
+  };
+
+  const shown = (spec: unknown) => {
+    const parsed = parseUiSpec(spec).spec;
+    if (!parsed) return;
+    const step = foldShown(fold, parsed);
+    fold = step.fold;
+    if (step.closed.length > 0) void write(step.closed);
   };
 
   const event = (name: ChatEvent, detail?: string, itemId?: ItemId) =>
@@ -495,7 +506,7 @@ export async function runTurn(
     const fresh = live === undefined;
     if (live) {
       proxy = live.proxy;
-      proxy.begin(claimed.token);
+      proxy.begin(claimed.token, shown);
     } else {
       const switched = deps.profiles.some(
         (other) =>
@@ -511,11 +522,11 @@ export async function runTurn(
             : undefined;
         if (warm) {
           proxy = warm.proxy;
-          proxy.begin(claimed.token);
+          proxy.begin(claimed.token, shown);
           live = warm;
         } else {
           proxy = deps.proxy.open(appServer, origin);
-          proxy.begin(claimed.token);
+          proxy.begin(claimed.token, shown);
           const session: AgentSession = await connection.openSession(
             sessionInput(grant, deps.policy, proxy, resume),
           );

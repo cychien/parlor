@@ -34,8 +34,11 @@ export interface ProxySession {
   readonly nonce: string;
   /** The entry for `session/new`. */
   readonly server: StdioMcpServer;
-  /** Forward with this token until `end`; a `tools/call` outside a turn gets NO_TURN_MESSAGE. */
-  begin(token: Delegation): void;
+  /**
+   * Forward with this token until `end`; a `tools/call` outside a turn gets NO_TURN_MESSAGE.
+   * `shown` hears the spec of each `chat_show` call the app accepted.
+   */
+  begin(token: Delegation, shown?: (spec: unknown) => void): void;
   renew(token: Delegation): void;
   end(): void;
   dispose(): void;
@@ -92,6 +95,7 @@ interface Live {
   /** The app's answers to the handshake every session repeats; undefined outside turns' sessions. */
   readonly known: Map<string, KnownAnswer> | undefined;
   token: string | undefined;
+  shown: ((spec: unknown) => void) | undefined;
   protocolVersion: string | undefined;
   initialized: unknown;
   tools: unknown;
@@ -365,6 +369,28 @@ function confirm(
   });
 }
 
+const CHAT_SHOW_TOOL = "chat_show";
+
+/** The spec a `chat_show` call asks to show. */
+function shownSpec(message: Message): unknown {
+  if (message.method !== "tools/call") return undefined;
+  const params = (
+    message as {
+      readonly params?: { readonly name?: unknown; readonly arguments?: unknown };
+    }
+  ).params;
+  if (params?.name !== CHAT_SHOW_TOOL) return undefined;
+  const args = params.arguments;
+  return typeof args === "object" && args !== null
+    ? (args as { readonly spec?: unknown }).spec
+    : undefined;
+}
+
+function accepted(answer: Message | undefined): boolean {
+  const called = answer?.result as { readonly isError?: unknown } | undefined;
+  return typeof called === "object" && called !== null && called.isError !== true;
+}
+
 function handle(live: Live, line: string, reply: (line: string) => void): void {
   const message = parse(line);
   if (!message) return;
@@ -379,7 +405,10 @@ function handle(live: Live, line: string, reply: (line: string) => void): void {
   }
   const key = message.id === undefined ? undefined : handshakeKey(message);
   if (key === undefined) {
-    void forward(live, token, line, message, reply);
+    const shown = shownSpec(message);
+    void forward(live, token, line, message, reply).then(({ answer }) => {
+      if (shown !== undefined && accepted(answer)) live.shown?.(shown);
+    });
     return;
   }
   const known = live.known?.get(key);
@@ -406,6 +435,7 @@ function outsideSession(
     appOrigin: app.appOrigin.replace(/\/+$/, ""),
     known: undefined,
     token: undefined,
+    shown: undefined,
     protocolVersion: undefined,
     initialized: undefined,
     tools: undefined,
@@ -655,6 +685,7 @@ export function createMcpProxy(
         appOrigin: origin,
         known,
         token: undefined,
+        shown: undefined,
         protocolVersion: undefined,
         initialized: undefined,
         tools: undefined,
@@ -665,6 +696,7 @@ export function createMcpProxy(
       sessions.set(nonce, live);
       const end = () => {
         live.token = undefined;
+        live.shown = undefined;
         for (const controller of live.inflight) controller.abort();
       };
       return {
@@ -675,8 +707,9 @@ export function createMcpProxy(
           args: ["mcp-proxy"],
           env: { [SOCKET_ENV]: socketPath, [NONCE_ENV]: nonce },
         },
-        begin: (token) => {
+        begin: (token, shown) => {
           live.token = token.token;
+          live.shown = shown;
           for (const [key, { line, answer }] of live.unconfirmed) {
             const message = parse(line);
             if (message) confirm(live, token.token, line, message, key, answer);
