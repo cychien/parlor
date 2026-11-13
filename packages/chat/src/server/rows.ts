@@ -13,6 +13,7 @@ const agentOptionSchema = z.object({
   name: z.string().max(MAX_REPORTED_TEXT),
   category: z.string().max(MAX_REPORTED_TEXT).optional(),
   current: z.string().max(MAX_REPORTED_TEXT),
+  type: z.literal("boolean").optional(),
   values: z
     .array(
       z.object({

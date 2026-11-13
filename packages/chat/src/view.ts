@@ -301,6 +301,24 @@ export function foldThread<C extends ThreadConfirmation>(
       }
     }
   }
+  return placeSteered(rows, input.turns);
+}
+
+/** A prompt steered into a running turn reads where the agent took it in, not where it was sent. */
+function placeSteered<C>(
+  rows: ChatItem<C>[],
+  turns: readonly TurnStatus[],
+): ChatItem<C>[] {
+  for (const turn of turns) {
+    if (!turn.steeredAfter) continue;
+    const at = rows.findIndex(
+      (row) => row.kind === "prompt" && row.turnId === turn.turnId,
+    );
+    if (at === -1) continue;
+    const [prompt] = rows.splice(at, 1);
+    const anchor = rows.findIndex((row) => row.id === turn.steeredAfter);
+    rows.splice(anchor === -1 ? at : anchor + 1, 0, prompt!);
+  }
   return rows;
 }
 

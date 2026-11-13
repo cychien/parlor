@@ -197,6 +197,18 @@ export interface ChatStore {
     host: HostPrincipal,
     turns: readonly { readonly turnId: TurnId; readonly afterSeq: number }[],
   ): Promise<TurnSignals[]>;
+  /**
+   * Folds a queued prompt into the turn this computer is running, in its thread and for the
+   * same agent: its own turn ends `done`, read after `after`. False when it is no longer queued.
+   */
+  steerTurn(
+    tx: ChatDb,
+    owner: ChatOwner,
+    host: HostPrincipal,
+    turnId: TurnId,
+    steered: TurnId,
+    after: ItemId | undefined,
+  ): Promise<{ readonly threadId: ThreadId; readonly steered: boolean }>;
   reportHost(
     tx: ChatDb,
     owner: ChatOwner,
@@ -387,6 +399,7 @@ const turnRow = z.object({
   state: turnStateSchema,
   lapsed: z.boolean(),
   failure: z.enum(TURN_FAILURES).nullable(),
+  steered_after: idSchema("item").nullable().optional(),
 });
 
 async function createTurn(
@@ -641,7 +654,8 @@ async function turnsOf(
     db,
     sql`select id, thread_id, host_id, agent_id, state,
         coalesce(state = 'running' and lease_until < now(), false) as lapsed,
-        case when state = 'failed' then outcome->>'reason' end as failure
+        case when state = 'failed' then outcome->>'reason' end as failure,
+        steered_after
       from parlor_chat_turns
       where thread_id = ${threadId}
         and id in (select turn_id from parlor_chat_items
@@ -654,6 +668,7 @@ async function turnsOf(
     state: turn.lapsed ? "failed" : turn.state,
     agent: { hostId: turn.host_id, agentId: turn.agent_id },
     failure: turn.lapsed ? "host_lost" : (turn.failure ?? undefined),
+    ...(turn.steered_after ? { steeredAfter: turn.steered_after } : {}),
   }));
 }
 
@@ -952,7 +967,52 @@ export const sqlChatStore: ChatStore = {
       list.push(item);
       byTurn.set(item.turnId, list);
     }
-    return [...byTurn].map(([turnId, items]) => ({ turnId, items }));
+    const queued = await query(
+      db,
+      sql`select ${ITEM_COLUMNS_OF_I}, r.id as running_id
+        from parlor_chat_turns r
+        join (values ${sql.join(wanted, sql`, `)}) as q(turn_id, after_seq) on q.turn_id = r.id
+        join parlor_chat_turns w on w.thread_id = r.thread_id and w.state = 'queued'
+          and w.host_id = r.host_id and w.agent_id = r.agent_id
+        join parlor_chat_items i on i.id = w.prompt_item_id and i.thread_id = w.thread_id
+        where r.host_id = ${host.hostId} and r.owner_id = ${owner.userId} and r.state = 'running'
+        order by w.created_at, w.id`,
+      itemRow.extend({ running_id: idSchema("turn") }),
+    );
+    const prompts = new Map<TurnId, LoggedItem<"prompt">[]>();
+    for (const row of queued) {
+      const item = toLoggedItem(row);
+      if (item.kind !== "prompt") continue;
+      const list = prompts.get(row.running_id) ?? [];
+      list.push(item);
+      prompts.set(row.running_id, list);
+    }
+    const signalled = new Set(byTurn.keys());
+    return [
+      ...[...byTurn].map(([turnId, items]) => ({
+        turnId,
+        items,
+        ...(prompts.has(turnId) ? { queued: prompts.get(turnId)! } : {}),
+      })),
+      ...[...prompts]
+        .filter(([turnId]) => !signalled.has(turnId))
+        .map(([turnId, queuedPrompts]) => ({ turnId, items: [], queued: queuedPrompts })),
+    ];
+  },
+
+  async steerTurn(tx, owner, host, turnId, steered, after) {
+    const { threadId, agentId } = await lockRunningTurn(tx, owner, host, turnId);
+    const done = await query(
+      tx,
+      sql`update parlor_chat_turns
+        set state = 'done', outcome = ${JSON.stringify({ state: "done" })}::jsonb,
+          finished_at = now(), steered_after = ${after ?? null}
+        where id = ${steered} and thread_id = ${threadId} and state = 'queued'
+          and host_id = ${host.hostId} and owner_id = ${owner.userId} and agent_id = ${agentId}
+        returning id`,
+      z.object({ id: idSchema("turn") }),
+    );
+    return { threadId, steered: done.length > 0 };
   },
 
   async reportHost(tx, owner, host, report) {

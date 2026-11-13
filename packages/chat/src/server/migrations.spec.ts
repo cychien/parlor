@@ -13,6 +13,7 @@ describe("chat migrations", () => {
       "chat/0003_host_devices",
       "chat/0004_host_presence",
       "chat/0005_host_agents_checked",
+      "chat/0006_steered_turns",
     ]);
     for (const migration of CHAT_MIGRATIONS) expect(migration.sql).not.toContain("$");
   });
@@ -49,6 +50,7 @@ describe.each(drivers)("applying the chat migrations on $name", (driver) => {
       { id: "chat/0003_host_devices" },
       { id: "chat/0004_host_presence" },
       { id: "chat/0005_host_agents_checked" },
+      { id: "chat/0006_steered_turns" },
     ]);
     expect(
       await rows(

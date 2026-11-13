@@ -211,6 +211,11 @@ export function startFold(
   };
 }
 
+/** Closes the text the agent was writing, so a prompt steered in now reads after it. */
+export function foldSteered(fold: TurnFold): FoldStep {
+  return closeText(fold);
+}
+
 /** What a `chat_show` call showed, in its place in the turn: after the text before it. */
 export function foldShown(fold: TurnFold, spec: ChatItemBody<"ui">["spec"]): FoldStep {
   if (!fold.showsUi) return unchanged(fold);

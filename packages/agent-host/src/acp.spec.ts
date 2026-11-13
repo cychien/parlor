@@ -98,7 +98,7 @@ async function launch(
 const prompt = (text: string) => [{ kind: "text" as const, text }];
 
 describe("the options a prompt may choose", () => {
-  it("keeps the agent's selects, groups flattened, and never its permission mode", () => {
+  it("keeps the agent's selects, groups flattened, its switches as on and off, and never its permission mode", () => {
     const configOptions: Parameters<typeof agentOptionsOf>[0] = [
       {
         id: "model",
@@ -128,7 +128,13 @@ describe("the options a prompt may choose", () => {
         currentValue: "default",
         options: [{ value: "bypassPermissions", name: "Bypass" }],
       },
-      { id: "fast", name: "Fast", type: "boolean", currentValue: false },
+      {
+        id: "fast",
+        name: "Fast",
+        category: "model_config",
+        type: "boolean",
+        currentValue: true,
+      },
     ];
     expect(agentOptionsOf(configOptions)).toEqual([
       {
@@ -144,6 +150,17 @@ describe("the options a prompt may choose", () => {
         category: "thought_level",
         current: "high",
         values: [{ id: "high", name: "High" }],
+      },
+      {
+        id: "fast",
+        name: "Fast",
+        category: "model_config",
+        type: "boolean",
+        current: "on",
+        values: [
+          { id: "on", name: "On" },
+          { id: "off", name: "Off" },
+        ],
       },
     ]);
   });

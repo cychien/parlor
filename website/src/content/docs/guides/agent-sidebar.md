@@ -65,6 +65,12 @@ Then bind it where the UI renders, with `useAgentView(view, { get })`, and attac
 
 Two options make a view more than something to read. `keyed: true` is for a list's rows: bind each row with `key` set to the id your actions take, and "delete this one" resolves to that id. `writable: true` with a `set` in the binding lets the agent fill a form for the user, who submits it. The template's todo page does both, with a `todo` view per row and a `newTodo` view on the New todo field; start from it.
 
+## Sending while the agent works
+
+A message sent while the agent is still answering goes into that answer when the agent can take it: Claude Code and Codex both can, through ACP's `_session/steering` extension. It shows in the thread where the agent read it, after what it had written by then, and the agent carries on with it in the same turn. On a computer that approves devices, as one paired with `connect` does, only a message from a device it already trusts goes in this way. Any other message, or one the agent will not take in, waits and runs as the next turn, as before.
+
+The agent's options a prompt may choose include its switches as well as its menus, such as Claude's fast mode: `useChat().agent.options` lists a switch with `type: "boolean"` and the values `on` and `off`. The agent's permission mode is never among them; Parlor Host decides it.
+
 ## Showing UI in the chat
 
 The agent can answer with more than text: a chart, a few key numbers, a comparison, built from components you define. Give `chat()` a catalog:

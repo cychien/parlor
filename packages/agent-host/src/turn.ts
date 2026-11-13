@@ -23,8 +23,8 @@ import type {
   TurnOutcome,
   TurnSignals,
 } from "@parlor/chat";
-import { parseUiSpec, UI_ITEMS_PROTOCOL } from "@parlor/chat";
-import { ActionError, asId, type ItemId } from "@parlor/core";
+import { parseUiSpec, STEERING_PROTOCOL, UI_ITEMS_PROTOCOL } from "@parlor/chat";
+import { ActionError, asId, type ItemId, type TurnId } from "@parlor/core";
 import type { DeviceKeys } from "@parlor/server";
 
 import {
@@ -39,7 +39,14 @@ import {
 } from "./acp.js";
 import { optionChanges } from "./agent-options.js";
 import type { AgentProfile } from "./agents.js";
-import { finishFold, foldShown, foldUpdate, startFold, type TurnFold } from "./fold.js";
+import {
+  finishFold,
+  foldShown,
+  foldSteered,
+  foldUpdate,
+  startFold,
+  type TurnFold,
+} from "./fold.js";
 import type { AppLink } from "./link.js";
 import { logEvent } from "./log.js";
 import type { McpProxy, ProxySession } from "./mcp-proxy.js";
@@ -79,6 +86,8 @@ export const PROMPT_MAX_AGE_MS = 10 * 60_000;
 const VOUCH_MAX_AGE_MS = 30 * 24 * 60 * 60_000;
 
 const SIGNAL_POLL_MS = 500;
+/** A queued prompt the agent would not take in is offered again this many times, then left for its own turn. */
+const STEER_ATTEMPTS = 3;
 const MAX_APPEND_ITEMS = 64;
 const APPEND_RETRY_BASE_MS = 250;
 const APPEND_RETRY_MAX_MS = 4_000;
@@ -261,8 +270,10 @@ export async function runTurn(
     logEvent("host_append", { turnId, itemIds: items.map((item) => item.id) });
   };
 
+  let lastWritten: ItemId | undefined;
   const write = (items: readonly HostItemDraft[]) => {
     const batch = [...items];
+    lastWritten = batch.at(-1)?.id ?? lastWritten;
     appending = appending.then(async () => {
       if (lost) return;
       try {
@@ -778,8 +789,59 @@ export async function runTurn(
             const waiting = pending.get(item.body.askId);
             if (waiting) await admitAnswer(waiting, item, batch.devices ?? []);
           }
+          for (const queued of batch.queued ?? []) {
+            if (signalsOver.signal.aborted || cancelled) return;
+            await steer(queued);
+          }
         }
       }
+    };
+
+    const steerAttempts = new Map<TurnId, number>();
+    /**
+     * Admitted as a claimed prompt would be: as is when this computer approves no devices,
+     * else only from a device pinned here, validly signed. Any other waits for its own turn.
+     */
+    const steerable = async (queued: LoggedItem<"prompt">): Promise<boolean> => {
+      if (deps.policy.deviceApproval !== "local") return true;
+      const signed = await signedPrompt(origin, queued);
+      if (!signed) return false;
+      const known = await deps.trust.get(origin, signed.deviceId);
+      if (!known) return false;
+      const due = presenceDueAt(deps.policy, known);
+      const outcome = await verifyPrompt(
+        signed,
+        known,
+        due !== undefined && signed.statement.at > due,
+      );
+      if (outcome !== "valid") return false;
+      if (signed.signature.presence === "user")
+        await confirmedPresence(known, signed.statement.at);
+      return true;
+    };
+    const steer = async (queued: LoggedItem<"prompt">) => {
+      const attempts = steerAttempts.get(queued.turnId) ?? 0;
+      if (attempts >= STEER_ATTEMPTS || (link.protocol ?? 0) < STEERING_PROTOCOL) return;
+      steerAttempts.set(queued.turnId, attempts + 1);
+      if (!(await steerable(queued))) {
+        steerAttempts.set(queued.turnId, STEER_ATTEMPTS);
+        return;
+      }
+      if (!(await session.steer([{ kind: "text", text: queued.body.text }]))) return;
+      steerAttempts.set(queued.turnId, STEER_ATTEMPTS);
+      const step = foldSteered(fold);
+      fold = step.fold;
+      if (step.closed.length > 0) void write(step.closed);
+      const after = lastWritten;
+      await appending;
+      logEvent("turn_steered", { turnId, steered: queued.turnId });
+      await calls
+        .call("hostSteer", {
+          turnId,
+          steered: queued.turnId,
+          ...(after ? { after } : {}),
+        })
+        .catch(() => undefined);
     };
 
     let stop: StopReason | "lost" | undefined;

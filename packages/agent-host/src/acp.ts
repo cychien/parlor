@@ -58,6 +58,14 @@ export interface AgentConnection {
   kill(): Promise<void>;
 }
 
+/** Not in the ACP schema: an extension Claude's and Codex's adapters both take, advertised as `_meta.steering.supported`. */
+const STEER_METHOD = "_session/steering";
+
+function steeringOf(meta: unknown): boolean {
+  if (!isFields(meta) || !isFields(meta.steering)) return false;
+  return meta.steering.supported === true;
+}
+
 /** `openSession` would not run the session; `leftOpen` when the agent still holds it. */
 export class SessionRefused extends Error {
   override readonly name = "SessionRefused";
@@ -74,6 +82,8 @@ export interface AgentCapabilities {
   readonly resume: boolean;
   readonly close: boolean;
   readonly mcpHttp: boolean;
+  /** Takes `_session/steering`: a prompt sent into the turn it is running. */
+  readonly steering?: boolean | undefined;
   /** False until the user logs the agent in on a terminal; `problem` says how. */
   readonly ready: boolean;
   readonly problem?: string | undefined;
@@ -115,6 +125,11 @@ export interface AgentSession {
   readonly options: readonly AgentOption[];
   /** Sets one of `options` to one of its values. */
   setOption(id: string, value: string): Promise<void>;
+  /**
+   * Puts `blocks` into the turn the session is running. Resolves true when the agent took
+   * them in; every update it sent before that has already reached `handlers.update`.
+   */
+  steer(blocks: readonly PromptBlock[]): Promise<boolean>;
 }
 
 export type PromptBlock = { readonly kind: "text"; readonly text: string };
@@ -227,7 +242,10 @@ export interface AgentModes {
 
 /** The agent side of ACP in this file's own terms, for the fake agent. */
 export interface AcpAgentHandlers {
-  readonly capabilities: Pick<AgentCapabilities, "resume" | "close" | "mcpHttp">;
+  readonly capabilities: Pick<
+    AgentCapabilities,
+    "resume" | "close" | "mcpHttp" | "steering"
+  >;
   newSession(input: OpenSessionInput): Promise<{
     readonly id: string;
     readonly modes?: AgentModes | undefined;
@@ -242,6 +260,8 @@ export interface AcpAgentHandlers {
       readonly cancelled: AbortSignal;
     },
   ): Promise<StopReason>;
+  /** Takes `blocks` into the prompt `sessionId` is running; false when none runs. */
+  steer?(sessionId: string, blocks: readonly PromptBlock[]): boolean;
 }
 
 const STDERR_TAIL_BYTES = 4_096;
@@ -451,7 +471,13 @@ function sessionUpdateOf(update: AgentUpdate): SessionUpdate {
 }
 
 /** The permission mode is the computer's to pin; `model_config` tunes a model, not a choice. */
-const HIDDEN_CATEGORIES = new Set(["mode", "model_config"]);
+/** The session's mode is the host's to pin, never a prompt's to choose. */
+const HIDDEN_CATEGORIES = new Set(["mode"]);
+
+const SWITCH_VALUES = [
+  { id: "on", name: "On" },
+  { id: "off", name: "Off" },
+] as const;
 
 /** The agent's select options a prompt may choose, its groups flattened. */
 export function agentOptionsOf(
@@ -464,8 +490,20 @@ function optionsOf(
   configOptions: readonly SessionConfigOption[] | null | undefined,
 ): AgentOption[] {
   return (configOptions ?? []).flatMap((option): AgentOption[] => {
-    if (option.type !== "select") return [];
     if (option.category && HIDDEN_CATEGORIES.has(option.category)) return [];
+    if (option.type === "boolean") {
+      return [
+        {
+          id: option.id,
+          name: option.name,
+          ...(option.category ? { category: option.category } : {}),
+          type: "boolean",
+          current: option.currentValue ? "on" : "off",
+          values: [...SWITCH_VALUES],
+        },
+      ];
+    }
+    if (option.type !== "select") return [];
     const values = option.options.flatMap((entry) =>
       "options" in entry ? entry.options : [entry],
     );
@@ -486,6 +524,15 @@ function optionsOf(
 }
 
 function configOptionOf(option: AgentOption): SessionConfigOption {
+  if (option.type === "boolean") {
+    return {
+      id: option.id,
+      name: option.name,
+      ...(option.category ? { category: option.category } : {}),
+      type: "boolean",
+      currentValue: option.current === "on",
+    };
+  }
   return {
     id: option.id,
     name: option.name,
@@ -822,6 +869,7 @@ export function acpLauncher(): AgentLauncher {
         resume: Boolean(agentCapabilities.sessionCapabilities?.resume),
         close: Boolean(agentCapabilities.sessionCapabilities?.close),
         mcpHttp: agentCapabilities.mcpCapabilities?.http === true,
+        steering: steeringOf(initialized._meta),
         ready: true,
       };
 
@@ -926,13 +974,13 @@ export function acpLauncher(): AgentLauncher {
               return state.options;
             },
             setOption: async (id, value) => {
+              const isSwitch =
+                state.options.find((option) => option.id === id)?.type === "boolean";
               const response = await context.request(
                 methods.agent.session.setConfigOption,
-                {
-                  sessionId,
-                  configId: id,
-                  value,
-                },
+                isSwitch
+                  ? { sessionId, configId: id, type: "boolean", value: value === "on" }
+                  : { sessionId, configId: id, value },
               );
               state.options = agentOptionsOf(response.configOptions);
             },
@@ -953,6 +1001,17 @@ export function acpLauncher(): AgentLauncher {
               } finally {
                 state.handlers = undefined;
               }
+            },
+            steer: async (blocks) => {
+              if (!capabilities.steering || !state.handlers) return false;
+              const response = await context
+                .request(STEER_METHOD, {
+                  sessionId,
+                  prompt: blocks.map((block) => ({ type: "text", text: block.text })),
+                  _meta: { steering: { idleBehavior: "promptRequired" } },
+                })
+                .catch(() => undefined);
+              return isFields(response) && response.outcome === "injected";
             },
             cancel: () =>
               context
@@ -987,7 +1046,26 @@ export function serveAcpAgent(handlers: AcpAgentHandlers, io: AcpStdio): Promise
         },
       },
       authMethods: [],
+      ...(handlers.capabilities.steering
+        ? { _meta: { steering: { supported: true } } }
+        : {}),
     }))
+    .onRequest(
+      STEER_METHOD,
+      { parse: (params: unknown) => (isFields(params) ? params : {}) },
+      ({ params }) => {
+        const sessionId = typeof params.sessionId === "string" ? params.sessionId : "";
+        const prompt = Array.isArray(params.prompt) ? params.prompt : [];
+        const blocks = prompt.flatMap((block): PromptBlock[] =>
+          isFields(block) && block.type === "text" && typeof block.text === "string"
+            ? [{ kind: "text", text: block.text }]
+            : [],
+        );
+        const injected =
+          running.has(sessionId) && handlers.steer?.(idOf(sessionId), blocks) === true;
+        return { outcome: injected ? "injected" : "not_running" };
+      },
+    )
     .onRequest(methods.agent.session.new, async ({ params }) => {
       const { id, modes, options } = await handlers.newSession({
         cwd: params.cwd,
@@ -1017,10 +1095,13 @@ export function serveAcpAgent(handlers: AcpAgentHandlers, io: AcpStdio): Promise
     })
     .onRequest(methods.agent.session.setMode, () => ({}))
     .onRequest(methods.agent.session.setConfigOption, ({ params }) => {
-      const options = (configs.get(idOf(params.sessionId)) ?? []).map((option) =>
-        option.id === params.configId && option.type === "select"
-          ? { ...option, currentValue: String(params.value) }
-          : option,
+      const options = (configs.get(idOf(params.sessionId)) ?? []).map(
+        (option): SessionConfigOption =>
+          option.id !== params.configId
+            ? option
+            : option.type === "boolean"
+              ? { ...option, currentValue: params.value === true }
+              : { ...option, currentValue: String(params.value) },
       );
       configs.set(idOf(params.sessionId), options);
       return { configOptions: options };

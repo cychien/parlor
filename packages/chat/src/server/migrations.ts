@@ -98,4 +98,8 @@ export const CHAT_MIGRATIONS: readonly Migration[] = [
     id: "chat/0005_host_agents_checked",
     sql: `alter table parlor_chat_hosts add column agents_checked_at timestamptz;`,
   },
+  {
+    id: "chat/0006_steered_turns",
+    sql: `alter table parlor_chat_turns add column steered_after text;`,
+  },
 ];
