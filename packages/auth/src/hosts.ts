@@ -9,6 +9,7 @@ import {
   type HostId,
   type HostPrincipal,
   type UserId,
+  type UserPrincipal,
 } from "@parlor/core";
 import { type ActionsOf, createRegistry } from "@parlor/core/registry";
 import {
@@ -578,6 +579,10 @@ async function verifyProof(
   }
 }
 
+/** Keeps the URL's fragment: a Location without one inherits it, as the pairing secret must. */
+const seeOther = (location: string) =>
+  new Response(null, { status: 303, headers: { location } });
+
 /** The MCP server name the host registered the app under, as the connected page shows it. */
 const AGENT_TOOLS_NAME = /^[a-z0-9][a-z0-9_-]{0,79}$/;
 
@@ -598,20 +603,30 @@ export function hostRoutes(deps: HostGrantDeps): readonly AnyPluginRoute[] {
   const accountOf = async (userId: UserId) => host.auth?.account?.(userId);
 
   return [
-    pluginRoute({
+    {
       method: "GET",
       path: "/hosts/authorize",
-      access: ["user"],
-      handle: async (request, caller) => {
-        if (!(await chatAllows(host, caller))) return failure(CHAT_REFUSED, 403);
-        const parsed = authorizeRequest.safeParse(
-          Object.fromEntries(new URL(request.url).searchParams),
-        );
+      access: "public",
+      handle: async (request) => {
+        const { search, searchParams } = new URL(request.url);
+        if (settings.connectComputerPage) {
+          return seeOther(`${settings.connectComputerPage}${search}`);
+        }
+        const caller = await host.callerOf(request).catch(() => undefined);
+        if (caller?.principal.kind !== "user") {
+          return failure(
+            `Sign in to ${appName()} in this browser, then reload this page.`,
+            401,
+          );
+        }
+        const user = caller as typeof caller & { readonly principal: UserPrincipal };
+        if (!(await chatAllows(host, user))) return failure(CHAT_REFUSED, 403);
+        const parsed = authorizeRequest.safeParse(Object.fromEntries(searchParams));
         if (!parsed.success) {
           return failure("This connection request is incomplete.", 400);
         }
         const pairing = parsed.data;
-        const profile = await accountOf(caller.principal.userId);
+        const profile = await accountOf(user.principal.userId);
         const app = appName();
         const hidden = Object.entries(pairing)
           .map(
@@ -639,7 +654,7 @@ ${
             : [new URL(pairing.redirectUri).origin];
         return page("Connect a computer", body, ["'self'", ...target]);
       },
-    }),
+    },
     pluginRoute({
       method: "POST",
       path: "/hosts/authorize",
@@ -671,12 +686,14 @@ ${
         const { decision, useAgentTools, ...pairing } = parsed.data;
         const target =
           pairing.redirectUri === IPC_REDIRECT ? undefined : new URL(pairing.redirectUri);
+        const answer = (location: URL) =>
+          json ? Response.json({ location: location.href }) : seeOther(location.href);
         if (decision === "cancel") {
           if (!target)
             return Response.json({ error: "access_denied", state: pairing.state });
           target.searchParams.set("error", "access_denied");
           target.searchParams.set("state", pairing.state);
-          return new Response(null, { status: 303, headers: { location: target.href } });
+          return answer(target);
         }
         const code = randomBytes(32).toString("base64url");
         await databaseOf(host).transaction(async (handle) => {
@@ -704,7 +721,7 @@ ${
         target.searchParams.set("state", pairing.state);
         if (agentTools !== undefined)
           target.searchParams.set("agentTools", agentTools ? "on" : "off");
-        return new Response(null, { status: 303, headers: { location: target.href } });
+        return answer(target);
       },
     }),
     {
@@ -763,8 +780,13 @@ ${
       path: "/hosts/connected",
       access: "public",
       handle: async (request) => {
-        const app = escape(appName());
         const tools = new URL(request.url).searchParams.get("agentTools");
+        if (settings.connectComputerPage) {
+          const query = new URLSearchParams({ connected: "1" });
+          if (tools && AGENT_TOOLS_NAME.test(tools)) query.set("agentTools", tools);
+          return seeOther(`${settings.connectComputerPage}?${query}`);
+        }
+        const app = escape(appName());
         const body =
           tools && AGENT_TOOLS_NAME.test(tools)
             ? `<h1>Connected to ${app}</h1>

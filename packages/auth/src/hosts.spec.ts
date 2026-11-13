@@ -68,7 +68,7 @@ describe("the consent page", () => {
     expect(html).toContain(`name="keyThumbprint" value="${await computer.thumbprint()}"`);
   });
 
-  it("refuses a visitor who is not signed in", async () => {
+  it("tells a visitor who is not signed in to sign in here first", async () => {
     const computer = new Computer();
     const response = await app.server.fetch(
       new Request(
@@ -76,6 +76,10 @@ describe("the consent page", () => {
       ),
     );
     expect(response.status).toBe(401);
+    expect(response.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    expect(await response.text()).toContain(
+      "Sign in to Hello in this browser, then reload this page.",
+    );
   });
 
   it("refuses a redirect that is not this computer's loopback", async () => {
@@ -446,5 +450,63 @@ describe("a database from before host grants", () => {
     } finally {
       await old.close();
     }
+  });
+});
+
+describe("the app's own connect page", () => {
+  beforeEach(async () => {
+    await app.server.close();
+    app = createTestApp(database, { auth: { connectComputerPage: "/connect-computer" } });
+  });
+
+  it("sends the request there with its query, signed in or not", async () => {
+    const query = `${await new Computer().authorizeQuery()}&agentTools=offered`;
+    const response = await app.server.fetch(
+      new Request(`${ORIGIN}/_parlor/auth/hosts/authorize?${query}`),
+    );
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe(`/connect-computer?${query}`);
+  });
+
+  it("answers its approval with where the computer waits, and the code exchanges", async () => {
+    const alice = await signUp("Alice");
+    const computer = new Computer();
+    const response = await alice.post("/_parlor/auth/hosts/authorize", {
+      ...(await computer.pairing()),
+      agentTools: "offered",
+      useAgentTools: "on",
+      decision: "connect",
+    });
+    expect(response.status).toBe(200);
+    const location = new URL(((await response.json()) as { location: string }).location);
+    expect(`${location.origin}${location.pathname}`).toBe(
+      "http://127.0.0.1:43124/callback",
+    );
+    expect(location.searchParams.get("state")).toBe(computer.state);
+    expect(location.searchParams.get("agentTools")).toBe("on");
+    const code = location.searchParams.get("code")!;
+    expect((await computer.exchange(app.server, code)).status).toBe(200);
+  });
+
+  it("answers its cancel with the computer's address and no code", async () => {
+    const alice = await signUp("Alice");
+    const computer = new Computer();
+    const response = await alice.post("/_parlor/auth/hosts/authorize", {
+      ...(await computer.pairing()),
+      decision: "cancel",
+    });
+    expect(await response.json()).toEqual({
+      location: `http://127.0.0.1:43124/callback?error=access_denied&state=${computer.state}`,
+    });
+  });
+
+  it("is where the computer sends the browser once connected, keeping the pairing fragment", async () => {
+    const response = await app.server.fetch(
+      new Request(`${ORIGIN}/_parlor/auth/hosts/connected?agentTools=hello-app`),
+    );
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe(
+      "/connect-computer?connected=1&agentTools=hello-app",
+    );
   });
 });

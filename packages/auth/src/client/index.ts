@@ -5,6 +5,7 @@ import {
   detectPlatform,
   type DeviceKey,
   deviceKey,
+  type HostPairing,
   type PairingPresenceKey,
   type PresencePublicKey,
   resolveCapability,
@@ -168,6 +169,61 @@ export interface AuthClient
   };
   /** The account actions: `sessions`, `revokeSession`, `agents`, `revokeAgent`. */
   readonly account: ActionClient<AccountActions>;
+  /**
+   * Answers a request `parseComputerConnection` read on the app's `connectComputerPage`.
+   * Resolves to where the page goes next, the computer's own address: assign it to
+   * `location`, and the app's page comes back with `step: "connected"`.
+   */
+  answerComputerConnection(
+    request: ComputerConnectionRequest,
+    decision: "connect" | "cancel",
+    options?: { readonly agentTools?: boolean | undefined },
+  ): Promise<string>;
+}
+
+/** A computer that ran `connect` and waits for the signed-in user to approve it. */
+export interface ComputerConnectionRequest extends HostPairing {
+  readonly redirectUri: string;
+  /** The computer offers its Claude Code and Codex the app's tools outside the sidebar too. */
+  readonly offersAgentTools: boolean;
+}
+
+export type ComputerConnection =
+  | { readonly step: "confirm"; readonly request: ComputerConnectionRequest }
+  /** `agentTools` names the app to Claude Code and Codex on that computer, when it lets them. */
+  | { readonly step: "connected"; readonly agentTools: string | undefined };
+
+const PAIRING_FIELDS = [
+  "redirectUri",
+  "codeChallenge",
+  "state",
+  "hostName",
+  "platform",
+  "matchingCode",
+  "keyThumbprint",
+] as const;
+
+/**
+ * What the app's `connectComputerPage` shows for its query: a computer to approve, the
+ * computer connected, or nothing it knows (`undefined`). The server checks each field again.
+ */
+export function parseComputerConnection(search: string): ComputerConnection | undefined {
+  const query = new URLSearchParams(search);
+  if (query.get("connected") === "1") {
+    return { step: "connected", agentTools: query.get("agentTools") ?? undefined };
+  }
+  const fields = PAIRING_FIELDS.map(
+    (name) => [name, query.get(name)?.trim() ?? ""] as const,
+  );
+  if (fields.some(([, value]) => value === "")) return undefined;
+  const pairing = Object.fromEntries(fields) as Record<
+    (typeof PAIRING_FIELDS)[number],
+    string
+  >;
+  return {
+    step: "confirm",
+    request: { ...pairing, offersAgentTools: query.get("agentTools") === "offered" },
+  };
 }
 
 interface BetterAuthResult {
@@ -740,6 +796,35 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
       return (await key?.presenceSetup?.()) === "needed" ? "needed" : "ready";
     },
     device,
+    answerComputerConnection: async (request, decision, answer = {}) => {
+      const { offersAgentTools, ...pairing } = request;
+      const response = await (options.fetch ?? fetch)(
+        `${baseUrl}${basePath}/auth/hosts/authorize`,
+        {
+          method: "POST",
+          headers: { ...(await headers()), "content-type": "application/json" },
+          body: JSON.stringify({
+            ...pairing,
+            ...(offersAgentTools ? { agentTools: "offered" } : {}),
+            ...(offersAgentTools && answer.agentTools !== false
+              ? { useAgentTools: "on" }
+              : {}),
+            decision,
+          }),
+        },
+      );
+      const body = (await response.json().catch(() => undefined)) as
+        | { location?: unknown; error?: { message?: string; code?: string } }
+        | undefined;
+      if (!response.ok || typeof body?.location !== "string") {
+        throw new AuthClientError(
+          body?.error?.message ?? "The computer could not be connected.",
+          response.status,
+          body?.error?.code,
+        );
+      }
+      return body.location;
+    },
     authorizeHost: async (pairing) => {
       const response = await (options.fetch ?? fetch)(
         `${baseUrl}${basePath}/auth/hosts/authorize`,

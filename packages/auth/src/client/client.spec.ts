@@ -6,7 +6,12 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 import { createTestApp, ORIGIN, PASSWORD, signUp } from "../testing/app.js";
 import { Computer } from "../testing/computer.js";
-import { type AuthClient, createAuthClient, type SessionStore } from "./index.js";
+import {
+  type AuthClient,
+  createAuthClient,
+  parseComputerConnection,
+  type SessionStore,
+} from "./index.js";
 
 let database: DatabaseHandle;
 let server: FrameworkServer;
@@ -163,6 +168,32 @@ describe("the auth client in a native shell", () => {
     expect(hosts.map((host) => host.name)).toEqual(["Alice's Mac"]);
   });
 
+  it("answers a request from the app's connect page with where the computer waits", async () => {
+    const { auth } = shell();
+    await auth.signUp({ name: "Alice", email: "alice@example.com", password: PASSWORD });
+    const computer = new Computer("Alice's Mac", "macos");
+    const query = `${await computer.authorizeQuery()}&agentTools=offered`;
+    const parsed = parseComputerConnection(`?${query}`);
+    expect(parsed?.step).toBe("confirm");
+    if (parsed?.step !== "confirm") return;
+    expect(parsed.request).toMatchObject({
+      hostName: "Alice's Mac",
+      platform: "macos",
+      offersAgentTools: true,
+    });
+
+    const location = new URL(
+      await auth.answerComputerConnection(parsed.request, "connect", {
+        agentTools: false,
+      }),
+    );
+
+    expect(location.searchParams.get("state")).toBe(computer.state);
+    expect(location.searchParams.get("agentTools")).toBe("off");
+    const exchanged = await computer.exchange(server, location.searchParams.get("code")!);
+    expect(exchanged.status).toBe(200);
+  });
+
   it("refuses to approve a pairing without a session", async () => {
     const { auth } = shell();
     const computer = new Computer("Alice's Mac", "macos", "urn:parlor:ipc");
@@ -185,5 +216,21 @@ describe("the auth client in a native shell", () => {
     await laptop.account("revokeSession", { id: phone.id });
     expect(await settled(auth)).toEqual({ status: "signed-out" });
     expect(store.token).toBeUndefined();
+  });
+});
+
+describe("parseComputerConnection", () => {
+  it("reads the connected step and the name the agents know the app by", () => {
+    expect(parseComputerConnection("?connected=1&agentTools=tallyo")).toEqual({
+      step: "connected",
+      agentTools: "tallyo",
+    });
+  });
+
+  it("knows nothing of a query missing a pairing field", async () => {
+    const query = new URLSearchParams(await new Computer().authorizeQuery());
+    query.delete("keyThumbprint");
+    expect(parseComputerConnection(`?${query}`)).toBeUndefined();
+    expect(parseComputerConnection("")).toBeUndefined();
   });
 });
