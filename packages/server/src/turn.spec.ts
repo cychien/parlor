@@ -16,6 +16,7 @@ import { AuthFailure, type AuthProvider } from "./auth.js";
 import { type Caller, type CallerResolver } from "./caller.js";
 import { createServer, type FrameworkServer } from "./create-server.js";
 import { createMcpHandler } from "./mcp.js";
+import type { PluginTool } from "./plugin.js";
 import { defaultScope } from "./scope.js";
 
 const alice = asId("user", "alice");
@@ -178,6 +179,77 @@ describe("ui tools called with a turn token", () => {
       expect.anything(),
       undefined,
     );
+  });
+});
+
+describe("plugin tools for a chat turn", () => {
+  const shows: unknown[] = [];
+  const show: PluginTool = {
+    name: "chat_show",
+    description: "Show UI in the chat.",
+    input: z.object({ spec: z.object({ root: z.string() }) }),
+    readOnly: true,
+    run: async (input, caller) => {
+      shows.push({ input, scope: caller.scope, kind: caller.principal.kind });
+      return { shown: true };
+    },
+  };
+  let client: Client | undefined;
+  afterEach(async () => {
+    await client?.close();
+    client = undefined;
+  });
+
+  async function connectAs(token: string) {
+    const runner = createActionRunner({
+      actions,
+      scope: defaultScope,
+      callers,
+      sync: false,
+    });
+    const handler = createMcpHandler({ actions, runner, callers, turnTools: [show] });
+    client = new Client({ name: "proxy", version: "0.0.0" });
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL("http://app.test/_parlor/mcp"), {
+        fetch: (input, init) => {
+          const headers = new Headers(init?.headers);
+          headers.set("authorization", `Bearer ${token}`);
+          return handler.fetch(new Request(input, { ...init, headers }));
+        },
+      }),
+    );
+    return client;
+  }
+
+  it("lists them to an agent answering a turn and runs them with its caller", async () => {
+    const agent = await connectAs("inline");
+    expect((await agent.listTools()).tools.map((tool) => tool.name)).toEqual([
+      "deleteTask",
+      "chat_show",
+    ]);
+    const result = await agent.callTool({
+      name: "chat_show",
+      arguments: { spec: { root: "kpi" } },
+    });
+    expect(result.structuredContent).toEqual({ shown: true });
+    expect(shows).toEqual([
+      { input: { spec: { root: "kpi" } }, scope: "alice", kind: "agent" },
+    ]);
+  });
+
+  it("refuses input the tool does not take, before it runs", async () => {
+    shows.length = 0;
+    const agent = await connectAs("inline");
+    const result = await agent.callTool({ name: "chat_show", arguments: { spec: {} } });
+    expect(result.isError).toBe(true);
+    expect(shows).toEqual([]);
+  });
+
+  it("hides them from an agent outside any turn", async () => {
+    const agent = await connectAs("external");
+    expect((await agent.listTools()).tools.map((tool) => tool.name)).toEqual([
+      "deleteTask",
+    ]);
   });
 });
 

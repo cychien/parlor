@@ -27,6 +27,7 @@ import type { ActionRegistry } from "@parlor/core/registry";
 import type { ActionRunner } from "./actions.js";
 import { type CallerResolver, sourceFor } from "./caller.js";
 import { McpCalls } from "./mcp-calls.js";
+import type { PluginTool } from "./plugin.js";
 import type { RegistryResolver } from "./visibility.js";
 
 export interface McpOptions<T extends ActionMap> {
@@ -47,6 +48,8 @@ export interface McpOptions<T extends ActionMap> {
   readonly confirmation?: ConfirmationPolicy | undefined;
   /** The actions a request may see; defaults to all of `actions`. */
   readonly registryFor?: RegistryResolver | undefined;
+  /** Listed only to an agent answering a chat turn. */
+  readonly turnTools?: readonly PluginTool[] | undefined;
 }
 
 /** The public origin first, then the one `parlor dev` serves the app on, then the request's. */
@@ -209,6 +212,7 @@ export function createMcpHandler<T extends ActionMap>(
     callers,
     confirmation = defaultConfirmationPolicy,
     registryFor = () => Promise.resolve(options.actions),
+    turnTools = [],
     app,
     name = app?.name ?? "parlor",
     version = "0.0.0",
@@ -338,6 +342,34 @@ export function createMcpHandler<T extends ActionMap>(
           } catch (error) {
             if (!(error instanceof UiFailure))
               console.error("[parlor] UI tool failed:", error);
+            return toolError(error);
+          }
+        },
+      );
+    }
+    const inTurn = principal.kind === "agent" && principal.turn !== undefined;
+    for (const tool of inTurn ? turnTools : []) {
+      server.registerTool(
+        tool.name,
+        {
+          description: tool.description,
+          inputSchema: unvalidated(tool.input),
+          annotations: { readOnlyHint: tool.readOnly },
+        },
+        async (args, toolCtx) => {
+          try {
+            const input = tool.input.safeParse(args);
+            if (!input.success) {
+              throw new ActionError("invalid_input", `Invalid input for "${tool.name}"`, {
+                issues: input.error.issues,
+              });
+            }
+            return toolResult(
+              await inCall(ctx, toolCtx, () =>
+                tool.run(input.data, { principal, scope: caller!.scope }),
+              ),
+            );
+          } catch (error) {
             return toolError(error);
           }
         },

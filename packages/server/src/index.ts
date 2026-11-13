@@ -63,6 +63,7 @@ export {
   type PluginRoute,
   pluginRoute,
   type PluginRuntime,
+  type PluginTool,
   type PublicPluginRoute,
   type ServerPlugin,
 } from "./plugin.js";

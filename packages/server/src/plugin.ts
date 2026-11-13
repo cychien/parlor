@@ -8,6 +8,7 @@ import type {
 } from "@parlor/core";
 import type { ActionRegistry } from "@parlor/core/registry";
 import type { ServerChannel } from "@parlor/sync";
+import type { z } from "zod";
 
 import type { CallerOf } from "./access.js";
 import type { AuthProvider } from "./auth.js";
@@ -52,6 +53,17 @@ export interface PluginRuntime {
   allows?(caller: PluginCaller): boolean | Promise<boolean>;
   /** Runs before `close()` awaits in-flight requests, so it must end what it holds open. */
   close?(): void | Promise<void>;
+  /** Tools on MCP for an agent answering one of the user's chat turns, and no other caller. */
+  readonly tools?: readonly PluginTool[] | undefined;
+}
+
+export interface PluginTool<I extends z.ZodObject = z.ZodObject> {
+  readonly name: string;
+  readonly description: string;
+  /** Checked before `run`; a call that fails it gets `invalid_input`. */
+  readonly input: I;
+  readonly readOnly: boolean;
+  run(input: z.output<I>, caller: PluginCaller): Promise<unknown>;
 }
 
 /** Who is asking: enough to look the user up, with no request to read. */
