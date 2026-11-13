@@ -4,6 +4,7 @@ import { z } from "zod";
 import { CHAT_EVENTS } from "./events.js";
 import { idSchema } from "./id-schemas.js";
 import { MAX_PROMPT_CHARS } from "./limits.js";
+import { parseUiSpec, type UiSpec } from "./ui.js";
 
 const signature = z.object({
   keyId: z.string(),
@@ -91,6 +92,17 @@ export const chatItemBodies = {
       ),
     }),
   },
+  ui: {
+    author: "agent",
+    body: z.object({
+      spec: z.unknown().transform((value, ctx): UiSpec => {
+        const parsed = parseUiSpec(value);
+        if (parsed.spec) return parsed.spec;
+        ctx.addIssue({ code: "custom", message: parsed.issue ?? "Not a UI spec." });
+        return z.NEVER;
+      }),
+    }),
+  },
   ask: {
     author: "agent",
     body: z.object({
@@ -174,6 +186,7 @@ export const hostItemDraft = z.discriminatedUnion("kind", [
   draft("reasoning"),
   draft("tool"),
   draft("plan"),
+  draft("ui"),
   draft("ask"),
   draft("event"),
 ]);

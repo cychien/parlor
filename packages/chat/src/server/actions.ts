@@ -30,11 +30,13 @@ import {
   CHAT_TAG,
   HOSTS_TAG,
 } from "../tags.js";
+import type { ChatUiCatalog } from "../ui.js";
 import { turnContext } from "./context.js";
 import type { LiveRelay } from "./live.js";
 import { type ChatHost, chatAction } from "./party.js";
 import type { TurnPush } from "./push.js";
 import { agentInfoSchema, TURN_FAILURES } from "./rows.js";
+import { checkedUiItems } from "./ui-tool.js";
 
 const presenceDueSchema = z
   .record(z.string().min(1).max(64), z.number().int().nonnegative())
@@ -82,6 +84,8 @@ export interface ChatActionDeps {
   readonly appOrigin: () => string;
   /** Hands a queued turn straight to its computer; without it computers only claim. */
   readonly pushed?: TurnPush | undefined;
+  /** The components `ui` items may hold. */
+  readonly ui?: ChatUiCatalog | undefined;
 }
 
 const threadId = idSchema("thread");
@@ -587,7 +591,7 @@ export function hostChatActions(
             host,
             host.host,
             input.turnId,
-            input.items,
+            checkedUiItems(deps.ui, input.items),
             deps.leaseMs,
           );
           return {

@@ -50,7 +50,8 @@
     "@parlor/capabilities": "workspace:*",
     "@parlor/chat": "workspace:*",
     "@parlor/core": "workspace:*",
-    "@parlor/sync": "workspace:*"
+    "@parlor/sync": "workspace:*",
+    "@standard-schema/spec": "catalog:"
   },
   "devDependencies": {
     "@tanstack/react-query": "catalog:",

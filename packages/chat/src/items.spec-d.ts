@@ -24,7 +24,7 @@ test("who writes what is read off the one table", () => {
   expectTypeOf<ChatItemKind>().toEqualTypeOf<keyof typeof chatItemBodies>();
   expectTypeOf<UserItemKind>().toEqualTypeOf<"prompt" | "answer" | "cancel">();
   expectTypeOf<HostItemKind>().toEqualTypeOf<
-    "reply" | "reasoning" | "tool" | "plan" | "ask" | "event"
+    "reply" | "reasoning" | "tool" | "plan" | "ui" | "ask" | "event"
   >();
 });
 

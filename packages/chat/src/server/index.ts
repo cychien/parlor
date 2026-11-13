@@ -11,6 +11,7 @@ import { REVOCATION_HORIZON_MS, type ServerPlugin } from "@parlor/server";
 
 import type { ChatOwner } from "../model.js";
 import { CHAT_PLUGIN } from "../protocol.js";
+import type { ChatUiCatalog } from "../ui.js";
 import {
   CHAT_TAG,
   type ChatActionDeps,
@@ -23,6 +24,7 @@ import { CHAT_MIGRATIONS } from "./migrations.js";
 import { turnPush } from "./push.js";
 import { chatRoutes } from "./routes.js";
 import { type ChatDb, sqlChatStore } from "./store.js";
+import { chatShowTool } from "./ui-tool.js";
 
 export {
   CHAT_ACTIVITY_TAG,
@@ -108,6 +110,8 @@ export interface ChatOptions {
   readonly maxQueued?: number | undefined;
   /** Defaults to `inProcessRelay`; a multi-instance deployment passes one that crosses instances. */
   readonly relay?: (() => LiveRelay) | undefined;
+  /** The components the agent may show in the chat with `chat_show`, from `defineChatUi`. */
+  readonly ui?: ChatUiCatalog | undefined;
 }
 
 /** A lease past the revocation memory would outlive the revocation of its grant. */
@@ -195,6 +199,7 @@ export function chat(options: ChatOptions = {}): ServerPlugin {
         instructions: options.instructions,
         appName: process.env.PARLOR_APP_NAME ?? "this app",
         appOrigin: () => process.env.PARLOR_ORIGIN ?? process.env.PARLOR_WEB_ORIGIN ?? "",
+        ui: options.ui,
       };
       const session = hostSession(deps);
       const pushed = turnPush({ relay, session, db });
@@ -223,6 +228,7 @@ export function chat(options: ChatOptions = {}): ServerPlugin {
             host.announce(ownStream(owner), [[HOSTS_TAG, hostId]]),
         }),
         channel: relay.channel,
+        ...(options.ui ? { tools: [chatShowTool(options.ui)] } : {}),
         start: () => {
           sweep = setInterval(() => {
             (host.ready?.() ?? Promise.resolve())

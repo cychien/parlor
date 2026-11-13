@@ -129,6 +129,26 @@ describe("foldThread", () => {
     ]);
   });
 
+  it("renders what the agent showed as a ui row in its place in the turn", () => {
+    seq = 0;
+    const spec = { root: "kpi", elements: { kpi: { type: "Kpi", props: { value: 3 } } } };
+    const items = [
+      prompt("p1"),
+      reply("u1.1", "Here:"),
+      item("ui", "u1.2", turn1, { spec }),
+      reply("u1.3", "Up 3."),
+    ];
+    expect(fold({ items, turns: turns([turn1, "done"]) }).map((row) => row.kind)).toEqual(
+      ["prompt", "reply", "ui", "reply"],
+    );
+    expect(fold({ items, turns: turns([turn1, "done"]) })[2]).toEqual({
+      kind: "ui",
+      id: "u1.2",
+      turnId: "u1",
+      spec,
+    });
+  });
+
   it("marks a prompt as mine only when this device signed it", () => {
     seq = 0;
     const items = [prompt("p1", turn1, "phone"), prompt("p2", turn2, "laptop")];

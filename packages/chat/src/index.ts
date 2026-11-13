@@ -55,6 +55,7 @@ export {
   type HostWelcome,
   parseChatFrame,
   PUSHED_TURNS_PROTOCOL,
+  UI_ITEMS_PROTOCOL,
   type PushedTurn,
   type ProtocolRange,
   type StreamingKind,
@@ -66,6 +67,20 @@ export {
   CHAT_TAG,
   HOSTS_TAG,
 } from "./tags.js";
+export {
+  type ChatUiCatalog,
+  type ChatUiComponent,
+  type ChatUiProps,
+  checkUiSpec,
+  defineChatUi,
+  parseUiProps,
+  parseUiSpec,
+  UI_LIMITS,
+  type UiCheck,
+  type UiElement,
+  type UiIssue,
+  type UiSpec,
+} from "./ui.js";
 export {
   type AskState,
   type ChatItem,
