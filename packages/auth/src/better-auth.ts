@@ -42,6 +42,11 @@ export interface ParlorAuthOptions extends Omit<
    */
   readonly signInPage: string;
   /**
+   * The app page where a user connects a computer, such as `/connect-computer`, given the
+   * `connect` request's query; `parseComputerConnection` reads it. Parlor's own page when absent.
+   */
+  readonly connectComputerPage?: `/${string}` | undefined;
+  /**
    * The app's URL scheme, `app.scheme`, where social sign-in in a native shell returns.
    * Defaults to `PARLOR_APP_SCHEME`, which `parlor dev` and `parlor build` set from it.
    */
@@ -50,6 +55,7 @@ export interface ParlorAuthOptions extends Omit<
 
 export interface ParlorAuthSettings {
   readonly appName?: string | undefined;
+  readonly connectComputerPage?: `/${string}` | undefined;
   readonly origin: string;
   readonly baseURL: string;
   readonly resource: string;
@@ -123,12 +129,12 @@ function originOf(options: ParlorAuthOptions): string {
  * PKCE, tokens bound to `/_parlor/mcp`).
  */
 export function parlorAuth(options: ParlorAuthOptions): BetterAuthOptions {
-  const { origin: _origin, signInPage, scheme, ...rest } = options;
+  const { origin: _origin, signInPage, connectComputerPage, scheme, ...rest } = options;
   const origin = originOf(options);
   const baseURL = `${origin}${AUTH_BASE_PATH}`;
   const resource = `${origin}${DEFAULT_BASE_PATH}/mcp`;
   const bridge: Bridge = {
-    settings: { appName: rest.appName, origin, baseURL, resource },
+    settings: { appName: rest.appName, connectComputerPage, origin, baseURL, resource },
   };
   const trusted = rest.trustedOrigins;
   return {
