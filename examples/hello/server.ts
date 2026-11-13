@@ -6,6 +6,7 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 
 import { registry } from "./actions/index.js";
 import { authOptions } from "./auth.js";
+import { chatUi } from "./chat-ui.js";
 import * as schema from "./schema/index.js";
 
 const database = await createDatabase({
@@ -22,5 +23,5 @@ export default createServer({
       database: drizzleAdapter(database.db, { provider: "pg", schema }),
     },
   }),
-  plugins: [chat()],
+  plugins: [chat({ ui: chatUi })],
 });

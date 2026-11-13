@@ -2,7 +2,7 @@ import { asId } from "@parlor/core";
 import { describe, expect, it } from "vitest";
 
 import type { AgentUpdate } from "./acp.js";
-import { finishFold, type FoldStep, foldUpdate, startFold } from "./fold.js";
+import { finishFold, type FoldStep, foldShown, foldUpdate, startFold } from "./fold.js";
 
 const turnId = asId("turn", "u1");
 
@@ -285,5 +285,68 @@ describe("the fold", () => {
       },
     ]);
     expect((closed[0]!.body as { detail: string }).detail).toHaveLength(4_000);
+  });
+
+  describe("chat_show", () => {
+    const spec = { root: "kpi", elements: { kpi: { type: "Kpi", props: { value: 3 } } } };
+    const showStart: AgentUpdate = {
+      kind: "tool_start",
+      toolCallId: "toolu_ui",
+      title: "chat_show",
+      toolKind: "other",
+      mcp: { server: "hello", tool: "chat_show" },
+    };
+    const showDone: AgentUpdate = {
+      kind: "tool_update",
+      toolCallId: "toolu_ui",
+      status: "completed",
+      detail: '{"shown":true}',
+    };
+
+    function show(showsUi: boolean) {
+      let fold = startFold(turnId, { showsUi });
+      const closed: FoldStep["closed"][number][] = [];
+      const frames: FoldStep["frames"][number][] = [];
+      const take = (step: FoldStep) => {
+        fold = step.fold;
+        closed.push(...step.closed);
+        frames.push(...step.frames);
+      };
+      take(foldUpdate(fold, { kind: "text", text: "Here:" }, "hello"));
+      take(foldUpdate(fold, showStart, "hello"));
+      take(foldShown(fold, spec));
+      take(foldUpdate(fold, showDone, "hello"));
+      take(foldUpdate(fold, { kind: "text", text: "Up 3." }, "hello"));
+      take(finishFold(fold, false));
+      return { closed, frames };
+    }
+
+    it("folds an accepted chat_show into a ui item after the text before it, with no step for the call", () => {
+      const { closed, frames } = show(true);
+      expect(closed).toEqual([
+        { id: "u1.1", kind: "reply", body: { text: "Here:" } },
+        { id: "u1.3", kind: "ui", body: { spec } },
+        { id: "u1.4", kind: "reply", body: { text: "Up 3." } },
+      ]);
+      expect(frames.filter((frame) => frame.type === "item")).toEqual([]);
+    });
+
+    it("keeps chat_show a plain step for an app too old to store ui items", () => {
+      const { closed } = show(false);
+      expect(closed).toEqual([
+        { id: "u1.1", kind: "reply", body: { text: "Here:" } },
+        {
+          id: "u1.2",
+          kind: "tool",
+          body: {
+            title: "chat_show",
+            tool: { kind: "app", name: "chat_show" },
+            status: "done",
+            detail: '{"shown":true}',
+          },
+        },
+        { id: "u1.3", kind: "reply", body: { text: "Up 3." } },
+      ]);
+    });
   });
 });

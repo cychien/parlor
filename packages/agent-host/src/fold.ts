@@ -14,10 +14,14 @@ interface OpenTool {
   readonly title: string;
   readonly app: boolean;
   readonly name: string;
+  /** A `chat_show` call: what it showed becomes a `ui` item, so the call itself is not a step. */
+  readonly hidden: boolean;
 }
 
 export interface TurnFold {
   readonly turnId: TurnId;
+  /** The app stores `ui` items, so `chat_show` calls fold into them. */
+  readonly showsUi: boolean;
   readonly open: OpenText | undefined;
   readonly tools: ReadonlyMap<string, OpenTool>;
   readonly plan: Extract<AgentUpdate, { kind: "plan" }>["entries"] | undefined;
@@ -68,6 +72,20 @@ function closeText(fold: TurnFold, interrupted = false): FoldStep {
         }
       : { id: itemId(open.id), kind: "reasoning", body: { text: open.text } };
   return { fold: { ...fold, open: undefined }, frames: [], closed: [closed] };
+}
+
+const CHAT_SHOW_TOOL = "chat_show";
+
+function toolFrames(tool: OpenTool, status: ToolFrameStatus): HostFrame[] {
+  return tool.hidden ? [] : [toolFrame(tool, status)];
+}
+
+function toolDrafts(
+  tool: OpenTool,
+  status: ChatItemBody<"tool">["status"],
+  detail: string | undefined,
+): HostItemDraft[] {
+  return tool.hidden ? [] : [toolDraft(tool, status, detail)];
 }
 
 function toolFrame(tool: OpenTool, status: ToolFrameStatus): HostFrame {
@@ -131,21 +149,24 @@ function startTool(
     const tool = { ...known, title: update.title || known.title };
     return {
       fold: withTool(fold, update.toolCallId, tool),
-      frames: [toolFrame(tool, "pending")],
+      frames: toolFrames(tool, "pending"),
       closed: [],
     };
   }
   const text = closeText(fold);
   const next = allocate(text.fold);
+  const app = update.mcp !== undefined && update.mcp.server === appServer;
+  const name = update.mcp?.tool ?? update.toolKind;
   const tool: OpenTool = {
     id: next.id,
     title: update.title,
-    app: update.mcp !== undefined && update.mcp.server === appServer,
-    name: update.mcp?.tool ?? update.toolKind,
+    app,
+    name,
+    hidden: fold.showsUi && app && name === CHAT_SHOW_TOOL,
   };
   return {
     fold: withTool(next.fold, update.toolCallId, tool),
-    frames: [toolFrame(tool, "pending")],
+    frames: toolFrames(tool, "pending"),
     closed: text.closed,
   };
 }
@@ -161,21 +182,45 @@ function updateTool(
     return {
       fold: withTool(fold, update.toolCallId, undefined),
       frames: [],
-      closed: [
-        toolDraft(tool, update.status === "completed" ? "done" : "failed", update.detail),
-      ],
+      closed: toolDrafts(
+        tool,
+        update.status === "completed" ? "done" : "failed",
+        update.detail,
+      ),
     };
   }
   return {
     fold: withTool(fold, update.toolCallId, tool),
-    frames: [toolFrame(tool, update.status === "in_progress" ? "running" : "pending")],
+    frames: toolFrames(tool, update.status === "in_progress" ? "running" : "pending"),
     closed: [],
   };
 }
 
 /** Pure: knows no ACP, HTTP or time. Item ids are `<turnId>.<n>`. */
-export function startFold(turnId: TurnId): TurnFold {
-  return { turnId, open: undefined, tools: new Map(), plan: undefined, nextId: 1 };
+export function startFold(
+  turnId: TurnId,
+  options: { readonly showsUi?: boolean } = {},
+): TurnFold {
+  return {
+    turnId,
+    showsUi: options.showsUi === true,
+    open: undefined,
+    tools: new Map(),
+    plan: undefined,
+    nextId: 1,
+  };
+}
+
+/** What a `chat_show` call showed, in its place in the turn: after the text before it. */
+export function foldShown(fold: TurnFold, spec: ChatItemBody<"ui">["spec"]): FoldStep {
+  if (!fold.showsUi) return unchanged(fold);
+  const text = closeText(fold);
+  const next = allocate(text.fold);
+  return {
+    fold: next.fold,
+    frames: [],
+    closed: [...text.closed, { id: itemId(next.id), kind: "ui", body: { spec } }],
+  };
 }
 
 /** `appServer` is the MCP server name the host gave the agent for this app. */
@@ -218,8 +263,8 @@ export function foldUpdate(
 /** Closes what is open; `interrupted` marks the last reply when the user stopped the turn. */
 export function finishFold(fold: TurnFold, interrupted: boolean): FoldStep {
   const text = closeText(fold, interrupted);
-  const tools = [...fold.tools.values()].map((tool) =>
-    toolDraft(tool, interrupted ? "cancelled" : "done", undefined),
+  const tools = [...fold.tools.values()].flatMap((tool) =>
+    toolDrafts(tool, interrupted ? "cancelled" : "done", undefined),
   );
   const plan: HostItemDraft[] = fold.plan
     ? [{ id: planItemOf(fold), kind: "plan", body: { entries: entriesOf(fold.plan) } }]

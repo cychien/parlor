@@ -55,6 +55,12 @@ export type ChatItem<C = unknown> =
       readonly streaming: boolean;
     }
   | {
+      readonly kind: "ui";
+      readonly id: ItemId;
+      readonly turnId: TurnId;
+      readonly spec: ChatItemBody<"ui">["spec"];
+    }
+  | {
       readonly kind: "ask";
       readonly id: ItemId;
       readonly turnId: TurnId;
@@ -208,6 +214,9 @@ export function foldThread<C extends ThreadConfirmation>(
         streaming: false,
       });
     },
+    ui: (item) => {
+      push({ kind: "ui", id: item.id, turnId: item.turnId, spec: item.body.spec });
+    },
     ask: (item) => {
       asks.set(
         item.id,
@@ -311,6 +320,8 @@ function fold(folders: ItemFolders, item: LoggedItem): void {
       return folders.tool(item);
     case "plan":
       return folders.plan(item);
+    case "ui":
+      return folders.ui(item);
     case "ask":
       return folders.ask(item);
     case "event":

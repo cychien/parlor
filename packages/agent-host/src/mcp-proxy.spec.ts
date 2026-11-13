@@ -45,11 +45,15 @@ beforeAll(async () => {
       received.push({ headers: request.headers, body });
       const { id, params } = JSON.parse(body) as {
         id?: number;
-        params?: { name?: string };
+        params?: { name?: string; arguments?: { spec?: { root?: string } } };
       };
       if (params?.name === HELD) return;
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(APP_ANSWER.replace('"id":7', `"id":${id}`));
+      response.end(
+        params?.arguments?.spec?.root === "refused"
+          ? JSON.stringify({ jsonrpc: "2.0", id, result: { content: [], isError: true } })
+          : APP_ANSWER.replace('"id":7', `"id":${id}`),
+      );
     });
   });
   await new Promise<void>((resolve) => stub.listen(0, "127.0.0.1", resolve));
@@ -126,6 +130,25 @@ describe("the MCP proxy", () => {
       expect(headers).not.toHaveProperty("x-parlor-source");
       expect(headers["content-type"]).toBe("application/json");
     }
+    session.dispose();
+  });
+
+  it("tells the turn what each chat_show call the app accepted showed, and nothing for one it refused", async () => {
+    const session = proxy.open("hello", origin);
+    const agent = agentSide(session.server.env);
+    const shown: unknown[] = [];
+    session.begin({ token: "tokenA", expiresAt: Date.now() + 60_000 }, (spec) =>
+      shown.push(spec),
+    );
+    const show = (id: number, root: string) =>
+      `{"jsonrpc":"2.0","id":${id},"method":"tools/call","params":{"name":"chat_show","arguments":{"spec":{"root":"${root}","elements":{}}}}}`;
+    agent.send(show(1, "refused"));
+    await agent.next();
+    agent.send(show(2, "kpi"));
+    await agent.next();
+    agent.send(call(3));
+    await agent.next();
+    expect(shown).toEqual([{ root: "kpi", elements: {} }]);
     session.dispose();
   });
 

@@ -10,3 +10,4 @@ export { Ask, AskChoice, AskForm } from "../chat/chat-ask.js";
 export { Composer, Input, Send, Status, Stop } from "../chat/chat-composer.js";
 export { Root } from "../chat/chat-root.js";
 export { LoadOlder, Thread } from "../chat/chat-thread.js";
+export { Ui } from "../chat/chat-ui.js";

@@ -45,6 +45,7 @@
     "@parlor/core": "workspace:*",
     "@parlor/server": "workspace:*",
     "@parlor/sync": "workspace:*",
+    "@standard-schema/spec": "catalog:",
     "drizzle-orm": "^0.45.4",
     "zod": "catalog:"
   },

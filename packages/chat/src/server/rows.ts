@@ -67,6 +67,7 @@ const ITEM_KINDS = [
   "reasoning",
   "tool",
   "plan",
+  "ui",
   "ask",
   "event",
 ] as const;
@@ -140,6 +141,13 @@ export function toLoggedItem(row: z.output<typeof itemRow>): LoggedItem {
         author: "agent",
         kind: "plan",
         body: chatItemBodies.plan.body.parse(row.body),
+      };
+    case "ui":
+      return {
+        ...common,
+        author: "agent",
+        kind: "ui",
+        body: chatItemBodies.ui.body.parse(row.body),
       };
     case "ask":
       return {

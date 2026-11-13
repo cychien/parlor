@@ -541,6 +541,7 @@ export function createServer<T extends ActionMap>(
       callers,
       confirmation,
       registryFor,
+      turnTools: runtimes.flatMap(({ runtime }) => runtime.tools ?? []),
       app: mcpApp,
       ...mcp,
     });
