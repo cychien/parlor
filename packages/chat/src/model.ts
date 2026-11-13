@@ -65,6 +65,8 @@ export interface AgentOption {
   readonly name: string;
   /** `model` and `thought_level` as the agent tags them; any other the agent names. */
   readonly category?: string | undefined;
+  /** A switch, such as Claude's fast mode: its `values` are `on` and `off`. */
+  readonly type?: "boolean" | undefined;
   /** The agent's own default, the value a prompt that chooses nothing runs with. */
   readonly current: string;
   readonly values: readonly AgentOptionValue[];
@@ -142,6 +144,11 @@ export interface TurnStatus {
   readonly state: TurnState;
   readonly agent: AgentRef;
   readonly failure?: TurnFailure | undefined;
+  /**
+   * The prompt went into a turn already running instead of one of its own, after this item:
+   * the thread shows it there, where the agent read it.
+   */
+  readonly steeredAfter?: ItemId | undefined;
 }
 
 export interface ThreadPage {
@@ -194,6 +201,11 @@ export interface ClaimedTurn {
 export interface TurnSignals {
   readonly turnId: TurnId;
   readonly items: readonly LoggedItem<Exclude<UserItemKind, "prompt">>[];
+  /**
+   * Prompts queued behind this turn in its thread, for the same agent, oldest first: the
+   * computer may steer them into the running turn instead of starting turns of their own.
+   */
+  readonly queued?: readonly LoggedItem<"prompt">[];
   /** The keys of each device that answered, as the account lists them; revoked ones are left out. */
   readonly devices?: readonly DeviceKeys[];
 }

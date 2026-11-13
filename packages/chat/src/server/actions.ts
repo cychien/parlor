@@ -634,6 +634,29 @@ export function hostChatActions(
         return { id: finished.threadId };
       },
     }),
+    hostSteer: chatAction("host", enforcing, {
+      description:
+        "Record that a queued prompt went into the turn this computer is running, read after `after`.",
+      input: z.object({ turnId, steered: turnId, after: idSchema("item").optional() }),
+      run: async (input, host, ctx): Promise<{ readonly steered: boolean }> => {
+        deps.pushed?.confirm(input.turnId);
+        await requireWelcome(host, dbOf(ctx));
+        return deps.transact(host, async (tx) => {
+          const result = await deps.store.steerTurn(
+            tx,
+            host,
+            host.host,
+            input.turnId,
+            input.steered,
+            input.after,
+          );
+          return {
+            result: { steered: result.steered },
+            threadId: result.steered ? result.threadId : undefined,
+          };
+        });
+      },
+    }),
   };
 }
 

@@ -47,6 +47,7 @@ export function clipAgentOptions(options: readonly AgentOption[]): AgentOption[]
         ...(option.category === undefined
           ? {}
           : { category: clip(option.category, limits.category) }),
+        ...(option.type ? { type: option.type } : {}),
         current: option.current,
         values: kept.map((value): AgentOptionValue => ({
           id: value.id,

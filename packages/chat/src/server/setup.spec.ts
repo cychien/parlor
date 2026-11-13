@@ -97,6 +97,7 @@ describe("chat() setup", () => {
       "hostSignals",
       "hostAppend",
       "hostFinish",
+      "hostSteer",
     ]);
     expect(
       runtime.routes?.map((route) => [route.method, route.path, route.access]),

@@ -149,6 +149,19 @@ describe("foldThread", () => {
     });
   });
 
+  it("shows a prompt steered into a running turn after the reply the agent had written", () => {
+    seq = 0;
+    const items = [prompt("p1"), prompt("p2", turn2), reply("u1.1", "Looking.")];
+    const rows = fold({
+      items,
+      turns: [
+        { turnId: turn1, state: "running", agent },
+        { turnId: turn2, state: "done", agent, steeredAfter: asId("item", "u1.1") },
+      ],
+    });
+    expect(rows.map((row) => row.id)).toEqual(["p1", "u1.1", "p2"]);
+  });
+
   it("marks a prompt as mine only when this device signed it", () => {
     seq = 0;
     const items = [prompt("p1", turn1, "phone"), prompt("p2", turn2, "laptop")];

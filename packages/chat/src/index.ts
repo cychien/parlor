@@ -55,6 +55,7 @@ export {
   type HostWelcome,
   parseChatFrame,
   PUSHED_TURNS_PROTOCOL,
+  STEERING_PROTOCOL,
   UI_ITEMS_PROTOCOL,
   type PushedTurn,
   type ProtocolRange,

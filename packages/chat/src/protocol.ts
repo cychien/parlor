@@ -57,14 +57,18 @@ export interface HostStreamBatch {
  * kinds, frames and cursor rules. Bumped on any change an older peer could misread.
  * 3: the server may claim a turn for the computer and push it on the `chat` channel.
  * 4: the computer may append `ui` items.
+ * 5: the computer may steer a queued prompt into the turn it is running.
  */
-export const HOST_PROTOCOL = 4;
+export const HOST_PROTOCOL = 5;
 
 /** The first protocol whose computers take a turn pushed to them. */
 export const PUSHED_TURNS_PROTOCOL = 3;
 
 /** The first protocol whose backends store `ui` items. */
 export const UI_ITEMS_PROTOCOL = 4;
+
+/** The first protocol whose backends take `hostSteer`. */
+export const STEERING_PROTOCOL = 5;
 
 /**
  * Server to one computer, on the `chat` channel: a turn claimed for it, as `hostClaim` would
