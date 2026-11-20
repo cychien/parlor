@@ -5,7 +5,7 @@ import type { HostedSocket, SocketPlatform } from "@parlor/sync/server";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import type { AuthProvider } from "./auth.js";
+import { AuthFailure, type AuthProvider } from "./auth.js";
 import { ANONYMOUS_ACCOUNT, createServer } from "./create-server.js";
 import type { PluginHost, ServerPlugin } from "./plugin.js";
 
@@ -116,6 +116,22 @@ describe("a split server's edge", { timeout: 30_000 }, () => {
     );
     expect(await placement("/_parlor/sync/socket?ticket=0123abcd")).toBe(
       ANONYMOUS_ACCOUNT,
+    );
+  });
+
+  it("sends bad credentials to the anonymous account, and refuses to guess when it cannot tell who calls", async () => {
+    const failing = (error: Error) =>
+      createServer(() => ({
+        actions,
+        database: { ...database, close: undefined },
+        auth: { ...auth(), authenticate: () => Promise.reject(error) },
+      })).split!().edge;
+    const live = request("/_parlor/sync/token", "alice");
+    expect(await failing(new AuthFailure("expired", "Expired.")).placement(live)).toBe(
+      ANONYMOUS_ACCOUNT,
+    );
+    await expect(failing(new Error("database away")).placement(live)).rejects.toThrow(
+      "database away",
     );
   });
 

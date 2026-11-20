@@ -792,9 +792,16 @@ function buildServer<T extends ActionMap>(
     if (!live) return undefined;
     try {
       return accountOf(await callers(request));
-    } catch {
-      // The account's server refuses it the same way, with the answer the caller expects.
-      return ANONYMOUS_ACCOUNT;
+    } catch (error) {
+      // Bad credentials: the account's server refuses them the same way. Anything else, such
+      // as the database being away, must not put a user's connections in another account.
+      if (
+        error instanceof AuthFailure ||
+        toActionError(error).code === "unauthenticated"
+      ) {
+        return ANONYMOUS_ACCOUNT;
+      }
+      throw error;
     }
   };
 

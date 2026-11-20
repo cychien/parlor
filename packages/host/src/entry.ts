@@ -338,17 +338,27 @@ export default {
       return await withDocument(incoming, (request) =>
         scope.run(async () => {
           const server = await edge();
-          const key = await server.placement(request);
+          let key;
+          try {
+            key = await server.placement(request);
+          } catch (error) {
+            console.error("[parlor] could not tell whose account serves a request:", error);
+            return Response.json(
+              { error: { code: "internal", message: "The server is unavailable. Try again shortly." } },
+              { status: 503 },
+            );
+          }
           if (key === undefined) return server.fetch(request);
           return account(key).fetch(forAccount(request, key));
         }),
       );
     } finally {
+      // The scope is never closed here: work the app hands to waitUntil may still use its
+      // connections, and workerd ends them with the request once all of that has settled.
       waitUntil(
         scope
           .run(async () => (await edge()).settle())
-          .catch((error) => console.error("[parlor] settling after a request failed:", error))
-          .finally(() => scope.close()),
+          .catch((error) => console.error("[parlor] settling after a request failed:", error)),
       );
     }
   },
@@ -470,7 +480,10 @@ export class ${TOPIC_CLASS} extends DurableObject {
     if (account) await this.ctx.storage.delete("s:" + account);
   }
 
-  /** Relays to every account listening but the one that published, without waiting for them. */
+  /**
+   * Relays to every account listening but the one that published, without waiting for them.
+   * An account nobody listens in any more unsubscribes itself, in turn with its own calls.
+   */
   async publish(channel, topic, payload, from) {
     const listening = await this.ctx.storage.list({ prefix: "s:" });
     for (const key of listening.keys()) {
@@ -480,10 +493,7 @@ export class ${TOPIC_CLASS} extends DurableObject {
       accounts
         .get(accounts.idFromName(account))
         .deliver(channel, topic, payload)
-        .then(
-          (heard) => (heard ? undefined : this.ctx.storage.delete(key)),
-          (error) => console.error("[parlor] a topic could not reach an account:", error),
-        );
+        .catch((error) => console.error("[parlor] a topic could not reach an account:", error));
     }
   }
 }
