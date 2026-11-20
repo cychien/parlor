@@ -106,6 +106,173 @@ describe("createSyncClient", () => {
     client.stop();
   });
 
+  describe("when the server says its stream misses nothing", () => {
+    const serve = (options: {
+      negotiationBuild?: string;
+      checkBuild?: () => string | null;
+    }) => {
+      const calls: string[] = [];
+      const streams: AbortSignal[] = [];
+      const request = vi.fn(async (path: string, init?: RequestInit) => {
+        calls.push(path);
+        if (path.endsWith("/sync/token")) {
+          return Response.json(
+            {
+              protocol: 1,
+              transport: "sse",
+              endpoint: "/_parlor/sync/stream",
+              pollIntervalMs: 2000,
+              safety: "build",
+            },
+            options.negotiationBuild
+              ? { headers: { "x-parlor-build": options.negotiationBuild } }
+              : {},
+          );
+        }
+        if (path.includes("/sync/stream")) {
+          streams.push(init!.signal!);
+          return new Response(
+            sseBody([
+              'event: handshake\ndata: {"protocol":1,"capabilities":[],"build":"a"}\n\n',
+            ]),
+            { status: 200, headers: { "content-type": "text/event-stream" } },
+          );
+        }
+        if (path.endsWith("/sync/build")) {
+          const answer = options.checkBuild?.();
+          if (answer === "missing") return new Response(null, { status: 404 });
+          return Response.json({ build: answer ?? null });
+        }
+        return Response.json({ events: [], cursor: "" });
+      });
+      return { calls, streams, request };
+    };
+    const polls = (calls: string[]) => calls.filter((path) => path.includes("/sync?"));
+    const checks = (calls: string[]) =>
+      calls.filter((path) => path.endsWith("/sync/build"));
+
+    it("asks which build answers instead of polling, and says so on the stream", async () => {
+      const { calls, streams, request } = serve({
+        negotiationBuild: "a",
+        checkBuild: () => "a",
+      });
+      const client = createSyncClient({ request, onEvents: vi.fn(), safetyPollMs: 1000 });
+      client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls.find((path) => path.includes("/sync/stream"))).toContain(
+        "safety=build",
+      );
+
+      await vi.advanceTimersByTimeAsync(3500);
+      expect(polls(calls)).toEqual([]);
+      expect(checks(calls)).toHaveLength(3);
+      expect(streams).toHaveLength(1);
+      client.stop();
+    });
+
+    it("reopens the stream when another build answers the check", async () => {
+      let build = "a";
+      const { streams, request } = serve({
+        negotiationBuild: "a",
+        checkBuild: () => build,
+      });
+      const client = createSyncClient({ request, onEvents: vi.fn(), safetyPollMs: 1000 });
+      client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+      build = "b";
+      await vi.advanceTimersByTimeAsync(1100);
+      expect(streams).toHaveLength(2);
+      expect(streams[0]!.aborted).toBe(true);
+      client.stop();
+    });
+
+    it("reopens it when the check answers no build at all", async () => {
+      const { streams, request } = serve({
+        negotiationBuild: "a",
+        checkBuild: () => null,
+      });
+      const client = createSyncClient({ request, onEvents: vi.fn(), safetyPollMs: 1000 });
+      client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1100);
+      expect(streams).toHaveLength(2);
+      client.stop();
+    });
+
+    it("polls for events, as ever, until the stream it was offered has greeted it", async () => {
+      const calls: string[] = [];
+      const request = vi.fn(async (path: string) => {
+        calls.push(path);
+        if (path.endsWith("/sync/token")) {
+          return Response.json(
+            {
+              protocol: 1,
+              transport: "sse",
+              endpoint: "/_parlor/sync/stream",
+              pollIntervalMs: 2000,
+              safety: "build",
+            },
+            { headers: { "x-parlor-build": "a" } },
+          );
+        }
+        if (path.includes("/sync/stream")) {
+          return new Response(sseBody([]), {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          });
+        }
+        return Response.json({ events: [event(7, "z")], cursor: "7.z" });
+      });
+      const onEvents = vi.fn();
+      const client = createSyncClient({
+        request,
+        onEvents,
+        onError: () => undefined,
+        safetyPollMs: 1000,
+        coalesceMs: 10,
+      });
+      client.start();
+      await vi.advanceTimersByTimeAsync(1200);
+      expect(polls(calls).length).toBeGreaterThanOrEqual(1);
+      expect(checks(calls)).toEqual([]);
+      expect(onEvents).toHaveBeenCalledWith([event(7, "z")]);
+      client.stop();
+    });
+
+    it("reopens it when the server that answers the check has no such route", async () => {
+      const { streams, request } = serve({
+        negotiationBuild: "a",
+        checkBuild: () => "missing",
+      });
+      const client = createSyncClient({ request, onEvents: vi.fn(), safetyPollMs: 1000 });
+      client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1100);
+      expect(streams).toHaveLength(2);
+      client.stop();
+    });
+
+    it("needs no header of the check or the negotiation, which another origin's page cannot read", async () => {
+      let build = "a";
+      const { calls, streams, request } = serve({ checkBuild: () => build });
+      const client = createSyncClient({ request, onEvents: vi.fn(), safetyPollMs: 1000 });
+      client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1100);
+      expect(checks(calls)).toHaveLength(1);
+      expect(polls(calls)).toEqual([]);
+      build = "b";
+      await vi.advanceTimersByTimeAsync(1100);
+      expect(streams).toHaveLength(2);
+      client.stop();
+    });
+  });
+
   it("starts where the page's data stands until it has a cursor of its own", async () => {
     const streams: string[] = [];
     const request = vi.fn(async (path: string) => {

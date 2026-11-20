@@ -1,3 +1,4 @@
+import type { DataProvider } from "@parlor/core";
 import { createDatabase, type DatabaseHandle } from "@parlor/data";
 import { H3 } from "h3";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -15,6 +16,7 @@ interface Instance {
   readonly hub: SyncHub;
   readonly computers: Set<ChannelConnection>;
   readonly streams: { count: number };
+  readonly requests: string[];
 }
 
 let handle: DatabaseHandle;
@@ -34,9 +36,20 @@ afterAll(async () => {
   await handle.close();
 });
 
-function instance(build: string | undefined, maxStreamMs?: number): Instance {
+/** As a server that hears events over a LISTEN connection, which can miss some. */
+const overTheDatabase = (): DataProvider => ({ ...handle, notifications: "database" });
+
+function instance(
+  build: string | undefined,
+  maxStreamMs?: number,
+  data: DataProvider = handle,
+): Instance {
   const app = new H3();
-  const hub = new SyncHub(handle);
+  const hub = new SyncHub(data);
+  const requests: string[] = [];
+  app.use((event) => {
+    requests.push(event.url.pathname);
+  });
   const computers = new Set<ChannelConnection>();
   const streams = { count: 0 };
   const chat: ServerChannel = {
@@ -51,7 +64,7 @@ function instance(build: string | undefined, maxStreamMs?: number): Instance {
   });
   registerSyncRoutes(app, {
     basePath: "/_parlor",
-    data: handle,
+    data,
     hub,
     scope: () => "acme",
     channels: [chat],
@@ -59,7 +72,7 @@ function instance(build: string | undefined, maxStreamMs?: number): Instance {
     build: () => build,
     maxStreamMs,
   });
-  const made = { app, hub, computers, streams };
+  const made = { app, hub, computers, streams, requests };
   instances.push(made);
   return made;
 }
@@ -99,10 +112,13 @@ const push = (to: Instance, frame: string) => {
   for (const connection of to.computers) connection.send(frame);
 };
 
-describe("a deploy", () => {
+describe.each([
+  ["in its own process", () => handle as DataProvider],
+  ["over the database", overTheDatabase],
+])("a deploy of a server that hears events %s", (_name, data) => {
   it("moves an open stream to the new build, so what the new build pushes arrives", async () => {
-    const old = instance("build-a");
-    const next = instance("build-b");
+    const old = instance("build-a", undefined, data());
+    const next = instance("build-b", undefined, data());
     const { deploy, request } = deployment(old, next);
     const received = listen(request);
     await vi.waitFor(() => expect(old.computers.size).toBe(1));
@@ -115,8 +131,8 @@ describe("a deploy", () => {
   });
 
   it("moves it once, even while both builds keep answering", async () => {
-    const old = instance("build-a");
-    const next = instance("build-b");
+    const old = instance("build-a", undefined, data());
+    const next = instance("build-b", undefined, data());
     const { deploy, request } = deployment(old, next);
     listen(request);
     await vi.waitFor(() => expect(old.streams.count).toBe(1));
@@ -129,8 +145,8 @@ describe("a deploy", () => {
   });
 
   it("leaves a stream alone when the server names no build", async () => {
-    const old = instance(undefined);
-    const next = instance(undefined);
+    const old = instance(undefined, undefined, data());
+    const next = instance(undefined, undefined, data());
     const { deploy, request } = deployment(old, next);
     listen(request);
     await vi.waitFor(() => expect(old.computers.size).toBe(1));
@@ -141,10 +157,51 @@ describe("a deploy", () => {
   });
 });
 
+describe("a server whose stream misses nothing", () => {
+  const polls = (of: Instance) => of.requests.filter((path) => path === "/_parlor/sync");
+  const checks = (of: Instance) =>
+    of.requests.filter((path) => path === "/_parlor/sync/build");
+
+  it("is asked which build answers and never polled, and its stream is not ended on time", async () => {
+    const only = instance("build-a", 200);
+    listen((path, init) =>
+      Promise.resolve(only.app.fetch(new Request(`http://app.test${path}`, init))),
+    );
+    await vi.waitFor(() => expect(only.computers.size).toBe(1));
+    await vi.waitFor(() => expect(checks(only).length).toBeGreaterThanOrEqual(3));
+    expect(polls(only)).toEqual([]);
+    expect(only.streams.count).toBe(1);
+  });
+
+  it("is left for the new build by the check alone, when nothing else is requested", async () => {
+    const old = instance("build-a");
+    const next = instance("build-b");
+    const { deploy, request } = deployment(old, next);
+    listen(request);
+    await vi.waitFor(() => expect(old.computers.size).toBe(1));
+    deploy();
+    await vi.waitFor(() => expect(next.computers.size).toBe(1), { timeout: 2000 });
+    expect(old.computers.size).toBe(0);
+    expect(polls(next)).toEqual([]);
+  });
+
+  it("is left for a build that names none, which is then polled as before", async () => {
+    const old = instance("build-a");
+    const next = instance(undefined);
+    const { deploy, request } = deployment(old, next);
+    listen(request);
+    await vi.waitFor(() => expect(old.computers.size).toBe(1));
+    deploy();
+    await vi.waitFor(() => expect(next.computers.size).toBe(1), { timeout: 2000 });
+    expect(old.computers.size).toBe(0);
+    await vi.waitFor(() => expect(polls(next).length).toBeGreaterThanOrEqual(1));
+  });
+});
+
 describe("a stream's lifetime", () => {
   it("ends it on time so an instance a deploy left behind drains, and the client reopens it", async () => {
-    const old = instance("build-a", 200);
-    const next = instance(undefined);
+    const old = instance("build-a", 200, overTheDatabase());
+    const next = instance(undefined, undefined, overTheDatabase());
     const { deploy, request } = deployment(old, next);
     listen(request);
     await vi.waitFor(() => expect(old.computers.size).toBe(1));

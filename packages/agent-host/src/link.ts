@@ -5,6 +5,7 @@ import {
   CHAT_CHANNEL,
   CHAT_TAG,
   type ClaimedTurn,
+  type HeartbeatAnswer,
   HOST_PROTOCOL,
   type HostFrame,
   type HostStreamBatch,
@@ -272,6 +273,42 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
       body: JSON.stringify(body),
     });
 
+  /** What the app handed out for heartbeats that carry no credential, once it has. */
+  let beat: string | undefined;
+  const unsignedFetch = untilHeaders(async (input, init) => {
+    if (mode === "closed") throw new LinkDown("This app's link is closed.");
+    const request = new Request(input, init);
+    const response = await deps.fetch(request);
+    logEvent("http_request", {
+      method: request.method,
+      path: new URL(request.url).pathname,
+      status: response.status,
+    });
+    return response;
+  }, REQUEST_TIMEOUT_MS);
+  /** True unless the app no longer knows the token, as after it restarted. */
+  const beatWith = async (token: string): Promise<boolean> => {
+    const response = await unsignedFetch(`${origin}/_parlor/chat/beat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token }),
+    });
+    await response.body?.cancel();
+    return response.status !== 404;
+  };
+  const beatOf = async (response: Response): Promise<string | undefined> => {
+    if (response.status !== 200) {
+      await response.body?.cancel();
+      return undefined;
+    }
+    const answer = (await response.json().catch(() => undefined)) as
+      | Partial<HeartbeatAnswer>
+      | undefined;
+    return typeof answer?.beat === "string" && answer.beat !== ""
+      ? answer.beat
+      : undefined;
+  };
+
   const flush = async (turnId: TurnId, stream: TurnStream) => {
     while (stream.pending.length > 0) {
       if (mode === "closed") break;
@@ -299,7 +336,11 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
     },
     async heartbeat() {
       await welcomed;
-      await post("heartbeat", {});
+      if (beat !== undefined) {
+        if (await beatWith(beat)) return;
+        beat = undefined;
+      }
+      beat = await beatOf(await post("heartbeat", {}));
     },
   };
 

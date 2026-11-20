@@ -11,6 +11,7 @@ import {
   type SyncBatch,
   type SyncEvent,
   type SyncNegotiation,
+  SYNC_BUILD_PATH,
   SYNC_PROTOCOL_VERSION,
   BUILD_HEADER,
   DEFAULT_MAX_STREAM_MS,
@@ -57,7 +58,8 @@ export interface SyncRouteOptions {
   readonly build?: (() => string | undefined) | undefined;
   /**
    * How long a stream lives, give or take a tenth, before the server ends it and the client
-   * reopens it, so an instance an old deploy left behind drains. Defaults to 15 minutes.
+   * reopens it, so an instance an old deploy left behind drains. Defaults to 15 minutes. A
+   * stream whose client watches the build itself (`SyncNegotiation.safety`) is never ended.
    */
   readonly maxStreamMs?: number | undefined;
   /**
@@ -112,17 +114,23 @@ function catchUpFrames(missed: SyncBatch): SyncBatch[] {
 interface MissedQuery {
   readonly since: string;
   readonly reset: boolean;
+  /** The client asks `SYNC_BUILD_PATH` itself, so the stream need not end to move it. */
+  readonly watchesBuild: boolean;
 }
 
 function missedQuery(event: H3Event): MissedQuery {
   const query = getQuery(event);
-  return { since: String(query.since ?? ""), reset: query.reset === "1" };
+  return {
+    since: String(query.since ?? ""),
+    reset: query.reset === "1",
+    watchesBuild: query.safety === "build",
+  };
 }
 
 async function missedSince(
   db: SyncDatabase,
   streams: readonly string[],
-  { since, reset }: MissedQuery,
+  { since, reset }: Pick<MissedQuery, "since" | "reset">,
 ): Promise<SyncBatch> {
   if (!reset) {
     return batch(await readSyncEvents(db, streams, decodeCursor(since)), since);
@@ -154,15 +162,27 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
     const build = options.build?.();
     if (build !== undefined) event.res.headers.set(BUILD_HEADER, build);
   };
+  const safety = () =>
+    transport === "sse" && hub.lossless && options.build?.() !== undefined
+      ? ("build" as const)
+      : undefined;
 
   app.post(`${basePath}/sync/token`, (event: H3Event): SyncNegotiation => {
     stamp(event);
+    const advised = safety();
     return {
       protocol: SYNC_PROTOCOL_VERSION,
       transport,
       endpoint: `${basePath}/sync/stream`,
       pollIntervalMs,
+      ...(advised ? { safety: advised } : {}),
     };
+  });
+
+  app.get(`${basePath}${SYNC_BUILD_PATH}`, (event: H3Event) => {
+    stamp(event);
+    event.res.headers.set("cache-control", "no-store");
+    return { build: options.build?.() ?? null };
   });
 
   app.get(`${basePath}/sync`, async (event: H3Event) => {
@@ -208,11 +228,12 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
         () => stream.close(),
       ),
     );
+    const query = missedQuery(event);
     const keepAlive = setInterval(() => stream.comment("keep-alive"), keepAliveMs);
-    const lifetime = setTimeout(
-      () => stream.close(),
-      maxStreamMs * (0.9 + 0.2 * Math.random()),
-    );
+    const lifetime =
+      query.watchesBuild && safety() === "build"
+        ? undefined
+        : setTimeout(() => stream.close(), maxStreamMs * (0.9 + 0.2 * Math.random()));
     const disconnects: (() => void)[] = [];
     const ended = new AbortController();
     const revoked = authority?.revoked;
@@ -252,7 +273,6 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
       );
     }
 
-    const query = missedQuery(event);
     const catchUp = async (first: SyncBatch) => {
       let missed = first;
       for (;;) {

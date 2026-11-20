@@ -525,7 +525,7 @@ export function cleanup({
 }
 ```
 
-The timer runs in every server process, which is right for the one instance Parlor supports.
+The timer runs in every server process, which is right for the one instance Parlor supports. A timer that queries the database keeps a serverless PostgreSQL awake for as long as the server runs, so arm one only while there is work it could find.
 
 ## 10. Configuration and secrets
 

@@ -8,6 +8,7 @@ import {
   type ChatServer,
   data,
   drivers,
+  HEARTBEAT_STATUS,
   openDatabase,
   resetDatabase,
   serveChat,
@@ -128,7 +129,7 @@ describe.each(drivers)("chat({ access }) on $name", (driver) => {
       turnId: "u1",
       token: { token: expect.any(String) },
     });
-    expect((await app.post("alice-host", "heartbeat", {})).status).toBe(204);
+    expect((await app.post("alice-host", "heartbeat", {})).status).toBe(HEARTBEAT_STATUS);
     expect(
       (
         await app.action("alice-host", "hostFinish", {

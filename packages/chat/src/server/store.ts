@@ -227,17 +227,18 @@ export interface ChatStore {
       readonly online: boolean;
       readonly ttlMs: number;
     },
-  ): Promise<{ readonly onlineUntil: number }>;
+  ): Promise<{ readonly onlineUntil: number; readonly written: string }>;
   /**
    * One UPDATE of `online_until`. `returned` is true when the sidebar had been told the
-   * computer was offline, so the caller announces its return.
+   * computer was offline, so the caller announces its return. `written` names this write
+   * of the computer's liveness, as `reportHost`'s does; absent when the computer has no row.
    */
   heartbeat(
     db: ChatDb,
     owner: ChatOwner,
     host: HostPrincipal,
     ttlMs: number,
-  ): Promise<{ readonly returned: boolean }>;
+  ): Promise<{ readonly returned: boolean; readonly written?: string | undefined }>;
   /** The user's computers, whatever scope `owner` is in: a computer serves its user everywhere. */
   listHosts(db: ChatDb, owner: ChatOwner): Promise<StoredHost[]>;
   /** Drops the user's computer rows whose grant is gone. */
@@ -272,6 +273,8 @@ async function query<S extends z.ZodType>(
 
 const count = z.coerce.number();
 const ms = (column: string) => sql.raw(`(extract(epoch from ${column}) * 1000)::bigint`);
+/** The transaction that last wrote a row, which Postgres keeps on it: it names that write. */
+const writeOf = (table?: string) => sql.raw(`${table ? `${table}.` : ""}xmin::text`);
 const ITEM_COLUMNS = sql`id, thread_id, turn_id, seq, kind, body, ${ms("created_at")} as at`;
 const ITEM_COLUMNS_OF_I = sql`i.id, i.thread_id, i.turn_id, i.seq, i.kind, i.body, ${ms("i.created_at")} as at`;
 const THREAD_COLUMNS = sql`id, title, host_id, agent_id, last_seq, ${ms("updated_at")} as updated_at`;
@@ -672,6 +675,89 @@ async function turnsOf(
   }));
 }
 
+const offlineHost = z.object({
+  id: idSchema("host"),
+  scope: z.string(),
+  owner_id: idSchema("user"),
+});
+
+const hostsOf = (rows: readonly z.output<typeof offlineHost>[]) =>
+  rows.map((row) => ({ id: row.id, owner: { scope: row.scope, userId: row.owner_id } }));
+
+/**
+ * What the app's only server asks about the liveness it tracks in memory, apart from
+ * `ChatStore`: the leases themselves stay in the rows that every read already checks.
+ */
+export const livenessQueries = {
+  /** When the next running turn's lease lapses unless renewed; undefined when none runs. */
+  async nextLeaseEnd(db: ChatDb): Promise<number | undefined> {
+    const [row] = await query(
+      db,
+      sql`select ${ms("min(lease_until)")} as lease_until from parlor_chat_turns
+        where state = 'running'`,
+      z.object({ lease_until: count.nullable() }),
+    );
+    return row?.lease_until ?? undefined;
+  },
+
+  /**
+   * Marks one computer offline, but only while its liveness is still the write `written`
+   * names: a server that took over since has made its own, and a predecessor still winding
+   * down must not undo it. Answers the owner when it did.
+   */
+  async markOffline(
+    db: ChatDb,
+    hostId: HostId,
+    written: string,
+  ): Promise<ChatOwner | undefined> {
+    const rows = await query(
+      db,
+      sql`update parlor_chat_hosts set announced_online = false, online_until = now()
+        where id = ${hostId} and announced_online
+          and ${writeOf()} = ${written}
+        returning id, scope, owner_id`,
+      offlineHost,
+    );
+    return hostsOf(rows)[0]?.owner;
+  },
+
+  /** Marks every computer the sidebar has online, but `connected`, offline. */
+  async markOthersOffline(
+    db: ChatDb,
+    connected: readonly HostId[],
+  ): Promise<{ readonly id: HostId; readonly owner: ChatOwner }[]> {
+    const kept = connected.length
+      ? sql`and id not in (${sql.join(
+          connected.map((id) => sql`${id}`),
+          sql`, `,
+        )})`
+      : sql``;
+    return hostsOf(
+      await query(
+        db,
+        sql`update parlor_chat_hosts set announced_online = false, online_until = now()
+          where announced_online ${kept}
+          returning id, scope, owner_id`,
+        offlineHost,
+      ),
+    );
+  },
+
+  /**
+   * Shortens a liveness that outlasts `ttlMs` to it: what the app's only server wrote for a
+   * connected computer, which servers that lease liveness would otherwise never see lapse.
+   */
+  async clampOnline(db: ChatDb, ttlMs: number): Promise<void> {
+    await query(
+      db,
+      sql`update parlor_chat_hosts set online_until = ${leaseSql(ttlMs)}
+        where online_until > ${leaseSql(ttlMs)}
+        returning id`,
+      z.object({ id: idSchema("host") }),
+    );
+  },
+};
+
 export const sqlChatStore: ChatStore = {
   async listThreads(db, owner) {
     const rows = await query(
@@ -1038,12 +1124,12 @@ export const sqlChatStore: ChatStore = {
           online_until = excluded.online_until,
           announced_online = excluded.announced_online, scope = excluded.scope
         where parlor_chat_hosts.owner_id = excluded.owner_id
-        returning ${ms("online_until")} as online_until`,
-      z.object({ online_until: count }),
+        returning ${ms("online_until")} as online_until, ${writeOf("parlor_chat_hosts")} as written`,
+      z.object({ online_until: count, written: z.string() }),
     );
     if (!row)
       throw new ActionError("forbidden", "This computer belongs to another account.");
-    return { onlineUntil: row.online_until };
+    return { onlineUntil: row.online_until, written: row.written };
   },
 
   async heartbeat(db, owner, host, ttlMs) {
@@ -1054,10 +1140,10 @@ export const sqlChatStore: ChatStore = {
         from (select announced_online as was from parlor_chat_hosts where id = ${host.hostId}) as prev
         where h.id = ${host.hostId} and h.owner_id = ${owner.userId}
           and h.grant_id = ${host.grantId}
-        returning prev.was as was`,
-      z.object({ was: z.boolean() }),
+        returning prev.was as was, ${writeOf("h")} as written`,
+      z.object({ was: z.boolean(), written: z.string() }),
     );
-    return { returned: beat !== undefined && !beat.was };
+    return { returned: beat !== undefined && !beat.was, written: beat?.written };
   },
 
   async listHosts(db, owner) {

@@ -390,7 +390,8 @@ async function removeGrant(
   match: { readonly hostId: string } | { readonly grantId: string },
   userId: string,
 ): Promise<RemovedGrant | undefined> {
-  return databaseOf(deps.host).transaction(async (handle) => {
+  const database = databaseOf(deps.host);
+  return database.transaction(async (handle) => {
     const tx = handle as Database;
     const removed = rowsOf<RemovedGrant>(
       await tx.execute(
@@ -400,7 +401,12 @@ async function removeGrant(
       ),
     )[0];
     if (!removed) return undefined;
-    await RevocationSet.revoke(tx, { kind: "grant", id: removed.grant_id });
+    await RevocationSet.revoke(
+      tx,
+      { kind: "grant", id: removed.grant_id },
+      undefined,
+      database,
+    );
     return removed;
   });
 }

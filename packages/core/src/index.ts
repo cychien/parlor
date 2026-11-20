@@ -14,6 +14,7 @@ export {
   isAction,
   isMutating,
   type ListenOptions,
+  type NotificationReach,
   needsConfirmation,
   needsPrincipal,
   type ParlorDatabase,

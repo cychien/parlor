@@ -1,10 +1,10 @@
-import { ActionError, type HostId } from "@parlor/core";
+import { ActionError, type HostId, type HostPrincipal } from "@parlor/core";
 import { type AnyPluginRoute, pluginRoute, readBoundedText } from "@parlor/server";
 import { z } from "zod";
 
 import { idSchema } from "../id-schemas.js";
 import type { ChatOwner } from "../model.js";
-import type { HostStreamBatch } from "../protocol.js";
+import type { HeartbeatAnswer, HostStreamBatch } from "../protocol.js";
 import type { LiveRelay } from "./live.js";
 import type { ChatDb, ChatStore } from "./store.js";
 
@@ -18,7 +18,19 @@ export interface ChatRouteDeps {
   readonly heartbeatMs: number;
   readonly reconcile: (owner: ChatOwner) => Promise<void>;
   readonly announceHost: (owner: ChatOwner, hostId: HostId) => Promise<void>;
+  /**
+   * Takes a heartbeat in place of renewing the computer's lease in the database, and answers
+   * the token its next ones may carry to `heard` (`HeartbeatAnswer`).
+   */
+  readonly beat?:
+    | ((owner: ChatOwner, host: HostPrincipal) => Promise<string>)
+    | undefined;
+  /** A heartbeat that carries only a token `beat` answered; false when nobody holds it. */
+  readonly heard?: ((token: string) => boolean) | undefined;
 }
+
+const MAX_BEAT_BODY_BYTES = 1024;
+const beatBody = z.object({ token: z.string().min(1).max(128) });
 
 const streamBatch = z.object({
   turnId: idSchema("turn"),
@@ -106,6 +118,10 @@ export function chatRoutes(deps: ChatRouteDeps): readonly AnyPluginRoute[] {
       handle: async (_request, caller) => {
         const { principal } = caller;
         const owner = { scope: caller.scope, userId: principal.userId };
+        if (deps.beat) {
+          const answer: HeartbeatAnswer = { beat: await deps.beat(owner, principal) };
+          return Response.json(answer);
+        }
         const { returned } = await deps.store.heartbeat(
           deps.db(),
           owner,
@@ -119,7 +135,26 @@ export function chatRoutes(deps: ChatRouteDeps): readonly AnyPluginRoute[] {
         return new Response(null, { status: 204 });
       },
     }),
+    {
+      method: "POST",
+      path: "/beat",
+      access: "public",
+      handle: async (request) => {
+        const text = await readBoundedText(request, MAX_BEAT_BODY_BYTES);
+        const parsed = beatBody.safeParse(text === undefined ? undefined : json(text));
+        const known = parsed.success && deps.heard?.(parsed.data.token) === true;
+        return new Response(null, { status: known ? 204 : 404 });
+      },
+    },
   ];
+}
+
+function json(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
 }
 
 function parseJson(text: string): unknown {

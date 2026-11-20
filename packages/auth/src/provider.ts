@@ -436,7 +436,9 @@ export function betterAuthProvider(provided: BetterAuthProviderOptions): AuthPro
       revocations = set;
       const auditLog = createAuditLog(database);
       bridge.revoke = (notice) =>
-        database.transaction((tx) => RevocationSet.revoke(tx, notice));
+        database.transaction((tx) =>
+          RevocationSet.revoke(tx, notice, undefined, database),
+        );
       grantKeys = createGrantKeys(database);
       devices = createDeviceRegistry(database);
       turnKeys = createTurnKeyStore({

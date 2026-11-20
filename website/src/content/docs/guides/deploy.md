@@ -34,7 +34,8 @@ Set `deploy.preset` to `cloudflare-durable` in `parlor.config.ts`, then build an
 pnpm parlor deploy
 ```
 
-- Set `DATABASE_URL` as a secret: any PostgreSQL that accepts connections from Cloudflare, such as Neon. If it is a pooled endpoint, also set `DATABASE_DIRECT_URL` to the direct one, which LISTEN needs.
+- Set `DATABASE_URL` as a secret: any PostgreSQL that accepts connections from Cloudflare, such as Neon. If it is a pooled endpoint, also set `DATABASE_DIRECT_URL` to the direct one, which migrations use.
+- The Durable Object is the app's one server, so it holds no database connection open while nothing happens. Live updates travel inside it, and an open page or a connected computer sends the database nothing until someone does something, so a serverless PostgreSQL can scale to zero in between. An older Parlor Host still asks every minute, so keep it updated on the computers you connect.
 - The migrations are embedded in the build and run before the server's first request.
 - The Durable Object starts beside the database: Parlor reads the region from `DATABASE_URL`'s host (Neon, Supabase, RDS and other cloud hosts name it). For a host that names none, set `deploy.cloudflare.locationHint` in `parlor.config.ts`. Add the app's own bindings, such as R2, under `deploy.cloudflare.wrangler`.
 - Wrangler applies Durable Object migrations in order, after the last one a deployment applied. Without migrations of its own, the app gets Parlor's `{ tag: "parlor-server-v1", new_sqlite_classes: ["ParlorServer"] }` at the end of the list; once it lists its own, include that entry where it was first deployed.
@@ -108,6 +109,8 @@ Parlor's agent features need a server that holds a connection to each open page.
 
 Run one instance. Several `node-server` instances behind a load balancer share data and live updates, but the screen tools, approvals and reply streaming only reach pages connected to the same instance.
 
+When one instance is all you run, say so: `server.instances: "one"` in `parlor.config.ts`, or `PARLOR_INSTANCES=one` in its environment. The server then keeps live updates and each computer's liveness in its own memory instead of holding a LISTEN connection and renewing leases, and sends an idle database nothing. `cloudflare-durable` is always one. Leave it unset when several instances share the database: they hear each other only through it.
+
 ## Environment
 
 | Variable              | When                                                                                        |
@@ -115,6 +118,7 @@ Run one instance. Several `node-server` instances behind a load balancer share d
 | `DATABASE_URL`        | always in production: a PostgreSQL connection string                                        |
 | `DATABASE_DIRECT_URL` | when `DATABASE_URL` goes through a pooler: the direct connection, for LISTEN and migrations |
 | `PARLOR_ORIGIN`       | with sign-in: the public origin                                                             |
+| `PARLOR_INSTANCES`    | `one` when this server is the app's only one, unless `server.instances` or the preset said  |
 | `BETTER_AUTH_SECRET`  | with sign-in: the session signing secret                                                    |
 
 Migrations run when the server starts.

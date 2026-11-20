@@ -68,6 +68,15 @@ export function syncTransportFor(preset: DeployPreset): "sse" | "poll" {
   return LONG_LIVED.has(preset) ? "sse" : "poll";
 }
 
+/**
+ * The presets that run the app as exactly one server, whatever the load: its memory holds
+ * every open stream, so it needs no database connection to hear its own events. The others
+ * may be scaled out, which only whoever deploys them knows (`server.instances`).
+ */
+export function instancesFor(preset: DeployPreset): "one" | undefined {
+  return preset === "cloudflare-durable" ? "one" : undefined;
+}
+
 /** `cloudflare-durable` is a Worker that hands every request but documents to one Durable Object. */
 export function nitroPresetFor(preset: DeployPreset): string {
   return preset === "cloudflare-durable" ? "cloudflare-module" : preset;

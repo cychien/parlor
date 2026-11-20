@@ -20,6 +20,7 @@ import {
   hostSession,
 } from "./actions.js";
 import { inProcessRelay, type LiveRelay } from "./live.js";
+import { connectedLiveness, leasedLiveness } from "./liveness.js";
 import { CHAT_MIGRATIONS } from "./migrations.js";
 import { turnPush } from "./push.js";
 import { chatRoutes } from "./routes.js";
@@ -183,15 +184,25 @@ export function chat(options: ChatOptions = {}): ServerPlugin {
           console.warn("[parlor] chat: pruning revoked computers failed:", error);
         }
       };
-      let sweep: ReturnType<typeof setInterval> | undefined;
+      const announce: ChatActionDeps["announce"] = (owner, tags) =>
+        host.announce(ownStream(owner), tags);
+      const liveness = (host.instances === "one" ? connectedLiveness : leasedLiveness)({
+        store: sqlChatStore,
+        db,
+        heartbeatMs,
+        reconcile,
+        announce,
+        ready: () => host.ready?.() ?? Promise.resolve(),
+        revoked: (principal) => auth.revoked(principal),
+      });
       const deps: ChatActionDeps = {
         enforcing: auth.enforcing,
         transact,
         reconcile,
         pruneHosts,
-        announce: (owner, tags) => host.announce(ownStream(owner), tags),
+        announce,
         auth,
-        store: sqlChatStore,
+        store: liveness.store,
         relay,
         leaseMs,
         heartbeatMs,
@@ -200,6 +211,9 @@ export function chat(options: ChatOptions = {}): ServerPlugin {
         appName: process.env.PARLOR_APP_NAME ?? "this app",
         appOrigin: () => process.env.PARLOR_ORIGIN ?? process.env.PARLOR_WEB_ORIGIN ?? "",
         ui: options.ui,
+        onlineTtlMs: liveness.onlineTtlMs,
+        hostReported: (owner, principal, online, written) =>
+          liveness.reported(owner, principal, online, written),
       };
       const session = hostSession(deps);
       const pushed = turnPush({ relay, session, db });
@@ -220,29 +234,21 @@ export function chat(options: ChatOptions = {}): ServerPlugin {
           : {}),
         routes: chatRoutes({
           db,
-          store: sqlChatStore,
+          store: liveness.store,
           relay,
           heartbeatMs,
           reconcile,
-          announceHost: (owner, hostId) =>
-            host.announce(ownStream(owner), [[HOSTS_TAG, hostId]]),
+          announceHost: (owner, hostId) => announce(owner, [[HOSTS_TAG, hostId]]),
+          beat: liveness.beat,
+          heard: liveness.heard,
         }),
         channel: relay.channel,
         ...(options.ui ? { tools: [chatShowTool(options.ui)] } : {}),
-        start: () => {
-          sweep = setInterval(() => {
-            (host.ready?.() ?? Promise.resolve())
-              .then(() => reconcile())
-              .catch((error: unknown) => {
-                console.warn("[parlor] chat: sweeping lapsed turns failed:", error);
-              });
-          }, heartbeatMs);
-          sweep.unref?.();
-        },
+        start: () => liveness.start(),
         close: () => {
-          clearInterval(sweep);
           pushed.close();
           relay.close();
+          return liveness.close();
         },
       };
     },

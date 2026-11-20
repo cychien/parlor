@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import { PGlite } from "@electric-sql/pglite";
+import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pglite";
 
 import type { DatabaseHandle } from "./database.js";
@@ -27,6 +28,10 @@ export async function pgliteHandle(dataDir: string): Promise<DatabaseHandle> {
       const unlisten = await client.listen(channel, handler);
       return () => unlisten();
     },
+    notify: async (channel, payload, tx) => {
+      await (tx ?? db).execute(sql`select pg_notify(${channel}, ${payload})`);
+    },
+    notifications: "process",
     migrate: (folder) => migrateDatabase(db, folder),
     close: once(() => client.close()),
   };

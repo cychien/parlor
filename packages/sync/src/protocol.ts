@@ -71,4 +71,14 @@ export interface SyncNegotiation {
   readonly transport: "sse" | "poll";
   readonly endpoint: string;
   readonly pollIntervalMs: number;
+  /**
+   * `build`: no event can miss the stream, so while it is open the client polls for none.
+   * It only asks `SYNC_BUILD_PATH` which build answers now, to leave a stream that a deploy
+   * left on the old one, and says so when it opens the stream (`safety=build`), which then
+   * lives until it drops. Absent, the client polls for missed events as its safety net.
+   */
+  readonly safety?: "build" | undefined;
 }
+
+/** Answers the server's build to anyone, touching neither the database nor a session. */
+export const SYNC_BUILD_PATH = "/sync/build";

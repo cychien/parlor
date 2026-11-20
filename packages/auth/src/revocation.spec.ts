@@ -267,3 +267,60 @@ describe.runIf(postgresUrl)(
     });
   },
 );
+
+describe.runIf(postgresUrl)("RevocationSet on a server that notifies in process", () => {
+  const listeners = async () => {
+    const admin = new pg.Client({ connectionString: postgresUrl });
+    await admin.connect();
+    try {
+      const { rows } = await admin.query(
+        `select pid from pg_stat_activity where query = 'LISTEN "${REVOCATION_CHANNEL}"'`,
+      );
+      return rows.length;
+    } finally {
+      await admin.end();
+    }
+  };
+
+  it("follows revocations from memory without a LISTEN connection", async () => {
+    const handle = await createDatabase({
+      url: postgresUrl,
+      notifications: "process",
+      predecessorMs: 0,
+    });
+    handles.set("in process", handle);
+    await handle.db.execute(sql`drop table if exists parlor_auth_revocations`);
+    for (const migration of AUTH_MIGRATIONS)
+      await handle.db.execute(sql.raw(migration.sql));
+    const before = await listeners();
+    const set = track(new RevocationSet({ database: handle, horizonMs: HORIZON_MS }));
+    await set.ready();
+    expect(set.mode).toBe("following");
+    expect(await listeners()).toBe(before);
+
+    const closed = set.signal([{ kind: "session", id: "s-1" }]);
+    await handle.transaction((tx) =>
+      RevocationSet.revoke(tx, { kind: "session", id: "s-1" }, undefined, handle),
+    );
+    expect(closed.aborted).toBe(true);
+    expect(await set.isRevoked({ kind: "session", id: "s-1" })).toBe(true);
+  });
+
+  it("hears nothing of a revocation that rolled back", async () => {
+    const handle = handles.get("in process")!;
+    const set = track(new RevocationSet({ database: handle, horizonMs: HORIZON_MS }));
+    await set.ready();
+    await handle
+      .transaction(async (tx) => {
+        await RevocationSet.revoke(
+          tx,
+          { kind: "grant", id: "g-kept" },
+          undefined,
+          handle,
+        );
+        throw new Error("abort");
+      })
+      .catch(() => {});
+    expect(await set.isRevoked({ kind: "grant", id: "g-kept" })).toBe(false);
+  });
+});

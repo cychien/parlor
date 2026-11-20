@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  instancesFor,
   nitroPresetFor,
   resolvePreset,
   runsOnWorkerd,
@@ -44,6 +45,15 @@ describe("syncTransportFor", () => {
     expect(syncTransportFor("vercel")).toBe("poll");
     expect(syncTransportFor("cloudflare-module")).toBe("poll");
     expect(syncTransportFor("cloudflare-durable")).toBe("sse");
+  });
+});
+
+describe("instancesFor", () => {
+  it("knows only the Durable Object to be the app's one server", () => {
+    expect(instancesFor("cloudflare-durable")).toBe("one");
+    expect(instancesFor("node-server")).toBeUndefined();
+    expect(instancesFor("bun")).toBeUndefined();
+    expect(instancesFor("vercel")).toBeUndefined();
   });
 });
 

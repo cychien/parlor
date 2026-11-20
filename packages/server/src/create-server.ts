@@ -18,13 +18,14 @@ import {
   REFRESH_HEADER,
 } from "@parlor/core";
 import type { ActionRegistry } from "@parlor/core/registry";
-import { BUILD_HEADER, type ServerChannel } from "@parlor/sync";
+import { BUILD_HEADER, type ServerChannel, SYNC_BUILD_PATH } from "@parlor/sync";
 import {
   ensureSyncTables,
   recordSyncEvent,
   registerSyncRoutes,
   type SyncDatabase,
   SyncHub,
+  syncNotifyOf,
   type SyncTransport,
 } from "@parlor/sync/server";
 import { H3, type H3Event, readBody } from "h3";
@@ -358,9 +359,11 @@ export function createServer<T extends ActionMap>(
     })());
   const callers = createCallerResolver(auth, scope, ready);
   const registryFor = createRegistryResolver(actions, options.visible, callers);
+  const notify = database ? syncNotifyOf(database) : undefined;
   const host: PluginHost = {
     basePath,
     database,
+    instances: database?.notifications === "process" ? "one" : "many",
     ...(auth ? { auth } : {}),
     authMisconfigured: "auth" in options && auth === undefined,
     callerOf: callers,
@@ -372,12 +375,12 @@ export function createServer<T extends ActionMap>(
     announce: async (target, tags, within) => {
       if (!syncEnabled || !database || tags.length === 0) return;
       if (within !== undefined) {
-        await recordSyncEvent(within as SyncDatabase, { scope: target, tags });
+        await recordSyncEvent(within as SyncDatabase, { scope: target, tags }, notify);
         return;
       }
       await ready();
       await database.transaction((tx) =>
-        recordSyncEvent(tx as SyncDatabase, { scope: target, tags }),
+        recordSyncEvent(tx as SyncDatabase, { scope: target, tags }, notify),
       );
     },
   };
@@ -570,9 +573,14 @@ export function createServer<T extends ActionMap>(
   }
 
   if (syncEnabled && database && hub) {
-    app.use(`${basePath}/sync/**`, refuseUnless(callers, "sync"));
-    app.use(`${basePath}/sync/**`, async () => {
-      await ready();
+    const refuseSync = refuseUnless(callers, "sync");
+    const asksBuild = (event: H3Event) =>
+      event.url.pathname === `${basePath}${SYNC_BUILD_PATH}`;
+    app.use(`${basePath}/sync/**`, (event) =>
+      asksBuild(event) ? undefined : refuseSync(event),
+    );
+    app.use(`${basePath}/sync/**`, async (event) => {
+      if (!asksBuild(event)) await ready();
     });
     registerSyncRoutes(app, {
       basePath,

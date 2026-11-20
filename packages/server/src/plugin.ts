@@ -113,6 +113,8 @@ export interface PluginRoute<K extends SignedInKind | "anonymous"> {
   handle(request: Request, caller: CallerOf<K>): Promise<Response>;
 }
 
+export type ServerInstances = "one" | "many";
+
 /** Callable by anyone, signed in or not: sign-in pages, OAuth endpoints. */
 export interface PublicPluginRoute {
   readonly method: "GET" | "POST";
@@ -136,6 +138,12 @@ export function pluginRoute<const K extends SignedInKind | "anonymous">(
 export interface PluginHost {
   readonly basePath: string;
   readonly database: DataProvider | undefined;
+  /**
+   * `one` when this server is the app's only one, so every open stream and every timer of
+   * the app is its own and it need not ask the database what another server holds. `many`
+   * when others may serve the same database. A host written before it is read as `many`.
+   */
+  readonly instances?: ServerInstances | undefined;
   /** The installed auth provider, for plugins that mint or look up credentials (chat). */
   readonly auth?: AuthProvider | undefined;
   /** `createServer` got an `auth` key whose value is undefined: a sign-in setup that failed to configure. */

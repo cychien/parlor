@@ -121,21 +121,29 @@ export class RevocationSet {
     return controller.signal;
   }
 
-  /** Records the revocation in the caller's transaction; the NOTIFY goes out on commit. */
+  /**
+   * Records the revocation in the caller's transaction and tells every set when it commits:
+   * through `database`'s own `notify`, which reaches its `listen` wherever that hears from,
+   * or with NOTIFY in the transaction when no provider is given.
+   */
   static async revoke(
     tx: unknown,
     notice: RevocationNotice,
     at: number = Date.now(),
+    database?: DataProvider,
   ): Promise<void> {
     const db = tx as Database;
     await db.execute(sql`
       insert into parlor_auth_revocations (kind, id, revoked_at)
       values (${notice.kind}, ${notice.id}, ${new Date(at).toISOString()})
       on conflict (kind, id) do update set revoked_at = excluded.revoked_at`);
-    const payload: Revocation = { kind: notice.kind, id: notice.id, at };
-    await db.execute(
-      sql`select pg_notify(${REVOCATION_CHANNEL}, ${JSON.stringify(payload)})`,
-    );
+    const payload = JSON.stringify({
+      kind: notice.kind,
+      id: notice.id,
+      at,
+    } satisfies Revocation);
+    if (database?.notify) await database.notify(REVOCATION_CHANNEL, payload, tx);
+    else await db.execute(sql`select pg_notify(${REVOCATION_CHANNEL}, ${payload})`);
   }
 
   async stop(): Promise<void> {

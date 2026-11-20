@@ -35,12 +35,15 @@ import {
 } from "./entry.js";
 import {
   type DeployPreset,
+  instancesFor,
   nitroPresetFor,
   runsOnWorkerd,
   syncTransportFor,
 } from "./presets.js";
 
 export const SYNC_TRANSPORT_ENV = "PARLOR_SYNC_TRANSPORT";
+/** `one` when the built server is the app's only one (`@parlor/data` reads it). */
+export const INSTANCES_ENV = "PARLOR_INSTANCES";
 /** Names one `parlor build`, so a client can tell a deploy happened (`@parlor/server` reads it). */
 export const BUILD_ID_ENV = "PARLOR_BUILD_ID";
 
@@ -99,6 +102,7 @@ export async function buildServer(
   const hostRoot = hostRootDir(rootDir);
   const basePath = options.basePath ?? "/_parlor";
   const syncTransport = config.server.sync?.transport ?? syncTransportFor(options.preset);
+  const instances = instancesFor(options.preset);
   const indexHtml = await readFile(join(webOutDir(rootDir), "index.html"), "utf8").catch(
     () => "",
   );
@@ -178,6 +182,9 @@ export async function buildServer(
       [PAGE_ROUTES_PLACEHOLDER]: pageRoutesSource(manifest),
       [`process.env.${SYNC_TRANSPORT_ENV}`]: JSON.stringify(syncTransport),
       [`process.env.${BUILD_ID_ENV}`]: JSON.stringify(buildId()),
+      ...(instances
+        ? { [`process.env.${INSTANCES_ENV}`]: JSON.stringify(instances) }
+        : {}),
       ...(cloudflare ? { [MIGRATIONS_PLACEHOLDER]: cloudflare.migrations } : {}),
       ...Object.fromEntries(
         Object.entries(appServerEnv(config)).map(([name, value]) => [

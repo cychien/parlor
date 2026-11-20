@@ -15,6 +15,8 @@ import {
   type ChatServer,
   data,
   drivers,
+  HEARTBEAT_STATUS,
+  ONE_INSTANCE,
   openDatabase,
   resetDatabase,
   rows,
@@ -190,20 +192,20 @@ describe.each(drivers)("a turn whose lease lapsed on $name", (driver) => {
       expect((await syncTags()).slice(before)).toEqual([[["parlor_chat", "t1"]]]);
     });
 
-    it("runs off another computer's heartbeat", async () => {
+    it.skipIf(ONE_INSTANCE)("runs off another computer's heartbeat", async () => {
       expect((await app.post("alice-host-2", "heartbeat", {})).status).toBe(204);
       expect(await turnStates()).toEqual(failed);
       expect(await lostEvents()).toHaveLength(1);
     });
 
-    it("runs off the computer's own heartbeat", async () => {
+    it.skipIf(ONE_INSTANCE)("runs off the computer's own heartbeat", async () => {
       expect((await app.post("alice-host", "heartbeat", {})).status).toBe(204);
       expect(await turnStates()).toEqual(failed);
     });
 
     it("leaves another user's turns alone on a heartbeat", async () => {
       await app.action("bob-host", "hostHello", { ...HELLO, name: "Bob's Mac" });
-      expect((await app.post("bob-host", "heartbeat", {})).status).toBe(204);
+      expect((await app.post("bob-host", "heartbeat", {})).status).toBe(HEARTBEAT_STATUS);
       expect(await turnStates()).toEqual([{ id: "u1", state: "running" }]);
     });
 
@@ -212,7 +214,10 @@ describe.each(drivers)("a turn whose lease lapsed on $name", (driver) => {
       vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
       app = serveChat(handle);
       await app.action("alice", "hosts", {});
-      expect(await turnStates()).toEqual([{ id: "u1", state: "running" }]);
+      // The app's only server looks as it starts, not on the next tick of a timer.
+      if (!ONE_INSTANCE) {
+        expect(await turnStates()).toEqual([{ id: "u1", state: "running" }]);
+      }
 
       await vi.advanceTimersByTimeAsync(30_000);
 
@@ -232,30 +237,33 @@ describe.each(drivers)("a turn whose lease lapsed on $name", (driver) => {
         JSON.stringify(tags).includes("parlor_chat_hosts"),
       );
 
-    it("is announced offline once, and announced again when it returns", async () => {
-      const announced = (await hostTags()).length;
-      await age();
+    it.skipIf(ONE_INSTANCE)(
+      "is announced offline once, and announced again when it returns",
+      async () => {
+        const announced = (await hostTags()).length;
+        await age();
 
-      await app.post("alice-host-2", "heartbeat", {});
-      await app.post("alice-host-2", "heartbeat", {});
-      expect((await hostTags()).slice(announced)).toEqual([
-        [["parlor_chat_hosts", "mac"]],
-      ]);
-      const listed = data(await app.action("alice", "hosts", {})) as {
-        id: string;
-        online: boolean;
-      }[];
-      expect(listed.map(({ id, online }) => [id, online])).toEqual([
-        ["mac", false],
-        ["pc", true],
-      ]);
+        await app.post("alice-host-2", "heartbeat", {});
+        await app.post("alice-host-2", "heartbeat", {});
+        expect((await hostTags()).slice(announced)).toEqual([
+          [["parlor_chat_hosts", "mac"]],
+        ]);
+        const listed = data(await app.action("alice", "hosts", {})) as {
+          id: string;
+          online: boolean;
+        }[];
+        expect(listed.map(({ id, online }) => [id, online])).toEqual([
+          ["mac", false],
+          ["pc", true],
+        ]);
 
-      await app.post("alice-host", "heartbeat", {});
-      await app.post("alice-host", "heartbeat", {});
-      expect((await hostTags()).slice(announced)).toEqual([
-        [["parlor_chat_hosts", "mac"]],
-        [["parlor_chat_hosts", "mac"]],
-      ]);
-    });
+        await app.post("alice-host", "heartbeat", {});
+        await app.post("alice-host", "heartbeat", {});
+        expect((await hostTags()).slice(announced)).toEqual([
+          [["parlor_chat_hosts", "mac"]],
+          [["parlor_chat_hosts", "mac"]],
+        ]);
+      },
+    );
   });
 });

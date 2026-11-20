@@ -48,6 +48,7 @@ export {
   CHAT_CHANNEL,
   CHAT_PLUGIN,
   type ChatFrame,
+  type HeartbeatAnswer,
   HOST_PROTOCOL,
   type HostFrame,
   type HostHello,

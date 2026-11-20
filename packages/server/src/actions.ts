@@ -23,6 +23,7 @@ import {
   readSyncCursor,
   recordSyncEvent,
   type SyncDatabase,
+  syncNotifyOf,
 } from "@parlor/sync/server";
 
 import { requireSurface, type Surface } from "./access.js";
@@ -177,6 +178,7 @@ export function createActionRunner<T extends ActionMap>(
   const registryFor = options.registryFor ?? (() => Promise.resolve(actions));
   const callers = options.callers ?? createCallerResolver(undefined, scope);
   const pruner = sync && database ? createPruner(database) : undefined;
+  const notify = database ? syncNotifyOf(database) : undefined;
   let prepared: Promise<void> | undefined;
   const ready =
     options.ready ??
@@ -250,11 +252,15 @@ export function createActionRunner<T extends ActionMap>(
           sync && database
             ? async ({ action, tags, tx }) => {
                 if (tags.length === 0) return;
-                await recordSyncEvent(tx as SyncDatabase, {
-                  scope: notifiedStream(action.notifies, caller),
-                  tags,
-                  source: client,
-                });
+                await recordSyncEvent(
+                  tx as SyncDatabase,
+                  {
+                    scope: notifiedStream(action.notifies, caller),
+                    tags,
+                    source: client,
+                  },
+                  notify,
+                );
               }
             : undefined,
       },

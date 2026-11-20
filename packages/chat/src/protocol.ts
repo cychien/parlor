@@ -107,6 +107,16 @@ export type HostWelcome =
       readonly protocols: ProtocolRange;
     };
 
+/**
+ * What `POST /_parlor/chat/heartbeat` may answer: a token the computer's next heartbeats
+ * carry to `POST /_parlor/chat/beat` (`{ token }`) with no credential, which an app takes
+ * without reading its database. A 404 there means the app no longer knows the token, as
+ * after a restart: the computer sends a heartbeat with its credential again.
+ */
+export interface HeartbeatAnswer {
+  readonly beat: string;
+}
+
 type Fields = Readonly<Record<string, unknown>>;
 
 function isFields(value: unknown): value is Fields {
