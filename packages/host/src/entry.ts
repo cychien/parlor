@@ -1,6 +1,7 @@
 import { UNROUTED_HEADER } from "@parlor/agent-ui";
 
 import { locationHintForDatabase } from "./location-hint.js";
+import { readUnreadBody, UNREAD_BODY_LIMIT_BYTES } from "./unread-body.js";
 
 export interface RenderEntryOptions {
   /** The module `parlor build` built from `web.ssr`, exporting `render`. */
@@ -206,6 +207,8 @@ function app() {
   }));
 }
 
+${readUnreadBody.toString()}
+
 export class ${DURABLE_SERVER_CLASS} extends DurableObject {
 ${connectionScopes ? "  #connections = createConnectionScope();\n" : ""}  #sockets;
 
@@ -223,8 +226,10 @@ ${sockets ? "    this.#sockets = hostedSockets(ctx);\n" : ""}
     return ${connectionScopes ? "this.#connections.run(run)" : "run()"};
   }
 
-  fetch(request) {
-    return this.#serve((server) => server.fetch(request));
+  async fetch(request) {
+    const response = await this.#serve((server) => server.fetch(request));
+    await readUnreadBody(request, ${UNREAD_BODY_LIMIT_BYTES});
+    return response;
   }
 
   webSocketMessage() {}
