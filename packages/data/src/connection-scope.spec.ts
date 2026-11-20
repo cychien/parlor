@@ -75,21 +75,22 @@ describe("a topic's subscription on the bus", () => {
     const calls: string[] = [];
     let release: () => void = () => {};
     const slow = new Promise<void>((resolve) => (release = resolve));
-    let leaving = false;
+    let leaving: () => void = () => {};
+    const leavingStarted = new Promise<void>((resolve) => (leaving = resolve));
     const topics = new TopicChannels({
       publish: async () => {},
       subscribe: async (_channel, topic) => {
         calls.push(`+${topic}`);
       },
       unsubscribe: async (_channel, topic) => {
-        leaving = true;
+        leaving();
         await slow;
         calls.push(`-${topic}`);
       },
     });
     const leave = await topics.listen("sync", "org-1", () => {});
     const left = leave();
-    while (!leaving) await Promise.resolve();
+    await leavingStarted;
     const back = topics.listen("sync", "org-1", () => {});
     release();
     await Promise.all([left, back]);
