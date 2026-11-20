@@ -275,12 +275,17 @@ describe.runIf(postgresUrl)(
 );
 
 describe.runIf(postgresUrl)("RevocationSet on a server that notifies in process", () => {
+  // Its own name, so a parallel test's LISTEN connections are not counted.
+  const appName = `revocation-process-${crypto.randomUUID().slice(0, 8)}`;
+  const named = new URL(postgresUrl!);
+  named.searchParams.set("application_name", appName);
   const listeners = async () => {
     const admin = new pg.Client({ connectionString: postgresUrl });
     await admin.connect();
     try {
       const { rows } = await admin.query(
-        `select pid from pg_stat_activity where query = 'LISTEN "${REVOCATION_CHANNEL}"'`,
+        `select pid from pg_stat_activity where application_name = $1 and query = 'LISTEN "${REVOCATION_CHANNEL}"'`,
+        [appName],
       );
       return rows.length;
     } finally {
@@ -290,7 +295,7 @@ describe.runIf(postgresUrl)("RevocationSet on a server that notifies in process"
 
   it("follows revocations from memory without a LISTEN connection", async () => {
     const handle = await createDatabase({
-      url: postgresUrl,
+      url: named.href,
       notifications: "process",
       predecessorMs: 0,
     });
