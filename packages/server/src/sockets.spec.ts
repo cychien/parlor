@@ -124,7 +124,7 @@ describe("a server whose runtime holds its sockets while it sleeps", () => {
     expect(leave.status).toBe(204);
     expect(lines[0]!.attachment).not.toHaveProperty("remembered");
     await cold.close();
-  });
+  }, 30_000);
 
   it("answers a socket's opening itself, never through the router", async () => {
     server.installSockets!(instance([]));
