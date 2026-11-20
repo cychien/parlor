@@ -266,7 +266,10 @@ export function withServerMigration(
   ];
 }
 
-/** The scaled preset's classes, listed once in the app's append-only migration log. */
+/**
+ * The scaled preset's classes, listed once in the app's append-only migration log. An app
+ * that ran on `cloudflare-durable` also retires `ParlorServer`, which kept nothing in storage.
+ */
 export function withScaledMigration(
   migrations: NonNullable<WranglerConfig["migrations"]>,
 ): NonNullable<WranglerConfig["migrations"]> {
@@ -276,9 +279,19 @@ export function withScaledMigration(
         classes?.includes(name),
       ),
     );
+  const deleted = (name: string) =>
+    migrations.some((migration) => migration.deleted_classes?.includes(name));
   const missing = [ACCOUNT_CLASS, TOPIC_CLASS].filter((name) => !declared(name));
-  if (missing.length === 0) return migrations;
-  return [...migrations, { tag: "parlor-scaled-v1", new_sqlite_classes: missing }];
+  const retiring = declared(DURABLE_SERVER_CLASS) && !deleted(DURABLE_SERVER_CLASS);
+  if (missing.length === 0 && !retiring) return migrations;
+  return [
+    ...migrations,
+    {
+      tag: "parlor-scaled-v1",
+      ...(missing.length > 0 ? { new_sqlite_classes: missing } : {}),
+      ...(retiring ? { deleted_classes: [DURABLE_SERVER_CLASS] } : {}),
+    },
+  ];
 }
 
 function scaledWranglerConfig(config: ParlorConfig): WranglerConfig {

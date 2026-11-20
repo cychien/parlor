@@ -824,6 +824,14 @@ describe("withScaledMigration", () => {
   it("keeps the app's order once the app lists them", () => {
     expect(withScaledMigration([scaled, fridge])).toEqual([scaled, fridge]);
   });
+
+  it("retires the one server of an app that ran on cloudflare-durable", () => {
+    const server = { tag: "parlor-server-v1", new_sqlite_classes: ["ParlorServer"] };
+    expect(withScaledMigration([server])).toEqual([
+      server,
+      { ...scaled, deleted_classes: ["ParlorServer"] },
+    ]);
+  });
 });
 
 describe("withServerMigration", () => {

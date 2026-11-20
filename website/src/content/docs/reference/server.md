@@ -14,6 +14,8 @@ import { createServer } from "@parlor/server";
 
 `createServer` returns a server with a web-standard `fetch(request)` and `close()`. `server.ts` default-exports it; `parlor dev` serves it with srvx and `parlor build` wraps it for every deploy preset.
 
+It takes the options below, or a function that returns them: `createServer(() => ({ actions, database, auth, plugins }))`. With a function, `server.split()` gives a host that runs the app in several runtimes, such as [`cloudflare-scaled`](/parlor/guides/deploy/#cloudflare-at-scale), an `edge` and `account(key)`: the edge serves everything that holds no live state and answers, with `placement(request)`, which account's server takes the rest; each account's server is built from its own call of the function, so its auth and plugins share nothing with another account's. Keep `createDatabase` and option objects such as `parlorAuth(...)` outside the function.
+
 | Option                           | Meaning                                                                                                                                                                              |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `actions`                        | the registry from `createRegistry`                                                                                                                                                   |
@@ -101,6 +103,8 @@ In `parlor dev` and in every build, a request is answered by the first of:
 The app's content security policy goes on its documents and static files. Responses from the server, absolute routes included, keep their own headers.
 
 A plugin's `setup` runs while the app loads, where some runtimes, such as Cloudflare's, allow no I/O and no timers. Start background work, such as an interval, in the runtime's `start()`, which the server calls once when it is ready for its first request.
+
+Mark a plugin `realtime: true` when its routes and actions keep state in memory, such as connections or timers: a split server serves them in the caller's account rather than the stateless edge. The edge never calls `start()` and gives plugins a database without `listen`; it calls the runtime's `settle()` after each request, so work held for later is finished before the request ends.
 
 `PluginHost.instances` is `"one"` when the server is the app's only one, which it reads off its database's `notifications`, and `"many"` when others may serve the same database. A plugin that tracks something live, such as who is connected, may keep it in memory when it is one, and must put it in the database, on a lease, when it is many. `chat()` does both.
 

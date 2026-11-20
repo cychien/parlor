@@ -7,7 +7,7 @@ description: Build the server and the web app for production.
 pnpm build
 ```
 
-`parlor build` writes the web app and a server that serves it, the actions and MCP, in one output. It runs on [Nitro](https://nitro.build). Deploy it as one long-lived server: `node-server`, `bun`, or [Cloudflare](#cloudflare) with `cloudflare-durable`. Other serverless platforms are [not supported yet](#serverless-is-not-supported-yet).
+`parlor build` writes the web app and a server that serves it, the actions and MCP, in one output. It runs on [Nitro](https://nitro.build). Deploy it as one long-lived server: `node-server`, `bun`, or [Cloudflare](#cloudflare) with `cloudflare-durable`. For an app many unrelated accounts use at once, [`cloudflare-scaled`](#cloudflare-at-scale) spreads it over Cloudflare. Other serverless platforms are [not supported yet](#serverless-is-not-supported-yet).
 
 ## Presets
 
@@ -16,6 +16,7 @@ pnpm build
 | `node-server`                                                         | any machine with Node.js; the default                    |
 | `bun`                                                                 | a Bun server                                             |
 | `cloudflare-durable`                                                  | Cloudflare Workers, with the server in a Durable Object  |
+| `cloudflare-scaled`                                                   | Cloudflare Workers, with a Durable Object per account    |
 | `vercel`, `netlify`, `cloudflare-module`, `aws-lambda`, `deno-deploy` | not supported yet; `parlor build` warns when you use one |
 
 Pick one with `parlor build --preset vercel`, or `deploy.preset` in `parlor.config.ts`. On Vercel, Netlify and Cloudflare Pages the preset is detected from the build environment. `parlor deploy` builds and runs the platform's deploy.
@@ -95,6 +96,21 @@ With `cloudflare-durable`, `parlor dev` runs the server on Node with the same bi
 - `cloudflare:workers` exports `env` and `DurableObject` in development, so a module that defines a Durable Object class still loads.
 - A Durable Object class the app's own Worker defines is not available: `getPlatformProxy()` runs no Worker code, so reading its binding from `env` throws an error that says so. Run the build on `wrangler dev` to use it.
 - In Vitest, mock the module: `vi.mock("cloudflare:workers", () => ({ env: { ... } }))`.
+
+## Cloudflare at scale
+
+`cloudflare-durable` runs the whole app in one Durable Object, which is simplest and fast for one organization's app, and is also a ceiling: every request of every account goes through one object. `cloudflare-scaled` splits the app:
+
+- **The Worker** serves the web app, documents, actions, plugin routes and sign-in, statelessly, so it runs wherever Cloudflare has capacity. Each request opens its own database connection: through [Hyperdrive](https://developers.cloudflare.com/hyperdrive/) when the Worker has a binding named `HYPERDRIVE`, directly otherwise, with [Smart Placement](https://developers.cloudflare.com/workers/configuration/smart-placement/) running the Worker near the database.
+- **A Durable Object per account** (`ParlorAccount`) holds that account's live connections, as WebSockets it keeps while it hibernates, the agent's view of its screens, MCP sessions, approvals and the chat with its computers. Plugins that keep state in memory, `realtime: true` such as chat, run there too.
+- **A Durable Object per topic** (`ParlorTopic`) carries a write to the accounts that need it: an account's object listens to the scopes its open pages read, and a write in a scope reaches only the accounts listening to it. An idle page still costs the database nothing.
+
+To use it:
+
+- Build the server from a function, so each account's object builds its own auth and plugins: `export default createServer(() => ({ actions, database, auth, plugins }))`. Keep `createDatabase` and options such as `parlorAuth(...)` outside the function, as before.
+- Set `deploy.preset` to `cloudflare-scaled`. Wrangler gets `{ tag: "parlor-scaled-v1", new_sqlite_classes: ["ParlorAccount", "ParlorTopic"] }` at the end of the app's migrations, as with `cloudflare-durable`.
+- A plugin's `start()` runs only in the accounts' objects; the Worker calls a plugin's `settle()` after each request, so work held for later, such as a batch of audit records, is written before the request ends.
+- Moving an app from `cloudflare-durable` adds the new classes and deletes `ParlorServer` in the same migration; it kept nothing in its storage. Open pages reconnect on the deploy, as on any deploy.
 
 ## Serverless is not supported yet
 
