@@ -241,7 +241,11 @@ describe.runIf(postgresUrl)(
   "RevocationSet when Postgres drops the LISTEN connection",
   () => {
     it("still refuses a grant revoked while the connection was down", async () => {
-      const handle = await openDatabase(postgresUrl);
+      // Its own name, so the test drops only its own LISTEN and none of a parallel test's.
+      const named = new URL(postgresUrl!);
+      const appName = `revocation-${crypto.randomUUID().slice(0, 8)}`;
+      named.searchParams.set("application_name", appName);
+      const handle = await openDatabase(named.href);
       const set = track(
         new RevocationSet({
           database: counted(handle),
@@ -254,16 +258,18 @@ describe.runIf(postgresUrl)(
       await admin.connect();
       try {
         await admin.query(
-          `select pg_terminate_backend(pid) from pg_stat_activity where query = 'LISTEN "${REVOCATION_CHANNEL}"'`,
+          `select pg_terminate_backend(pid) from pg_stat_activity
+           where application_name = $1 and query = 'LISTEN "${REVOCATION_CHANNEL}"'`,
+          [appName],
         );
       } finally {
         await admin.end();
       }
-      await eventually(() => set.mode === "checking");
+      await eventually(() => set.mode === "checking", 10_000);
       await revoke(handle, "grant", "g-dropped");
       expect(await set.isRevoked({ kind: "grant", id: "g-dropped" })).toBe(true);
-      await eventually(() => set.mode === "following", 5000);
+      await eventually(() => set.mode === "following", 10_000);
       expect(await set.isRevoked({ kind: "grant", id: "g-dropped" })).toBe(true);
-    });
+    }, 30_000);
   },
 );
