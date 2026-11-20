@@ -327,6 +327,7 @@ async function prepareDurable(
     durableServerSource({
       serverEntry,
       connectionScopes: installed(rootDir, "@parlor/data"),
+      sockets: installed(rootDir, "@parlor/server"),
       workerExports: workerExportsPath,
     }),
   );

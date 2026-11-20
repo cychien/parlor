@@ -6,7 +6,10 @@ import {
   decodeCursor,
   encodeCursor,
   INITIAL_CURSOR,
+  DEFAULT_SOCKET_PING_MS,
   LEGACY_KEEP_ALIVE_MS,
+  SOCKET_PING,
+  SOCKET_PONG,
   SYNC_BUILD_PATH,
   type SyncBatch,
   type SyncCursor,
@@ -17,6 +20,44 @@ import {
 import { readSse } from "./sse.js";
 
 export type SyncRequest = (path: string, init?: RequestInit) => Promise<Response>;
+
+export interface SyncSocket {
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+}
+
+export interface SyncSocketEvents {
+  open(): void;
+  message(data: string): void;
+  close(): void;
+}
+
+/** Opens a socket to `path` (with its query) on the app's origin. */
+export type SyncConnect = (path: string, on: SyncSocketEvents) => SyncSocket;
+
+/** `SyncConnect` over the runtime's `WebSocket`, or undefined where there is none. */
+export function socketsAt(origin: string): SyncConnect | undefined {
+  const Socket = (globalThis as { WebSocket?: typeof WebSocket }).WebSocket;
+  if (typeof Socket !== "function") return undefined;
+  const base = origin.replace(/^http/, "ws");
+  return (path, on) => {
+    const socket = new Socket(new URL(path, base).href);
+    socket.onopen = () => on.open();
+    socket.onmessage = (event) =>
+      on.message(typeof event.data === "string" ? event.data : "");
+    socket.onclose = () => on.close();
+    return {
+      send(data) {
+        try {
+          socket.send(data);
+        } catch {
+          // A socket that is closing drops it; its close ends the stream.
+        }
+      },
+      close: (code, reason) => socket.close(code, reason),
+    };
+  };
+}
 
 export interface SyncClientOptions {
   readonly request: SyncRequest;
@@ -56,10 +97,15 @@ export interface SyncClientOptions {
   /** Bounds a negotiation or a poll, not the SSE stream. Defaults to 10 s. */
   readonly requestTimeoutMs?: number | undefined;
   /**
+   * Opens sockets, which a server whose platform holds them while it sleeps prefers: an
+   * idle socket costs that server nothing. Without it the client offers server-sent events.
+   */
+  readonly connect?: SyncConnect | undefined;
+  /**
    * What the server negotiated, each time it does; `SyncClient.transport` reads `poll`
    * during the fallback poll of a failed negotiation, this never does.
    */
-  readonly onNegotiated?: ((transport: "sse" | "poll") => void) | undefined;
+  readonly onNegotiated?: ((transport: SyncTransport) => void) | undefined;
   /**
    * The negotiated transport's connection came back after a failure: a stream reopened
    * after it dropped, or a poll succeeded after a failed one. A fallback poll on an SSE
@@ -115,8 +161,15 @@ export interface SyncClient {
    */
   observeBuild(build: string | null | undefined): void;
   readonly cursor: string;
-  readonly transport: "sse" | "poll" | undefined;
+  readonly transport: SyncTransport | undefined;
+  /**
+   * The open stream is a socket the server takes as this client being there, so the client
+   * need not say so otherwise, as a computer's heartbeats do.
+   */
+  readonly presence: boolean;
 }
+
+export type SyncTransport = "sse" | "poll" | "ws";
 
 const DEFAULTS = {
   coalesceMs: 250,
@@ -131,14 +184,21 @@ interface Handshake {
   readonly capabilities: readonly string[];
   readonly keepAliveMs: number | undefined;
   readonly build: string | undefined;
+  /** The server takes the open socket as the client being there. */
+  readonly presence: boolean;
+  readonly pingMs: number | undefined;
 }
 
 function parseHandshake(handshake: string): Handshake {
   try {
-    const { capabilities, keepAliveMs, build } = JSON.parse(handshake) as {
+    const { capabilities, keepAliveMs, build, presence, pingMs } = JSON.parse(
+      handshake,
+    ) as {
       capabilities?: unknown;
       keepAliveMs?: unknown;
       build?: unknown;
+      presence?: unknown;
+      pingMs?: unknown;
     };
     return {
       capabilities: Array.isArray(capabilities)
@@ -147,9 +207,17 @@ function parseHandshake(handshake: string): Handshake {
       keepAliveMs:
         typeof keepAliveMs === "number" && keepAliveMs > 0 ? keepAliveMs : undefined,
       build: typeof build === "string" && build !== "" ? build : undefined,
+      presence: presence === true,
+      pingMs: typeof pingMs === "number" && pingMs > 0 ? pingMs : undefined,
     };
   } catch {
-    return { capabilities: [], keepAliveMs: undefined, build: undefined };
+    return {
+      capabilities: [],
+      keepAliveMs: undefined,
+      build: undefined,
+      presence: false,
+      pingMs: undefined,
+    };
   }
 }
 
@@ -181,8 +249,8 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
   };
 
   let cursor: SyncCursor = INITIAL_CURSOR;
-  let transport: "sse" | "poll" | undefined;
-  let negotiated: "sse" | "poll" | undefined;
+  let transport: SyncTransport | undefined;
+  let negotiated: SyncTransport | undefined;
   let safety: SyncNegotiation["safety"];
   let interrupted = false;
   let running = false;
@@ -253,6 +321,8 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
   const offeredBuildWatch = () => transport === "sse" && safety === "build";
   /** Only an open stream misses nothing: until it is greeted, the safety net polls for events. */
   const watchesBuild = () => offeredBuildWatch() && live?.greeted === true;
+  /** A greeted socket misses nothing and a deploy closes it, so its safety net asks nothing. */
+  const holdsSocket = () => transport === "ws" && live?.greeted === true;
 
   const take = (batch: SyncBatch) => {
     if (!batch.reset) {
@@ -309,7 +379,9 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
       pollTimer = undefined;
       let halted = false;
       const mine = epoch;
-      void (watchesBuild() ? checkBuild(mine) : poll(mine))
+      void (
+        holdsSocket() ? Promise.resolve() : watchesBuild() ? checkBuild(mine) : poll(mine)
+      )
         .catch((error: unknown) => {
           if (error instanceof StaleRequest || mine !== epoch) {
             halted = true;
@@ -337,7 +409,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
   };
 
   const nextPollDelay = () => {
-    if (transport === "sse") return settings.safetyPollMs;
+    if (transport === "sse" || transport === "ws") return settings.safetyPollMs;
     const base = Math.max(negotiatedPollMs, options.pollEveryMs?.() ?? 0);
     return isHidden() ? Math.max(base, settings.hiddenPollMs) : base;
   };
@@ -345,7 +417,8 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
 
   const negotiate = async (): Promise<SyncNegotiation> => {
     return withTimeout(async (signal) => {
-      const response = await options.request(`${basePath}/sync/token`, {
+      const offer = options.connect ? "?transports=ws" : "";
+      const response = await options.request(`${basePath}/sync/token${offer}`, {
         method: "POST",
         signal,
       });
@@ -362,6 +435,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     readonly open: Set<ClientChannel>;
     greeted: boolean;
     build: string | undefined;
+    presence: boolean;
     /** Ends the stream to reopen it at once, on the build that answers now. */
     readonly move: () => void;
   }
@@ -377,6 +451,114 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     settled.add(current.build);
     current.move();
   };
+
+  const receive = (
+    current: LiveStream,
+    frame: { readonly event: string; readonly data: string },
+    greeted: (handshake: Handshake) => void,
+  ) => {
+    if (frame.event === "message") {
+      const batch = JSON.parse(frame.data) as SyncBatch;
+      take(batch);
+      const parsed = decodeCursor(batch.cursor);
+      if (compareCursors(parsed, cursor) > 0) cursor = parsed;
+      return;
+    }
+    if (frame.event === "handshake") {
+      const handshake = parseHandshake(frame.data);
+      current.greeted = true;
+      current.presence = handshake.presence;
+      current.build = handshake.build ?? current.build;
+      greeted(handshake);
+      current.listed = new Set(handshake.capabilities);
+      for (const event of handshake.capabilities) {
+        const channel = channels.get(event);
+        if (!channel || current.open.has(channel)) continue;
+        current.open.add(channel);
+        guarded(() => channel.opened());
+      }
+      return;
+    }
+    const channel = channels.get(frame.event);
+    if (channel && current.open.has(channel)) guarded(() => channel.receive(frame.data));
+  };
+
+  /** A socket's stream: it ends when the socket closes or stops answering its pings. */
+  const socket = (endpoint: string, ticket: string): Promise<"ended" | "moved"> =>
+    new Promise((resolve, reject) => {
+      const own = new AbortController();
+      controller = own;
+      let pingMs = DEFAULT_SOCKET_PING_MS;
+      let opened = false;
+      let finished = false;
+      let watchdog: ReturnType<typeof setTimeout> | undefined;
+      let pinger: ReturnType<typeof setTimeout> | undefined;
+      const current: LiveStream = {
+        listed: new Set(),
+        open: new Set(),
+        greeted: false,
+        build: undefined,
+        presence: false,
+        move: () => finish("moved"),
+      };
+      live = current;
+      const finish = (how: "ended" | "moved", failure?: Error) => {
+        if (finished) return;
+        finished = true;
+        if (watchdog !== undefined) cancel(watchdog);
+        if (pinger !== undefined) cancel(pinger);
+        connection.close(1000, "The client left.");
+        if (live === current) live = undefined;
+        for (const channel of current.open) guarded(() => channel.closed());
+        if (failure) reject(failure);
+        else resolve(how);
+      };
+      const rearm = () => {
+        if (watchdog !== undefined) cancel(watchdog);
+        watchdog = schedule(() => finish("ended"), pingMs * 2 + 5000);
+      };
+      const ping = () => {
+        pinger = schedule(() => {
+          connection.send(SOCKET_PING);
+          ping();
+        }, pingMs);
+      };
+      own.signal.addEventListener("abort", () => finish("ended"), { once: true });
+      const query = `${missedSince()}&ticket=${encodeURIComponent(ticket)}`;
+      const connection = options.connect!(`${endpoint}?${query}`, {
+        open() {
+          opened = true;
+          reconnectDelay = settings.reconnectBaseMs;
+          resumed();
+          rearm();
+          ping();
+        },
+        message(data) {
+          rearm();
+          if (data === SOCKET_PONG) return;
+          let frame: { event?: unknown; data?: unknown };
+          try {
+            frame = JSON.parse(data) as typeof frame;
+          } catch {
+            return;
+          }
+          if (typeof frame.event !== "string" || typeof frame.data !== "string") return;
+          receive(current, { event: frame.event, data: frame.data }, (handshake) => {
+            pingMs = handshake.pingMs ?? DEFAULT_SOCKET_PING_MS;
+            if (pinger !== undefined) cancel(pinger);
+            ping();
+            rearm();
+          });
+        },
+        close() {
+          finish(
+            "ended",
+            opened ? undefined : new Error("The sync socket did not open."),
+          );
+        },
+      });
+      rearm();
+    });
 
   /** Resolves `"moved"` when the stream ended to follow a deploy, which reconnects at once. */
   const stream = async (endpoint: string): Promise<"ended" | "moved"> => {
@@ -399,6 +581,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
       open,
       greeted: false,
       build: undefined,
+      presence: false,
       move: () => {
         moved = true;
         own.abort();
@@ -421,32 +604,11 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
       resumed();
       await readSse(
         response.body,
-        (frame) => {
-          if (frame.event === "message") {
-            const batch = JSON.parse(frame.data) as SyncBatch;
-            take(batch);
-            const parsed = decodeCursor(batch.cursor);
-            if (compareCursors(parsed, cursor) > 0) cursor = parsed;
-            return;
-          }
-          if (frame.event === "handshake") {
-            const handshake = parseHandshake(frame.data);
+        (frame) =>
+          receive(current, frame, (handshake) => {
             keepAliveMs = handshake.keepAliveMs ?? LEGACY_KEEP_ALIVE_MS;
-            current.greeted = true;
-            current.build = handshake.build ?? current.build;
             rearm();
-            current.listed = new Set(handshake.capabilities);
-            for (const event of handshake.capabilities) {
-              const channel = channels.get(event);
-              if (!channel || open.has(channel)) continue;
-              open.add(channel);
-              guarded(() => channel.opened());
-            }
-            return;
-          }
-          const channel = channels.get(frame.event);
-          if (channel && open.has(channel)) guarded(() => channel.receive(frame.data));
-        },
+          }),
         own.signal,
         rearm,
       );
@@ -490,6 +652,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     for (;;) {
       if (!active()) return;
       let endpoint: string | undefined;
+      let ticket: string | undefined;
       try {
         const negotiation = await negotiate();
         if (!active()) return;
@@ -503,6 +666,10 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
           return;
         }
         endpoint = negotiation.endpoint;
+        ticket =
+          negotiation.transport === "ws" && options.connect
+            ? negotiation.ticket
+            : undefined;
       } catch (error) {
         if (!active()) return;
         interrupted = true;
@@ -518,11 +685,11 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
         }
       }
       if (endpoint !== undefined) {
-        transport = "sse";
+        transport = ticket ? "ws" : "sse";
         schedulePoll(settings.safetyPollMs);
         let ended: "ended" | "moved" = "ended";
         try {
-          ended = await stream(endpoint);
+          ended = await (ticket ? socket(endpoint, ticket) : stream(endpoint));
         } catch (error) {
           if (!active()) return;
           if (error instanceof SyncUnauthorized) unauthorized(error);
@@ -610,6 +777,9 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     },
     get transport() {
       return transport;
+    },
+    get presence() {
+      return running && live?.greeted === true && live.presence;
     },
   };
 }

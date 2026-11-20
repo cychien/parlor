@@ -1,4 +1,4 @@
-import { pagePattern, UNROUTED_HEADER } from "@parlor/agent-ui";
+import { pagePattern, type PresenceUpdate, UNROUTED_HEADER } from "@parlor/agent-ui";
 import {
   type AgentUiOptions,
   createAgentUi,
@@ -18,14 +18,22 @@ import {
   REFRESH_HEADER,
 } from "@parlor/core";
 import type { ActionRegistry } from "@parlor/core/registry";
-import { BUILD_HEADER, type ServerChannel, SYNC_BUILD_PATH } from "@parlor/sync";
+import {
+  BUILD_HEADER,
+  type ServerChannel,
+  SYNC_BUILD_PATH,
+  SYNC_SOCKET_PATH,
+} from "@parlor/sync";
 import {
   ensureSyncTables,
   recordSyncEvent,
   registerSyncRoutes,
+  type HostedSocket,
+  type SocketPlatform,
   type SyncDatabase,
   SyncHub,
   syncNotifyOf,
+  type SyncSockets,
   type SyncTransport,
 } from "@parlor/sync/server";
 import { H3, type H3Event, readBody } from "h3";
@@ -113,6 +121,16 @@ export interface FrameworkServer {
   readonly installUiManifest?: ((source: UiManifestSource) => void) | undefined;
   readonly fetch: (request: Request) => Promise<Response>;
   readonly close: () => Promise<void>;
+  /**
+   * Hands the server the sockets its runtime holds while it sleeps, such as a Durable Object
+   * with hibernation; the host calls it in every instance before anything else. Sync then
+   * offers clients sockets, which cost an idle server nothing.
+   */
+  readonly installSockets?: ((platform: SocketPlatform) => void) | undefined;
+  /** The runtime saw one of those sockets close. */
+  readonly socketClosed?: ((socket: HostedSocket) => Promise<void>) | undefined;
+  /** The alarm `SocketPlatform.wakeAt` asked for. */
+  readonly alarm?: (() => Promise<void>) | undefined;
 }
 
 const STATUS_BY_CODE = {
@@ -418,6 +436,7 @@ export function createServer<T extends ActionMap>(
     });
   const runner = runnerFor(actions, undefined, registryFor);
   const hub = database ? new SyncHub(database) : undefined;
+  let sockets: SyncSockets | undefined;
   const inflight = new Set<Promise<unknown>>();
   let closing: Promise<void> | undefined;
 
@@ -582,7 +601,7 @@ export function createServer<T extends ActionMap>(
     app.use(`${basePath}/sync/**`, async (event) => {
       if (!asksBuild(event)) await ready();
     });
-    registerSyncRoutes(app, {
+    sockets = registerSyncRoutes(app, {
       basePath,
       data: database,
       hub,
@@ -601,6 +620,13 @@ export function createServer<T extends ActionMap>(
           ...(auth && hasUser(principal) ? { revoked: auth.revoked(principal) } : {}),
         };
       },
+      revokedOf: (principal) =>
+        auth && hasUser(principal) ? auth.revoked(principal) : undefined,
+      restored: ({ clientId, audience, remembered }) => {
+        if (agentUi && audience !== undefined && isPresence(remembered)) {
+          agentUi.receive(clientId, audience, remembered);
+        }
+      },
       transport: syncOptions?.transport,
       pollIntervalMs: syncOptions?.pollIntervalMs,
       build: serverBuild,
@@ -611,7 +637,7 @@ export function createServer<T extends ActionMap>(
         ),
       ],
       clientId: clientOf,
-    });
+    }).sockets;
   }
 
   if (agentUi) {
@@ -621,6 +647,10 @@ export function createServer<T extends ActionMap>(
       agentUi,
       audience: async (request) => (await callers(request)).audience,
       clientId: clientOf,
+      accepted: (clientId, message) => {
+        if (message.type === "presence") sockets?.remember(clientId, message);
+        else if (message.type === "leave") sockets?.remember(clientId, undefined);
+      },
     });
   }
 
@@ -635,13 +665,39 @@ export function createServer<T extends ActionMap>(
     return response;
   });
 
+  const socketPath = `${basePath}${SYNC_SOCKET_PATH}`;
+  /**
+   * With sockets held for it, the server first wires those it slept through, so a write this
+   * request makes reaches them, and answers a socket's opening itself: its response is not
+   * one the router may rebuild.
+   */
+  const serve = async (request: Request): Promise<Response> => {
+    if (!sockets?.installed) return stampBuild(await app.fetch(request));
+    await ready();
+    await sockets.ensure();
+    if (new URL(request.url).pathname === socketPath) return sockets.open(request);
+    return stampBuild(await app.fetch(request));
+  };
+
   return {
     installUiManifest: (source) => {
       refuseShadowedRoutes(source(), routes);
       agentUi?.install(source);
     },
+    installSockets: sockets
+      ? (platform) => {
+          sockets!.install(platform);
+        }
+      : undefined,
+    socketClosed: sockets
+      ? async (socket) => {
+          await ready();
+          await sockets!.closed(socket);
+        }
+      : undefined,
+    alarm: sockets ? () => sockets!.alarm() : undefined,
     fetch: (request) => {
-      const response = Promise.resolve(app.fetch(request)).then(stampBuild);
+      const response = serve(request);
       const settled = () => void inflight.delete(response);
       inflight.add(response);
       response.then(settled, settled);
@@ -655,6 +711,14 @@ export function createServer<T extends ActionMap>(
         await database?.close?.();
       })()),
   };
+}
+
+function isPresence(value: unknown): value is PresenceUpdate {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { type?: unknown }).type === "presence"
+  );
 }
 
 /** Names the build on a response, copying one whose headers cannot change, such as a proxied fetch's. */

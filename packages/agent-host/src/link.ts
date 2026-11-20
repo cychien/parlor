@@ -20,7 +20,7 @@ import {
 } from "@parlor/client";
 import type { TurnId } from "@parlor/core";
 import { BUILD_HEADER } from "@parlor/sync";
-import { createSyncClient, type SyncClient } from "@parlor/sync/client";
+import { createSyncClient, socketsAt, type SyncClient } from "@parlor/sync/client";
 
 import type { AppGrant, HostKeys } from "./grants.js";
 import { logEvent } from "./log.js";
@@ -399,6 +399,7 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
         );
         sync = createSyncClient({
           request: (path, init) => signedFetch(`${origin}${path}`, init),
+          connect: socketsAt(origin),
           coalesceMs: 0,
           reconnectMaxMs: RECONNECT_MAX_MS,
           pollEveryMs: polling.pollEveryMs,
@@ -430,10 +431,11 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
           onError: () => undefined,
         });
         sync.start();
-        heartbeat = setInterval(
-          () => void api.heartbeat().catch(() => undefined),
-          answer.heartbeatMs,
-        );
+        // A socket the app takes as this computer being there says it already.
+        heartbeat = setInterval(() => {
+          if (sync?.presence) return;
+          void api.heartbeat().catch(() => undefined);
+        }, answer.heartbeatMs);
         heartbeat.unref();
         if (modeNow() === "serving") deps.onWake(link);
       });

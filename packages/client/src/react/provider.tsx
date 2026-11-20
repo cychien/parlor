@@ -1,6 +1,6 @@
 import type { AgentUiClient } from "@parlor/agent-ui/client";
 import { BUILD_HEADER } from "@parlor/sync";
-import { createSyncClient, type SyncClient } from "@parlor/sync/client";
+import { createSyncClient, socketsAt, type SyncClient } from "@parlor/sync/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AnyRouter } from "@tanstack/react-router";
 import {
@@ -185,8 +185,10 @@ function SyncConnection({
   useEffect(() => {
     const { client, auth } = value;
     let refused: SessionSnapshot | undefined;
+    const origin = client.origin?.();
     const syncClient: SyncClient = createSyncClient({
       request: (path, init) => client.request(path, init),
+      connect: origin ? socketsAt(origin) : undefined,
       basePath: client.basePath,
       clientId: client.clientId,
       startAt: () => value.readTags.position(loadedAfter),

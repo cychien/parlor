@@ -11,13 +11,22 @@ import {
   type SyncBatch,
   type SyncEvent,
   type SyncNegotiation,
+  DEFAULT_SOCKET_PING_MS,
   SYNC_BUILD_PATH,
   SYNC_PROTOCOL_VERSION,
+  SYNC_SOCKET_PATH,
   BUILD_HEADER,
   DEFAULT_MAX_STREAM_MS,
 } from "../protocol.js";
 import { createEventStream, DEFAULT_MAX_QUEUED_BYTES } from "./event-stream.js";
 import type { SyncHub } from "./hub.js";
+import {
+  createSyncSockets,
+  type RestoredSocket,
+  type StreamSink,
+  type StreamSpec,
+  type SyncSockets,
+} from "./sockets.js";
 import {
   MAX_BATCH,
   readSyncBacklog,
@@ -68,6 +77,16 @@ export interface SyncRouteOptions {
    * these routes run.
    */
   readonly authority?: ((request: Request) => Promise<StreamAuthority>) | undefined;
+  /** Aborts when the credential behind `principal` is revoked, for a socket rewired after a sleep. */
+  readonly revokedOf?: ((principal: Principal) => AbortSignal | undefined) | undefined;
+  /** What `SyncSockets.remember` kept with a client's sockets, handed back once they are rewired. */
+  readonly restored?: ((held: RestoredSocket) => void) | undefined;
+  /** How often a socket's client pings, which the platform answers without waking the server. */
+  readonly pingMs?: number | undefined;
+}
+
+export interface SyncRoutes {
+  readonly sockets: SyncSockets;
 }
 
 export interface StreamAuthority {
@@ -111,7 +130,7 @@ function catchUpFrames(missed: SyncBatch): SyncBatch[] {
   return frames;
 }
 
-interface MissedQuery {
+export interface MissedQuery {
   readonly since: string;
   readonly reset: boolean;
   /** The client asks `SYNC_BUILD_PATH` itself, so the stream need not end to move it. */
@@ -142,7 +161,7 @@ async function missedSince(
   return batch(backlog.events, since);
 }
 
-export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
+export function registerSyncRoutes(app: H3, options: SyncRouteOptions): SyncRoutes {
   const { basePath, data, hub, scope } = options;
   const streamsOf = async (request: Request): Promise<readonly string[]> => {
     const own = await scope(request);
@@ -167,8 +186,165 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
       ? ("build" as const)
       : undefined;
 
-  app.post(`${basePath}/sync/token`, (event: H3Event): SyncNegotiation => {
+  const carriedBy = (authority: StreamAuthority | undefined) => {
+    const admitted = authority?.channels ?? true;
+    return channels.filter((channel) =>
+      typeof admitted === "function" ? admitted(channel) : admitted,
+    );
+  };
+
+  /**
+   * Joins a stream to the hub and to its channels, until `sink` closes. Opening one also
+   * greets it and sends what it missed since its cursor, before anything live.
+   */
+  const attach = async (
+    sink: StreamSink,
+    spec: StreamSpec,
+    opening?: { readonly query: MissedQuery; readonly handshake: object },
+  ): Promise<void> => {
+    const { streams } = spec;
+    const send = (payload: SyncBatch) => sink.push({ data: JSON.stringify(payload) });
+    const sendLive = (syncEvent: SyncEvent) =>
+      send({ events: [syncEvent], cursor: encodeCursor(cursorOf(syncEvent)) });
+
+    let arrivedDuringCatchUp: SyncEvent[] | undefined = opening ? [] : undefined;
+    let droppedDuringCatchUp = false;
+    const unsubscribes = streams.map((name) =>
+      hub.subscribe(
+        name,
+        (syncEvent) => {
+          if (!arrivedDuringCatchUp) sendLive(syncEvent);
+          else if (arrivedDuringCatchUp.length < MAX_BATCH)
+            arrivedDuringCatchUp.push(syncEvent);
+          else {
+            arrivedDuringCatchUp = [];
+            droppedDuringCatchUp = true;
+          }
+        },
+        () => sink.close(),
+      ),
+    );
+    const disconnects: (() => void)[] = [];
+    const ended = new AbortController();
+    const { revoked } = spec;
+    const closeRevoked = () => sink.close();
+    const detach = () => {
+      if (ended.signal.aborted) return;
+      ended.abort();
+      revoked?.removeEventListener("abort", closeRevoked);
+      for (const unsubscribe of unsubscribes) unsubscribe();
+      for (const disconnect of disconnects) disconnect();
+    };
+    sink.onClosed(detach);
+    if (revoked?.aborted) closeRevoked();
+    else revoked?.addEventListener("abort", closeRevoked, { once: true });
+
+    if (opening) {
+      sink.push({
+        event: "handshake",
+        data: JSON.stringify({
+          protocol: SYNC_PROTOCOL_VERSION,
+          capabilities: spec.channels.map((channel) => channel.event),
+          ...opening.handshake,
+        }),
+      });
+    }
+    for (const channel of spec.channels) {
+      disconnects.push(
+        channel.connect({
+          clientId: spec.clientId,
+          scope: streams[0]!,
+          ...(spec.principal ? { principal: spec.principal } : {}),
+          closed: ended.signal,
+          ...(spec.watched ? { watched: true } : {}),
+          send: (frame) => sink.push({ event: channel.event, data: frame }),
+        }),
+      );
+    }
+    if (!opening) return;
+
+    const { query } = opening;
+    const catchUp = async (first: SyncBatch) => {
+      let missed = first;
+      for (;;) {
+        for (const frame of catchUpFrames(missed)) {
+          await sink.drained();
+          if (ended.signal.aborted) return;
+          send(frame);
+        }
+        const truncated = !missed.reset && missed.events.length >= MAX_BATCH;
+        if (!truncated && !droppedDuringCatchUp) break;
+        droppedDuringCatchUp = false;
+        missed = await missedSince(db(), streams, { ...query, since: missed.cursor });
+      }
+      const caughtUpTo = decodeCursor(missed.cursor);
+      const pending = arrivedDuringCatchUp!
+        .filter((syncEvent) => compareCursors(cursorOf(syncEvent), caughtUpTo) > 0)
+        .sort((a, b) => compareCursors(cursorOf(a), cursorOf(b)));
+      arrivedDuringCatchUp = undefined;
+      for (const syncEvent of pending) sendLive(syncEvent);
+    };
+    const first = await missedSince(db(), streams, query).catch((error: unknown) => {
+      detach();
+      throw error;
+    });
+    void catchUp(first).catch((error: unknown) => {
+      console.error("[parlor] sync catch-up failed:", error);
+      sink.close();
+    });
+  };
+
+  const sockets = createSyncSockets({
+    hub,
+    pingMs: options.pingMs ?? DEFAULT_SOCKET_PING_MS,
+    held: async (request) => {
+      const authority = await options.authority?.(request);
+      return {
+        streams: [...(await streamsOf(request))],
+        audience: await options.audience?.(request),
+        clientId: options.clientId?.(request),
+        principal: authority?.principal,
+        channels: carriedBy(authority).map((channel) => channel.event),
+        revoked: authority?.revoked,
+      };
+    },
+    attach: (sink, held, revoked, query) =>
+      attach(
+        sink,
+        {
+          streams: held.streams,
+          principal: held.principal,
+          clientId: held.clientId,
+          channels: channels.filter((channel) => held.channels.includes(channel.event)),
+          revoked: revoked ?? (held.principal && options.revokedOf?.(held.principal)),
+          watched: true,
+        },
+        query
+          ? {
+              query: { ...query, watchesBuild: false },
+              handshake: {
+                presence: true,
+                pingMs: options.pingMs ?? DEFAULT_SOCKET_PING_MS,
+                ...(options.build?.() === undefined ? {} : { build: options.build() }),
+              },
+            }
+          : undefined,
+      ),
+    restored: options.restored,
+  });
+
+  app.post(`${basePath}/sync/token`, async (event: H3Event): Promise<SyncNegotiation> => {
     stamp(event);
+    const offered = String(getQuery(event).transports ?? "").split(",");
+    if (offered.includes("ws") && sockets.installed && hub.lossless) {
+      return {
+        protocol: SYNC_PROTOCOL_VERSION,
+        transport: "ws",
+        endpoint: `${basePath}${SYNC_SOCKET_PATH}`,
+        pollIntervalMs,
+        ticket: await sockets.ticket(event.req),
+      };
+    }
     const advised = safety();
     return {
       protocol: SYNC_PROTOCOL_VERSION,
@@ -198,109 +374,36 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
 
   app.get(`${basePath}/sync/stream`, async (event: H3Event) => {
     const streams = await streamsOf(event.req);
-    const currentScope = streams[0]!;
     const build = options.build?.();
     const authority = await options.authority?.(event.req);
-    const admitted = authority?.channels ?? true;
-    const carried = channels.filter((channel) =>
-      typeof admitted === "function" ? admitted(channel) : admitted,
-    );
     await hub.start();
     const stream = createEventStream(maxQueuedBytes);
-    const send = (payload: SyncBatch) => stream.push({ data: JSON.stringify(payload) });
-    const sendLive = (syncEvent: SyncEvent) =>
-      send({ events: [syncEvent], cursor: encodeCursor(cursorOf(syncEvent)) });
-
-    let arrivedDuringCatchUp: SyncEvent[] | undefined = [];
-    let droppedDuringCatchUp = false;
-    const unsubscribes = streams.map((name) =>
-      hub.subscribe(
-        name,
-        (syncEvent) => {
-          if (!arrivedDuringCatchUp) sendLive(syncEvent);
-          else if (arrivedDuringCatchUp.length < MAX_BATCH)
-            arrivedDuringCatchUp.push(syncEvent);
-          else {
-            arrivedDuringCatchUp = [];
-            droppedDuringCatchUp = true;
-          }
-        },
-        () => stream.close(),
-      ),
-    );
     const query = missedQuery(event);
     const keepAlive = setInterval(() => stream.comment("keep-alive"), keepAliveMs);
     const lifetime =
       query.watchesBuild && safety() === "build"
         ? undefined
         : setTimeout(() => stream.close(), maxStreamMs * (0.9 + 0.2 * Math.random()));
-    const disconnects: (() => void)[] = [];
-    const ended = new AbortController();
-    const revoked = authority?.revoked;
-    const closeRevoked = () => stream.close();
-    const detach = () => {
-      if (ended.signal.aborted) return;
-      ended.abort();
+    stream.onClosed(() => {
       clearInterval(keepAlive);
       clearTimeout(lifetime);
-      revoked?.removeEventListener("abort", closeRevoked);
-      for (const unsubscribe of unsubscribes) unsubscribe();
-      for (const disconnect of disconnects) disconnect();
-    };
-    stream.onClosed(detach);
-    if (revoked?.aborted) closeRevoked();
-    else revoked?.addEventListener("abort", closeRevoked, { once: true });
-
-    stream.push({
-      event: "handshake",
-      data: JSON.stringify({
-        protocol: SYNC_PROTOCOL_VERSION,
-        capabilities: carried.map((channel) => channel.event),
-        keepAliveMs,
-        ...(build === undefined ? {} : { build }),
-      }),
     });
-    const clientId = options.clientId?.(event.req);
-    for (const channel of carried) {
-      disconnects.push(
-        channel.connect({
-          clientId,
-          scope: currentScope,
-          ...(authority ? { principal: authority.principal } : {}),
-          closed: ended.signal,
-          send: (frame) => stream.push({ event: channel.event, data: frame }),
-        }),
+    try {
+      await attach(
+        stream,
+        {
+          streams,
+          principal: authority?.principal,
+          clientId: options.clientId?.(event.req),
+          channels: carriedBy(authority),
+          revoked: authority?.revoked,
+        },
+        { query, handshake: { keepAliveMs, ...(build === undefined ? {} : { build }) } },
       );
-    }
-
-    const catchUp = async (first: SyncBatch) => {
-      let missed = first;
-      for (;;) {
-        for (const frame of catchUpFrames(missed)) {
-          await stream.drained();
-          if (ended.signal.aborted) return;
-          send(frame);
-        }
-        const truncated = !missed.reset && missed.events.length >= MAX_BATCH;
-        if (!truncated && !droppedDuringCatchUp) break;
-        droppedDuringCatchUp = false;
-        missed = await missedSince(db(), streams, { ...query, since: missed.cursor });
-      }
-      const caughtUpTo = decodeCursor(missed.cursor);
-      const pending = arrivedDuringCatchUp!
-        .filter((syncEvent) => compareCursors(cursorOf(syncEvent), caughtUpTo) > 0)
-        .sort((a, b) => compareCursors(cursorOf(a), cursorOf(b)));
-      arrivedDuringCatchUp = undefined;
-      for (const syncEvent of pending) sendLive(syncEvent);
-    };
-    const first = await missedSince(db(), streams, query).catch((error: unknown) => {
-      detach();
-      throw error;
-    });
-    void catchUp(first).catch((error: unknown) => {
-      console.error("[parlor] sync catch-up failed:", error);
+    } catch (error) {
       stream.close();
-    });
+      throw error;
+    }
 
     event.res.headers.set("content-type", "text/event-stream");
     stamp(event);
@@ -311,4 +414,6 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): void {
     }
     return stream.body;
   });
+
+  return { sockets };
 }
