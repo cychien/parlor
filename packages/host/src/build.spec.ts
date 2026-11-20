@@ -802,7 +802,12 @@ describe("buildServer for cloudflare-scaled", () => {
       { name: "PARLOR_TOPICS", class_name: "ParlorTopic" },
     ]);
     expect(wrangler.migrations).toEqual([
-      { tag: "parlor-scaled-v1", new_sqlite_classes: ["ParlorAccount", "ParlorTopic"] },
+      { tag: "parlor-server-v1", new_sqlite_classes: ["ParlorServer"] },
+      {
+        tag: "parlor-scaled-v1",
+        new_sqlite_classes: ["ParlorAccount", "ParlorTopic"],
+        deleted_classes: ["ParlorServer"],
+      },
     ]);
     const worker = await readFile(join(result.outputDir, "server", "index.mjs"), "utf8");
     expect(worker).toMatch(/export \{[^}]*\bParlorAccount\b[^}]*\bParlorTopic\b/);
@@ -817,8 +822,15 @@ describe("withScaledMigration", () => {
   const fridge = { tag: "v1_fridge", new_sqlite_classes: ["Fridge"] };
 
   it("appends the account and topic classes after the app's own migrations", () => {
-    expect(withScaledMigration([])).toEqual([scaled]);
     expect(withScaledMigration([fridge])).toEqual([fridge, scaled]);
+  });
+
+  it("keeps the one server's history for an app without migrations, which may have run on cloudflare-durable", () => {
+    const server = { tag: "parlor-server-v1", new_sqlite_classes: ["ParlorServer"] };
+    expect(withScaledMigration([])).toEqual([
+      server,
+      { ...scaled, deleted_classes: ["ParlorServer"] },
+    ]);
   });
 
   it("keeps the app's order once the app lists them", () => {

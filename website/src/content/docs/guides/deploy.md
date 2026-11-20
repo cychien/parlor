@@ -108,7 +108,7 @@ With `cloudflare-durable`, `parlor dev` runs the server on Node with the same bi
 To use it:
 
 - Build the server from a function, so each account's object builds its own auth and plugins: `export default createServer(() => ({ actions, database, auth, plugins }))`. Keep `createDatabase` and options such as `parlorAuth(...)` outside the function, as before.
-- Set `deploy.preset` to `cloudflare-scaled`. Wrangler gets `{ tag: "parlor-scaled-v1", new_sqlite_classes: ["ParlorAccount", "ParlorTopic"] }` at the end of the app's migrations, as with `cloudflare-durable`.
+- Set `deploy.preset` to `cloudflare-scaled`. Wrangler gets `{ tag: "parlor-scaled-v1", new_sqlite_classes: ["ParlorAccount", "ParlorTopic"] }` at the end of the app's migrations, as with `cloudflare-durable`. Without migrations of its own, the app keeps `parlor-server-v1` first, so a deployment that ran `cloudflare-durable` finds the tag it applied.
 - A plugin's `start()` runs only in the accounts' objects; the Worker calls a plugin's `settle()` after each request, so work held for later, such as a batch of audit records, is written before the request ends.
 - Moving an app from `cloudflare-durable` adds the new classes and deletes `ParlorServer` in the same migration; it kept nothing in its storage. Open pages reconnect on the deploy, as on any deploy.
 

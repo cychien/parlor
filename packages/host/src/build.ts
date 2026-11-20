@@ -269,10 +269,13 @@ export function withServerMigration(
 /**
  * The scaled preset's classes, listed once in the app's append-only migration log. An app
  * that ran on `cloudflare-durable` also retires `ParlorServer`, which kept nothing in storage.
+ * An app without migrations of its own keeps `cloudflare-durable`'s, which Wrangler may have
+ * applied already and expects to find first.
  */
 export function withScaledMigration(
-  migrations: NonNullable<WranglerConfig["migrations"]>,
+  own: NonNullable<WranglerConfig["migrations"]>,
 ): NonNullable<WranglerConfig["migrations"]> {
+  const migrations = own.length === 0 ? withServerMigration(own) : own;
   const declared = (name: string) =>
     migrations.some((migration) =>
       [migration.new_classes, migration.new_sqlite_classes].some((classes) =>
