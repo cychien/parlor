@@ -22,6 +22,8 @@ import {
   labelChunkGroups,
 } from "./bundle.js";
 import {
+  ACCOUNT_BINDING,
+  ACCOUNT_CLASS,
   cloudflareEntrySource,
   DURABLE_SERVER_BINDING,
   DURABLE_SERVER_CLASS,
@@ -31,6 +33,10 @@ import {
   NONCE_PLACEHOLDER,
   PAGE_ROUTES_PLACEHOLDER,
   type RenderEntryOptions,
+  scaledEntrySource,
+  scaledServerSource,
+  TOPIC_BINDING,
+  TOPIC_CLASS,
   UI_MANIFEST_PLACEHOLDER,
 } from "./entry.js";
 import {
@@ -130,20 +136,27 @@ export async function buildServer(
   await mkdir(hostRoot, { recursive: true });
   const serverEntry = join(rootDir, config.server.entry);
   const entryPath = join(hostRoot, "entry.mjs");
+  const scaled = options.preset === "cloudflare-scaled";
   const cloudflare =
     options.preset === "cloudflare-durable"
       ? await prepareDurable({ config, rootDir }, hostRoot, serverEntry)
-      : undefined;
+      : scaled
+        ? await prepareScaled({ config, rootDir }, hostRoot, serverEntry)
+        : undefined;
+  const locationHint = config.deploy.cloudflare?.locationHint;
   await writeFile(
     entryPath,
-    cloudflare
-      ? cloudflareEntrySource({
+    scaled
+      ? scaledEntrySource({
+          serverEntry,
           basePath,
           contentSecurityPolicy,
           render,
-          locationHint: config.deploy.cloudflare?.locationHint,
+          locationHint,
         })
-      : hostEntrySource({ serverEntry, basePath, contentSecurityPolicy, render }),
+      : cloudflare
+        ? cloudflareEntrySource({ basePath, contentSecurityPolicy, render, locationHint })
+        : hostEntrySource({ serverEntry, basePath, contentSecurityPolicy, render }),
   );
   await writeFile(join(hostRoot, ".gitignore"), "*\n");
 
@@ -253,6 +266,39 @@ export function withServerMigration(
   ];
 }
 
+/** The scaled preset's classes, listed once in the app's append-only migration log. */
+export function withScaledMigration(
+  migrations: NonNullable<WranglerConfig["migrations"]>,
+): NonNullable<WranglerConfig["migrations"]> {
+  const declared = (name: string) =>
+    migrations.some((migration) =>
+      [migration.new_classes, migration.new_sqlite_classes].some((classes) =>
+        classes?.includes(name),
+      ),
+    );
+  const missing = [ACCOUNT_CLASS, TOPIC_CLASS].filter((name) => !declared(name));
+  if (missing.length === 0) return migrations;
+  return [...migrations, { tag: "parlor-scaled-v1", new_sqlite_classes: missing }];
+}
+
+function scaledWranglerConfig(config: ParlorConfig): WranglerConfig {
+  const own = (config.deploy.cloudflare?.wrangler ?? {}) as WranglerConfig;
+  return {
+    name: workerName(config.app.id),
+    // The Worker runs beside the database it queries on every request, wherever its callers are.
+    placement: { mode: "smart" },
+    ...own,
+    durable_objects: {
+      bindings: [
+        { name: ACCOUNT_BINDING, class_name: ACCOUNT_CLASS },
+        { name: TOPIC_BINDING, class_name: TOPIC_CLASS },
+        ...(own.durable_objects?.bindings ?? []),
+      ],
+    },
+    migrations: withScaledMigration(own.migrations ?? []),
+  };
+}
+
 function durableWranglerConfig(config: ParlorConfig): WranglerConfig {
   const own = (config.deploy.cloudflare?.wrangler ?? {}) as WranglerConfig;
   return {
@@ -279,7 +325,7 @@ export interface DevWranglerConfig {
   readonly unavailable: readonly UnavailableDurableObject[];
 }
 
-/** The bindings a cloudflare-durable build declares, as Wrangler's `getPlatformProxy()` reads them. */
+/** The bindings a Durable Object preset's build declares, as Wrangler's `getPlatformProxy()` reads them. */
 export function devWranglerConfig(
   config: ParlorConfig,
   compatibilityDate: string = DEFAULT_COMPATIBILITY_DATE,
@@ -288,9 +334,12 @@ export function devWranglerConfig(
     main: _main,
     assets: _assets,
     migrations: _migrations,
+    placement: _placement,
     durable_objects: durableObjects,
     ...production
-  } = durableWranglerConfig(config);
+  } = config.deploy.preset === "cloudflare-scaled"
+    ? scaledWranglerConfig(config)
+    : durableWranglerConfig(config);
   const bindings = durableObjects?.bindings ?? [];
   const ownClass = (binding: (typeof bindings)[number]) =>
     !binding.script_name || binding.script_name === production.name;
@@ -338,6 +387,39 @@ async function prepareDurable(
       deployConfig: true,
       nodeCompat: true,
       wrangler: durableWranglerConfig(config),
+    },
+  };
+}
+
+async function prepareScaled(
+  { config, rootDir }: Pick<LoadedConfig, "config" | "rootDir">,
+  hostRoot: string,
+  serverEntry: string,
+): Promise<DurableBuild> {
+  for (const name of ["@parlor/server", "@parlor/data"]) {
+    if (!installed(rootDir, name)) {
+      throw new ConfigError(`The cloudflare-scaled preset needs ${name} in ${rootDir}.`);
+    }
+  }
+  const workerExports = config.deploy.cloudflare?.exports;
+  const workerExportsPath = workerExports ? join(rootDir, workerExports) : undefined;
+  if (workerExportsPath && !existsSync(workerExportsPath)) {
+    throw new ConfigError(
+      `deploy.cloudflare.exports names ${workerExports}, which does not exist in ${rootDir}`,
+    );
+  }
+  const exportsPath = join(hostRoot, "exports.cloudflare.mjs");
+  await writeFile(
+    exportsPath,
+    scaledServerSource({ serverEntry, workerExports: workerExportsPath }),
+  );
+  return {
+    migrations: embeddedMigrations(rootDir, config.database.migrations),
+    nitro: {
+      exports: exportsPath,
+      deployConfig: true,
+      nodeCompat: true,
+      wrangler: scaledWranglerConfig(config),
     },
   };
 }

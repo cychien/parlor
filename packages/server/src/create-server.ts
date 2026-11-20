@@ -133,6 +133,11 @@ export interface FrameworkServer {
   /** The alarm `SocketPlatform.wakeAt` asked for. */
   readonly alarm?: (() => Promise<void>) | undefined;
   /**
+   * Gets ready and wires the sockets it slept through, for a runtime woken by something
+   * other than a request, such as a notification from the bus.
+   */
+  readonly awaken?: (() => Promise<void>) | undefined;
+  /**
    * The app as a stateless edge and one server per account, for a host that runs them in
    * separate runtimes (`cloudflare-scaled`). The same object on every call.
    */
@@ -825,6 +830,10 @@ function buildServer<T extends ActionMap>(
         }
       : undefined,
     alarm: sockets ? () => sockets!.alarm() : undefined,
+    awaken: async () => {
+      await ready();
+      await sockets?.ensure();
+    },
     fetch: (request) => {
       const response = serve(request);
       const settled = () => void inflight.delete(response);

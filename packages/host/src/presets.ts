@@ -4,6 +4,7 @@ export const DEPLOY_PRESETS = [
   "netlify",
   "cloudflare-module",
   "cloudflare-durable",
+  "cloudflare-scaled",
   "aws-lambda",
   "deno-deploy",
   "bun",
@@ -14,12 +15,19 @@ const LONG_LIVED: ReadonlySet<DeployPreset> = new Set([
   "node-server",
   "bun",
   "cloudflare-durable",
+  "cloudflare-scaled",
 ]);
 
 const ON_WORKERD: ReadonlySet<DeployPreset> = new Set([
   "cloudflare-module",
   "cloudflare-durable",
+  "cloudflare-scaled",
 ]);
+
+/** The presets that run the app's server in Durable Objects the app's own Worker defines. */
+export function usesDurableObjects(preset: DeployPreset): boolean {
+  return preset === "cloudflare-durable" || preset === "cloudflare-scaled";
+}
 
 const CI_PRESETS: ReadonlyArray<readonly [string, DeployPreset]> = [
   ["VERCEL", "vercel"],
@@ -69,22 +77,27 @@ export function syncTransportFor(preset: DeployPreset): "sse" | "poll" {
 }
 
 /**
- * The presets that run the app as exactly one server, whatever the load: its memory holds
- * every open stream, so it needs no database connection to hear its own events. The others
- * may be scaled out, which only whoever deploys them knows (`server.instances`).
+ * `one` for the presets that run the app as exactly one server, whatever the load: its
+ * memory holds every open stream, so it needs no database connection to hear its own events.
+ * `scaled` for the one that splits it into a stateless edge and a server per account, joined
+ * by Durable Objects. The others may be scaled out, which only whoever deploys them knows
+ * (`server.instances`).
  */
-export function instancesFor(preset: DeployPreset): "one" | undefined {
-  return preset === "cloudflare-durable" ? "one" : undefined;
+export function instancesFor(preset: DeployPreset): "one" | "scaled" | undefined {
+  if (preset === "cloudflare-durable") return "one";
+  if (preset === "cloudflare-scaled") return "scaled";
+  return undefined;
 }
 
-/** `cloudflare-durable` is a Worker that hands every request but documents to one Durable Object. */
+/** Both Durable Object presets are a Cloudflare module Worker with Durable Objects of its own. */
 export function nitroPresetFor(preset: DeployPreset): string {
-  return preset === "cloudflare-durable" ? "cloudflare-module" : preset;
+  return usesDurableObjects(preset) ? "cloudflare-module" : preset;
 }
 
 const RENDER_CONDITIONS: Partial<Record<DeployPreset, readonly string[]>> = {
   "cloudflare-module": ["workerd", "worker"],
   "cloudflare-durable": ["workerd", "worker"],
+  "cloudflare-scaled": ["workerd", "worker"],
   "deno-deploy": ["deno"],
   bun: ["bun", "node"],
 };
