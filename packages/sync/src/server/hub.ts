@@ -51,8 +51,12 @@ export class SyncHub {
   }
 
   /** Hears each stream it serves on its own topic, from runtimes that share no process with it. */
-  get #onBus(): boolean {
+  get onBus(): boolean {
     return this.data.notifications === "bus";
+  }
+
+  get #onBus(): boolean {
+    return this.onBus;
   }
 
   async start(): Promise<void> {

@@ -88,6 +88,8 @@ export interface HeldSocket {
   readonly channels: readonly string[];
   readonly openedAt: number;
   readonly remembered?: unknown;
+  /** The last sync batch's cursor sent on it, to send what it missed once it is wired again. */
+  readonly cursor?: string | undefined;
 }
 
 export interface SyncSocketsDeps {
@@ -103,7 +105,14 @@ export interface SyncSocketsDeps {
     held: HeldSocket,
     revoked: AbortSignal | undefined,
     query: Omit<MissedQuery, "watchesBuild"> | undefined,
+    /** False for a socket wired again, whose client was greeted when it opened. */
+    greet: boolean,
   ) => Promise<void>;
+  /**
+   * Others write while the server sleeps (another runtime on the bus), so a socket wired again
+   * catches up from the last cursor it was sent. Otherwise nothing is written meanwhile.
+   */
+  readonly resumes?: boolean | undefined;
   readonly restored?: ((socket: RestoredSocket) => void) | undefined;
   readonly now?: (() => number) | undefined;
   /** Starts every ticket, so a host can tell which runtime issued it (`ticketAccount`). */
@@ -140,6 +149,20 @@ interface Wired {
   end(): void;
 }
 
+/** The cursor of a sync batch frame, which carries no event name. */
+function cursorOfFrame(frame: {
+  readonly event?: string | undefined;
+  readonly data: string;
+}) {
+  if (frame.event !== undefined && frame.event !== "message") return undefined;
+  try {
+    const cursor = (JSON.parse(frame.data) as { cursor?: unknown }).cursor;
+    return typeof cursor === "string" ? cursor : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function socketSink(entry: { readonly socket: HostedSocket }) {
   const listeners: (() => void)[] = [];
   let ended = false;
@@ -150,7 +173,11 @@ function socketSink(entry: { readonly socket: HostedSocket }) {
   };
   const sink: StreamSink = {
     push({ event, data }) {
-      if (!ended) entry.socket.send(JSON.stringify({ event: event ?? "message", data }));
+      if (ended) return;
+      entry.socket.send(JSON.stringify({ event: event ?? "message", data }));
+      const cursor = cursorOfFrame({ event, data });
+      const held = cursor === undefined ? undefined : heldOf(entry.socket.attachment);
+      if (held) entry.socket.attach({ ...held, cursor });
     },
     close() {
       if (ended) return;
@@ -192,6 +219,7 @@ export function createSyncSockets(deps: SyncSocketsDeps): SyncSockets {
     held: HeldSocket,
     revoked?: AbortSignal,
     query?: Omit<MissedQuery, "watchesBuild">,
+    greet = true,
   ): Promise<Wired> => {
     const entry: Wired = { held, socket, end: () => undefined };
     const { sink, end } = socketSink(entry);
@@ -201,7 +229,7 @@ export function createSyncSockets(deps: SyncSocketsDeps): SyncSockets {
       if (wired.get(held.id) === entry) wired.delete(held.id);
     });
     try {
-      await deps.attach(sink, held, revoked, query);
+      await deps.attach(sink, held, revoked, query, greet);
     } catch (error) {
       sink.close();
       throw error;
@@ -222,7 +250,11 @@ export function createSyncSockets(deps: SyncSocketsDeps): SyncSockets {
         entry.socket = socket;
         continue;
       }
-      await wire(socket, kept);
+      const resume =
+        deps.resumes && kept.cursor !== undefined
+          ? { since: kept.cursor, reset: false }
+          : undefined;
+      await wire(socket, kept, undefined, resume, false);
       if (kept.clientId !== undefined && kept.remembered !== undefined) {
         restored.push({
           clientId: kept.clientId,

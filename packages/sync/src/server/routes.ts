@@ -202,7 +202,7 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): SyncRout
   const attach = async (
     sink: StreamSink,
     spec: StreamSpec,
-    opening?: { readonly query: MissedQuery; readonly handshake: object },
+    opening?: { readonly query: MissedQuery; readonly handshake?: object | undefined },
   ): Promise<void> => {
     const { streams } = spec;
     const send = (payload: SyncBatch) => sink.push({ data: JSON.stringify(payload) });
@@ -241,7 +241,7 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): SyncRout
     if (revoked?.aborted) closeRevoked();
     else revoked?.addEventListener("abort", closeRevoked, { once: true });
 
-    if (opening) {
+    if (opening?.handshake) {
       sink.push({
         event: "handshake",
         data: JSON.stringify({
@@ -311,7 +311,8 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): SyncRout
         revoked: authority?.revoked,
       };
     },
-    attach: (sink, held, revoked, query) =>
+    resumes: hub.onBus,
+    attach: (sink, held, revoked, query, greet) =>
       attach(
         sink,
         {
@@ -325,11 +326,15 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): SyncRout
         query
           ? {
               query: { ...query, watchesBuild: false },
-              handshake: {
-                presence: true,
-                pingMs: options.pingMs ?? DEFAULT_SOCKET_PING_MS,
-                ...(options.build?.() === undefined ? {} : { build: options.build() }),
-              },
+              handshake: greet
+                ? {
+                    presence: true,
+                    pingMs: options.pingMs ?? DEFAULT_SOCKET_PING_MS,
+                    ...(options.build?.() === undefined
+                      ? {}
+                      : { build: options.build() }),
+                  }
+                : undefined,
             }
           : undefined,
       ),

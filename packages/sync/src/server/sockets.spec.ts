@@ -1,4 +1,4 @@
-import { asId, type Principal } from "@parlor/core";
+import { asId, type DataProvider, type Principal } from "@parlor/core";
 import { createDatabase, type DatabaseHandle } from "@parlor/data";
 import { H3 } from "h3";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -121,13 +121,13 @@ describe("sync over sockets the platform holds while the server sleeps", () => {
   });
 
   /** One server process: its own hub and routes, and so its own memory of the sockets. */
-  const serve = () => {
-    const hub = new SyncHub(handle);
+  const serve = (data: DataProvider = handle) => {
+    const hub = new SyncHub(data);
     hubs.push(hub);
     app = new H3();
     return registerSyncRoutes(app, {
       basePath: "/_parlor",
-      data: handle,
+      data,
       hub,
       scope: () => "acme",
       audience: (request) => `acme/${request.headers.get("x-user") ?? "alice"}`,
@@ -191,6 +191,44 @@ describe("sync over sockets the platform holds while the server sleeps", () => {
     const offered = await negotiate();
     expect(offered).toMatchObject({ transport: "ws", endpoint: "/_parlor/sync/socket" });
     expect(offered.ticket).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("catches a socket wired again on a bus up on what others wrote while it slept, without greeting it again", async () => {
+    // A Durable Object's memory goes when it sleeps: its hub stops hearing, its sockets stay open.
+    let asleep = false;
+    const onBus = (): DataProvider => ({
+      ...handle,
+      notifications: "bus",
+      listen: (name, handler, options) =>
+        handle.listen(name, (payload) => asleep || handler(payload), options),
+    });
+    sockets = serve(onBus());
+    const lines: { sent: string[]; attachment: unknown; closed: boolean }[] = [];
+    sockets.install(instance(lines).platform);
+    const { ticket } = await negotiate();
+    await open(ticket!);
+    const [line] = lines;
+    await write("acme", "seen");
+    await vi.waitFor(() =>
+      expect(events(line!).at(-1)!.tags).toEqual([["notes", "seen"]]),
+    );
+    expect(line!.attachment).toHaveProperty("cursor");
+
+    asleep = true;
+    await write("acme", "while asleep");
+
+    sockets = serve({ ...handle, notifications: "bus" });
+    sockets.install(instance(lines).platform);
+    await sockets.ensure();
+    await vi.waitFor(() =>
+      expect(events(line!).map((event) => event.tags)).toContainEqual([
+        ["notes", "while asleep"],
+      ]),
+    );
+    expect(frames(line!).filter((frame) => frame.event === "handshake")).toHaveLength(1);
+    expect(
+      events(line!).filter((event) => JSON.stringify(event.tags).includes("seen")),
+    ).toHaveLength(1);
   });
 
   it("greets a socket opened with a ticket, sends what it missed, then what is written", async () => {
