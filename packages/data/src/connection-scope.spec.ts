@@ -1,6 +1,6 @@
 import { is, sql } from "drizzle-orm";
 import { PgDatabase } from "drizzle-orm/pg-core";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   ConnectionOwner,
@@ -123,5 +123,38 @@ describe("a topic's subscription on the bus", () => {
     const leave = await topics.listen("sync", "org-1", () => {});
     await Promise.all([leave(), topics.listen("sync", "org-1", () => {})]);
     expect(calls).toEqual(["+org-1"]);
+  });
+
+  it("leaves a topic the bus still sends it, even one it never subscribed in this life", async () => {
+    const calls: string[] = [];
+    const scope = createConnectionScope({
+      bus: {
+        publish: async () => {},
+        subscribe: async (_channel, topic) => void calls.push(`+${topic}`),
+        unsubscribe: async (_channel, topic) => void calls.push(`-${topic}`),
+      },
+    });
+    expect(scope.deliver("sync", "org-1", "x")).toBe(false);
+    await vi.waitFor(() => expect(calls).toEqual(["-org-1"]));
+    await scope.close();
+  });
+
+  it("forgets a listener whose subscription the bus refused", async () => {
+    let refuse = true;
+    const calls: string[] = [];
+    const topics = new TopicChannels({
+      publish: async () => {},
+      subscribe: async (_channel, topic) => {
+        if (refuse) throw new Error("bus away");
+        calls.push(`+${topic}`);
+      },
+      unsubscribe: async (_channel, topic) => void calls.push(`-${topic}`),
+    });
+    await expect(topics.listen("sync", "org-1", () => {})).rejects.toThrow("bus away");
+    expect(topics.deliver("sync", "org-1", "x")).toBe(false);
+    refuse = false;
+    const leave = await topics.listen("sync", "org-1", () => {});
+    await leave();
+    expect(calls).toEqual(["+org-1", "-org-1"]);
   });
 });

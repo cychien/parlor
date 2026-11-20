@@ -8,6 +8,7 @@ import {
   decodeCursor,
   DEFAULT_KEEP_ALIVE_MS,
   encodeCursor,
+  INITIAL_CURSOR,
   type SyncBatch,
   type SyncEvent,
   type SyncNegotiation,
@@ -266,6 +267,11 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): SyncRout
     if (!opening) return;
 
     const { query } = opening;
+    // Before reading what it missed: what commits after this read is heard live.
+    const head = await hub.ready(streams).catch((error: unknown) => {
+      detach();
+      throw error;
+    });
     const catchUp = async (first: SyncBatch) => {
       let missed = first;
       for (;;) {
@@ -285,6 +291,10 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): SyncRout
         .sort((a, b) => compareCursors(cursorOf(a), cursorOf(b)));
       arrivedDuringCatchUp = undefined;
       for (const syncEvent of pending) sendLive(syncEvent);
+      const reached = head && compareCursors(head, caughtUpTo) > 0 ? head : caughtUpTo;
+      if (pending.length === 0 && compareCursors(reached, INITIAL_CURSOR) > 0) {
+        sink.reached?.(encodeCursor(reached));
+      }
     };
     const first = await missedSince(db(), streams, query).catch((error: unknown) => {
       detach();

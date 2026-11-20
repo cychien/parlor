@@ -231,6 +231,57 @@ describe("sync over sockets the platform holds while the server sleeps", () => {
     ).toHaveLength(1);
   });
 
+  it("catches a socket that was sent nothing yet up after a sleep on a bus", async () => {
+    let asleep = false;
+    const onBus = (): DataProvider => ({
+      ...handle,
+      notifications: "bus",
+      listen: (name, handler, options) =>
+        handle.listen(name, (payload) => asleep || handler(payload), options),
+    });
+    sockets = serve(onBus());
+    const lines: { sent: string[]; attachment: unknown; closed: boolean }[] = [];
+    sockets.install(instance(lines).platform);
+    const latest = await write("acme", "before it opened");
+    const { ticket } = await negotiate();
+    await open(ticket!, `${latest.version}.${latest.id}`);
+    const [line] = lines;
+    expect(events(line!)).toEqual([]);
+    await vi.waitFor(() => expect(line!.attachment).toHaveProperty("cursor"));
+
+    asleep = true;
+    await write("acme", "first while asleep");
+
+    sockets = serve({ ...handle, notifications: "bus" });
+    sockets.install(instance(lines).platform);
+    await sockets.ensure();
+    await vi.waitFor(() =>
+      expect(events(line!).map((event) => event.tags)).toContainEqual([
+        ["notes", "first while asleep"],
+      ]),
+    );
+  });
+
+  it("pushes to a socket opened after a write that found nobody subscribed", async () => {
+    const lines: { sent: string[]; attachment: unknown; closed: boolean }[] = [];
+    const first = instance(lines);
+    sockets.install(first.platform);
+    const opened = await negotiate();
+    await open(opened.ticket!);
+    const [gone] = lines;
+    gone!.closed = true;
+    await sockets.closed(first.of(gone!));
+    await write("acme", "nobody listening");
+
+    const again = await negotiate();
+    await open(again.ticket!);
+    const line = lines.at(-1)!;
+    await write("acme", "live");
+    await vi.waitFor(() =>
+      expect(events(line).map((event) => event.tags)).toContainEqual([["notes", "live"]]),
+    );
+  });
+
   it("greets a socket opened with a ticket, sends what it missed, then what is written", async () => {
     const lines: { sent: string[]; attachment: unknown; closed: boolean }[] = [];
     const first = instance(lines);

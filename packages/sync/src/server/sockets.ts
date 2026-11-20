@@ -11,6 +11,8 @@ export interface StreamSink {
   /** Resolves once the reader has taken everything queued, or the stream ended. */
   drained(): Promise<void>;
   onClosed(listener: () => void): void;
+  /** The stream has everything up to `cursor`, whether or not a batch carried it. */
+  reached?(cursor: string): void;
 }
 
 export interface StreamSpec {
@@ -171,13 +173,18 @@ function socketSink(entry: { readonly socket: HostedSocket }) {
     ended = true;
     for (const listener of listeners.splice(0)) listener();
   };
+  const remember = (cursor: string | undefined) => {
+    const held = cursor ? heldOf(entry.socket.attachment) : undefined;
+    if (held && held.cursor !== cursor) entry.socket.attach({ ...held, cursor });
+  };
   const sink: StreamSink = {
     push({ event, data }) {
       if (ended) return;
       entry.socket.send(JSON.stringify({ event: event ?? "message", data }));
-      const cursor = cursorOfFrame({ event, data });
-      const held = cursor === undefined ? undefined : heldOf(entry.socket.attachment);
-      if (held) entry.socket.attach({ ...held, cursor });
+      remember(cursorOfFrame({ event, data }));
+    },
+    reached: (cursor) => {
+      if (!ended) remember(cursor);
     },
     close() {
       if (ended) return;

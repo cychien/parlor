@@ -94,6 +94,18 @@ export class SyncHub {
     if (this.lossless) await this.#follow();
   }
 
+  /**
+   * Resolves once the hub hears `streams` and knows where the log stands, and answers that
+   * place: a stream that reads what it missed after this misses nothing in between. Undefined
+   * when the hub hears the database's NOTIFY, which carries each event itself.
+   */
+  async ready(streams: readonly string[]): Promise<SyncCursor | undefined> {
+    if (!this.lossless) return undefined;
+    await Promise.all(streams.map((stream) => this.#heard.get(stream)?.listening));
+    await this.#follow();
+    return this.#head;
+  }
+
   /** Reads on from where the log stands now; a stream catches up on what came before. */
   async #follow(): Promise<void> {
     if (this.#head) return;
