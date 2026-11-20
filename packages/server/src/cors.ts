@@ -1,4 +1,5 @@
 import { REFRESH_HEADER, SHELL_ORIGINS } from "@parlor/core";
+import { BUILD_HEADER } from "@parlor/sync";
 import { type H3Event, handleCors } from "h3";
 
 import { CLIENT_HEADER, SESSION_TOKEN_HEADER, SOURCE_HEADER } from "./protocol.js";
@@ -35,7 +36,12 @@ export function corsMiddleware(config: CorsConfig = {}) {
         REFRESH_HEADER,
       ],
       credentials: true,
-      exposeHeaders: ["content-type", "content-length", SESSION_TOKEN_HEADER],
+      exposeHeaders: [
+        "content-type",
+        "content-length",
+        SESSION_TOKEN_HEADER,
+        BUILD_HEADER,
+      ],
       preflight: { statusCode: 204 },
     });
     return preflight || undefined;
