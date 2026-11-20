@@ -235,23 +235,27 @@ describe.runIf(postgresUrl)("node-postgres notifying in process", () => {
     await unlisten();
   });
 
-  it("keeps each connection scope's listeners to that scope's notifications", async () => {
+  it("reaches listeners across connection scopes, as one Durable Object instance replaces another", async () => {
     const handle = handles.get("node-postgres notifying in process")!;
     const name = channel();
-    const outside = received();
-    const inside = received();
-    await handle.listen(name, outside.handler);
-    const scope = createConnectionScope();
+    const inbox = received();
+    const first = createConnectionScope();
+    await first.run(() => handle.listen(name, inbox.handler));
+    await first.close();
+    const second = createConnectionScope();
     try {
-      await scope.run(async () => {
-        await handle.listen(name, inside.handler);
-        await handle.transaction((tx) => handle.notify(name, "scoped", tx));
+      await second.run(async () => {
+        await handle.transaction((tx) => handle.notify(name, "in a transaction", tx));
+        await handle.notify(name, "on its own");
       });
-      await handle.notify(name, "unscoped");
-      expect(inside.payloads).toEqual(["scoped"]);
-      expect(outside.payloads).toEqual(["unscoped"]);
+      await handle.notify(name, "outside every scope");
+      expect(inbox.payloads).toEqual([
+        "in a transaction",
+        "on its own",
+        "outside every scope",
+      ]);
     } finally {
-      await scope.close();
+      await second.close();
     }
   });
 });

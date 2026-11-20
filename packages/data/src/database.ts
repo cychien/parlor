@@ -126,20 +126,25 @@ interface PgConnections extends ScopedConnections {
   readonly pool: pg.Pool;
   readonly db: NodePgDatabase;
   readonly listeners: Set<pg.Client>;
+}
+
+/**
+ * The process's own notifications, which outlive every connection scope: a Durable Object
+ * instance that replaces another in the same isolate keeps hearing what the server's
+ * listeners, started in the one before, are waiting for.
+ */
+interface InProcess {
   readonly channels: ProcessChannels;
-  readonly openedAt: number;
-  predecessor?: Predecessor | undefined;
+  readonly startedAt: number;
+  readonly forMs: number;
+  /** The connection that hears the server this one replaces, while it is still listened to. */
+  predecessor?: { readonly listen: (channel: string) => void } | undefined;
 }
 
-interface Predecessor {
-  readonly client: pg.Client;
-  readonly connected: Promise<unknown>;
-  readonly heard: Set<string>;
-}
-
+/** `channels`, when given, hear what `db`'s transactions notify, once each commits. */
 function openPgConnections(
   url: string,
-  reach: NotificationReach,
+  channels?: ProcessChannels,
   onClose?: () => void,
 ): PgConnections {
   const pool = new pg.Pool({ connectionString: url });
@@ -153,14 +158,11 @@ function openPgConnections(
   });
   const listeners = new Set<pg.Client>();
   const db = drizzle(pool);
-  const channels = new ProcessChannels();
-  if (reach === "process") holdNotifications(db, channels.deliver);
+  if (channels) holdNotifications(db, channels.deliver);
   return {
     pool,
     db,
     listeners,
-    channels,
-    openedAt: Date.now(),
     close: once(async () => {
       onClose?.();
       await Promise.all([...listeners].map((client) => client.end()));
@@ -215,9 +217,15 @@ function nodePostgresHandle(
   const key = {};
   const outside = new ConnectionOwner();
   const opened = new Set<PgConnections>();
+  const inProcess: InProcess | undefined =
+    reach === "process"
+      ? { channels: new ProcessChannels(), startedAt: Date.now(), forMs: predecessorMs }
+      : undefined;
   const connections = () =>
     (currentOwner() ?? outside).connectionsFor(key, () => {
-      const created = openPgConnections(url, reach, () => opened.delete(created));
+      const created = openPgConnections(url, inProcess?.channels, () =>
+        opened.delete(created),
+      );
       opened.add(created);
       return created;
     });
@@ -225,21 +233,22 @@ function nodePostgresHandle(
     // Said through the database in either case: a server that notifies in process is heard
     // there by the one replacing it, which listens as it starts.
     await (tx ?? connections().db).execute(sql`select pg_notify(${channel}, ${payload})`);
-    if (reach === "database") return;
+    if (!inProcess) return;
     const waiting = tx === undefined ? undefined : heldBy(tx);
     if (waiting) {
       waiting.push({ channel, payload });
       return;
     }
     if (isTransaction(tx)) warnUnheldTransaction();
-    connections().channels.deliver([{ channel, payload }]);
+    inProcess.channels.deliver([{ channel, payload }]);
   };
-  const listenInProcess: DatabaseHandle["listen"] = async (channel, handler) => {
-    const own = connections();
-    const unlisten = own.channels.listen(channel, handler);
-    hearPredecessor(own, directUrl, channel, predecessorMs);
-    return async () => unlisten();
-  };
+  const listenInProcess =
+    (state: InProcess): DatabaseHandle["listen"] =>
+    async (channel, handler) => {
+      const unlisten = state.channels.listen(channel, handler);
+      hearPredecessor(state, connections(), directUrl, channel);
+      return async () => unlisten();
+    };
   const listenOnDatabase: DatabaseHandle["listen"] = async (
     channel,
     handler,
@@ -299,7 +308,7 @@ function nodePostgresHandle(
     driver: "node-postgres",
     read: () => connections().db,
     transaction: (run) => connections().db.transaction((tx) => run(tx)),
-    listen: reach === "process" ? listenInProcess : listenOnDatabase,
+    listen: inProcess ? listenInProcess(inProcess) : listenOnDatabase,
     notify,
     notifications: reach,
     migrate: (folder) => migrateDirect(connections, url, directUrl, folder),
@@ -311,21 +320,23 @@ function nodePostgresHandle(
 }
 
 /**
- * For its first `forMs`, has `own` hear `channel` through the database as well, where the
- * server it replaces still notifies while it finishes. One connection, closed when the time
- * is up; a failure only loses what that server said, which nothing else would have heard.
+ * For the first `forMs` after the server started, hears `channel` through the database as
+ * well, where the server it replaces still notifies while it finishes. One connection, owned
+ * by `own`'s scope and closed when the time is up; a failure only loses what that server
+ * said, which nothing else would have heard.
  */
 function hearPredecessor(
+  state: InProcess,
   own: PgConnections,
   directUrl: string,
   channel: string,
-  forMs: number,
 ): void {
-  const remaining = own.openedAt + forMs - Date.now();
+  const remaining = state.startedAt + state.forMs - Date.now();
   if (remaining <= 0) return;
-  if (!own.predecessor) {
+  if (!state.predecessor) {
     const client = new pg.Client({ connectionString: directUrl, keepAlive: true });
-    const forget = own.channels.hearDatabase();
+    const forget = state.channels.hearDatabase();
+    const heard = new Set<string>();
     const end = once(async () => {
       clearTimeout(timer);
       forget();
@@ -335,8 +346,9 @@ function hearPredecessor(
     const timer = setTimeout(() => void end(), remaining);
     timer.unref?.();
     client.on("error", () => void end());
+    client.on("end", () => void end());
     client.on("notification", (message) => {
-      own.channels.heard({ channel: message.channel, payload: message.payload ?? "" });
+      state.channels.heard({ channel: message.channel, payload: message.payload ?? "" });
     });
     own.listeners.add(client);
     const connected = client.connect();
@@ -347,14 +359,17 @@ function hearPredecessor(
       );
       void end();
     });
-    own.predecessor = { client, connected, heard: new Set() };
+    state.predecessor = {
+      listen(name) {
+        if (heard.has(name)) return;
+        heard.add(name);
+        connected
+          .then(() => client.query(`LISTEN ${pg.escapeIdentifier(name)}`))
+          .catch(() => {});
+      },
+    };
   }
-  const { client, connected, heard } = own.predecessor;
-  if (heard.has(channel)) return;
-  heard.add(channel);
-  connected
-    .then(() => client.query(`LISTEN ${pg.escapeIdentifier(channel)}`))
-    .catch(() => {});
+  state.predecessor.listen(channel);
 }
 
 async function migrateDirect(
@@ -367,7 +382,7 @@ async function migrateDirect(
     await migrateDatabase(connections().db, folder);
     return;
   }
-  const direct = openPgConnections(directUrl, "database");
+  const direct = openPgConnections(directUrl);
   try {
     await migrateDatabase(direct.db, folder);
   } finally {

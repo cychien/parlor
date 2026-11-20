@@ -6,7 +6,7 @@ import {
   type Principal,
 } from "@parlor/core";
 import { createRegistry } from "@parlor/core/registry";
-import { createDatabase, type DatabaseHandle } from "@parlor/data";
+import { createConnectionScope, createDatabase, type DatabaseHandle } from "@parlor/data";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 
@@ -176,5 +176,62 @@ describe.runIf(postgresUrl)("the app's only server, on Postgres", () => {
     expect(used).toBe(before);
     expect(await listening()).toBe(0);
     await reader.cancel();
+  });
+
+  it("keeps pushing after the Durable Object it runs in is replaced while the process lives on", async () => {
+    const pushed = async (
+      reader: ReadableStreamDefaultReader<Uint8Array>,
+      id: string,
+    ) => {
+      const decoder = new TextDecoder();
+      let text = "";
+      const deadline = Date.now() + 2000;
+      while (!text.includes(id) && Date.now() < deadline) {
+        const next = await Promise.race([
+          reader.read(),
+          new Promise<undefined>((resolve) => setTimeout(resolve, 200)),
+        ]);
+        if (!next) continue;
+        if (next.done) break;
+        text += decoder.decode(next.value);
+      }
+      return text.includes(id);
+    };
+    // A fresh server, whose hub first starts inside a Durable Object instance.
+    const fresh = createServer({
+      actions,
+      database: { ...database, close: undefined },
+      auth,
+    });
+    const request = (path: string, init: RequestInit = {}) =>
+      fresh.fetch(
+        new Request(`http://app.test${path}`, {
+          ...init,
+          headers: { authorization: "Bearer alice", "content-type": "application/json" },
+        }),
+      );
+    // Each Durable Object instance serves its requests in its own connection scope.
+    const instance = () => createConnectionScope();
+    const first = instance();
+    const earlier = await first.run(() => request("/_parlor/sync/stream?safety=build"));
+    const { reader: gone } = await framesOf(earlier.body!, 1);
+    await gone.cancel();
+    await first.close();
+
+    const second = instance();
+    try {
+      const stream = await second.run(() => request("/_parlor/sync/stream?safety=build"));
+      const { reader } = await framesOf(stream.body!, 1);
+      const wrote = await second.run(() =>
+        request("/_parlor/actions/addNote", { method: "POST", body: "{}" }),
+      );
+      expect(wrote.status).toBe(200);
+      const { data } = (await wrote.json()) as { data: { id: string } };
+      expect(await pushed(reader, data.id)).toBe(true);
+      await reader.cancel();
+    } finally {
+      await second.close();
+      await fresh.close();
+    }
   });
 });
