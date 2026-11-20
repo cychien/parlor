@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -14,6 +14,7 @@ import {
   buildServer,
   devWranglerConfig,
   nitroCli,
+  withScaledMigration,
   withServerMigration,
 } from "./build.js";
 import {
@@ -768,6 +769,60 @@ describe("buildServer for cloudflare-durable with the app's own Worker exports",
         `deploy.cloudflare.exports names worker.ts, which does not exist in ${rootDir}`,
       ),
     );
+  });
+});
+
+describe("buildServer for cloudflare-scaled", () => {
+  it("builds a Worker for the edge with Durable Objects per account and per topic, beside the database", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "parlor-host-scaled-"));
+    // The account objects import @parlor/server and @parlor/data from the app.
+    await symlink(
+      fileURLToPath(new URL("../../../examples/hello/node_modules", import.meta.url)),
+      join(rootDir, "node_modules"),
+    );
+    await writeFile(
+      join(rootDir, "server.ts"),
+      "export default { fetch: () => new Response(null), split: () => ({}) };\n",
+    );
+    await mkdir(join(rootDir, ".parlor", "web"), { recursive: true });
+    await writeFile(join(rootDir, ".parlor", "web", "index.html"), "<!doctype html>");
+    const config = parseConfig({ app: { id: "dev.parlor.scaled", name: "Scaled" } });
+
+    const result = await buildServer(
+      { config, rootDir, configFile: "parlor.config.ts" },
+      { preset: "cloudflare-scaled" },
+    );
+    expect(result.syncTransport).toBe("sse");
+    const wrangler = JSON.parse(
+      await readFile(join(result.outputDir, "server", "wrangler.json"), "utf8"),
+    );
+    expect(wrangler.placement).toEqual({ mode: "smart" });
+    expect(wrangler.durable_objects.bindings).toEqual([
+      { name: "PARLOR_ACCOUNTS", class_name: "ParlorAccount" },
+      { name: "PARLOR_TOPICS", class_name: "ParlorTopic" },
+    ]);
+    expect(wrangler.migrations).toEqual([
+      { tag: "parlor-scaled-v1", new_sqlite_classes: ["ParlorAccount", "ParlorTopic"] },
+    ]);
+    const worker = await readFile(join(result.outputDir, "server", "index.mjs"), "utf8");
+    expect(worker).toMatch(/export \{[^}]*\bParlorAccount\b[^}]*\bParlorTopic\b/);
+  }, 120_000);
+});
+
+describe("withScaledMigration", () => {
+  const scaled = {
+    tag: "parlor-scaled-v1",
+    new_sqlite_classes: ["ParlorAccount", "ParlorTopic"],
+  };
+  const fridge = { tag: "v1_fridge", new_sqlite_classes: ["Fridge"] };
+
+  it("appends the account and topic classes after the app's own migrations", () => {
+    expect(withScaledMigration([])).toEqual([scaled]);
+    expect(withScaledMigration([fridge])).toEqual([fridge, scaled]);
+  });
+
+  it("keeps the app's order once the app lists them", () => {
+    expect(withScaledMigration([scaled, fridge])).toEqual([scaled, fridge]);
   });
 });
 
