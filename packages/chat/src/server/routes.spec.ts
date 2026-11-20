@@ -7,6 +7,7 @@ import { MAX_STREAM_BODY_BYTES } from "./routes.js";
 import {
   agentRef,
   type ChatServer,
+  ONE_INSTANCE,
   openDatabase,
   resetDatabase,
   rows,
@@ -156,34 +157,37 @@ describe("the host-only routes", () => {
     },
   );
 
-  it("renews a computer's liveness with one update and no sync event", async () => {
-    await rows(
-      handle,
-      "update parlor_chat_hosts set online_until = now() - interval '1 second' where id = 'mac'",
-    );
-    expect(
+  it.skipIf(ONE_INSTANCE)(
+    "renews a computer's liveness with one update and no sync event",
+    async () => {
       await rows(
         handle,
-        "select online_until > now() as online from parlor_chat_hosts where id = 'mac'",
-      ),
-    ).toEqual([{ online: false }]);
-    const events = await rows(handle, "select count(*)::int as n from sync_events");
-    const reply = await app.post("alice-host", "heartbeat", {});
-    expect(reply.status).toBe(204);
-    expect(
-      await rows(
-        handle,
-        "select online_until > now() as online from parlor_chat_hosts where id = 'mac'",
-      ),
-    ).toEqual([{ online: true }]);
-    expect(await rows(handle, "select count(*)::int as n from sync_events")).toEqual(
-      events,
-    );
-    expect(
-      await rows(
-        handle,
-        "select extract(epoch from online_until - now())::int between 55 and 60 as ok from parlor_chat_hosts where id = 'mac'",
-      ),
-    ).toEqual([{ ok: true }]);
-  });
+        "update parlor_chat_hosts set online_until = now() - interval '1 second' where id = 'mac'",
+      );
+      expect(
+        await rows(
+          handle,
+          "select online_until > now() as online from parlor_chat_hosts where id = 'mac'",
+        ),
+      ).toEqual([{ online: false }]);
+      const events = await rows(handle, "select count(*)::int as n from sync_events");
+      const reply = await app.post("alice-host", "heartbeat", {});
+      expect(reply.status).toBe(204);
+      expect(
+        await rows(
+          handle,
+          "select online_until > now() as online from parlor_chat_hosts where id = 'mac'",
+        ),
+      ).toEqual([{ online: true }]);
+      expect(await rows(handle, "select count(*)::int as n from sync_events")).toEqual(
+        events,
+      );
+      expect(
+        await rows(
+          handle,
+          "select extract(epoch from online_until - now())::int between 55 and 60 as ok from parlor_chat_hosts where id = 'mac'",
+        ),
+      ).toEqual([{ ok: true }]);
+    },
+  );
 });

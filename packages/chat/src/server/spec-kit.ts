@@ -150,7 +150,31 @@ export const drivers: readonly Driver[] = [
   ...(url ? [{ name: "node-postgres" as const, url }] : []),
 ];
 
-async function scratchDatabase(baseUrl: string): Promise<DatabaseHandle> {
+/**
+ * With `PARLOR_TEST_INSTANCES=one` the specs run as the app's only server, which keeps
+ * liveness in memory; otherwise as one of several, which lease it in the database.
+ */
+export const ONE_INSTANCE = process.env.PARLOR_TEST_INSTANCES === "one";
+
+/**
+ * A heartbeat's status: the app's only server answers it with a token for the next ones,
+ * one of several renews the computer's lease and answers nothing.
+ */
+export const HEARTBEAT_STATUS = ONE_INSTANCE ? 200 : 204;
+
+/** What tells a server it is the app's only one, passed on from `database` when asked. */
+function instancesOf(
+  database: DataProvider,
+  one: boolean = ONE_INSTANCE,
+): Partial<DataProvider> {
+  if (!one || !database.notify) return {};
+  return {
+    notify: database.notify.bind(database),
+    notifications: database.notifications,
+  };
+}
+
+async function scratchDatabase(baseUrl: string, one: boolean): Promise<DatabaseHandle> {
   const name = `parlor_test_${randomBytes(6).toString("hex")}`;
   const onServer = async (statement: string) => {
     const admin = await createDatabase({ url: baseUrl });
@@ -163,7 +187,11 @@ async function scratchDatabase(baseUrl: string): Promise<DatabaseHandle> {
   await onServer(`create database ${name}`);
   const scratchUrl = new URL(baseUrl);
   scratchUrl.pathname = `/${name}`;
-  const handle = await createDatabase({ url: scratchUrl.href });
+  const handle = await createDatabase({
+    url: scratchUrl.href,
+    notifications: one ? "process" : "database",
+    predecessorMs: 0,
+  });
   return {
     ...handle,
     close: async () => {
@@ -173,9 +201,12 @@ async function scratchDatabase(baseUrl: string): Promise<DatabaseHandle> {
   };
 }
 
-export async function openDatabase(driver: Driver): Promise<DatabaseHandle> {
+export async function openDatabase(
+  driver: Driver,
+  one: boolean = ONE_INSTANCE,
+): Promise<DatabaseHandle> {
   const handle = await (driver.url
-    ? scratchDatabase(driver.url)
+    ? scratchDatabase(driver.url, one)
     : createDatabase({ dataDir: "memory://" }));
   await handle.db.execute(sql`select 1`);
   return handle;
@@ -200,6 +231,7 @@ export function counted(handle: DatabaseHandle): Counted {
       return handle.transaction(run);
     },
     listen: (channel, handler, options) => handle.listen(channel, handler, options),
+    ...instancesOf(handle),
     get transactions() {
       return transactions;
     },
@@ -239,6 +271,8 @@ export function serveChat(
     enforcing?: boolean;
     scope?: ScopeResolver;
     providerIo?: ProviderIo;
+    /** Serve as the app's only server or as one of several, whatever the specs run as. */
+    instances?: "one" | "many";
   } = {},
 ): ChatServer {
   const auth = testAuth(options.enforcing ?? true, options.providerIo);
@@ -250,6 +284,10 @@ export function serveChat(
       read: () => database.read(),
       transaction: (run) => database.transaction(run),
       ...(database.listen ? { listen: database.listen.bind(database) } : {}),
+      ...instancesOf(
+        database,
+        options.instances === undefined ? ONE_INSTANCE : options.instances === "one",
+      ),
     },
     plugins: [chat(options.chat)],
   });

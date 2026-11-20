@@ -76,7 +76,7 @@ describe("chat() setup", () => {
     );
   });
 
-  it("offers the actions, the two host routes, the chat channel and a close", () => {
+  it("offers the actions, the host routes, the token heartbeat anyone may send, the chat channel and a close", () => {
     const runtime = chat().setup(hostWith());
     expect(runtime.actions?.names()).toEqual([
       "open",
@@ -104,6 +104,7 @@ describe("chat() setup", () => {
     ).toEqual([
       ["POST", "/stream", ["host"]],
       ["POST", "/heartbeat", ["host"]],
+      ["POST", "/beat", "public"],
     ]);
     expect(runtime.channel?.event).toBe("chat");
     runtime.close?.();

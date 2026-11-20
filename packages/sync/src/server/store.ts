@@ -1,4 +1,4 @@
-import type { Tag } from "@parlor/core";
+import type { DataProvider, Tag } from "@parlor/core";
 import { sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 
@@ -36,6 +36,9 @@ export async function ensureSyncTables(db: SyncDatabase): Promise<void> {
     sql`create index if not exists sync_events_scope_version on sync_events (scope, version, id)`,
   );
   await db.execute(
+    sql`create index if not exists sync_events_version on sync_events (version, id)`,
+  );
+  await db.execute(
     sql`create table if not exists sync_version (id int primary key, v bigint not null)`,
   );
   await db.execute(sql`
@@ -57,9 +60,32 @@ export interface RecordSyncEventInput {
   readonly source?: string | undefined;
 }
 
+/** Carries a recorded event to the hubs once `tx` commits. */
+export type SyncNotify = (
+  channel: string,
+  payload: string,
+  tx: SyncDatabase,
+) => Promise<void>;
+
+const notifyInSql: SyncNotify = async (channel, payload, tx) => {
+  await tx.execute(sql`select pg_notify(${channel}, ${payload})`);
+};
+
+/** The provider's own `notify`, which reaches its `listen` wherever that hears from. */
+export function syncNotifyOf(data: DataProvider): SyncNotify | undefined {
+  return data.notify
+    ? (channel, payload, tx) => data.notify!(channel, payload, tx)
+    : undefined;
+}
+
+/**
+ * Records the event in `tx` and notifies the hubs when it commits: through `notify`, which
+ * a server passes from its data provider (`syncNotifyOf`), or with NOTIFY in `tx` itself.
+ */
 export async function recordSyncEvent(
   tx: SyncDatabase,
   input: RecordSyncEventInput,
+  notify: SyncNotify = notifyInSql,
 ): Promise<SyncEvent> {
   if (input.tags.length === 0) throw new Error("A sync event needs at least one tag");
   const id = crypto.randomUUID();
@@ -85,9 +111,7 @@ export async function recordSyncEvent(
     tags: input.tags,
     source: input.source,
   };
-  await tx.execute(
-    sql`select pg_notify(${SYNC_CHANNEL}, ${notifyPayload(input.scope, event)})`,
-  );
+  await notify(SYNC_CHANNEL, notifyPayload(input.scope, event), tx);
   return event;
 }
 
@@ -139,6 +163,44 @@ export async function readSyncEvents(
       source: row.source ?? undefined,
     }))
     .sort((a, b) => compareCursors(a, b));
+}
+
+/** The last event of any stream, or the initial cursor when the log is empty. */
+export async function readSyncHead(db: SyncDatabase): Promise<SyncCursor> {
+  const [last] = await rows<{ id: string; version: number | string }>(
+    db.execute(
+      sql`select version, id from sync_events order by version desc, id desc limit 1`,
+    ),
+  );
+  return last ? { version: Number(last.version), id: last.id } : INITIAL_CURSOR;
+}
+
+/**
+ * Every stream's events after `since`, in the order they committed, each with its stream.
+ * Versions are allocated under one row lock, so nothing can commit behind what this read.
+ */
+export async function readSyncTail(
+  db: SyncDatabase,
+  since: SyncCursor,
+  limit: number = MAX_BATCH,
+): Promise<NotifyPayload[]> {
+  const found = await rows<EventRow & { scope: string }>(
+    db.execute(sql`
+      select id, version, scope, tags, source
+        from sync_events
+       where (version, id) > (${since.version}, ${since.id})
+       order by version asc, id asc
+       limit ${limit}`),
+  );
+  return found.map((row) => ({
+    scope: row.scope,
+    event: {
+      id: row.id,
+      version: Number(row.version),
+      tags: row.tags,
+      source: row.source ?? undefined,
+    },
+  }));
 }
 
 export type SyncBacklog =

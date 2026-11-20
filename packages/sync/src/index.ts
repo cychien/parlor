@@ -7,6 +7,7 @@ export {
   DEFAULT_MAX_STREAM_MS,
   encodeCursor,
   INITIAL_CURSOR,
+  SYNC_BUILD_PATH,
   SYNC_CHANNEL,
   SYNC_PROTOCOL_VERSION,
   type SyncBatch,

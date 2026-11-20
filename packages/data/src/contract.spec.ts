@@ -2,9 +2,10 @@ import net from "node:net";
 
 import { sql } from "drizzle-orm";
 import pg from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { createDatabase, type DatabaseHandle } from "./database.js";
+import { createConnectionScope } from "./connection-scope.js";
+import { createDatabase, type DatabaseHandle, resolveNotifications } from "./database.js";
 
 const postgresUrl = process.env.PARLOR_TEST_DATABASE_URL;
 
@@ -21,11 +22,28 @@ const drivers = [
     : []),
 ];
 
+const notifiers = [
+  ...drivers,
+  ...(postgresUrl
+    ? [
+        {
+          name: "node-postgres notifying in process",
+          open: () =>
+            createDatabase({
+              url: postgresUrl,
+              notifications: "process",
+              predecessorMs: 0,
+            }),
+        },
+      ]
+    : []),
+];
+
 const handles = new Map<string, DatabaseHandle>();
 
 // PGlite starts on its first query and that is the slow part, so it happens once, outside any test's timeout.
 beforeAll(async () => {
-  for (const driver of drivers) {
+  for (const driver of notifiers) {
     const handle = await driver.open();
     await handle.db.execute(sql`select 1`);
     handles.set(driver.name, handle);
@@ -36,7 +54,7 @@ afterAll(async () => {
   for (const handle of handles.values()) await handle.close();
 });
 
-function open(driver: (typeof drivers)[number]): DatabaseHandle {
+function open(driver: (typeof notifiers)[number]): DatabaseHandle {
   return handles.get(driver.name)!;
 }
 
@@ -103,6 +121,236 @@ describe.each(drivers)("DataProvider contract on $name", (driver) => {
     });
     await inbox.until(1);
     expect(inbox.payloads).toEqual(["committed"]);
+  });
+});
+
+describe.each(notifiers)("notify on $name", (driver) => {
+  const quiet = () => new Promise((resolve) => setTimeout(resolve, 100));
+
+  it("reaches a listener until it unlistens", async () => {
+    const handle = open(driver);
+    const name = channel();
+    const inbox = received();
+    const unlisten = await handle.listen(name, inbox.handler);
+    await handle.notify(name, "one");
+    await inbox.until(1);
+    await unlisten();
+    await handle.notify(name, "two");
+    await quiet();
+    expect(inbox.payloads).toEqual(["one"]);
+  });
+
+  it("waits for its transaction to commit and is dropped when it rolls back", async () => {
+    const handle = open(driver);
+    const name = channel();
+    const inbox = received();
+    await handle.listen(name, inbox.handler);
+    await handle
+      .transaction(async (tx) => {
+        await handle.notify(name, "rolled back", tx);
+        throw new Error("abort");
+      })
+      .catch(() => {});
+    let beforeCommit: string[] = [];
+    await handle.transaction(async (tx) => {
+      await handle.notify(name, "committed", tx);
+      await quiet();
+      beforeCommit = [...inbox.payloads];
+    });
+    await inbox.until(1);
+    expect(beforeCommit).toEqual([]);
+    expect(inbox.payloads).toEqual(["committed"]);
+  });
+
+  it("follows a savepoint: kept when released, dropped when rolled back", async () => {
+    const handle = open(driver);
+    const name = channel();
+    const inbox = received();
+    await handle.listen(name, inbox.handler);
+    await handle.transaction(async (tx) => {
+      await handle.notify(name, "outer", tx);
+      await tx.transaction(async (savepoint) => {
+        await handle.notify(name, "released", savepoint);
+      });
+      await tx
+        .transaction(async (savepoint) => {
+          await handle.notify(name, "undone", savepoint);
+          throw new Error("abort the savepoint");
+        })
+        .catch(() => {});
+    });
+    await inbox.until(2);
+    await quiet();
+    expect(inbox.payloads).toEqual(["outer", "released"]);
+  });
+
+  it("holds a transaction opened through db as well", async () => {
+    const handle = open(driver);
+    const name = channel();
+    const inbox = received();
+    await handle.listen(name, inbox.handler);
+    await handle.db
+      .transaction(async (tx) => {
+        await handle.notify(name, "rolled back", tx);
+        throw new Error("abort");
+      })
+      .catch(() => {});
+    await handle.db.transaction(async (tx) => {
+      await handle.notify(name, "committed", tx);
+    });
+    await inbox.until(1);
+    await quiet();
+    expect(inbox.payloads).toEqual(["committed"]);
+  });
+});
+
+describe.runIf(postgresUrl)("node-postgres notifying in process", () => {
+  const listening = async () => {
+    const admin = new pg.Client({ connectionString: postgresUrl });
+    await admin.connect();
+    try {
+      const { rows } = await admin.query<{ count: number }>(
+        `select count(*)::int as count from pg_stat_activity
+         where datname = current_database() and query ilike 'listen %'`,
+      );
+      return rows[0]!.count;
+    } finally {
+      await admin.end();
+    }
+  };
+
+  it("says so, as PGlite does, while node-postgres defaults to the database", () => {
+    expect(handles.get("node-postgres notifying in process")!.notifications).toBe(
+      "process",
+    );
+    expect(handles.get("PGlite")!.notifications).toBe("process");
+    expect(handles.get("node-postgres")!.notifications).toBe("database");
+  });
+
+  it("holds no LISTEN connection for its listeners", async () => {
+    const handle = handles.get("node-postgres notifying in process")!;
+    const before = await listening();
+    const unlisten = await handle.listen(channel(), () => {});
+    expect(await listening()).toBe(before);
+    await unlisten();
+  });
+
+  it("reaches listeners across connection scopes, as one Durable Object instance replaces another", async () => {
+    const handle = handles.get("node-postgres notifying in process")!;
+    const name = channel();
+    const inbox = received();
+    const first = createConnectionScope();
+    await first.run(() => handle.listen(name, inbox.handler));
+    await first.close();
+    const second = createConnectionScope();
+    try {
+      await second.run(async () => {
+        await handle.transaction((tx) => handle.notify(name, "in a transaction", tx));
+        await handle.notify(name, "on its own");
+      });
+      await handle.notify(name, "outside every scope");
+      expect(inbox.payloads).toEqual([
+        "in a transaction",
+        "on its own",
+        "outside every scope",
+      ]);
+    } finally {
+      await second.close();
+    }
+  });
+});
+
+describe.runIf(postgresUrl)("a server that starts beside the one it replaces", () => {
+  const opened: DatabaseHandle[] = [];
+  afterEach(async () => {
+    for (const handle of opened.splice(0)) await handle.close();
+  });
+  const server = async (predecessorMs: number) => {
+    const handle = await createDatabase({
+      url: postgresUrl,
+      notifications: "process",
+      predecessorMs,
+    });
+    opened.push(handle);
+    return handle;
+  };
+  const listeningTo = async (name: string) => {
+    const admin = new pg.Client({ connectionString: postgresUrl });
+    await admin.connect();
+    try {
+      const { rows } = await admin.query(
+        "select pid from pg_stat_activity where query = $1",
+        [`LISTEN ${pg.escapeIdentifier(name)}`],
+      );
+      return rows.length;
+    } finally {
+      await admin.end();
+    }
+  };
+
+  it("hears what that one still notifies, once each, along with its own", async () => {
+    const predecessor = await server(0);
+    const successor = await server(5000);
+    const name = channel();
+    const inbox = received();
+    await successor.listen(name, inbox.handler);
+    await vi.waitFor(async () => expect(await listeningTo(name)).toBe(1));
+
+    await predecessor.transaction((tx) => predecessor.notify(name, "its last write", tx));
+    await successor.transaction((tx) => successor.notify(name, "my own", tx));
+    await successor.notify(name, "my own, outside a transaction");
+    await successor.notify(name, "said twice");
+    await successor.notify(name, "said twice");
+    await inbox.until(5);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(inbox.payloads.toSorted()).toEqual([
+      "its last write",
+      "my own",
+      "my own, outside a transaction",
+      "said twice",
+      "said twice",
+    ]);
+  });
+
+  it("hears nothing that one rolled back", async () => {
+    const predecessor = await server(0);
+    const successor = await server(5000);
+    const name = channel();
+    const inbox = received();
+    await successor.listen(name, inbox.handler);
+    await vi.waitFor(async () => expect(await listeningTo(name)).toBe(1));
+    await predecessor
+      .transaction(async (tx) => {
+        await predecessor.notify(name, "undone", tx);
+        throw new Error("abort");
+      })
+      .catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(inbox.payloads).toEqual([]);
+  });
+
+  it("lets the database connection go when its time is up, and then hears only itself", async () => {
+    const predecessor = await server(0);
+    const successor = await server(400);
+    const name = channel();
+    const inbox = received();
+    await successor.listen(name, inbox.handler);
+    await vi.waitFor(async () => expect(await listeningTo(name)).toBe(1));
+    await vi.waitFor(async () => expect(await listeningTo(name)).toBe(0));
+
+    await predecessor.notify(name, "too late");
+    await successor.notify(name, "mine");
+    await successor.notify(name, "mine");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(inbox.payloads).toEqual(["mine", "mine"]);
+  });
+});
+
+describe("resolveNotifications", () => {
+  it("keeps notifications in process only for an app with one server", () => {
+    expect(resolveNotifications("one")).toBe("process");
+    expect(resolveNotifications("many")).toBe("database");
+    expect(resolveNotifications(undefined)).toBe("database");
   });
 });
 

@@ -46,6 +46,14 @@ export const parlorConfigSchema = z.object({
       port: z.number().int().positive().default(3000),
       url: z.url().optional(),
       sync: z.object({ transport: z.enum(["sse", "poll"]).optional() }).optional(),
+      /**
+       * `one` when a single server serves the app: it then keeps live updates and liveness in
+       * its own memory and leaves an idle database alone, and a second server on the same
+       * database would not hear the first. `many` when several may. Unset, `parlor build`
+       * decides by preset (`cloudflare-durable` is one server) and the server otherwise reads
+       * `PARLOR_INSTANCES`, defaulting to `many`.
+       */
+      instances: z.enum(["one", "many"]).optional(),
     })
     .prefault({}),
   web: z

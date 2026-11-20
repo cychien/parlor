@@ -11,6 +11,7 @@ import {
   readSyncCursor,
   readSyncEvents,
   recordSyncEvent,
+  syncNotifyOf,
 } from "./store.js";
 
 let handle: DatabaseHandle;
@@ -93,6 +94,33 @@ describe("sync store", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     await unlisten();
     expect(received.map((p) => JSON.parse(p))).toContainEqual({ scope: "acme", event });
+  });
+
+  it("notifies through the data provider when handed its notify", async () => {
+    const received: NotifyPayload[] = [];
+    const unlisten = await handle.listen("parlor_sync", (payload) => {
+      received.push(JSON.parse(payload) as NotifyPayload);
+    });
+    const sent: { channel: string; tx: unknown }[] = [];
+    const notify = syncNotifyOf(handle)!;
+    let inside: unknown;
+    const event = await handle.transaction((tx) => {
+      inside = tx;
+      return recordSyncEvent(
+        tx,
+        { scope: "provider", tags: [["tasks", "9"]] },
+        (channel, payload, within) => {
+          sent.push({ channel, tx: within });
+          return notify(channel, payload, within);
+        },
+      );
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await unlisten();
+    expect(sent).toEqual([{ channel: "parlor_sync", tx: inside }]);
+    expect(received).toEqual([
+      { scope: "provider", event: expect.objectContaining({ id: event.id }) },
+    ]);
   });
 
   it("keeps a bulk write's NOTIFY under the pg_notify limit by collapsing to table tags", async () => {

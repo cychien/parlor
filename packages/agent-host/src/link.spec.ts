@@ -267,6 +267,85 @@ describe("an app link", () => {
     expect(link.mode).toBe("closed");
   });
 
+  describe("heartbeats", () => {
+    const brisk = { ...welcome, heartbeatMs: 40 };
+    const beating = (heartbeat: () => Response, beat: (token: unknown) => Response) =>
+      stubApp((seen) => {
+        if (seen.path.endsWith("/hostHello")) return data(brisk);
+        if (seen.path.endsWith("/sync/token")) return new Response(null, { status: 503 });
+        if (seen.path.endsWith("/chat/heartbeat")) return heartbeat();
+        if (seen.path.endsWith("/chat/beat")) {
+          return beat((seen.body as { token?: unknown }).token);
+        }
+        return data({ id: "t1" });
+      });
+    const beats = (app: ReturnType<typeof stubApp>) =>
+      app.seen.filter((seen) => /\/chat\/(heartbeat|beat)$/.test(seen.path));
+
+    it("carry only the token the app answered, and no credential, from then on", async () => {
+      const app = beating(
+        () => Response.json({ beat: "token-1" }),
+        () => new Response(null, { status: 204 }),
+      );
+      const link = createAppLink(grant, deps(app.fetch));
+      link.start();
+      await vi.waitFor(() => expect(beats(app).length).toBeGreaterThanOrEqual(3));
+      await link.stop();
+      const [first, ...rest] = beats(app);
+      expect(first).toMatchObject({ path: "/_parlor/chat/heartbeat" });
+      expect(first!.authorization).toMatch(/^ParlorHost /);
+      for (const later of rest) {
+        expect(later).toEqual({
+          method: "POST",
+          path: "/_parlor/chat/beat",
+          authorization: null,
+          body: { token: "token-1" },
+        });
+      }
+    });
+
+    it("carry the credential again once the app no longer knows the token, and take its new one", async () => {
+      let issued = 0;
+      let known = "";
+      const app = beating(
+        () => {
+          known = `token-${(issued += 1)}`;
+          return Response.json({ beat: known });
+        },
+        (token) => {
+          const status = token === known ? 204 : 404;
+          return new Response(null, { status });
+        },
+      );
+      const link = createAppLink(grant, deps(app.fetch));
+      link.start();
+      await vi.waitFor(() => expect(beats(app).length).toBeGreaterThanOrEqual(2));
+      known = "forgotten by a restart";
+      await vi.waitFor(() => expect(issued).toBe(2));
+      await vi.waitFor(() =>
+        expect(beats(app).at(-1)).toMatchObject({
+          path: "/_parlor/chat/beat",
+          body: { token: "token-2" },
+        }),
+      );
+      await link.stop();
+    });
+
+    it("keep their credential for an app that answers no token", async () => {
+      const app = beating(
+        () => new Response(null, { status: 204 }),
+        () => new Response(null, { status: 404 }),
+      );
+      const link = createAppLink(grant, deps(app.fetch));
+      link.start();
+      await vi.waitFor(() => expect(beats(app).length).toBeGreaterThanOrEqual(3));
+      await link.stop();
+      expect(beats(app).every((seen) => seen.path === "/_parlor/chat/heartbeat")).toBe(
+        true,
+      );
+    });
+  });
+
   it("hands a turn the app pushed on its stream to onPushed, and ignores the channel's other frames", async () => {
     const pushed = { id: "t1", turnId: "u1", clientId: "tab-1" };
     const sse = [

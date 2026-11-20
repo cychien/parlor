@@ -14,6 +14,7 @@ import {
 import {
   agentRef,
   type ChatServer,
+  HEARTBEAT_STATUS,
   type HttpListener,
   listenHttp,
   openDatabase,
@@ -76,7 +77,7 @@ describe("createFakeHost over real HTTP", () => {
       userActivity: true,
     });
     expect(await host.claim()).toBeUndefined();
-    expect((await host.heartbeat()).status).toBe(204);
+    expect((await host.heartbeat()).status).toBe(HEARTBEAT_STATUS);
     expect(authorized.map((request) => request.url.replace(http.origin, ""))).toEqual([
       "/_parlor/chat/actions/hostHello",
       "/_parlor/chat/actions/hostClaim",

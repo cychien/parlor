@@ -2,6 +2,7 @@ import {
   type ActionContext,
   ActionError,
   type HostId,
+  type HostPrincipal,
   type Tag,
   type ThreadId,
   type TurnId,
@@ -84,6 +85,12 @@ export interface ChatActionDeps {
   readonly appOrigin: () => string;
   /** Hands a queued turn straight to its computer; without it computers only claim. */
   readonly pushed?: TurnPush | undefined;
+  /** How long a computer's report that it is online holds; twice `heartbeatMs` by default. */
+  readonly onlineTtlMs?: number | undefined;
+  /** A computer reported itself online or offline; `written` names the write that recorded it. */
+  readonly hostReported?:
+    | ((owner: ChatOwner, host: HostPrincipal, online: boolean, written: string) => void)
+    | undefined;
   /** The components `ui` items may hold. */
   readonly ui?: ChatUiCatalog | undefined;
 }
@@ -461,7 +468,7 @@ export function hostChatActions(
         if (input.protocols.max < protocols.min) return refuse("host_too_old");
         const protocol = Math.min(input.protocols.max, protocols.max);
         if (protocol < input.protocols.min) return refuse("app_too_old");
-        await deps.store.reportHost(dbOf(ctx), host, host.host, {
+        const { written } = await deps.store.reportHost(dbOf(ctx), host, host.host, {
           protocol,
           name: input.name,
           platform: input.platform,
@@ -469,8 +476,9 @@ export function hostChatActions(
           devices: input.devices,
           presenceDue: input.presenceDue,
           online: true,
-          ttlMs: 2 * deps.heartbeatMs,
+          ttlMs: deps.onlineTtlMs ?? 2 * deps.heartbeatMs,
         });
+        deps.hostReported?.(host, host.host, true, written);
         learnAgents(id, input.agents);
         welcomed.add(id);
         return {
@@ -501,17 +509,23 @@ export function hostChatActions(
       ): Promise<{ readonly id: string; readonly onlineUntil: number }> => {
         const db = dbOf(ctx);
         const known = await welcome(host, db);
-        const { onlineUntil } = await deps.store.reportHost(db, host, host.host, {
-          protocol: known.protocol,
-          name: known.name,
-          platform: known.platform,
-          agents: input.agents,
-          devices: input.devices,
-          presenceDue: input.presenceDue,
-          agentsCheckedAt: input.agentsChecked ? Date.now() : undefined,
-          online: input.online,
-          ttlMs: 2 * deps.heartbeatMs,
-        });
+        const { onlineUntil, written } = await deps.store.reportHost(
+          db,
+          host,
+          host.host,
+          {
+            protocol: known.protocol,
+            name: known.name,
+            platform: known.platform,
+            agents: input.agents,
+            devices: input.devices,
+            presenceDue: input.presenceDue,
+            agentsCheckedAt: input.agentsChecked ? Date.now() : undefined,
+            online: input.online,
+            ttlMs: deps.onlineTtlMs ?? 2 * deps.heartbeatMs,
+          },
+        );
+        deps.hostReported?.(host, host.host, input.online, written);
         learnAgents(host.host.hostId, input.agents);
         return { id: host.host.hostId, onlineUntil };
       },

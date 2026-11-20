@@ -32,8 +32,23 @@ export interface DataProvider<TDb = unknown> {
     handler: (payload: string) => void,
     options?: ListenOptions,
   ): Promise<Unlisten>;
+  /**
+   * Sends `payload` to every `listen` handler of `channel`: when `tx` commits, or at once
+   * without one. What a transaction notifies is dropped when it rolls back. A payload stays
+   * under 8000 bytes, the limit of Postgres NOTIFY.
+   */
+  notify?(channel: string, payload: string, tx?: TDb): Promise<void>;
+  /**
+   * Where `listen` hears from. `process`: what this process itself notifies, with no
+   * connection to hold or lose, which is everything when it is the app's only server.
+   * `database`: every server on the database, over a connection each one holds open.
+   * A provider without it is read as `database`.
+   */
+  readonly notifications?: NotificationReach | undefined;
   close?(): Promise<void>;
 }
+
+export type NotificationReach = "process" | "database";
 
 export interface ActionContext {
   readonly scope: string;

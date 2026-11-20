@@ -23,6 +23,17 @@ describe("appServerEnv", () => {
     });
   });
 
+  it("tells the server whether it is the app's only one under PARLOR_INSTANCES, when the config says", () => {
+    const config = parseConfig({
+      app: { id: "dev.parlor.test", name: "Test" },
+      server: { instances: "one" },
+    });
+    expect(appServerEnv(config)).toEqual({
+      PARLOR_APP_NAME: "Test",
+      PARLOR_INSTANCES: "one",
+    });
+  });
+
   it("hands the server the app's URL scheme under PARLOR_APP_SCHEME, which native sign-in returns to", () => {
     const config = parseConfig({
       app: { id: "dev.parlor.test", name: "Test", scheme: "test" },

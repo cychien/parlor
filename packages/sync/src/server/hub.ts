@@ -1,7 +1,13 @@
 import type { DataProvider, Unlisten } from "@parlor/core";
 
-import { SYNC_CHANNEL, type SyncEvent } from "../protocol.js";
-import { parseNotifyPayload } from "./store.js";
+import { cursorOf, SYNC_CHANNEL, type SyncCursor, type SyncEvent } from "../protocol.js";
+import {
+  MAX_BATCH,
+  parseNotifyPayload,
+  readSyncHead,
+  readSyncTail,
+  type SyncDatabase,
+} from "./store.js";
 
 export type SyncSubscriber = (event: SyncEvent) => void;
 
@@ -10,10 +16,18 @@ interface Subscription {
   readonly onStop: (() => void) | undefined;
 }
 
+const TAIL_RETRY_MS = 1000;
+
 export class SyncHub {
   readonly #subscribers = new Map<string, Set<Subscription>>();
   #unlisten: Unlisten | undefined;
   #starting: Promise<void> | undefined;
+  /** The last event read from the log; forgotten when a write finds nobody subscribed. */
+  #head: SyncCursor | undefined;
+  #heading: Promise<void> | undefined;
+  #reading = false;
+  #woken = false;
+  #retry: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly data: DataProvider) {}
 
@@ -21,28 +35,100 @@ export class SyncHub {
     return typeof this.data.listen === "function";
   }
 
+  /**
+   * No event can miss it. It hears "something was written" in its own process, over no
+   * connection that could drop, and reads what from the log in the order it committed, so a
+   * notification that never came or came out of turn costs no event.
+   */
+  get lossless(): boolean {
+    return this.canPush && this.data.notifications === "process";
+  }
+
   async start(): Promise<void> {
-    if (!this.data.listen || this.#unlisten) return;
-    const starting = (this.#starting ??= this.data
-      .listen(
-        SYNC_CHANNEL,
-        (payload) => {
-          const parsed = parseNotifyPayload(payload);
-          if (parsed) this.publish(parsed.scope, parsed.event);
-        },
-        { onLost: () => this.#reconnectEveryStream() },
-      )
-      .then(
-        (unlisten) => {
-          if (this.#starting === starting) this.#unlisten = unlisten;
-          else void unlisten();
-        },
-        (error: unknown) => {
-          if (this.#starting === starting) this.#starting = undefined;
-          throw error;
-        },
-      ));
-    await starting;
+    if (!this.data.listen) return;
+    if (!this.#unlisten) {
+      const starting = (this.#starting ??= this.data
+        .listen(
+          SYNC_CHANNEL,
+          (payload) => {
+            if (this.lossless) {
+              this.#wake();
+              return;
+            }
+            const parsed = parseNotifyPayload(payload);
+            if (parsed) this.publish(parsed.scope, parsed.event);
+          },
+          { onLost: () => this.#reconnectEveryStream() },
+        )
+        .then(
+          (unlisten) => {
+            if (this.#starting === starting) this.#unlisten = unlisten;
+            else void unlisten();
+          },
+          (error: unknown) => {
+            if (this.#starting === starting) this.#starting = undefined;
+            throw error;
+          },
+        ));
+      await starting;
+    }
+    if (this.lossless) await this.#follow();
+  }
+
+  /** Reads on from where the log stands now; a stream catches up on what came before. */
+  async #follow(): Promise<void> {
+    if (this.#head) return;
+    this.#heading ??= readSyncHead(this.#db())
+      .then((head) => {
+        this.#head ??= head;
+      })
+      .finally(() => {
+        this.#heading = undefined;
+      });
+    await this.#heading;
+  }
+
+  /** Something was written. With nobody subscribed it only forgets its place, so the next subscriber starts from where the log is then. */
+  #wake(): void {
+    if (this.#subscribers.size === 0) {
+      this.#head = undefined;
+      return;
+    }
+    if (this.#reading) {
+      this.#woken = true;
+      return;
+    }
+    void this.#tail();
+  }
+
+  async #tail(): Promise<void> {
+    this.#reading = true;
+    try {
+      do {
+        this.#woken = false;
+        const head = this.#head;
+        if (!head || this.#subscribers.size === 0) return;
+        const found = await readSyncTail(this.#db(), head);
+        if (this.#head !== head) return;
+        for (const { scope, event } of found) this.publish(scope, event);
+        const last = found.at(-1);
+        if (last) this.#head = cursorOf(last.event);
+        if (found.length >= MAX_BATCH) this.#woken = true;
+      } while (this.#woken);
+    } catch (error) {
+      console.error("[parlor] sync: reading new events failed, trying again:", error);
+      this.#retry ??= setTimeout(() => {
+        this.#retry = undefined;
+        this.#wake();
+      }, TAIL_RETRY_MS);
+      (this.#retry as { unref?: () => void }).unref?.();
+    } finally {
+      this.#reading = false;
+    }
+  }
+
+  #db(): SyncDatabase {
+    return this.data.read() as SyncDatabase;
   }
 
   #reconnectEveryStream(): void {
@@ -63,7 +149,9 @@ export class SyncHub {
     this.#subscribers.set(scope, set);
     return () => {
       set.delete(subscription);
-      if (set.size === 0) this.#subscribers.delete(scope);
+      if (set.size === 0 && this.#subscribers.get(scope) === set) {
+        this.#subscribers.delete(scope);
+      }
     };
   }
 
@@ -81,5 +169,8 @@ export class SyncHub {
     this.#unlisten = undefined;
     this.#starting = undefined;
     this.#subscribers.clear();
+    this.#head = undefined;
+    if (this.#retry !== undefined) clearTimeout(this.#retry);
+    this.#retry = undefined;
   }
 }

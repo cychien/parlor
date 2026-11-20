@@ -151,13 +151,14 @@ describe("buildServer", () => {
       join(rootDir, "server.ts"),
       [
         'const transport = (value = process.env.PARLOR_SYNC_TRANSPORT) => value ?? "unset";',
+        'const instances = (value = process.env.PARLOR_INSTANCES) => value ?? "unset";',
         "let ui: (() => unknown) | undefined;",
         "export default {",
         "  installUiManifest: (source: () => unknown) => { ui = source; },",
         "  fetch: (request: Request) => {",
         "    const path = new URL(request.url).pathname;",
         '    if (!path.startsWith("/_parlor/")) return new Response(null, { status: 404, headers: { "x-parlor-unrouted": "1" } });',
-        "    return Response.json({ path, transport: transport(), ui: ui?.() ?? null });",
+        "    return Response.json({ path, transport: transport(), instances: instances(), ui: ui?.() ?? null });",
         "  },",
         "};",
       ].join("\n"),
@@ -206,6 +207,7 @@ describe("buildServer", () => {
       await expect(api.json()).resolves.toEqual({
         path: "/_parlor/ping",
         transport: "sse",
+        instances: "unset",
         ui: { protocol: 1, routes: [{ path: "/settings" }] },
       });
       const asset = await fetch(`http://localhost:${port}/assets/a.js`);
@@ -513,7 +515,7 @@ describe("buildServer for cloudflare-durable", () => {
         "  fetch: (request: Request) => {",
         "    const path = new URL(request.url).pathname;",
         "    served += 1;",
-        '    if (path.startsWith("/_parlor/") || path === "/webhooks/pay") return Response.json({ path, served, ui: ui?.() ?? null, migrations, transport: process.env.PARLOR_SYNC_TRANSPORT ?? null });',
+        '    if (path.startsWith("/_parlor/") || path === "/webhooks/pay") return Response.json({ path, served, ui: ui?.() ?? null, migrations, transport: process.env.PARLOR_SYNC_TRANSPORT ?? null, instances: process.env.PARLOR_INSTANCES ?? null });',
         '    return new Response(null, { status: 404, headers: { "x-parlor-unrouted": "1" } });',
         "  },",
         "};",
@@ -595,6 +597,7 @@ describe("buildServer for cloudflare-durable", () => {
         ui: { protocol: 1, routes: [{ path: "/settings" }] },
         migrations: { migrations: 1 },
         transport: "sse",
+        instances: "one",
       });
       const objects = await fetch(
         `http://127.0.0.1:${port}/cdn-cgi/local/explorer/api/workers/durable_objects/namespaces/dev-parlor-hostcf-ParlorServer/objects`,

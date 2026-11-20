@@ -20,4 +20,6 @@ export {
   type RecordSyncEventInput,
   RETENTION_MS,
   type SyncDatabase,
+  type SyncNotify,
+  syncNotifyOf,
 } from "./store.js";

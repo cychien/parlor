@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 
-import { asId, type Principal } from "@parlor/core";
+import { asId, type DataProvider, type Principal } from "@parlor/core";
 import { createDatabase, type DatabaseHandle } from "@parlor/data";
 import { sql } from "drizzle-orm";
 import { H3 } from "h3";
@@ -174,6 +174,51 @@ describe("sync routes", () => {
     );
     expect(response.headers.get("connection")).toBe("close");
     await response.body!.cancel();
+  });
+});
+
+describe("a hub that hears every event in its own process", () => {
+  const served = (data: DataProvider, build: (() => string | undefined) | undefined) => {
+    const own = new H3();
+    registerSyncRoutes(own, {
+      basePath: "/_parlor",
+      data,
+      hub: new SyncHub(data),
+      scope: () => "default",
+      ...(build ? { build } : {}),
+    });
+    return (path: string, method = "GET") =>
+      own.fetch(new Request(`http://app.test${path}`, { method }));
+  };
+  const negotiated = async (fetch: ReturnType<typeof served>) =>
+    (await (await fetch("/_parlor/sync/token", "POST")).json()) as { safety?: string };
+
+  it("advises watching the build in place of polling, once it names one", async () => {
+    expect(await negotiated(served(handle, () => "build-a"))).toMatchObject({
+      safety: "build",
+    });
+    expect((await negotiated(served(handle, undefined))).safety).toBeUndefined();
+    expect((await negotiated(served(handle, () => undefined))).safety).toBeUndefined();
+  });
+
+  it("advises nothing when events come over a connection that can drop", async () => {
+    const lossy: DataProvider = { ...handle, notifications: "database" };
+    expect((await negotiated(served(lossy, () => "build-a"))).safety).toBeUndefined();
+  });
+
+  it("answers its build without reading the database", async () => {
+    const reads = vi.fn();
+    const counted: DataProvider = {
+      ...handle,
+      read: () => {
+        reads();
+        return handle.read();
+      },
+    };
+    const response = await served(counted, () => "build-a")("/_parlor/sync/build");
+    expect(response.headers.get("x-parlor-build")).toBe("build-a");
+    await expect(response.json()).resolves.toEqual({ build: "build-a" });
+    expect(reads).not.toHaveBeenCalled();
   });
 });
 

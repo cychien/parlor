@@ -23,6 +23,7 @@ import { defineConfig } from "@parlor/config";
 | `server.port`                                          | `3000`                       | the server's port in development, or the next free one                                                         |
 | `server.url`                                           | none                         | the public server origin native shells call                                                                    |
 | `server.sync.transport`                                | by preset                    | `sse` or `poll`                                                                                                |
+| `server.instances`                                     | by preset                    | `one` when a single server serves the app, `many` when several may; see [Deploy](/parlor/guides/deploy/)       |
 | `web.port`                                             | `5173`                       | the web app's port in development, or the next free one                                                        |
 | `web.pwa`, `web.themeColor`, `web.backgroundColor`     | `true`, `#ffffff`, `#ffffff` | the installable web app; its manifest takes its language from `<html lang>` in `index.html`                    |
 | `web.icons`                                            | none                         | the installed app's icons: `{ src, sizes, type?, purpose? }`, files in `public/`; Android needs 192 and 512 px |

@@ -7,6 +7,7 @@ import {
   encodeCursor,
   INITIAL_CURSOR,
   LEGACY_KEEP_ALIVE_MS,
+  SYNC_BUILD_PATH,
   type SyncBatch,
   type SyncCursor,
   type SyncEvent,
@@ -182,6 +183,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
   let cursor: SyncCursor = INITIAL_CURSOR;
   let transport: "sse" | "poll" | undefined;
   let negotiated: "sse" | "poll" | undefined;
+  let safety: SyncNegotiation["safety"];
   let interrupted = false;
   let running = false;
   let controller: AbortController | undefined;
@@ -247,6 +249,10 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     cursor === INITIAL_CURSOR ? (options.startAt?.() ?? "") : encodeCursor(cursor);
   const missedSince = () =>
     `since=${encodeURIComponent(since())}${options.onReset ? "&reset=1" : ""}`;
+  /** The server offered a stream that misses nothing, whose client watches the build itself. */
+  const offeredBuildWatch = () => transport === "sse" && safety === "build";
+  /** Only an open stream misses nothing: until it is greeted, the safety net polls for events. */
+  const watchesBuild = () => offeredBuildWatch() && live?.greeted === true;
 
   const take = (batch: SyncBatch) => {
     if (!batch.reset) {
@@ -272,6 +278,30 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     if (running && negotiated === "poll") resumed();
   };
 
+  const checkBuild = async (mine: number) => {
+    // Read from the body: another origin's page, as in a shell, sees only the headers CORS exposes.
+    const build = await withTimeout(async (signal) => {
+      const response = await options.request(`${basePath}${SYNC_BUILD_PATH}`, { signal });
+      if (response.status === 404) {
+        await response.body?.cancel();
+        return undefined;
+      }
+      if (!response.ok) {
+        throw new Error(`sync build check failed with HTTP ${response.status}`);
+      }
+      const answer = (await response.json().catch(() => undefined)) as
+        | { readonly build?: unknown }
+        | undefined;
+      return typeof answer?.build === "string" && answer.build !== ""
+        ? answer.build
+        : undefined;
+    });
+    if (mine !== epoch) throw new StaleRequest();
+    // No build is not the server that offered to be watched: reopen and negotiate with what answers now.
+    if (build) observeBuild(build);
+    else live?.move();
+  };
+
   const schedulePoll = (ms: number) => {
     if (!running) return;
     if (pollTimer !== undefined) cancel(pollTimer);
@@ -279,7 +309,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
       pollTimer = undefined;
       let halted = false;
       const mine = epoch;
-      void poll(mine)
+      void (watchesBuild() ? checkBuild(mine) : poll(mine))
         .catch((error: unknown) => {
           if (error instanceof StaleRequest || mine !== epoch) {
             halted = true;
@@ -330,6 +360,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
   interface LiveStream {
     listed: ReadonlySet<string>;
     readonly open: Set<ClientChannel>;
+    greeted: boolean;
     build: string | undefined;
     /** Ends the stream to reopen it at once, on the build that answers now. */
     readonly move: () => void;
@@ -366,6 +397,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     const current: LiveStream = {
       listed: new Set(),
       open,
+      greeted: false,
       build: undefined,
       move: () => {
         moved = true;
@@ -375,7 +407,8 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
     live = current;
     rearm();
     try {
-      const response = await options.request(`${endpoint}?${missedSince()}`, {
+      const watching = offeredBuildWatch() ? "&safety=build" : "";
+      const response = await options.request(`${endpoint}?${missedSince()}${watching}`, {
         headers: { accept: "text/event-stream" },
         signal: own.signal,
       });
@@ -399,6 +432,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
           if (frame.event === "handshake") {
             const handshake = parseHandshake(frame.data);
             keepAliveMs = handshake.keepAliveMs ?? LEGACY_KEEP_ALIVE_MS;
+            current.greeted = true;
             current.build = handshake.build ?? current.build;
             rearm();
             current.listed = new Set(handshake.capabilities);
@@ -461,6 +495,7 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
         if (!active()) return;
         negotiatedPollMs = negotiation.pollIntervalMs;
         negotiated = negotiation.transport;
+        safety = negotiation.safety === "build" ? "build" : undefined;
         guarded(() => options.onNegotiated?.(negotiation.transport));
         if (negotiation.transport === "poll") {
           transport = "poll";
