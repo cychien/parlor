@@ -31,6 +31,7 @@ import {
   type TurnId,
 } from "@parlor/core";
 import type { ClientChannel } from "@parlor/sync";
+import type { SyncTransport } from "@parlor/sync/client";
 
 import { generateClientId } from "../../action-client.js";
 import type { PluginClient } from "../../plugin-client.js";
@@ -243,8 +244,8 @@ export interface ChatRuntimeDeps {
   readonly onSyncTags: (listener: (tags: readonly Tag[]) => void) => () => void;
   readonly onResume: (listener: () => void) => () => void;
   /** What the server negotiated for sync; `undefined` until it has. */
-  readonly transport: () => "sse" | "poll" | undefined;
-  readonly onNegotiated: (listener: (transport: "sse" | "poll") => void) => () => void;
+  readonly transport: () => SyncTransport | undefined;
+  readonly onNegotiated: (listener: (transport: SyncTransport) => void) => () => void;
   readonly isHidden?: (() => boolean) | undefined;
   readonly auth:
     | Partial<DeviceSource & HostAuthorizer & DeviceLinker & ComputerDisconnector>

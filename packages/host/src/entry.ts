@@ -176,6 +176,8 @@ export default {
 export interface DurableServerOptions {
   readonly serverEntry: string;
   readonly connectionScopes: boolean;
+  /** The app has `@parlor/server`, whose sockets outlast the object's hibernation. */
+  readonly sockets?: boolean | undefined;
   /** The app's own Worker exports, such as its Durable Object classes. */
   readonly workerExports?: string | undefined;
 }
@@ -183,14 +185,17 @@ export interface DurableServerOptions {
 /**
  * The app's server, imported on the Durable Object's first request: workerd allows no I/O
  * or timers while a module loads, and server.ts may await its database at the top level.
+ * The object hands the server the sockets it holds while it hibernates (`installSockets`),
+ * answers their pings without waking, and passes their closes and its alarm on.
  */
 export function durableServerSource({
   serverEntry,
   connectionScopes,
+  sockets,
   workerExports,
 }: DurableServerOptions): string {
   return `import { DurableObject } from "cloudflare:workers";
-${connectionScopes ? 'import { createConnectionScope } from "@parlor/data";\n' : ""}${workerExports ? `export * from ${JSON.stringify(workerExports)};\n` : ""}
+${sockets ? 'import { hostedSockets } from "@parlor/server";\n' : ""}${connectionScopes ? 'import { createConnectionScope } from "@parlor/data";\n' : ""}${workerExports ? `export * from ${JSON.stringify(workerExports)};\n` : ""}
 const UI_MANIFEST = ${UI_MANIFEST_PLACEHOLDER};
 
 let loading;
@@ -202,8 +207,38 @@ function app() {
 }
 
 export class ${DURABLE_SERVER_CLASS} extends DurableObject {
-${connectionScopes ? "  #connections = createConnectionScope();\n\n" : ""}  fetch(request) {
-    ${connectionScopes ? "return this.#connections.run(async () => (await app()).fetch(request));" : "return app().then((server) => server.fetch(request));"}
+${connectionScopes ? "  #connections = createConnectionScope();\n" : ""}  #sockets;
+
+  constructor(ctx, env) {
+    super(ctx, env);
+${sockets ? "    this.#sockets = hostedSockets(ctx);\n" : ""}
+  }
+
+  #serve(work) {
+    const run = async () => {
+      const server = await app();
+      if (this.#sockets) server.installSockets?.(this.#sockets);
+      return work(server);
+    };
+    return ${connectionScopes ? "this.#connections.run(run)" : "run()"};
+  }
+
+  fetch(request) {
+    return this.#serve((server) => server.fetch(request));
+  }
+
+  webSocketMessage() {}
+
+  webSocketClose(socket) {
+    return this.#serve((server) => this.#sockets && server.socketClosed?.(this.#sockets.of(socket)));
+  }
+
+  webSocketError(socket) {
+    return this.webSocketClose(socket);
+  }
+
+  alarm() {
+    return this.#serve((server) => server.alarm?.());
   }
 }
 `;

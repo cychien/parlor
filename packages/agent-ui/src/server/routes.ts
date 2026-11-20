@@ -1,5 +1,6 @@
 import type { H3 } from "h3";
 
+import type { ClientMessage } from "../protocol.js";
 import type { AgentUi } from "./agent-ui.js";
 import { parseClientMessage } from "./schemas.js";
 
@@ -10,6 +11,8 @@ export interface AgentUiRouteOptions {
   readonly agentUi: AgentUi;
   readonly audience: (request: Request) => string | Promise<string>;
   readonly clientId: (request: Request) => string | undefined;
+  /** A client's message the server took, for a server that keeps its last presence elsewhere too. */
+  readonly accepted?: ((clientId: string, message: ClientMessage) => void) | undefined;
 }
 
 const status = (code: number) => new Response(null, { status: code });
@@ -38,6 +41,7 @@ export function registerAgentUiRoutes(app: H3, options: AgentUiRouteOptions): vo
     if (!message) return status(400);
     const receipt = agentUi.receive(id, await audience(request), message);
     if (!receipt.accepted) return status(404);
+    options.accepted?.(id, message);
     if (receipt.next === undefined) return status(204);
     return new Response(receipt.next, {
       headers: { "content-type": "application/json" },

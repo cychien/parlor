@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createSyncClient, SyncRequestTimeout, SyncUnauthorized } from "./sync-client.js";
+import {
+  createSyncClient,
+  type SyncConnect,
+  type SyncSocketEvents,
+  SyncRequestTimeout,
+  SyncUnauthorized,
+} from "./sync-client.js";
 
 function sseBody(frames: string[], { end = false } = {}) {
   const encoder = new TextEncoder();
@@ -269,6 +275,168 @@ describe("createSyncClient", () => {
       build = "b";
       await vi.advanceTimersByTimeAsync(1100);
       expect(streams).toHaveLength(2);
+      client.stop();
+    });
+  });
+
+  describe("over a socket", () => {
+    interface Opened {
+      readonly path: string;
+      readonly on: SyncSocketEvents;
+      readonly sent: string[];
+      closed: boolean;
+    }
+    const serve = () => {
+      const calls: string[] = [];
+      const sockets: Opened[] = [];
+      const request = vi.fn(async (path: string) => {
+        calls.push(path);
+        if (path.includes("/sync/token")) {
+          return path.includes("transports=ws")
+            ? Response.json({
+                protocol: 1,
+                transport: "ws",
+                endpoint: "/_parlor/sync/socket",
+                pollIntervalMs: 2000,
+                ticket: `ticket-${sockets.length + 1}`,
+              })
+            : Response.json({
+                protocol: 1,
+                transport: "sse",
+                endpoint: "/_parlor/sync/stream",
+                pollIntervalMs: 2000,
+              });
+        }
+        if (path.includes("/sync/stream")) {
+          return new Response(sseBody([]), {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          });
+        }
+        return Response.json({ events: [], cursor: "" });
+      });
+      const connect: SyncConnect = (path, on) => {
+        const opened: Opened = { path, on, sent: [], closed: false };
+        sockets.push(opened);
+        return {
+          send: (data) => opened.sent.push(data),
+          close: () => {
+            opened.closed = true;
+          },
+        };
+      };
+      return { calls, sockets, request, connect };
+    };
+    const greet = (socket: Opened, extra: object = {}) => {
+      socket.on.open();
+      socket.on.message(
+        JSON.stringify({
+          event: "handshake",
+          data: JSON.stringify({
+            protocol: 1,
+            capabilities: [],
+            presence: true,
+            pingMs: 1000,
+            ...extra,
+          }),
+        }),
+      );
+    };
+    const polls = (calls: string[]) => calls.filter((path) => path.includes("/sync?"));
+
+    it("offers sockets, opens one with its ticket, takes its events and holds it as presence", async () => {
+      const { calls, sockets, request, connect } = serve();
+      const onEvents = vi.fn();
+      const client = createSyncClient({
+        request,
+        connect,
+        onEvents,
+        coalesceMs: 10,
+        safetyPollMs: 1000,
+      });
+      client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls[0]).toBe("/_parlor/sync/token?transports=ws");
+      expect(sockets.map((socket) => socket.path)).toEqual([
+        "/_parlor/sync/socket?since=&ticket=ticket-1",
+      ]);
+      expect(client.transport).toBe("ws");
+      expect(client.presence).toBe(false);
+      greet(sockets[0]!);
+      expect(client.presence).toBe(true);
+      sockets[0]!.on.message(
+        JSON.stringify({
+          event: "message",
+          data: JSON.stringify({ events: [event(4, "w")], cursor: "4.w" }),
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(20);
+      expect(onEvents).toHaveBeenCalledWith([event(4, "w")]);
+      expect(client.cursor).toBe("4.w");
+
+      for (let tick = 0; tick < 3; tick += 1) {
+        await vi.advanceTimersByTimeAsync(1000);
+        sockets[0]!.on.message("pong");
+      }
+      expect(sockets[0]!.sent).toEqual(["ping", "ping", "ping"]);
+      expect(polls(calls)).toEqual([]);
+      expect(sockets).toHaveLength(1);
+      client.stop();
+      expect(sockets[0]!.closed).toBe(true);
+      expect(client.presence).toBe(false);
+    });
+
+    it("drops a socket that stops answering and opens another from its cursor", async () => {
+      const { sockets, request, connect } = serve();
+      const client = createSyncClient({
+        request,
+        connect,
+        onEvents: vi.fn(),
+        coalesceMs: 0,
+        reconnectBaseMs: 10,
+        reconnectMaxMs: 10,
+        random: () => 0,
+      });
+      client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      greet(sockets[0]!);
+      sockets[0]!.on.message(
+        JSON.stringify({
+          event: "message",
+          data: JSON.stringify({ events: [event(9, "z")], cursor: "9.z" }),
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(7100);
+      expect(sockets[0]!.closed).toBe(true);
+      expect(sockets).toHaveLength(2);
+      expect(sockets[1]!.path).toBe("/_parlor/sync/socket?since=9.z&ticket=ticket-2");
+      client.stop();
+    });
+
+    it("polls, as ever, while its socket is not open", async () => {
+      const { calls, sockets, request, connect } = serve();
+      const client = createSyncClient({
+        request,
+        connect,
+        onEvents: vi.fn(),
+        safetyPollMs: 1000,
+      });
+      client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1100);
+      expect(sockets[0]!.closed).toBe(false);
+      expect(polls(calls)).toHaveLength(1);
+      client.stop();
+    });
+
+    it("offers nothing without a way to open sockets, and keeps server-sent events", async () => {
+      const { calls, sockets, request } = serve();
+      const client = createSyncClient({ request, onEvents: vi.fn() });
+      client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls[0]).toBe("/_parlor/sync/token");
+      expect(client.transport).toBe("sse");
+      expect(sockets).toEqual([]);
       client.stop();
     });
   });

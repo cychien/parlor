@@ -17,6 +17,11 @@ export interface ChannelConnection {
   readonly principal?: Principal | undefined;
   /** Aborts when the stream ends, including when its holder's credential is revoked. */
   readonly closed?: AbortSignal | undefined;
+  /**
+   * The server learns when its holder stops answering, so while it lasts the holder is
+   * there: a socket whose pings the platform times. A server-sent stream is not.
+   */
+  readonly watched?: boolean | undefined;
   send(data: string): void;
 }
 

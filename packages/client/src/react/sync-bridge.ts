@@ -1,4 +1,5 @@
 import type { ClientChannel, SyncEvent } from "@parlor/sync";
+import type { SyncTransport } from "@parlor/sync/client";
 import type { SyncClient } from "@parlor/sync/client";
 
 export interface FrameworkSync {
@@ -10,9 +11,9 @@ export interface FrameworkSync {
    */
   onResume(listener: () => void): () => void;
   /** What the server negotiated; `undefined` until it has, and while no client is attached. */
-  transport(): "sse" | "poll" | undefined;
+  transport(): SyncTransport | undefined;
   /** The server negotiated a transport, on every connect. */
-  onNegotiated(listener: (transport: "sse" | "poll") => void): () => void;
+  onNegotiated(listener: (transport: SyncTransport) => void): () => void;
 }
 
 export class SyncBridge implements FrameworkSync {
@@ -20,9 +21,9 @@ export class SyncBridge implements FrameworkSync {
   readonly #listeners = new Set<(events: readonly SyncEvent[]) => void>();
   readonly #detachers = new Map<ClientChannel, () => void>();
   readonly #resumers = new Set<() => void>();
-  readonly #negotiators = new Set<(transport: "sse" | "poll") => void>();
+  readonly #negotiators = new Set<(transport: SyncTransport) => void>();
   #client: SyncClient | undefined;
-  #transport: "sse" | "poll" | undefined;
+  #transport: SyncTransport | undefined;
 
   addChannel(channel: ClientChannel): () => void {
     this.#channels.add(channel);
@@ -44,16 +45,16 @@ export class SyncBridge implements FrameworkSync {
     return () => this.#resumers.delete(listener);
   }
 
-  transport(): "sse" | "poll" | undefined {
+  transport(): SyncTransport | undefined {
     return this.#transport;
   }
 
-  onNegotiated(listener: (transport: "sse" | "poll") => void): () => void {
+  onNegotiated(listener: (transport: SyncTransport) => void): () => void {
     this.#negotiators.add(listener);
     return () => this.#negotiators.delete(listener);
   }
 
-  negotiated(transport: "sse" | "poll"): void {
+  negotiated(transport: SyncTransport): void {
     this.#transport = transport;
     for (const listener of [...this.#negotiators]) listener(transport);
   }

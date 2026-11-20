@@ -242,7 +242,7 @@ export function chat(options: ChatOptions = {}): ServerPlugin {
           beat: liveness.beat,
           heard: liveness.heard,
         }),
-        channel: relay.channel,
+        channel: liveness.joined?.(relay.channel) ?? relay.channel,
         ...(options.ui ? { tools: [chatShowTool(options.ui)] } : {}),
         start: () => liveness.start(),
         close: () => {

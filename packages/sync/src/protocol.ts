@@ -68,9 +68,12 @@ export interface SyncBatch {
 
 export interface SyncNegotiation {
   readonly protocol: typeof SYNC_PROTOCOL_VERSION;
-  readonly transport: "sse" | "poll";
+  /** `ws` only for a client that offered it (`?transports=ws`) and a server whose platform holds sockets. */
+  readonly transport: "sse" | "poll" | "ws";
   readonly endpoint: string;
   readonly pollIntervalMs: number;
+  /** With `ws`: what the socket's URL carries in place of a credential, which a socket cannot send. */
+  readonly ticket?: string | undefined;
   /**
    * `build`: no event can miss the stream, so while it is open the client polls for none.
    * It only asks `SYNC_BUILD_PATH` which build answers now, to leave a stream that a deploy
@@ -82,3 +85,16 @@ export interface SyncNegotiation {
 
 /** Answers the server's build to anyone, touching neither the database nor a session. */
 export const SYNC_BUILD_PATH = "/sync/build";
+
+/** Where a client opens a socket the server's platform holds while the server sleeps. */
+export const SYNC_SOCKET_PATH = "/sync/socket";
+/** What a client sends on its socket to learn it still stands; the platform answers `SOCKET_PONG` on its own. */
+export const SOCKET_PING = "ping";
+export const SOCKET_PONG = "pong";
+export const DEFAULT_SOCKET_PING_MS = 30_000;
+
+/** One frame on a socket: what a server-sent event of that name carries. */
+export interface SocketFrame {
+  readonly event: string;
+  readonly data: string;
+}

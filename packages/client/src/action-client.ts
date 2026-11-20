@@ -65,6 +65,8 @@ export interface ActionClient<T extends ActionMap> {
     options?: CallOptions,
   ): Promise<ActionEnvelope<ActionOutput<T[K]>>>;
   request(path: string, init?: RequestInit): Promise<Response>;
+  /** The origin `request` reaches, for a socket to the same server; undefined when unknown. */
+  origin?(): string | undefined;
   /** Hears every response the client gets, such as the sync client reading the server's build. */
   onResponse?(listener: (response: Response) => void): () => void;
 }
@@ -201,6 +203,13 @@ export function createActionClient<T extends ActionMap>(
     basePath,
     request,
     invoke,
+    origin() {
+      try {
+        return new URL(baseUrl || "/", globalThis.location?.href).origin;
+      } catch {
+        return undefined;
+      }
+    },
     onResponse(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);

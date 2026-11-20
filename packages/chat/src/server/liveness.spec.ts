@@ -1,5 +1,6 @@
 import type { HostPrincipal, Tag } from "@parlor/core";
 import type { DatabaseHandle } from "@parlor/data";
+import type { ServerChannel } from "@parlor/sync";
 import {
   afterAll,
   afterEach,
@@ -265,6 +266,51 @@ describe.each(drivers)("the app's only server's liveness on $name", (driver) => 
     stop();
     expect(await online(mac)).toBe(true);
     expect(announced).toEqual([]);
+  });
+
+  describe("a computer's socket the platform watches", () => {
+    const inner: ServerChannel = {
+      event: "chat",
+      hosts: true,
+      connect: () => () => undefined,
+    };
+    const connect = (host: HostPrincipal, watched: boolean) =>
+      liveness.joined!(inner).connect({
+        clientId: undefined,
+        scope: owner.scope,
+        principal: host,
+        ...(watched ? { watched: true } : {}),
+        send: () => undefined,
+      });
+
+    it("keeps the computer online with no heartbeat for as long as it stays open", async () => {
+      await report(mac, false);
+      const leave = connect(mac, true);
+      await vi.waitFor(async () => expect(await online(mac)).toBe(true));
+      await pause(GRACE_MS * 3);
+      expect(await online(mac)).toBe(true);
+      expect(heartbeats).toBe(1);
+      expect(hostTags()).toEqual([[["parlor_chat_hosts", "mac"]]]);
+      leave();
+    });
+
+    it("lets the computer go a grace after it closes, and not before", async () => {
+      await hello(mac);
+      const leave = connect(mac, true);
+      leave();
+      leave();
+      await pause(HEARTBEAT_MS);
+      expect(await online(mac)).toBe(true);
+      await gone(mac);
+      expect(hostTags()).toEqual([[["parlor_chat_hosts", "mac"]]]);
+    });
+
+    it("counts a stream it does not watch for nothing", async () => {
+      await hello(mac);
+      const leave = connect(mac, false);
+      await gone(mac);
+      leave();
+    });
   });
 
   describe("a turn's lease", () => {

@@ -1,4 +1,5 @@
 import type { HostId, HostPrincipal, Tag } from "@parlor/core";
+import type { ServerChannel } from "@parlor/sync";
 
 import type { ChatOwner } from "../model.js";
 import { HOSTS_TAG } from "../tags.js";
@@ -26,6 +27,11 @@ export interface Liveness {
   beat?(owner: ChatOwner, host: HostPrincipal): Promise<string>;
   /** A heartbeat that carries only `token`; false when no computer holds it. */
   heard?(token: string): boolean;
+  /**
+   * `channel`, counting each computer's watched stream (`ChannelConnection.watched`) as it
+   * being online: a socket the platform times holds it there with no heartbeat.
+   */
+  joined?(channel: ServerChannel): ServerChannel;
   /**
    * The computer said it is online or going offline (`hostHello`, `hostReport`); `written`
    * names the write of its liveness that recorded it (`ChatStore.reportHost`).
@@ -99,6 +105,8 @@ interface Computer {
   /** What its heartbeats carry once it has one, sparing them the database a credential costs. */
   readonly token: string;
   heardAt: number;
+  /** Its watched streams; while it has one, it is online however long it says nothing. */
+  streams: number;
   /**
    * This server's write of its liveness, so nothing more is written while it stays;
    * undefined until the database has it online by this server's hand.
@@ -142,7 +150,7 @@ export function connectedLiveness(deps: LivenessDeps): Liveness {
     if (closed) return;
     let next = Infinity;
     for (const computer of computers.values()) {
-      next = Math.min(next, computer.heardAt + graceMs);
+      if (computer.streams === 0) next = Math.min(next, computer.heardAt + graceMs);
     }
     if (next === Infinity) return;
     quiet = background(setTimeout(dropQuiet, Math.max(0, next - now())));
@@ -150,7 +158,7 @@ export function connectedLiveness(deps: LivenessDeps): Liveness {
   const dropQuiet = () => {
     quiet = undefined;
     for (const computer of [...computers.values()]) {
-      if (computer.heardAt + graceMs > now()) continue;
+      if (computer.streams > 0 || computer.heardAt + graceMs > now()) continue;
       forget(computer);
       const { stored } = computer;
       const { hostId } = computer.host;
@@ -175,6 +183,7 @@ export function connectedLiveness(deps: LivenessDeps): Liveness {
         host,
         token: `${crypto.randomUUID()}${crypto.randomUUID()}`,
         heardAt: now(),
+        streams: 0,
         stored: undefined,
       };
       const signal = deps.revoked?.(host);
@@ -254,6 +263,33 @@ export function connectedLiveness(deps: LivenessDeps): Liveness {
       if (computer.stored === undefined) await store(computer);
       return computer.token;
     },
+    joined: (channel) => ({
+      event: channel.event,
+      hosts: channel.hosts,
+      connect(connection) {
+        const leave = channel.connect(connection);
+        const { principal } = connection;
+        if (!connection.watched || principal?.kind !== "host") return leave;
+        const computer = heardFrom(
+          { scope: connection.scope, userId: principal.userId },
+          principal,
+        );
+        computer.streams += 1;
+        watchQuiet();
+        if (computer.stored === undefined) {
+          store(computer).catch(failed("marking a computer online"));
+        }
+        let left = false;
+        return () => {
+          leave();
+          if (left) return;
+          left = true;
+          computer.streams -= 1;
+          computer.heardAt = now();
+          watchQuiet();
+        };
+      },
+    }),
     heard(token) {
       const computer = byToken.get(token);
       if (!computer) return false;
