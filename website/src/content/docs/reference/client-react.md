@@ -48,7 +48,7 @@ import { FrameworkProvider } from "@parlor/client/react";
 //       ^?
 ```
 
-Wraps the app: `client` (the action client), `router` (the TanStack router) and, with sign-in, `auth` (the auth client from `@parlor/auth/client`). It uses `queryClient` when given, else the router's `context.queryClient`, else a new one. When the signed-in user changes, it clears cached queries and runs the router's loaders again. With `auth`, live updates run only while someone is signed in, or while the server signs nobody in (`anonymous`): a signed-out visitor never opens a sync connection, and one the server refuses waits for the session to change instead of retrying.
+Wraps the app: `client` (the action client), `router` (the TanStack router) and, with sign-in, `auth` (the auth client from `@parlor/auth/client`). It uses `queryClient` when given, else the router's `context.queryClient`, else a new one. When the signed-in user changes, it clears cached queries and runs the router's loaders again. With `auth`, live updates run only while someone is signed in, or while the server signs nobody in (`anonymous`): a signed-out visitor never opens a sync connection, and one the server refuses waits for the session to change instead of retrying. An app whose users pick a scope per request, such as an organization sent as a header, passes `scope` (`{ current(), subscribe(listener) }`, the current choice): sync reconnects in the new scope whenever it changes, also after the server refused the old one.
 
 ## Sessions and capabilities
 
