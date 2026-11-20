@@ -16,7 +16,12 @@ import {
 
 import type { ActionClient } from "../action-client.js";
 import type { RegisteredActions } from "../register.js";
-import type { FrameworkAuth, SessionSnapshot, SessionSource } from "../session.js";
+import type {
+  FrameworkAuth,
+  ScopeSource,
+  SessionSnapshot,
+  SessionSource,
+} from "../session.js";
 import { createAgentUiRuntime } from "./agent-ui/runtime.js";
 import { type FrameworkSync, SyncBridge } from "./sync-bridge.js";
 import {
@@ -50,6 +55,12 @@ export interface FrameworkProviderProps {
    * (`authorizeHost`) gives the chat both.
    */
   readonly auth?: FrameworkAuth | undefined;
+  /**
+   * The scope the app's requests pick beyond the signed-in user, such as an organization it
+   * sends as a header. Sync reconnects in the new scope whenever it changes, also after the
+   * server refused the last one; refreshing data read in the old scope stays with the app.
+   */
+  readonly scope?: ScopeSource | undefined;
   readonly children: ReactNode;
 }
 
@@ -61,6 +72,11 @@ const serverSession = () => LOADING;
 
 const NO_SESSION: SessionSource = {
   current: () => SIGNED_OUT,
+  subscribe: () => () => {},
+};
+
+const NO_SCOPE: ScopeSource = {
+  current: () => undefined,
   subscribe: () => () => {},
 };
 
@@ -107,6 +123,7 @@ export function FrameworkProvider({
   sync = true,
   router,
   auth,
+  scope = NO_SCOPE,
   children,
 }: FrameworkProviderProps) {
   const [ownQueryClient] = useState(
@@ -124,6 +141,7 @@ export function FrameworkProvider({
     };
   });
   const epoch = useSettledIdentityEpoch(auth);
+  const scoped = useSyncExternalStore(scope.subscribe, scope.current, NO_SCOPE.current);
   const appliedEpoch = useRef(epoch);
 
   useLayoutEffect(() => {
@@ -155,7 +173,11 @@ export function FrameworkProvider({
       <IdentityEpochContext.Provider value={epoch}>
         <QueryClientProvider client={ownQueryClient}>
           {sync && (
-            <SyncConnection key={epoch} value={value} queryClient={ownQueryClient} />
+            <SyncConnection
+              key={`${epoch}:${scoped ?? ""}`}
+              value={value}
+              queryClient={ownQueryClient}
+            />
           )}
           {children}
         </QueryClientProvider>
@@ -170,8 +192,9 @@ function syncsAs(session: SessionSnapshot | undefined): boolean {
 }
 
 /**
- * One sync connection; remounted with a fresh cursor whenever the signed-in user changes. It
- * runs while the session can sync, and after the server refuses it, until the session changes.
+ * One sync connection; remounted with a fresh cursor whenever the signed-in user or the scope
+ * changes. It runs while the session can sync, and after the server refuses it, until the
+ * session or the scope changes.
  */
 function SyncConnection({
   value,

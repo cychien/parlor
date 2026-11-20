@@ -24,6 +24,16 @@ export interface SessionSource {
   subscribe(listener: () => void): () => void;
 }
 
+/**
+ * What the server's scope for this device's requests depends on besides the signed-in user,
+ * such as the organization an app sends as a header. `current` returns the same string until
+ * it changes.
+ */
+export interface ScopeSource {
+  current(): string | undefined;
+  subscribe(listener: () => void): () => void;
+}
+
 /** This device's signing identity, as the chat needs it. */
 export interface SessionDevice {
   readonly id: DeviceId;

@@ -25,6 +25,7 @@ export type {
   FrameworkAuth,
   HostAuthorizer,
   PendingLink,
+  ScopeSource,
   SessionDevice,
   SessionSnapshot,
   SessionSource,

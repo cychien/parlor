@@ -94,6 +94,26 @@ export const scope: ScopeResolver = async (request, principal) => {
 };
 ```
 
+The browser's sync connection takes its scope from the request that opened it, so tell `FrameworkProvider` when the app picks another organization. Pass `scope`, a source of the current choice, and sync reconnects in the new scope whenever it changes, also after the server refused the last one:
+
+```tsx
+import type { ActionClient, RegisteredActions, ScopeSource } from "@parlor/client";
+import { FrameworkProvider } from "@parlor/client/react";
+import type { ReactNode } from "react";
+
+declare const client: ActionClient<RegisteredActions>;
+declare const organization: ScopeSource;
+declare const app: ReactNode;
+
+export const root = (
+  <FrameworkProvider client={client} scope={organization}>
+    {app}
+  </FrameworkProvider>
+);
+```
+
+Data the page read in the old organization is still the app's to refresh, for example with `queryClient.invalidateQueries()` where it switches.
+
 ## 4. Describe the tables
 
 Port each table to Drizzle in `schema/`, add `scope`, and export it from `schema/index.ts`. Keep the old column names with `text("old_name")` if other systems read the database. Use text ids; imported rows keep their old id with a prefix.
