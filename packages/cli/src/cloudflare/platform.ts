@@ -14,7 +14,7 @@ let current: Env | undefined;
 export function platformEnv(): Env {
   if (!current) {
     throw new Error(
-      'cloudflare:workers needs deploy.preset "cloudflare-durable" in parlor.config.ts, which makes parlor dev serve the app\'s Cloudflare bindings',
+      'cloudflare:workers needs deploy.preset "cloudflare-durable" or "cloudflare-scaled" in parlor.config.ts, which makes parlor dev serve the app\'s Cloudflare bindings',
     );
   }
   return current;
@@ -51,7 +51,7 @@ export function withUnavailable(
       const className = classes.get(property);
       if (className) {
         throw new Error(
-          `env.${String(property)} is unavailable in parlor dev: it binds ${className}, a Durable Object class the app's own Worker defines, and parlor dev emulates bindings with Wrangler's getPlatformProxy(), which runs no Worker code. Run the cloudflare-durable build on wrangler dev to use it.`,
+          `env.${String(property)} is unavailable in parlor dev: it binds ${className}, a Durable Object class the app's own Worker defines, and parlor dev emulates bindings with Wrangler's getPlatformProxy(), which runs no Worker code. Run the Cloudflare build on wrangler dev to use it.`,
         );
       }
       return Reflect.get(target, property);

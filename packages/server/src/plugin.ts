@@ -22,6 +22,12 @@ import type { Caller } from "./caller.js";
 export interface ServerPlugin {
   readonly name: string;
   readonly migrations?: readonly Migration[] | undefined;
+  /**
+   * Its routes and actions keep state in memory, such as live connections and timers, so a
+   * host that splits the app (`FrameworkServer.split`) serves them in the caller's account
+   * server rather than the stateless edge.
+   */
+  readonly realtime?: boolean | undefined;
   setup(host: PluginHost): PluginRuntime;
 }
 
@@ -43,9 +49,16 @@ export interface PluginRuntime {
   audit?(record: ActionAudit): void;
   /**
    * Starts the plugin's background work, such as timers. Called once, when the server is
-   * ready for its first request: some runtimes allow no timers while the app loads.
+   * ready for its first request: some runtimes allow no timers while the app loads. A split
+   * app's stateless edge never calls it.
    */
   start?(): void;
+  /**
+   * Finishes work held back for later, such as a batch of audit records. A host where nothing
+   * runs once a request is answered, such as a split app's stateless edge, calls it after each
+   * request (`EdgeServer.settle`).
+   */
+  settle?(): Promise<void>;
   /**
    * Who may use the plugin. Everyone else gets `forbidden` from its actions and signed-in
    * routes and never joins its channel. Absent admits whoever those surfaces admit.

@@ -248,3 +248,254 @@ ${sockets ? "    this.#sockets = hostedSockets(ctx);\n" : ""}
 }
 `;
 }
+
+export const ACCOUNT_BINDING = "PARLOR_ACCOUNTS";
+export const ACCOUNT_CLASS = "ParlorAccount";
+export const TOPIC_BINDING = "PARLOR_TOPICS";
+export const TOPIC_CLASS = "ParlorTopic";
+/** Set by the Worker on what it hands an account's Durable Object; a client's own is dropped. */
+export const ACCOUNT_HEADER = "x-parlor-account";
+
+/** The Durable Object that relays one topic of one notification channel. */
+export function topicName(channel: string, topic: string): string {
+  return `${channel}\u0000${topic}`;
+}
+
+export interface ScaledEntryOptions extends DocumentOptions {
+  readonly serverEntry: string;
+  readonly locationHint?: string | undefined;
+}
+
+/**
+ * The stateless Worker of `cloudflare-scaled`: it serves the app's edge in a connection
+ * scope of its own per request, whose notifications go to the topics' Durable Objects, and
+ * hands live connections, the agent's view and stateful plugins to the caller's account
+ * object. With a Hyperdrive binding it reaches the database through it.
+ */
+export function scaledEntrySource({
+  serverEntry,
+  locationHint,
+  ...document
+}: ScaledEntryOptions): string {
+  return `import { env, waitUntil } from "cloudflare:workers";
+import { createConnectionScope } from "@parlor/data";
+
+${documentSource(document)}
+
+${locationHintForDatabase.toString()}
+
+${topicName.toString()}
+
+const UI_MANIFEST = ${UI_MANIFEST_PLACEHOLDER};
+const CONFIGURED_HINT = ${JSON.stringify(locationHint ?? null)};
+const ACCOUNT_HEADER = ${JSON.stringify(ACCOUNT_HEADER)};
+
+let loading;
+function edge() {
+  return (loading ??= (async () => {
+    if (env.HYPERDRIVE?.connectionString && process.env.DATABASE_URL) {
+      process.env.DATABASE_DIRECT_URL ??= process.env.DATABASE_URL;
+      process.env.DATABASE_URL = env.HYPERDRIVE.connectionString;
+    }
+    const { default: server } = await import(${JSON.stringify(serverEntry)});
+    const split = server.split?.();
+    if (!split) throw new Error("cloudflare-scaled serves a server from @parlor/server's createServer.");
+    split.edge.installUiManifest?.(() => UI_MANIFEST);
+    return split.edge;
+  })());
+}
+
+let accountHint;
+function account(key) {
+  accountHint ??= { hint: CONFIGURED_HINT ?? locationHintForDatabase(env.DATABASE_URL) };
+  const accounts = env.${ACCOUNT_BINDING};
+  return accounts.get(accounts.idFromName(key), accountHint.hint ? { locationHint: accountHint.hint } : {});
+}
+
+const bus = {
+  publish: (channel, topic, payload) => {
+    const topics = env.${TOPIC_BINDING};
+    return topics.get(topics.idFromName(topicName(channel, topic))).publish(channel, topic, payload, null);
+  },
+  // The edge never listens: nothing it starts outlives the request.
+  subscribe: async () => {},
+  unsubscribe: async () => {},
+};
+
+function forAccount(request, key) {
+  const headers = new Headers(request.headers);
+  headers.set(ACCOUNT_HEADER, key);
+  return new Request(request, { headers });
+}
+
+export default {
+  async fetch(request) {
+    const scope = createConnectionScope({ bus });
+    const headers = new Headers(request.headers);
+    headers.delete(ACCOUNT_HEADER);
+    const incoming = new Request(request, { headers });
+    try {
+      return await withDocument(incoming, (request) =>
+        scope.run(async () => {
+          const server = await edge();
+          let key;
+          try {
+            key = await server.placement(request);
+          } catch (error) {
+            console.error("[parlor] could not tell whose account serves a request:", error);
+            return Response.json(
+              { error: { code: "internal", message: "The server is unavailable. Try again shortly." } },
+              { status: 503 },
+            );
+          }
+          if (key === undefined) return server.fetch(request);
+          return account(key).fetch(forAccount(request, key));
+        }),
+      );
+    } finally {
+      // The scope is never closed here: work the app hands to waitUntil may still use its
+      // connections, and workerd ends them with the request once all of that has settled.
+      waitUntil(
+        scope
+          .run(async () => (await edge()).settle())
+          .catch((error) => console.error("[parlor] settling after a request failed:", error)),
+      );
+    }
+  },
+};
+`;
+}
+
+export interface ScaledServerOptions {
+  readonly serverEntry: string;
+  /** The app's own Worker exports, such as its Durable Object classes. */
+  readonly workerExports?: string | undefined;
+}
+
+/**
+ * The Durable Objects of `cloudflare-scaled`. `ParlorAccount` serves one account: its live
+ * connections as sockets it holds while it hibernates, the agent's view and stateful plugins,
+ * from a server built for it alone; it hears the topics it listens to from `ParlorTopic`,
+ * which keeps who listens to one topic and relays what is published on it.
+ */
+export function scaledServerSource({
+  serverEntry,
+  workerExports,
+}: ScaledServerOptions): string {
+  return `import { DurableObject } from "cloudflare:workers";
+import { hostedSockets } from "@parlor/server";
+import { createConnectionScope } from "@parlor/data";
+${workerExports ? `export * from ${JSON.stringify(workerExports)};\n` : ""}
+const UI_MANIFEST = ${UI_MANIFEST_PLACEHOLDER};
+const ACCOUNT_HEADER = ${JSON.stringify(ACCOUNT_HEADER)};
+const ACCOUNT_KEY = "parlor:account";
+
+${topicName.toString()}
+
+${readUnreadBody.toString()}
+
+let loading;
+function app() {
+  return (loading ??= import(${JSON.stringify(serverEntry)}).then(({ default: server }) => {
+    if (!server.split) throw new Error("cloudflare-scaled serves a server from @parlor/server's createServer.");
+    return server;
+  }));
+}
+
+export class ${ACCOUNT_CLASS} extends DurableObject {
+  #key;
+  #server;
+  #sockets;
+  #scope;
+
+  constructor(ctx, env) {
+    super(ctx, env);
+    this.#sockets = hostedSockets(ctx);
+    const topic = (channel, name) => env.${TOPIC_BINDING}.get(env.${TOPIC_BINDING}.idFromName(topicName(channel, name)));
+    this.#scope = createConnectionScope({
+      bus: {
+        publish: (channel, name, payload) => topic(channel, name).publish(channel, name, payload, this.#key),
+        subscribe: (channel, name) => topic(channel, name).subscribe(this.#key),
+        unsubscribe: (channel, name) => topic(channel, name).unsubscribe(this.#key),
+      },
+    });
+  }
+
+  async #account(given) {
+    if (this.#key) return this.#key;
+    const kept = await this.ctx.storage.get(ACCOUNT_KEY);
+    if (given && kept !== given) await this.ctx.storage.put(ACCOUNT_KEY, given);
+    this.#key = given ?? kept;
+    if (!this.#key) throw new Error("This account's Durable Object does not know its account yet.");
+    return this.#key;
+  }
+
+  #serve(given, work) {
+    return this.#scope.run(async () => {
+      const key = await this.#account(given);
+      if (!this.#server) {
+        this.#server = (await app()).split().account(key);
+        this.#server.installUiManifest?.(() => UI_MANIFEST);
+      }
+      this.#server.installSockets?.(this.#sockets);
+      return work(this.#server);
+    });
+  }
+
+  async fetch(request) {
+    const response = await this.#serve(request.headers.get(ACCOUNT_HEADER) ?? undefined, (server) => server.fetch(request));
+    await readUnreadBody(request, ${UNREAD_BODY_LIMIT_BYTES});
+    return response;
+  }
+
+  webSocketMessage() {}
+
+  webSocketClose(socket) {
+    return this.#serve(undefined, (server) => server.socketClosed?.(this.#sockets.of(socket)));
+  }
+
+  webSocketError(socket) {
+    return this.webSocketClose(socket);
+  }
+
+  alarm() {
+    return this.#serve(undefined, (server) => server.alarm?.());
+  }
+
+  /** What a topic it listens to relays; false once nobody here listens, so the topic forgets it. */
+  deliver(channel, topic, payload) {
+    return this.#serve(undefined, async (server) => {
+      await server.awaken?.();
+      return this.#scope.deliver(channel, topic, payload);
+    });
+  }
+}
+
+export class ${TOPIC_CLASS} extends DurableObject {
+  async subscribe(account) {
+    if (account) await this.ctx.storage.put("s:" + account, 1);
+  }
+
+  async unsubscribe(account) {
+    if (account) await this.ctx.storage.delete("s:" + account);
+  }
+
+  /**
+   * Relays to every account listening but the one that published, without waiting for them.
+   * An account nobody listens in any more unsubscribes itself, in turn with its own calls.
+   */
+  async publish(channel, topic, payload, from) {
+    const listening = await this.ctx.storage.list({ prefix: "s:" });
+    for (const key of listening.keys()) {
+      const account = key.slice(2);
+      if (account === from) continue;
+      const accounts = this.env.${ACCOUNT_BINDING};
+      accounts
+        .get(accounts.idFromName(account))
+        .deliver(channel, topic, payload)
+        .catch((error) => console.error("[parlor] a topic could not reach an account:", error));
+    }
+  }
+}
+`;
+}

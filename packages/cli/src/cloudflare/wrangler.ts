@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 const require = createRequire(import.meta.url);
 
 export const WRANGLER_MISSING =
-  "The cloudflare-durable preset runs the app's Cloudflare bindings in parlor dev with Wrangler. Add wrangler to the app's devDependencies.";
+  "The cloudflare-durable and cloudflare-scaled presets run the app's Cloudflare bindings in parlor dev with Wrangler. Add wrangler to the app's devDependencies.";
 
 /** The app's own Wrangler, the one that builds and deploys it: a node_modules lookup, never NODE_PATH. */
 export function resolveWrangler(rootDir: string): string | undefined {

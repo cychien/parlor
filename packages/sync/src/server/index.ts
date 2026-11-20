@@ -2,6 +2,7 @@ export { SyncHub, type SyncSubscriber } from "./hub.js";
 export { createPruner, DEFAULT_PRUNE_INTERVAL_MS, type Pruner } from "./pruner.js";
 export {
   createSyncSockets,
+  ticketAccount,
   type HeldSocket,
   type HostedSocket,
   type RestoredSocket,

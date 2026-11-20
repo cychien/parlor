@@ -8,6 +8,7 @@ import {
   decodeCursor,
   DEFAULT_KEEP_ALIVE_MS,
   encodeCursor,
+  INITIAL_CURSOR,
   type SyncBatch,
   type SyncEvent,
   type SyncNegotiation,
@@ -38,6 +39,8 @@ export type SyncTransport = "sse" | "poll";
 
 export interface SyncRouteOptions {
   readonly basePath: string;
+  /** Starts every socket ticket; see `SyncSocketsDeps.ticketPrefix`. */
+  readonly ticketPrefix?: string | undefined;
   readonly data: DataProvider;
   readonly hub: SyncHub;
   readonly scope: (request: Request) => string | Promise<string>;
@@ -200,7 +203,7 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): SyncRout
   const attach = async (
     sink: StreamSink,
     spec: StreamSpec,
-    opening?: { readonly query: MissedQuery; readonly handshake: object },
+    opening?: { readonly query: MissedQuery; readonly handshake?: object | undefined },
   ): Promise<void> => {
     const { streams } = spec;
     const send = (payload: SyncBatch) => sink.push({ data: JSON.stringify(payload) });
@@ -239,7 +242,7 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): SyncRout
     if (revoked?.aborted) closeRevoked();
     else revoked?.addEventListener("abort", closeRevoked, { once: true });
 
-    if (opening) {
+    if (opening?.handshake) {
       sink.push({
         event: "handshake",
         data: JSON.stringify({
@@ -264,6 +267,11 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): SyncRout
     if (!opening) return;
 
     const { query } = opening;
+    // Before reading what it missed: what commits after this read is heard live.
+    const head = await hub.ready(streams).catch((error: unknown) => {
+      detach();
+      throw error;
+    });
     const catchUp = async (first: SyncBatch) => {
       let missed = first;
       for (;;) {
@@ -283,6 +291,10 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): SyncRout
         .sort((a, b) => compareCursors(cursorOf(a), cursorOf(b)));
       arrivedDuringCatchUp = undefined;
       for (const syncEvent of pending) sendLive(syncEvent);
+      const reached = head && compareCursors(head, caughtUpTo) > 0 ? head : caughtUpTo;
+      if (pending.length === 0 && compareCursors(reached, INITIAL_CURSOR) > 0) {
+        sink.reached?.(encodeCursor(reached));
+      }
     };
     const first = await missedSince(db(), streams, query).catch((error: unknown) => {
       detach();
@@ -296,6 +308,7 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): SyncRout
 
   const sockets = createSyncSockets({
     hub,
+    ticketPrefix: options.ticketPrefix,
     pingMs: options.pingMs ?? DEFAULT_SOCKET_PING_MS,
     held: async (request) => {
       const authority = await options.authority?.(request);
@@ -308,7 +321,8 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): SyncRout
         revoked: authority?.revoked,
       };
     },
-    attach: (sink, held, revoked, query) =>
+    resumes: hub.onBus,
+    attach: (sink, held, revoked, query, greet) =>
       attach(
         sink,
         {
@@ -322,11 +336,15 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): SyncRout
         query
           ? {
               query: { ...query, watchesBuild: false },
-              handshake: {
-                presence: true,
-                pingMs: options.pingMs ?? DEFAULT_SOCKET_PING_MS,
-                ...(options.build?.() === undefined ? {} : { build: options.build() }),
-              },
+              handshake: greet
+                ? {
+                    presence: true,
+                    pingMs: options.pingMs ?? DEFAULT_SOCKET_PING_MS,
+                    ...(options.build?.() === undefined
+                      ? {}
+                      : { build: options.build() }),
+                  }
+                : undefined,
             }
           : undefined,
       ),

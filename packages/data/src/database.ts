@@ -19,9 +19,11 @@ import {
 import { corkWrites } from "./cork.js";
 import { migrateDatabase } from "./migrations.js";
 import {
+  type Deliver,
   heldBy,
   holdNotifications,
   isTransaction,
+  type Notification,
   ProcessChannels,
 } from "./notifications.js";
 import { once } from "./once.js";
@@ -55,8 +57,11 @@ export interface DatabaseOptions {
    * no LISTEN connection is held, so an idle server leaves the database alone, but another
    * server on the same database hears nothing. Right for the app's only server. `database`
    * sends them through Postgres NOTIFY to every server, each holding a LISTEN connection.
+   * `bus` hands them to the bus the host gives each connection scope (`createConnectionScope`),
+   * which reaches only the runtimes listening to a notification's topic.
    * Defaults to `process` when `PARLOR_INSTANCES` is `one`, which `parlor build` sets for a
-   * preset that runs a single server, and to `database` otherwise. PGlite is always `process`.
+   * preset that runs a single server, to `bus` when it is `scaled`, and to `database`
+   * otherwise. PGlite is always `process`.
    */
   readonly notifications?: NotificationReach | undefined;
   /**
@@ -71,11 +76,16 @@ const DEFAULT_PREDECESSOR_MS = 2 * 60_000;
 
 const DEFAULT_LISTEN_CHECK_MS = 10_000;
 
-/** One server serves the app, so what it holds in memory is all there is. */
+/**
+ * `one`: one server serves the app, so what it holds in memory is all there is. `scaled`: the
+ * host connects its runtimes with a bus. Anything else shares the database's NOTIFY.
+ */
 export function resolveNotifications(
   instances: string | undefined = process.env.PARLOR_INSTANCES,
 ): NotificationReach {
-  return instances === "one" ? "process" : "database";
+  if (instances === "one") return "process";
+  if (instances === "scaled") return "bus";
+  return "database";
 }
 
 /** Runs one parameterized statement (`$1`, `$2`, ...) and answers its rows, as `pg` does. */
@@ -96,7 +106,7 @@ export interface DatabaseHandle extends DataProvider<Database> {
     handler: (payload: string) => void,
     options?: ListenOptions,
   ): Promise<Unlisten>;
-  notify(channel: string, payload: string, tx?: Database): Promise<void>;
+  notify(channel: string, payload: string, tx?: Database, topic?: string): Promise<void>;
   readonly notifications: NotificationReach;
   migrate(folder: string): Promise<void>;
   close(): Promise<void>;
@@ -144,7 +154,7 @@ interface InProcess {
 /** `channels`, when given, hear what `db`'s transactions notify, once each commits. */
 function openPgConnections(
   url: string,
-  channels?: ProcessChannels,
+  deliver?: Deliver,
   onClose?: () => void,
 ): PgConnections {
   const pool = new pg.Pool({ connectionString: url });
@@ -158,7 +168,7 @@ function openPgConnections(
   });
   const listeners = new Set<pg.Client>();
   const db = drizzle(pool);
-  if (channels) holdNotifications(db, channels.deliver);
+  if (deliver) holdNotifications(db, deliver);
   return {
     pool,
     db,
@@ -221,15 +231,32 @@ function nodePostgresHandle(
     reach === "process"
       ? { channels: new ProcessChannels(), startedAt: Date.now(), forMs: predecessorMs }
       : undefined;
-  const connections = () =>
-    (currentOwner() ?? outside).connectionsFor(key, () => {
-      const created = openPgConnections(url, inProcess?.channels, () =>
-        opened.delete(created),
-      );
+  const ownerNow = () => currentOwner() ?? outside;
+  const connections = () => {
+    const owner = ownerNow();
+    return owner.connectionsFor(key, () => {
+      const deliver = reach === "bus" ? publishOn(owner) : inProcess?.channels.deliver;
+      const created = openPgConnections(url, deliver, () => opened.delete(created));
       opened.add(created);
       return created;
     });
-  const notify: DatabaseHandle["notify"] = async (channel, payload, tx) => {
+  };
+  const notifyOnBus = async (
+    channel: string,
+    payload: string,
+    tx: Database | undefined,
+    topic: string,
+  ) => {
+    const waiting = tx === undefined ? undefined : heldBy(tx);
+    if (waiting) {
+      waiting.push({ channel, payload, topic });
+      return;
+    }
+    if (isTransaction(tx)) warnUnheldTransaction();
+    await publishOn(ownerNow())([{ channel, payload, topic }]);
+  };
+  const notify: DatabaseHandle["notify"] = async (channel, payload, tx, topic = "") => {
+    if (reach === "bus") return notifyOnBus(channel, payload, tx, topic);
     // Said through the database in either case: a server that notifies in process is heard
     // there by the one replacing it, which listens as it starts.
     await (tx ?? connections().db).execute(sql`select pg_notify(${channel}, ${payload})`);
@@ -242,6 +269,8 @@ function nodePostgresHandle(
     if (isTransaction(tx)) warnUnheldTransaction();
     inProcess.channels.deliver([{ channel, payload }]);
   };
+  const listenOnBus: DatabaseHandle["listen"] = (channel, handler, options = {}) =>
+    ownerNow().topics.listen(channel, options.topic ?? "", handler);
   const listenInProcess =
     (state: InProcess): DatabaseHandle["listen"] =>
     async (channel, handler) => {
@@ -308,7 +337,12 @@ function nodePostgresHandle(
     driver: "node-postgres",
     read: () => connections().db,
     transaction: (run) => connections().db.transaction((tx) => run(tx)),
-    listen: inProcess ? listenInProcess(inProcess) : listenOnDatabase,
+    listen:
+      reach === "bus"
+        ? listenOnBus
+        : inProcess
+          ? listenInProcess(inProcess)
+          : listenOnDatabase,
     notify,
     notifications: reach,
     migrate: (folder) => migrateDirect(connections, url, directUrl, folder),
@@ -316,6 +350,20 @@ function nodePostgresHandle(
       outside.forget(key);
       await Promise.all([...opened].map((created) => created.close()));
     }),
+  };
+}
+
+/**
+ * Delivers to `owner`'s own listeners and publishes on its bus. A notification that does not
+ * reach the bus is logged rather than thrown: what it announced has already committed.
+ */
+function publishOn(owner: ConnectionOwner): Deliver {
+  return async (notified: readonly Notification[]) => {
+    for (const { channel, payload, topic = "" } of notified) {
+      await owner.topics.publish(channel, topic, payload).catch((error: unknown) => {
+        console.error(`[parlor] could not publish "${channel}" on the bus:`, error);
+      });
+    }
   };
 }
 

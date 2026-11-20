@@ -68,7 +68,7 @@ describe("registerCloudflareWorkers", () => {
       run(process.execPath, [require.resolve("tsx/cli"), "main.ts"], { cwd: rootDir }),
     ).rejects.toMatchObject({
       stderr: expect.stringContaining(
-        'cloudflare:workers needs deploy.preset "cloudflare-durable" in parlor.config.ts',
+        'cloudflare:workers needs deploy.preset "cloudflare-durable" or "cloudflare-scaled" in parlor.config.ts',
       ),
     });
   }, 30_000);

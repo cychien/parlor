@@ -1,4 +1,9 @@
-export { type ConnectionScope, createConnectionScope } from "./connection-scope.js";
+export {
+  type ConnectionScope,
+  type ConnectionScopeOptions,
+  createConnectionScope,
+  type NotificationBus,
+} from "./connection-scope.js";
 export {
   createDatabase,
   type Database,

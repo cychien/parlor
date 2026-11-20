@@ -44,6 +44,10 @@ export {
   type FrameworkServer,
   type ServerOptions,
   type SyncOptions,
+  ANONYMOUS_ACCOUNT,
+  type EdgeServer,
+  type ServerOptionsSource,
+  type SplitServer,
 } from "./create-server.js";
 export {
   DEV_AUTH_PLUGIN,

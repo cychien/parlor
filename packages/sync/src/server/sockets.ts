@@ -11,6 +11,8 @@ export interface StreamSink {
   /** Resolves once the reader has taken everything queued, or the stream ended. */
   drained(): Promise<void>;
   onClosed(listener: () => void): void;
+  /** The stream has everything up to `cursor`, whether or not a batch carried it. */
+  reached?(cursor: string): void;
 }
 
 export interface StreamSpec {
@@ -88,6 +90,8 @@ export interface HeldSocket {
   readonly channels: readonly string[];
   readonly openedAt: number;
   readonly remembered?: unknown;
+  /** The last sync batch's cursor sent on it, to send what it missed once it is wired again. */
+  readonly cursor?: string | undefined;
 }
 
 export interface SyncSocketsDeps {
@@ -103,9 +107,25 @@ export interface SyncSocketsDeps {
     held: HeldSocket,
     revoked: AbortSignal | undefined,
     query: Omit<MissedQuery, "watchesBuild"> | undefined,
+    /** False for a socket wired again, whose client was greeted when it opened. */
+    greet: boolean,
   ) => Promise<void>;
+  /**
+   * Others write while the server sleeps (another runtime on the bus), so a socket wired again
+   * catches up from the last cursor it was sent. Otherwise nothing is written meanwhile.
+   */
+  readonly resumes?: boolean | undefined;
   readonly restored?: ((socket: RestoredSocket) => void) | undefined;
   readonly now?: (() => number) | undefined;
+  /** Starts every ticket, so a host can tell which runtime issued it (`ticketAccount`). */
+  readonly ticketPrefix?: string | undefined;
+}
+
+const TICKET_ACCOUNT = /^([A-Za-z0-9_-]+)\./;
+
+/** The account a ticket's prefix names, for a host that routes a socket to the runtime that issued it. */
+export function ticketAccount(ticket: string): string | undefined {
+  return TICKET_ACCOUNT.exec(ticket)?.[1];
 }
 
 const TICKET_TTL_MS = 30_000;
@@ -131,6 +151,20 @@ interface Wired {
   end(): void;
 }
 
+/** The cursor of a sync batch frame, which carries no event name. */
+function cursorOfFrame(frame: {
+  readonly event?: string | undefined;
+  readonly data: string;
+}) {
+  if (frame.event !== undefined && frame.event !== "message") return undefined;
+  try {
+    const cursor = (JSON.parse(frame.data) as { cursor?: unknown }).cursor;
+    return typeof cursor === "string" ? cursor : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function socketSink(entry: { readonly socket: HostedSocket }) {
   const listeners: (() => void)[] = [];
   let ended = false;
@@ -139,9 +173,18 @@ function socketSink(entry: { readonly socket: HostedSocket }) {
     ended = true;
     for (const listener of listeners.splice(0)) listener();
   };
+  const remember = (cursor: string | undefined) => {
+    const held = cursor ? heldOf(entry.socket.attachment) : undefined;
+    if (held && held.cursor !== cursor) entry.socket.attach({ ...held, cursor });
+  };
   const sink: StreamSink = {
     push({ event, data }) {
-      if (!ended) entry.socket.send(JSON.stringify({ event: event ?? "message", data }));
+      if (ended) return;
+      entry.socket.send(JSON.stringify({ event: event ?? "message", data }));
+      remember(cursorOfFrame({ event, data }));
+    },
+    reached: (cursor) => {
+      if (!ended) remember(cursor);
     },
     close() {
       if (ended) return;
@@ -183,6 +226,7 @@ export function createSyncSockets(deps: SyncSocketsDeps): SyncSockets {
     held: HeldSocket,
     revoked?: AbortSignal,
     query?: Omit<MissedQuery, "watchesBuild">,
+    greet = true,
   ): Promise<Wired> => {
     const entry: Wired = { held, socket, end: () => undefined };
     const { sink, end } = socketSink(entry);
@@ -192,7 +236,7 @@ export function createSyncSockets(deps: SyncSocketsDeps): SyncSockets {
       if (wired.get(held.id) === entry) wired.delete(held.id);
     });
     try {
-      await deps.attach(sink, held, revoked, query);
+      await deps.attach(sink, held, revoked, query, greet);
     } catch (error) {
       sink.close();
       throw error;
@@ -213,7 +257,11 @@ export function createSyncSockets(deps: SyncSocketsDeps): SyncSockets {
         entry.socket = socket;
         continue;
       }
-      await wire(socket, kept);
+      const resume =
+        deps.resumes && kept.cursor !== undefined
+          ? { since: kept.cursor, reset: false }
+          : undefined;
+      await wire(socket, kept, undefined, resume, false);
       if (kept.clientId !== undefined && kept.remembered !== undefined) {
         restored.push({
           clientId: kept.clientId,
@@ -276,7 +324,8 @@ export function createSyncSockets(deps: SyncSocketsDeps): SyncSockets {
         if (entry.expiresAt <= at) tickets.delete(ticket);
       }
       const { revoked, ...rest } = await deps.held(request);
-      const ticket = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll("-", "");
+      const random = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll("-", "");
+      const ticket = deps.ticketPrefix ? `${deps.ticketPrefix}.${random}` : random;
       tickets.set(ticket, {
         held: { parlor: 1, id: crypto.randomUUID(), ...rest, openedAt: at },
         revoked,

@@ -14,7 +14,7 @@ const database = await createDatabase({
   migrationsFolder: "migrations",
 });
 
-export default createServer({
+export default createServer(() => ({
   actions: registry,
   database,
   auth: betterAuthProvider({
@@ -24,4 +24,4 @@ export default createServer({
     },
   }),
   plugins: [chat({ ui: chatUi })],
-});
+}));

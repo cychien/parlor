@@ -29,7 +29,7 @@ export async function prepareCloudflareDev(
     if (error instanceof PresetError) throw new CliError(error.message, { cause: error });
     throw error;
   }
-  if (preset !== "cloudflare-durable") return undefined;
+  if (preset !== "cloudflare-durable" && preset !== "cloudflare-scaled") return undefined;
   if (!resolveWrangler(rootDir)) throw new CliError(WRANGLER_MISSING);
   const { wrangler, unavailable } = devWranglerConfig(config);
   const dir = join(generatedDir(rootDir, env), "cloudflare");

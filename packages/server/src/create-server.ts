@@ -35,6 +35,7 @@ import {
   syncNotifyOf,
   type SyncSockets,
   type SyncTransport,
+  ticketAccount,
 } from "@parlor/sync/server";
 import { H3, type H3Event, readBody } from "h3";
 
@@ -131,6 +132,65 @@ export interface FrameworkServer {
   readonly socketClosed?: ((socket: HostedSocket) => Promise<void>) | undefined;
   /** The alarm `SocketPlatform.wakeAt` asked for. */
   readonly alarm?: (() => Promise<void>) | undefined;
+  /**
+   * Gets ready and wires the sockets it slept through, for a runtime woken by something
+   * other than a request, such as a notification from the bus.
+   */
+  readonly awaken?: (() => Promise<void>) | undefined;
+  /**
+   * The app as a stateless edge and one server per account, for a host that runs them in
+   * separate runtimes (`cloudflare-scaled`). The same object on every call.
+   */
+  readonly split?: (() => SplitServer) | undefined;
+}
+
+/** Serves everything that holds no live state; answers which account's server takes the rest. */
+export interface EdgeServer extends FrameworkServer {
+  /**
+   * The account whose server must serve `request`: live connections, the agent's view of the
+   * screen and plugins that keep state in memory. Undefined when the edge serves it.
+   */
+  placement(request: Request): Promise<string | undefined>;
+  /** Finishes what the plugins held back while serving; the host keeps the request alive until it settles. */
+  settle(): Promise<void>;
+}
+
+export interface SplitServer {
+  readonly edge: EdgeServer;
+  /**
+   * A new server for the account `key` (from `EdgeServer.placement`), built from its own call
+   * of the options function, so nothing it holds is shared with another account's server.
+   * Call it once per runtime that serves the account.
+   */
+  account(key: string): FrameworkServer;
+}
+
+/** A server may be built more than once from a function: once per runtime when the host splits it. */
+export type ServerOptionsSource<T extends ActionMap> =
+  | ServerOptions<T>
+  | (() => ServerOptions<T>);
+
+type Role =
+  | { readonly kind: "whole" }
+  | { readonly kind: "edge" }
+  | { readonly kind: "account"; readonly key: string };
+
+/** The account of callers with no user and no key: every visitor of an app without sign-in. */
+export const ANONYMOUS_ACCOUNT = "anonymous";
+
+function base64Url(text: string): string {
+  return btoa(String.fromCharCode(...new TextEncoder().encode(text)))
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
+}
+
+/** Who a caller's live state belongs to: its user, a key's scope, or nobody in particular. */
+function accountOf(caller: Caller): string {
+  const { principal } = caller;
+  if (hasUser(principal)) return `u${base64Url(principal.userId)}`;
+  if (principal.kind === "key") return `k${base64Url(caller.scope)}`;
+  return ANONYMOUS_ACCOUNT;
 }
 
 const STATUS_BY_CODE = {
@@ -344,8 +404,33 @@ function refuseUnless(callers: CallerResolver, surface: Surface) {
 }
 
 export function createServer<T extends ActionMap>(
-  options: ServerOptions<T>,
+  source: ServerOptionsSource<T>,
 ): FrameworkServer {
+  const optionsOf = typeof source === "function" ? source : () => source;
+  const whole = buildServer(optionsOf(), { kind: "whole" });
+  let split: SplitServer | undefined;
+  return {
+    ...whole,
+    split: () =>
+      (split ??= {
+        edge: buildServer(optionsOf(), { kind: "edge" }) as EdgeServer,
+        account: (key) => {
+          if (typeof source !== "function") {
+            throw new Error(
+              "A host that runs a server per account needs createServer(() => ({ ... })): each account's server builds its own auth and plugins.",
+            );
+          }
+          return buildServer(source(), { kind: "account", key });
+        },
+      }),
+  };
+}
+
+function buildServer<T extends ActionMap>(
+  options: ServerOptions<T>,
+  role: Role,
+): FrameworkServer | EdgeServer {
+  const edge = role.kind === "edge";
   const {
     actions,
     scope = defaultScope,
@@ -373,15 +458,23 @@ export function createServer<T extends ActionMap>(
         if (syncEnabled) await ensureSyncTables(database.read() as SyncDatabase);
         await applyMigrations(database, installed);
       }
-      for (const { runtime } of runtimes) runtime.start?.();
+      if (!edge) for (const { runtime } of runtimes) runtime.start?.();
     })());
   const callers = createCallerResolver(auth, scope, ready);
   const registryFor = createRegistryResolver(actions, options.visible, callers);
   const notify = database ? syncNotifyOf(database) : undefined;
   const host: PluginHost = {
     basePath,
-    database,
-    instances: database?.notifications === "process" ? "one" : "many",
+    // Nothing at the edge outlives a request to hear a notification: plugins ask the database.
+    database: edge && database ? withoutListen(database) : database,
+    instances:
+      role.kind === "account"
+        ? "one"
+        : edge
+          ? "many"
+          : database?.notifications === "process"
+            ? "one"
+            : "many",
     ...(auth ? { auth } : {}),
     authMisconfigured: "auth" in options && auth === undefined,
     callerOf: callers,
@@ -409,7 +502,7 @@ export function createServer<T extends ActionMap>(
   const routes = mountRoutes(runtimes, basePath);
   const audit = auditAll(runtimes.map(({ runtime }) => runtime));
   const agentUi =
-    agentUiOptions === false
+    agentUiOptions === false || edge
       ? undefined
       : createAgentUi({
           ...agentUiOptions,
@@ -435,7 +528,7 @@ export function createServer<T extends ActionMap>(
       ready,
     });
   const runner = runnerFor(actions, undefined, registryFor);
-  const hub = database ? new SyncHub(database) : undefined;
+  const hub = database && !edge ? new SyncHub(database) : undefined;
   let sockets: SyncSockets | undefined;
   const inflight = new Set<Promise<unknown>>();
   let closing: Promise<void> | undefined;
@@ -547,7 +640,7 @@ export function createServer<T extends ActionMap>(
     });
   }
 
-  if (mcp !== false) {
+  if (mcp !== false && !edge) {
     const mcpApp = appName
       ? {
           name: appName,
@@ -603,6 +696,7 @@ export function createServer<T extends ActionMap>(
     });
     sockets = registerSyncRoutes(app, {
       basePath,
+      ticketPrefix: role.kind === "account" ? role.key : undefined,
       data: database,
       hub,
       scope: async (request) => (await callers(request)).scope,
@@ -679,7 +773,54 @@ export function createServer<T extends ActionMap>(
     return stampBuild(await app.fetch(request));
   };
 
+  const realtime = [
+    `${basePath}/sync`,
+    `${basePath}/ui`,
+    `${basePath}/mcp`,
+    ...installed
+      .filter((plugin) => plugin.realtime)
+      .map((plugin) => `${basePath}/${plugin.name}`),
+  ];
+  const placement = async (request: Request): Promise<string | undefined> => {
+    const url = new URL(request.url);
+    if (url.pathname === socketPath) {
+      return ticketAccount(url.searchParams.get("ticket") ?? "") ?? ANONYMOUS_ACCOUNT;
+    }
+    const live = realtime.some(
+      (prefix) => url.pathname === prefix || url.pathname.startsWith(`${prefix}/`),
+    );
+    if (!live) return undefined;
+    try {
+      return accountOf(await callers(request));
+    } catch (error) {
+      // Bad credentials: the account's server refuses them the same way. Anything else, such
+      // as the database being away, must not put a user's connections in another account.
+      if (
+        error instanceof AuthFailure ||
+        toActionError(error).code === "unauthenticated"
+      ) {
+        return ANONYMOUS_ACCOUNT;
+      }
+      throw error;
+    }
+  };
+
+  const settle = async () => {
+    const settled = await Promise.allSettled(
+      runtimes.map(({ runtime }) => runtime.settle?.()),
+    );
+    for (const result of settled) {
+      if (result.status === "rejected") {
+        console.error(
+          "[parlor] a plugin could not settle after a request:",
+          result.reason,
+        );
+      }
+    }
+  };
+
   return {
+    ...(edge ? { placement, settle } : {}),
     installUiManifest: (source) => {
       refuseShadowedRoutes(source(), routes);
       agentUi?.install(source);
@@ -696,6 +837,10 @@ export function createServer<T extends ActionMap>(
         }
       : undefined,
     alarm: sockets ? () => sockets!.alarm() : undefined,
+    awaken: async () => {
+      await ready();
+      await sockets?.ensure();
+    },
     fetch: (request) => {
       const response = serve(request);
       const settled = () => void inflight.delete(response);
@@ -711,6 +856,18 @@ export function createServer<T extends ActionMap>(
         await database?.close?.();
       })()),
   };
+}
+
+/** `database` with no `listen`, keeping methods bound to it, so a class-based provider still works. */
+function withoutListen(database: DataProvider): DataProvider {
+  return new Proxy(database, {
+    get(target, property) {
+      if (property === "listen") return undefined;
+      const value: unknown = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+    has: (target, property) => property !== "listen" && Reflect.has(target, property),
+  });
 }
 
 function isPresence(value: unknown): value is PresenceUpdate {

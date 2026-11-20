@@ -11,9 +11,10 @@ type Transact = Database["transaction"];
 export interface Notification {
   readonly channel: string;
   readonly payload: string;
+  readonly topic?: string | undefined;
 }
 
-export type Deliver = (notified: readonly Notification[]) => void;
+export type Deliver = (notified: readonly Notification[]) => void | Promise<void>;
 
 type Source = "process" | "database";
 
@@ -100,7 +101,7 @@ export function holdNotifications(db: Database, deliver: Deliver): void {
   db.transaction = (async (run, config) => {
     const notified: Notification[] = [];
     const result = await begin((tx) => run(holding(tx, notified)), config);
-    deliver(notified);
+    await deliver(notified);
     return result;
   }) as Transact;
 }
