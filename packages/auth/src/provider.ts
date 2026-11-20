@@ -169,10 +169,23 @@ function isKeyPrincipal(value: unknown): value is KeyPrincipal {
 }
 
 /** Stands in for the instance until the first call needs it. */
+/**
+ * Better Auth instances by the Parlor bridge their options carry. Options made once and
+ * spread into each provider, as when a split server builds one per account, share one
+ * instance: its plugins register themselves on shared objects and refuse a second `init`.
+ */
+const instances = new WeakMap<object, BetterAuthInstance>();
+
 function deferredInstance(options: BetterAuthOptions): BetterAuthInstance {
-  let created: BetterAuthInstance | undefined;
-  const current = () =>
-    (created ??= betterAuth(options) as unknown as BetterAuthInstance);
+  const key: object = bridgeOf(options);
+  const current = () => {
+    let created = instances.get(key);
+    if (!created) {
+      created = betterAuth(options) as unknown as BetterAuthInstance;
+      instances.set(key, created);
+    }
+    return created;
+  };
   return {
     options,
     handler: (request) => current().handler(request),
