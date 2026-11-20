@@ -89,7 +89,7 @@ afterAll(() => handle.close());
 describe("sync over sockets the platform holds while the server sleeps", () => {
   let app: H3;
   let sockets: SyncSockets;
-  let hub: SyncHub;
+  let hubs: SyncHub[];
   let joined: ChannelConnection[];
   let left: ChannelConnection[];
   let restored: RestoredSocket[];
@@ -112,9 +112,20 @@ describe("sync over sockets the platform holds while the server sleeps", () => {
     revocations = new Map();
     now = 1_000_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
-    hub = new SyncHub(handle);
+    hubs = [];
+    sockets = serve();
+    return async () => {
+      vi.restoreAllMocks();
+      for (const one of hubs) await one.stop();
+    };
+  });
+
+  /** One server process: its own hub and routes, and so its own memory of the sockets. */
+  const serve = () => {
+    const hub = new SyncHub(handle);
+    hubs.push(hub);
     app = new H3();
-    sockets = registerSyncRoutes(app, {
+    return registerSyncRoutes(app, {
       basePath: "/_parlor",
       data: handle,
       hub,
@@ -135,11 +146,7 @@ describe("sync over sockets the platform holds while the server sleeps", () => {
       channels: [channel],
       pingMs: 1000,
     }).sockets;
-    return async () => {
-      vi.restoreAllMocks();
-      await hub.stop();
-    };
-  });
+  };
 
   const request = (path: string, init: RequestInit & { user?: string } = {}) =>
     Promise.resolve(
@@ -228,17 +235,49 @@ describe("sync over sockets the platform holds while the server sleeps", () => {
     expect((await open(late!)).status).toBe(401);
   });
 
-  it("wires the sockets it slept through again in the next instance, without greeting them twice", async () => {
+  it("keeps its wiring when the next instance in the same process hands the sockets over", async () => {
     const lines: { sent: string[]; attachment: unknown; closed: boolean }[] = [];
     sockets.install(instance(lines).platform);
     await open((await negotiate()).ticket!);
     await open((await negotiate("mac")).ticket!);
-    const greeted = lines.map((line) => line.sent.length);
 
     sockets.install(instance(lines).platform);
-    expect(left).toHaveLength(2);
     await sockets.ensure();
-    await sockets.ensure();
+    expect(left).toEqual([]);
+    expect(joined).toHaveLength(2);
+    await write("acme", "woken");
+    await vi.waitFor(() =>
+      expect(lines.map((line) => events(line).at(-1)?.tags)).toEqual([
+        [["notes", "woken"]],
+        [["notes", "woken"]],
+      ]),
+    );
+  });
+
+  it("lets nobody leave on an alarm in the next instance while the sockets answer", async () => {
+    const lines: { sent: string[]; attachment: unknown; closed: boolean }[] = [];
+    sockets.install(instance(lines).platform);
+    await open((await negotiate("mac")).ticket!);
+    const woken = instance(lines);
+    sockets.install(woken.platform);
+    now += 2000;
+    woken.of(lines[0]!).answeredAt = now - 500;
+    await sockets.alarm();
+    expect(left).toEqual([]);
+    expect(lines[0]!.closed).toBe(false);
+    expect(woken.wakes).toEqual([now - 500 + 2500]);
+  });
+
+  it("wires the sockets again in a process that lost its memory, without greeting them twice", async () => {
+    const lines: { sent: string[]; attachment: unknown; closed: boolean }[] = [];
+    sockets.install(instance(lines).platform);
+    await open((await negotiate()).ticket!);
+    await open((await negotiate("mac")).ticket!);
+
+    const cold = serve();
+    cold.install(instance(lines).platform);
+    await cold.ensure();
+    await cold.ensure();
     expect(joined).toHaveLength(4);
     expect(
       lines.map((line) => frames(line).filter((f) => f.event === "handshake").length),
@@ -250,52 +289,52 @@ describe("sync over sockets the platform holds while the server sleeps", () => {
         [["notes", "woken"]],
       ]),
     );
-    expect(lines.map((line) => line.sent.length - 1)).toEqual(
-      greeted.map((count) => count),
-    );
   });
 
-  it("hands what it remembered of a client back once its sockets are wired again", async () => {
+  it("hands what it remembered of a client back once a cold process wires its sockets", async () => {
     const lines: { sent: string[]; attachment: unknown; closed: boolean }[] = [];
     sockets.install(instance(lines).platform);
     await open((await negotiate()).ticket!);
     const presence = { type: "presence", focused: true, visible: true, platform: "web" };
     sockets.remember("tab-1", presence);
     sockets.remember("somebody else", { type: "presence" });
-    sockets.install(instance(lines).platform);
-    await sockets.ensure();
+    const cold = serve();
+    cold.install(instance(lines).platform);
+    await cold.ensure();
     expect(restored).toEqual([
       { clientId: "tab-1", audience: "acme/alice", remembered: presence },
     ]);
   });
 
-  it("closes a socket whose credential is revoked, also after a sleep", async () => {
+  it("closes a socket whose credential is revoked, also after a cold start", async () => {
     const lines: { sent: string[]; attachment: unknown; closed: boolean }[] = [];
     sockets.install(instance(lines).platform);
     await open((await negotiate()).ticket!);
-    sockets.install(instance(lines).platform);
-    await sockets.ensure();
+    const cold = serve();
+    cold.install(instance(lines).platform);
+    await cold.ensure();
     revocations.get("s-1")!.abort();
     expect(lines[0]!.closed).toBe(true);
   });
 
-  it("tells the channels a computer left when its socket closes after a sleep, and not for a tab", async () => {
+  it("tells the channels a computer left when its socket closes, also after a cold start, and not for a tab", async () => {
     const lines: { sent: string[]; attachment: unknown; closed: boolean }[] = [];
     sockets.install(instance(lines).platform);
     await open((await negotiate()).ticket!);
     await open((await negotiate("mac")).ticket!);
+    const cold = serve();
     const asleep = instance(lines);
-    sockets.install(asleep.platform);
+    cold.install(asleep.platform);
     left.length = 0;
     joined.length = 0;
 
     lines[0]!.closed = true;
-    await sockets.closed(asleep.of(lines[0]!));
+    await cold.closed(asleep.of(lines[0]!));
     expect(joined).toEqual([]);
 
     lines[1]!.closed = true;
-    await sockets.closed(asleep.of(lines[1]!));
-    await sockets.closed(asleep.of(lines[1]!));
+    await cold.closed(asleep.of(lines[1]!));
+    await cold.closed(asleep.of(lines[1]!));
     expect(left.map((connection) => connection.principal?.kind)).toEqual(["host"]);
   });
 

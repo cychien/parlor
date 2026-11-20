@@ -79,6 +79,8 @@ export interface SyncSockets {
 /** What a socket keeps with it: enough to wire it again after the server slept. */
 export interface HeldSocket {
   readonly parlor: 1;
+  /** The same socket across instances, which each hand it over as another object. */
+  readonly id: string;
   readonly streams: readonly string[];
   readonly audience: string | undefined;
   readonly clientId: string | undefined;
@@ -92,7 +94,7 @@ export interface SyncSocketsDeps {
   readonly hub: SyncHub;
   readonly pingMs: number;
   readonly held: (request: Request) => Promise<
-    Omit<HeldSocket, "parlor" | "openedAt"> & {
+    Omit<HeldSocket, "parlor" | "id" | "openedAt"> & {
       readonly revoked?: AbortSignal | undefined;
     }
   >;
@@ -113,18 +115,23 @@ const MAX_ATTACHMENT_CHARS = 1800;
 function heldOf(value: unknown): HeldSocket | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const held = value as Partial<HeldSocket>;
-  return held.parlor === 1 && Array.isArray(held.streams) && Array.isArray(held.channels)
+  return held.parlor === 1 &&
+    typeof held.id === "string" &&
+    Array.isArray(held.streams) &&
+    Array.isArray(held.channels)
     ? (held as HeldSocket)
     : undefined;
 }
 
 interface Wired {
   readonly held: HeldSocket;
-  /** Ends the stream's wiring without closing the socket, which is gone or not this instance's. */
+  /** The object the instance now serving hands over for it. */
+  socket: HostedSocket;
+  /** Ends the stream's wiring without closing the socket, which is gone. */
   end(): void;
 }
 
-function socketSink(socket: HostedSocket) {
+function socketSink(entry: { readonly socket: HostedSocket }) {
   const listeners: (() => void)[] = [];
   let ended = false;
   const end = () => {
@@ -134,11 +141,11 @@ function socketSink(socket: HostedSocket) {
   };
   const sink: StreamSink = {
     push({ event, data }) {
-      if (!ended) socket.send(JSON.stringify({ event: event ?? "message", data }));
+      if (!ended) entry.socket.send(JSON.stringify({ event: event ?? "message", data }));
     },
     close() {
       if (ended) return;
-      socket.close(1000, "The stream ended.");
+      entry.socket.close(1000, "The stream ended.");
       end();
     },
     drained: () => Promise.resolve(),
@@ -161,8 +168,13 @@ export function createSyncSockets(deps: SyncSocketsDeps): SyncSockets {
       readonly expiresAt: number;
     }
   >();
-  const wired = new Map<HostedSocket, Wired>();
-  const gone = new WeakSet<HostedSocket>();
+  /**
+   * By socket id. Wiring outlives the instance that made it while the process lives on, so
+   * a new instance only hands each one its own object, and nothing a socket joined, such as
+   * a computer's liveness, sees it leave and come back.
+   */
+  const wired = new Map<string, Wired>();
+  const gone = new Set<string>();
   let platform: SocketPlatform | undefined;
   let rewired: Promise<void> | undefined;
 
@@ -172,11 +184,12 @@ export function createSyncSockets(deps: SyncSocketsDeps): SyncSockets {
     revoked?: AbortSignal,
     query?: Omit<MissedQuery, "watchesBuild">,
   ): Promise<Wired> => {
-    const { sink, end } = socketSink(socket);
-    const entry: Wired = { held, end };
-    wired.set(socket, entry);
+    const entry: Wired = { held, socket, end: () => undefined };
+    const { sink, end } = socketSink(entry);
+    entry.end = end;
+    wired.set(held.id, entry);
     sink.onClosed(() => {
-      if (wired.get(socket) === entry) wired.delete(socket);
+      if (wired.get(held.id) === entry) wired.delete(held.id);
     });
     try {
       await deps.attach(sink, held, revoked, query);
@@ -189,18 +202,30 @@ export function createSyncSockets(deps: SyncSocketsDeps): SyncSockets {
 
   const rewire = async (from: SocketPlatform) => {
     await deps.hub.start();
+    const present = new Set<string>();
     const restored: RestoredSocket[] = [];
     for (const socket of from.sockets()) {
-      const held = heldOf(socket.attachment);
-      if (!held || wired.has(socket) || gone.has(socket)) continue;
-      await wire(socket, held);
-      if (held.clientId !== undefined && held.remembered !== undefined) {
+      const kept = heldOf(socket.attachment);
+      if (!kept || gone.has(kept.id)) continue;
+      present.add(kept.id);
+      const entry = wired.get(kept.id);
+      if (entry) {
+        entry.socket = socket;
+        continue;
+      }
+      await wire(socket, kept);
+      if (kept.clientId !== undefined && kept.remembered !== undefined) {
         restored.push({
-          clientId: held.clientId,
-          audience: held.audience,
-          remembered: held.remembered,
+          clientId: kept.clientId,
+          audience: kept.audience,
+          remembered: kept.remembered,
         });
       }
+    }
+    for (const [id, entry] of wired) {
+      if (present.has(id)) continue;
+      wired.delete(id);
+      entry.end();
     }
     for (const socket of restored) deps.restored?.(socket);
   };
@@ -216,27 +241,30 @@ export function createSyncSockets(deps: SyncSocketsDeps): SyncSockets {
   };
 
   const closed = async (socket: HostedSocket) => {
-    if (gone.has(socket)) return;
-    gone.add(socket);
-    let entry = wired.get(socket);
+    const held = heldOf(socket.attachment);
+    if (!held || gone.has(held.id)) return;
+    gone.add(held.id);
+    let entry = wired.get(held.id);
     if (!entry) {
-      const held = heldOf(socket.attachment);
       // Only a computer's leaving is news to anyone; a tab's socket needs no rewiring to go.
-      if (held?.principal?.kind !== "host") return;
+      if (held.principal?.kind !== "host") return;
       await ensure();
-      entry = wired.get(socket) ?? (await wire(socket, held));
+      entry = wired.get(held.id) ?? (await wire(socket, held));
     }
-    wired.delete(socket);
+    wired.delete(held.id);
     entry.end();
   };
 
   return {
     install(next) {
       if (next === platform) return;
-      for (const entry of wired.values()) entry.end();
-      wired.clear();
       platform = next;
       rewired = undefined;
+      for (const socket of next.sockets()) {
+        const held = heldOf(socket.attachment);
+        const entry = held && wired.get(held.id);
+        if (entry) entry.socket = socket;
+      }
     },
     get installed() {
       return platform !== undefined;
@@ -250,7 +278,7 @@ export function createSyncSockets(deps: SyncSocketsDeps): SyncSockets {
       const { revoked, ...rest } = await deps.held(request);
       const ticket = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll("-", "");
       tickets.set(ticket, {
-        held: { parlor: 1, ...rest, openedAt: at },
+        held: { parlor: 1, id: crypto.randomUUID(), ...rest, openedAt: at },
         revoked,
         expiresAt: at + TICKET_TTL_MS,
       });
@@ -294,7 +322,7 @@ export function createSyncSockets(deps: SyncSocketsDeps): SyncSockets {
       let next = Infinity;
       for (const socket of current.sockets()) {
         const held = heldOf(socket.attachment);
-        if (!held || gone.has(socket)) continue;
+        if (!held || gone.has(held.id)) continue;
         const heard = Math.max(socket.answeredAt ?? 0, held.openedAt);
         if (heard + staleMs > at) {
           next = Math.min(next, heard + staleMs);

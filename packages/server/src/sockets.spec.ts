@@ -107,14 +107,23 @@ describe("a server whose runtime holds its sockets while it sleeps", () => {
     server.installSockets!(instance(lines));
     const wrote = await call("/_parlor/actions/addNote", { method: "POST", body: "{}" });
     const { data } = (await wrote.json()) as { data: { id: string } };
-    await vi.waitFor(() => expect(lines[0]!.sent.join("\n")).toContain(data.id));
-
-    const leave = await call("/_parlor/ui", {
-      method: "POST",
-      body: JSON.stringify({ type: "leave" }),
+    await vi.waitFor(() => expect(lines[0]!.sent.join("\n")).toContain(data.id), {
+      timeout: 5000,
     });
+
+    // A process that lost its memory knows the tab again only from what its socket kept.
+    const cold = createServer({ actions, database: { ...database, close: undefined } });
+    cold.installSockets!(instance(lines));
+    const leave = await cold.fetch(
+      new Request("http://app.test/_parlor/ui", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-parlor-client": "tab-1" },
+        body: JSON.stringify({ type: "leave" }),
+      }),
+    );
     expect(leave.status).toBe(204);
     expect(lines[0]!.attachment).not.toHaveProperty("remembered");
+    await cold.close();
   });
 
   it("answers a socket's opening itself, never through the router", async () => {
