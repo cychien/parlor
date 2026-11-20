@@ -359,7 +359,7 @@ describe.runIf(postgresUrl)("node-postgres when the server drops a connection", 
     const client = new pg.Client({ connectionString: postgresUrl });
     await client.connect();
     try {
-      await client.query(query);
+      return (await client.query(query)).rows;
     } finally {
       await client.end();
     }
@@ -390,14 +390,23 @@ describe.runIf(postgresUrl)("node-postgres when the server drops a connection", 
   });
 
   it("survives losing its idle pooled connections and serves the next query", async () => {
-    const handle = open(drivers[1]!);
-    await handle.db.execute(sql`select 1`);
-    await admin(
-      "select pg_terminate_backend(pid) from pg_stat_activity where pid <> pg_backend_pid() and state = 'idle' and datname = current_database()",
-    );
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    const result = await handle.db.execute(sql`select 2 as n`);
-    expect(result.rows).toEqual([{ n: 2 }]);
+    // Its own name, so the test drops only its own connections and none of a parallel test's.
+    const named = new URL(postgresUrl!);
+    const appName = `contract-${crypto.randomUUID().slice(0, 8)}`;
+    named.searchParams.set("application_name", appName);
+    const handle = await createDatabase({ url: named.href });
+    try {
+      await handle.db.execute(sql`select 1`);
+      const dropped = await admin(
+        `select pg_terminate_backend(pid) from pg_stat_activity where application_name = '${appName}' and state = 'idle'`,
+      );
+      expect(dropped.length).toBeGreaterThan(0);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const result = await handle.db.execute(sql`select 2 as n`);
+      expect(result.rows).toEqual([{ n: 2 }]);
+    } finally {
+      await handle.close();
+    }
   });
 });
 
