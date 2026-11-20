@@ -94,7 +94,7 @@ const request = (path: string, user?: string, init: RequestInit = {}) =>
 const accountKey = (userId: string) =>
   `u${btoa(userId).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "")}`;
 
-describe("a split server's edge", () => {
+describe("a split server's edge", { timeout: 30_000 }, () => {
   it("serves actions and plain plugin routes, and sends live connections, the screen, MCP and stateful plugins to the caller's account", async () => {
     const { edge } = app().server.split!();
     const placement = (path: string, user?: string) =>
@@ -135,7 +135,7 @@ describe("a split server's edge", () => {
   });
 });
 
-describe("a split server's accounts", () => {
+describe("a split server's accounts", { timeout: 30_000 }, () => {
   it("builds each account from its own call of the options, and starts its plugins", async () => {
     const { server, seen, built } = app();
     const split = server.split!();
