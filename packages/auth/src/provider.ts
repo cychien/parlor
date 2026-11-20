@@ -458,6 +458,7 @@ export function betterAuthProvider(provided: BetterAuthProviderOptions): AuthPro
         }),
         routes: [...authRoutes({ instance, settings, host }), ...hostRoutes(hostDeps)],
         audit: (record) => auditLog.record(record),
+        settle: () => auditLog.flush(),
         close: async () => {
           await Promise.all([set.stop(), auditLog.stop()]);
         },

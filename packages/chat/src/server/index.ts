@@ -132,6 +132,8 @@ function positiveInteger(name: string, value: number): number {
 export function chat(options: ChatOptions = {}): ServerPlugin {
   return {
     name: CHAT_PLUGIN,
+    // Turns, computers and their liveness live in memory: a split app serves them per account.
+    realtime: true,
     migrations: CHAT_MIGRATIONS,
     setup(host) {
       const leaseMs = positiveInteger("leaseMs", options.leaseMs ?? DEFAULT_LEASE_MS);

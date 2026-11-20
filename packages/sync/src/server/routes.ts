@@ -38,6 +38,8 @@ export type SyncTransport = "sse" | "poll";
 
 export interface SyncRouteOptions {
   readonly basePath: string;
+  /** Starts every socket ticket; see `SyncSocketsDeps.ticketPrefix`. */
+  readonly ticketPrefix?: string | undefined;
   readonly data: DataProvider;
   readonly hub: SyncHub;
   readonly scope: (request: Request) => string | Promise<string>;
@@ -296,6 +298,7 @@ export function registerSyncRoutes(app: H3, options: SyncRouteOptions): SyncRout
 
   const sockets = createSyncSockets({
     hub,
+    ticketPrefix: options.ticketPrefix,
     pingMs: options.pingMs ?? DEFAULT_SOCKET_PING_MS,
     held: async (request) => {
       const authority = await options.authority?.(request);

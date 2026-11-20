@@ -106,6 +106,15 @@ export interface SyncSocketsDeps {
   ) => Promise<void>;
   readonly restored?: ((socket: RestoredSocket) => void) | undefined;
   readonly now?: (() => number) | undefined;
+  /** Starts every ticket, so a host can tell which runtime issued it (`ticketAccount`). */
+  readonly ticketPrefix?: string | undefined;
+}
+
+const TICKET_ACCOUNT = /^([A-Za-z0-9_-]+)\./;
+
+/** The account a ticket's prefix names, for a host that routes a socket to the runtime that issued it. */
+export function ticketAccount(ticket: string): string | undefined {
+  return TICKET_ACCOUNT.exec(ticket)?.[1];
 }
 
 const TICKET_TTL_MS = 30_000;
@@ -276,7 +285,8 @@ export function createSyncSockets(deps: SyncSocketsDeps): SyncSockets {
         if (entry.expiresAt <= at) tickets.delete(ticket);
       }
       const { revoked, ...rest } = await deps.held(request);
-      const ticket = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll("-", "");
+      const random = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll("-", "");
+      const ticket = deps.ticketPrefix ? `${deps.ticketPrefix}.${random}` : random;
       tickets.set(ticket, {
         held: { parlor: 1, id: crypto.randomUUID(), ...rest, openedAt: at },
         revoked,
