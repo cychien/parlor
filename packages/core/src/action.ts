@@ -17,6 +17,11 @@ export interface ListenOptions {
    * reload whatever it derived from them.
    */
   readonly onLost?: (() => void) | undefined;
+  /**
+   * Hears only what is notified under this topic, such as one scope's changes. Only a
+   * `bus` provider routes by topic; the others hear the whole channel.
+   */
+  readonly topic?: string | undefined;
 }
 
 export interface DataProvider<TDb = unknown> {
@@ -35,20 +40,23 @@ export interface DataProvider<TDb = unknown> {
   /**
    * Sends `payload` to every `listen` handler of `channel`: when `tx` commits, or at once
    * without one. What a transaction notifies is dropped when it rolls back. A payload stays
-   * under 8000 bytes, the limit of Postgres NOTIFY.
+   * under 8000 bytes, the limit of Postgres NOTIFY. `topic` names who it concerns, such as a
+   * scope, so a `bus` provider sends it only to the runtimes that listen to that topic.
    */
-  notify?(channel: string, payload: string, tx?: TDb): Promise<void>;
+  notify?(channel: string, payload: string, tx?: TDb, topic?: string): Promise<void>;
   /**
    * Where `listen` hears from. `process`: what this process itself notifies, with no
    * connection to hold or lose, which is everything when it is the app's only server.
    * `database`: every server on the database, over a connection each one holds open.
+   * `bus`: the runtimes the host connects, such as Durable Objects, each hearing only the
+   * topics it listens to, over no connection to the database.
    * A provider without it is read as `database`.
    */
   readonly notifications?: NotificationReach | undefined;
   close?(): Promise<void>;
 }
 
-export type NotificationReach = "process" | "database";
+export type NotificationReach = "process" | "database" | "bus";
 
 export interface ActionContext {
   readonly scope: string;

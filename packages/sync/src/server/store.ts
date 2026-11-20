@@ -60,11 +60,12 @@ export interface RecordSyncEventInput {
   readonly source?: string | undefined;
 }
 
-/** Carries a recorded event to the hubs once `tx` commits. */
+/** Carries a recorded event to the hubs once `tx` commits; `topic` is the event's stream. */
 export type SyncNotify = (
   channel: string,
   payload: string,
   tx: SyncDatabase,
+  topic: string,
 ) => Promise<void>;
 
 const notifyInSql: SyncNotify = async (channel, payload, tx) => {
@@ -74,7 +75,7 @@ const notifyInSql: SyncNotify = async (channel, payload, tx) => {
 /** The provider's own `notify`, which reaches its `listen` wherever that hears from. */
 export function syncNotifyOf(data: DataProvider): SyncNotify | undefined {
   return data.notify
-    ? (channel, payload, tx) => data.notify!(channel, payload, tx)
+    ? (channel, payload, tx, topic) => data.notify!(channel, payload, tx, topic)
     : undefined;
 }
 
@@ -111,7 +112,7 @@ export async function recordSyncEvent(
     tags: input.tags,
     source: input.source,
   };
-  await notify(SYNC_CHANNEL, notifyPayload(input.scope, event), tx);
+  await notify(SYNC_CHANNEL, notifyPayload(input.scope, event), tx, input.scope);
   return event;
 }
 
@@ -179,16 +180,25 @@ export async function readSyncHead(db: SyncDatabase): Promise<SyncCursor> {
  * Every stream's events after `since`, in the order they committed, each with its stream.
  * Versions are allocated under one row lock, so nothing can commit behind what this read.
  */
+/** The events after `since` in commit order, only of `streams` when given. */
 export async function readSyncTail(
   db: SyncDatabase,
   since: SyncCursor,
   limit: number = MAX_BATCH,
+  streams?: readonly string[],
 ): Promise<NotifyPayload[]> {
+  if (streams?.length === 0) return [];
+  const only = streams
+    ? sql`and scope in (${sql.join(
+        streams.map((stream) => sql`${stream}`),
+        sql`, `,
+      )})`
+    : sql``;
   const found = await rows<EventRow & { scope: string }>(
     db.execute(sql`
       select id, version, scope, tags, source
         from sync_events
-       where (version, id) > (${since.version}, ${since.id})
+       where (version, id) > (${since.version}, ${since.id}) ${only}
        order by version asc, id asc
        limit ${limit}`),
   );

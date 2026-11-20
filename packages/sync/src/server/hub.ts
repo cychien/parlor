@@ -16,10 +16,16 @@ interface Subscription {
   readonly onStop: (() => void) | undefined;
 }
 
+/** A stream this hub hears on the bus, from its first subscriber to its last. */
+interface Heard {
+  readonly listening: Promise<Unlisten | undefined>;
+}
+
 const TAIL_RETRY_MS = 1000;
 
 export class SyncHub {
   readonly #subscribers = new Map<string, Set<Subscription>>();
+  readonly #heard = new Map<string, Heard>();
   #unlisten: Unlisten | undefined;
   #starting: Promise<void> | undefined;
   /** The last event read from the log; forgotten when a write finds nobody subscribed. */
@@ -41,11 +47,20 @@ export class SyncHub {
    * notification that never came or came out of turn costs no event.
    */
   get lossless(): boolean {
-    return this.canPush && this.data.notifications === "process";
+    return this.canPush && (this.data.notifications === "process" || this.#onBus);
+  }
+
+  /** Hears each stream it serves on its own topic, from runtimes that share no process with it. */
+  get #onBus(): boolean {
+    return this.data.notifications === "bus";
   }
 
   async start(): Promise<void> {
     if (!this.data.listen) return;
+    if (this.#onBus) {
+      await this.#follow();
+      return;
+    }
     if (!this.#unlisten) {
       const starting = (this.#starting ??= this.data
         .listen(
@@ -108,7 +123,12 @@ export class SyncHub {
         this.#woken = false;
         const head = this.#head;
         if (!head || this.#subscribers.size === 0) return;
-        const found = await readSyncTail(this.#db(), head);
+        const found = await readSyncTail(
+          this.#db(),
+          head,
+          undefined,
+          this.#onBus ? [...this.#subscribers.keys()] : undefined,
+        );
         if (this.#head !== head) return;
         for (const { scope, event } of found) this.publish(scope, event);
         const last = found.at(-1);
@@ -147,12 +167,34 @@ export class SyncHub {
     const set = this.#subscribers.get(scope) ?? new Set();
     set.add(subscription);
     this.#subscribers.set(scope, set);
+    if (this.#onBus && !this.#heard.has(scope)) this.#hear(scope);
     return () => {
       set.delete(subscription);
       if (set.size === 0 && this.#subscribers.get(scope) === set) {
         this.#subscribers.delete(scope);
+        this.#stopHearing(scope);
       }
     };
+  }
+
+  #hear(stream: string): void {
+    const listening = this.data.listen!(SYNC_CHANNEL, () => this.#wake(), {
+      topic: stream,
+    }).catch((error: unknown) => {
+      console.error(`[parlor] sync: could not hear stream "${stream}":`, error);
+      if (this.#heard.get(stream) === heard) this.#heard.delete(stream);
+      for (const { onStop } of this.#subscribers.get(stream) ?? []) onStop?.();
+      return undefined;
+    });
+    const heard: Heard = { listening };
+    this.#heard.set(stream, heard);
+  }
+
+  #stopHearing(stream: string): void {
+    const heard = this.#heard.get(stream);
+    if (!heard) return;
+    this.#heard.delete(stream);
+    void heard.listening.then((unlisten) => unlisten?.()).catch(() => {});
   }
 
   subscriberCount(scope?: string): number {
@@ -165,6 +207,7 @@ export class SyncHub {
   async stop(): Promise<void> {
     const subscriptions = [...this.#subscribers.values()].flatMap((set) => [...set]);
     for (const { onStop } of subscriptions) onStop?.();
+    for (const stream of [...this.#heard.keys()]) this.#stopHearing(stream);
     await this.#unlisten?.();
     this.#unlisten = undefined;
     this.#starting = undefined;
