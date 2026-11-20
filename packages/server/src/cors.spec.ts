@@ -62,6 +62,7 @@ describe("cors", () => {
     const ok = await server.fetch(post("capacitor://localhost"));
     expect(ok.headers.get("access-control-allow-origin")).toBe("capacitor://localhost");
     expect(ok.headers.get("access-control-expose-headers")).toContain("set-auth-token");
+    expect(ok.headers.get("access-control-expose-headers")).toContain("x-parlor-build");
     const bad = await server.fetch(post("capacitor://localhost", "{nope"));
     expect(bad.status).toBe(400);
     expect(bad.headers.get("access-control-allow-origin")).toBe("capacitor://localhost");
