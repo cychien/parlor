@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import {
@@ -449,7 +450,7 @@ describe("a service already running", () => {
 });
 
 describe("a newer CLI with a service running that no app installed", () => {
-  it("has the old service hand over to it, finishing its own turns, and starts itself", async () => {
+  it("has the old service hand over to it and drain, and starts itself", async () => {
     const old = await startDaemon("1.0.0");
     const start = vi.fn(spawnDaemon("1.1.0"));
     const outcome = await ensureServiceWith(
@@ -534,6 +535,41 @@ describe("a newer CLI with a service running that no app installed", () => {
       to: release("1.1.0"),
     });
     expect(await versionRunning()).toBe("1.1.0");
+  }, 60_000);
+
+  it("stops a release from before step_aside by its pid, killing one that ignores SIGTERM", async () => {
+    await mkdir(join(paths.root, "run"), { recursive: true });
+    const script = join(root, "parlor-host");
+    await writeFile(
+      script,
+      `const net = require("node:net");
+process.on("SIGTERM", () => undefined);
+net.createServer((socket) => socket.on("data", (data) => {
+  const { op } = JSON.parse(String(data));
+  socket.write(JSON.stringify(op === "hello" ? { ok: true, release: ${JSON.stringify(release("1.0.0"))} } : { ok: false, error: "Unknown op." }) + "\\n");
+})).listen(process.argv[2], () => process.stdout.write("listening\\n"));
+`,
+    );
+    const old = spawn(process.execPath, [script, paths.control, "daemon"], {
+      stdio: ["ignore", "pipe", "inherit"],
+    });
+    try {
+      await new Promise<void>((resolve) => old.stdout.once("data", () => resolve()));
+      const outcome = await ensureServiceWith(
+        await withTrust({ start: spawnDaemon("1.1.0") }),
+        paths,
+        cli("1.1.0"),
+      );
+      expect(outcome).toEqual({
+        kind: "upgraded",
+        from: release("1.0.0"),
+        to: release("1.1.0"),
+      });
+      expect(old.signalCode).toBe("SIGKILL");
+      expect(await versionRunning()).toBe("1.1.0");
+    } finally {
+      old.kill("SIGKILL");
+    }
   }, 60_000);
 
   it("keeps using an old release that does not stop", async () => {

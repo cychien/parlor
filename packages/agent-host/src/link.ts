@@ -77,6 +77,8 @@ export interface AppLink {
   readonly api: HostApi;
   /** Set once `hostHello` was welcomed; every other call waits for it. */
   readonly protocol: number | undefined;
+  /** Settles once the first `hostHello` was answered or failed, or the link closed first. */
+  readonly greeted: Promise<void>;
   readonly mode: LinkMode;
   start(): void;
   /** Stops waking the host and keeps everything else, so running turns finish on this link. */
@@ -212,6 +214,8 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
     refuse = reject;
   });
   welcomed.catch(() => undefined);
+  let finishGreeting: () => void = () => undefined;
+  const greeted = new Promise<void>((resolve) => (finishGreeting = resolve));
 
   const signedFetch: typeof fetch = async (input, init) => {
     if (mode === "closed") throw new LinkDown("This app's link is closed.");
@@ -351,6 +355,7 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
     if (heartbeat) clearInterval(heartbeat);
     heartbeat = undefined;
     refuse(new LinkDown("This app's link is closed."));
+    finishGreeting();
   };
 
   const hello = async (): Promise<HostWelcome | undefined> => {
@@ -365,6 +370,7 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
           agents: [],
         });
       } catch {
+        finishGreeting();
         if (revoked || modeNow() === "closed") return undefined;
         await sleep(Math.min(RETRY_BASE_MS * 2 ** attempt, RECONNECT_MAX_MS));
       }
@@ -374,6 +380,7 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
   const link: AppLink = {
     grant,
     api,
+    greeted,
     get protocol() {
       return welcome?.protocol;
     },
@@ -393,6 +400,7 @@ export function createAppLink(grant: AppGrant, deps: AppLinkDeps): AppLink {
         }
         welcome = answer;
         admit();
+        finishGreeting();
         const polling = adaptivePoll(
           answer.userActivity === true,
           () => deps.busy?.() ?? false,

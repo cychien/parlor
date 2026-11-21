@@ -331,6 +331,16 @@ const run = (command: string, args: readonly string[]) =>
     execFile(command, args, (error, stdout) => resolve(error ? "" : stdout)),
   );
 
+/** False when the process is already gone. */
+const signal = (pid: number, name: NodeJS.Signals) => {
+  try {
+    process.kill(pid, name);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const alive = (pid: number) => {
   try {
     process.kill(pid, 0);
@@ -358,10 +368,8 @@ async function signalOldService(paths: HostPaths): Promise<void> {
   if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return;
   const command = await run("ps", ["-o", "command=", "-p", String(pid)]);
   if (!/parlor-host/.test(command) || !/\bdaemon\b/.test(command)) return;
-  process.kill(pid, "SIGTERM");
-  if (await exited(pid, OLD_STOP_MS)) return;
-  process.kill(pid, "SIGKILL");
-  await exited(pid, OLD_STOP_MS);
+  if (!signal(pid, "SIGTERM") || (await exited(pid, OLD_STOP_MS))) return;
+  if (signal(pid, "SIGKILL")) await exited(pid, OLD_STOP_MS);
 }
 
 async function untilGone(paths: HostPaths, deps: ServiceDeps): Promise<boolean> {
@@ -390,8 +398,11 @@ async function replace(
     const reply = await control.send({ op: "step_aside", release: client.release });
     control.close();
     if (!reply.ok) {
-      if (reply.error !== UNKNOWN_OP) return { kind: "using", running };
-      await (deps.stopOld ?? signalOldService)(paths);
+      if (reply.error === "downgrade" || reply.error === "installed") {
+        return { kind: "using", running };
+      }
+      // Anything else, a lost reply included, is settled by whether it still answers.
+      if (reply.error === UNKNOWN_OP) await (deps.stopOld ?? signalOldService)(paths);
     }
   }
   if (!(await untilGone(paths, deps))) return { kind: "using", running };

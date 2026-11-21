@@ -795,34 +795,25 @@ export async function runMcpProxyProcess(
   process.stdout.on("error", () => undefined);
 
   const handshake = new Map<string, Message>();
-  const replayed = new Set<JsonRpcId>();
+  /** The replayed initialize's id, answered here and never shown to the agent. */
+  const replies = new Map<JsonRpcId, () => void>();
   let daemon: Socket | undefined;
   let reached = false;
+  /** False once a wait for a restarted host ran out, so later calls try once instead of waiting. */
+  let waits = true;
   let replays = 0;
 
-  const attach = (socket: Socket, opensAgain: boolean) => {
+  const attach = (socket: Socket) => {
     daemon = socket;
     socket.on("error", () => socket.destroy());
-    socket.once("connect", () => {
-      reached = true;
-      if (outside) why = DISCONNECTED_MESSAGE;
-    });
     socket.once("close", () => {
       if (daemon === socket) daemon = undefined;
       for (const id of unanswered) refuse(id);
       unanswered.clear();
+      for (const settle of replies.values()) settle();
+      replies.clear();
     });
     socket.write(outside ? `${OUTSIDE_PREFIX}${outside.appOrigin}\n` : `${nonce}\n`);
-    if (opensAgain) {
-      for (const message of handshake.values()) {
-        let sent = message;
-        if (message.id !== undefined) {
-          sent = { ...message, id: `parlor-replay-${++replays}` };
-          replayed.add(sent.id!);
-        }
-        socket.write(`${JSON.stringify(sent)}\n`);
-      }
-    }
     onLines(socket, (line) => {
       const message = parse(line) as
         | (Message & { readonly refused?: unknown })
@@ -832,11 +823,36 @@ export async function runMcpProxyProcess(
         return;
       }
       if (message?.id !== undefined && message.method === undefined) {
-        if (replayed.delete(message.id)) return;
+        const settle = replies.get(message.id);
+        if (settle) {
+          replies.delete(message.id);
+          settle();
+          return;
+        }
         unanswered.delete(message.id);
       }
       toAgent(line);
     });
+  };
+
+  const connected = (socket: Socket) => {
+    reached = true;
+    if (outside) why = DISCONNECTED_MESSAGE;
+    attach(socket);
+  };
+
+  /** Opens the new host with the agent's handshake, waiting for initialize's answer first. */
+  const openAgain = async (socket: Socket) => {
+    const initialize = handshake.get("initialize");
+    if (initialize?.id !== undefined) {
+      const id = `parlor-replay-${++replays}`;
+      const answered = new Promise<void>((resolve) => replies.set(id, resolve));
+      socket.write(`${JSON.stringify({ ...initialize, id })}\n`);
+      await answered;
+    }
+    const initialized = handshake.get("notifications/initialized");
+    if (initialized && !socket.destroyed)
+      socket.write(`${JSON.stringify(initialized)}\n`);
   };
 
   const dial = () =>
@@ -852,15 +868,20 @@ export async function runMcpProxyProcess(
   const reach = async (): Promise<Socket | undefined> => {
     if (daemon && !daemon.destroyed) return daemon;
     if (!outside) return undefined;
-    const deadline = Date.now() + (reached ? RECONNECT_WAIT_MS : 0);
+    const again = reached;
+    const deadline = Date.now() + (again && waits ? RECONNECT_WAIT_MS : 0);
     for (;;) {
       const socket = await dial();
       if (socket) {
-        attach(socket, reached);
-        reached = true;
-        return socket;
+        waits = true;
+        connected(socket);
+        if (again) await openAgain(socket);
+        return socket.destroyed ? undefined : socket;
       }
-      if (Date.now() >= deadline) return undefined;
+      if (Date.now() >= deadline) {
+        if (again) waits = false;
+        return undefined;
+      }
       await sleep(RECONNECT_POLL_MS);
     }
   };
@@ -883,7 +904,12 @@ export async function runMcpProxyProcess(
     socket.write(`${line}\n`);
   };
 
-  attach(connect(path), false);
+  const first = connect(path);
+  first.once("connect", () => {
+    reached = true;
+    if (outside) why = DISCONNECTED_MESSAGE;
+  });
+  attach(first);
   let forwarding = Promise.resolve();
   const agent = onLines(process.stdin, (line) => {
     forwarding = forwarding.then(() => pass(line));

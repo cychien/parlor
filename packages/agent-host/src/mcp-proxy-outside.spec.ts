@@ -26,11 +26,14 @@ let origin: string;
 let proxy: McpProxy;
 let served: OutsideApp | undefined;
 const received: Received[] = [];
+/** Calls to slowTool, left unanswered until the test lets them go. */
+const held: (() => void)[] = [];
 const children: ChildProcessWithoutNullStreams[] = [];
 
 const TOOLS = [
   { name: "listCourses", inputSchema: {}, annotations: { readOnlyHint: true } },
   { name: "createCourse", inputSchema: {}, annotations: { readOnlyHint: false } },
+  { name: "slowTool", inputSchema: {}, annotations: { readOnlyHint: true } },
 ];
 
 beforeAll(async () => {
@@ -54,6 +57,10 @@ beforeAll(async () => {
         response.writeHead(202).end();
         return;
       }
+      if (message.params?.name === "slowTool") {
+        held.push(() => response.destroy());
+        return;
+      }
       const result =
         message.method === "initialize"
           ? {
@@ -75,6 +82,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  for (const release of held.splice(0)) release();
   for (const child of children) child.kill();
   await proxy.close();
   stub.closeAllConnections();
@@ -270,6 +278,30 @@ describe("an agent outside any turn", () => {
     } finally {
       clearTimeout(restarted);
     }
+  }, 30_000);
+
+  it("answers a call in flight when Parlor Host stopped with an error, and never sends it again", async () => {
+    const agent = agentOutside(origin);
+    await agent.initialize(true);
+    const slow = agent.request("tools/call", { name: "slowTool", arguments: {} });
+    await vi.waitFor(() =>
+      expect(received.some((request) => request.tool === "slowTool")).toBe(true),
+    );
+
+    await proxy.close();
+    const refused = await agent.next();
+    expect(refused.id).toBe(slow);
+    expect((refused.error as { message: string }).message).toMatch(
+      /^This computer no longer serves the app/,
+    );
+
+    proxy = createMcpProxy("parlor-host", { tokenWaitMs: 300 });
+    proxy.serveOutside((appOrigin) => (appOrigin === origin ? served : undefined));
+    await proxy.listen(hostPaths(join(home, ".parlor", "host")).proxy);
+    received.length = 0;
+    agent.request("tools/call", { name: "listCourses", arguments: {} });
+    expect(textOf(await agent.next())).toBe("ran listCourses");
+    expect(received.map(({ tool }) => tool).filter(Boolean)).toEqual(["listCourses"]);
   }, 30_000);
 
   it("is told Parlor Host stopped when none comes back in time", async () => {

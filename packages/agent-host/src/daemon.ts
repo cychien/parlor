@@ -540,6 +540,8 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
         const held = agentTokens.get(key);
         if (held && held.expiresAt - AGENT_TOKEN_MARGIN_MS > Date.now())
           return held.token;
+        // A host that just started is still greeting the app; one the app did not answer fails at once.
+        if (state.link.protocol === undefined) await state.link.greeted;
         if (state.link.protocol === undefined) throw new AppNotAnswering();
         const fresh = await state.link.api.calls.call("hostAgentToken", {
           agent: `${agent} on ${name}`.slice(0, 120),
@@ -750,7 +752,6 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
         });
         openHostLog(join(paths.root, "logs", "daemon.log"));
         await putHostCommandFirstOnPath(paths.root);
-        await deps.proxy.listen(paths.proxy);
         listedProfiles = await loadProfiles(paths.agents);
         const found = await findAgents(listedProfiles);
         profiles = found.profiles;
@@ -772,6 +773,8 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
           logEvent("link_failed", { appOrigin: grant.appOrigin, error: String(error) }),
         );
       }
+      // Only now: an agent's proxy that reconnects finds every app it served before.
+      await deps.proxy.listen(paths.proxy);
     },
     async connect(appOrigin) {
       const saved = await deps.grants.get(appOrigin);
