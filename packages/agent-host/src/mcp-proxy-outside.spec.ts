@@ -26,11 +26,14 @@ let origin: string;
 let proxy: McpProxy;
 let served: OutsideApp | undefined;
 const received: Received[] = [];
+/** Calls to slowTool, left unanswered until the test lets them go. */
+const held: (() => void)[] = [];
 const children: ChildProcessWithoutNullStreams[] = [];
 
 const TOOLS = [
   { name: "listCourses", inputSchema: {}, annotations: { readOnlyHint: true } },
   { name: "createCourse", inputSchema: {}, annotations: { readOnlyHint: false } },
+  { name: "slowTool", inputSchema: {}, annotations: { readOnlyHint: true } },
 ];
 
 beforeAll(async () => {
@@ -50,6 +53,14 @@ beforeAll(async () => {
         method: message.method,
         tool: message.params?.name,
       });
+      if (message.id === undefined) {
+        response.writeHead(202).end();
+        return;
+      }
+      if (message.params?.name === "slowTool") {
+        held.push(() => response.destroy());
+        return;
+      }
       const result =
         message.method === "initialize"
           ? {
@@ -71,6 +82,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  for (const release of held.splice(0)) release();
   for (const child of children) child.kill();
   await proxy.close();
   stub.closeAllConnections();
@@ -79,6 +91,7 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
+  for (const release of held.splice(0)) release();
   received.length = 0;
   served = {
     appOrigin: origin,
@@ -236,6 +249,93 @@ describe("an agent outside any turn", () => {
       `This computer does not let coding agents use ${origin}: it is not connected, or that was turned off. Connect it again with \`npx @parlor/agent-host connect ${origin}\`.`,
     );
     expect(received).toEqual([]);
+  }, 30_000);
+
+  it("reaches the Parlor Host that replaced a stopped one, opening it with the handshake it began with", async () => {
+    const agent = agentOutside(origin);
+    await agent.initialize(true);
+    agent.send({ method: "notifications/initialized" });
+    agent.request("tools/call", { name: "listCourses", arguments: {} });
+    expect(textOf(await agent.next())).toBe("ran listCourses");
+
+    await proxy.close();
+    proxy = createMcpProxy("parlor-host", { tokenWaitMs: 300 });
+    proxy.serveOutside((appOrigin) => (appOrigin === origin ? served : undefined));
+    received.length = 0;
+    const restarted = setTimeout(
+      () => void proxy.listen(hostPaths(join(home, ".parlor", "host")).proxy),
+      500,
+    );
+    try {
+      agent.request("tools/call", { name: "listCourses", arguments: {} });
+      const answer = await agent.next();
+      expect(textOf(answer)).toBe("ran listCourses");
+      expect(received.map(({ method, tool }) => [method, tool])).toEqual([
+        ["initialize", undefined],
+        ["notifications/initialized", undefined],
+        ["tools/list", undefined],
+        ["tools/call", "listCourses"],
+      ]);
+    } finally {
+      clearTimeout(restarted);
+    }
+  }, 30_000);
+
+  it("answers a call in flight when Parlor Host stopped with an error, and never sends it again", async () => {
+    const agent = agentOutside(origin);
+    await agent.initialize(true);
+    const slow = agent.request("tools/call", { name: "slowTool", arguments: {} });
+    await vi.waitFor(() =>
+      expect(received.some((request) => request.tool === "slowTool")).toBe(true),
+    );
+
+    await proxy.close();
+    const refused = await agent.next();
+    expect(refused.id).toBe(slow);
+    expect((refused.error as { message: string }).message).toMatch(
+      /^This computer no longer serves the app/,
+    );
+
+    proxy = createMcpProxy("parlor-host", { tokenWaitMs: 300 });
+    proxy.serveOutside((appOrigin) => (appOrigin === origin ? served : undefined));
+    await proxy.listen(hostPaths(join(home, ".parlor", "host")).proxy);
+    received.length = 0;
+    agent.request("tools/call", { name: "listCourses", arguments: {} });
+    expect(textOf(await agent.next())).toBe("ran listCourses");
+    expect(received.map(({ tool }) => tool).filter(Boolean)).toEqual(["listCourses"]);
+  }, 30_000);
+
+  it("lets a host handing over know once no agent outside a turn waits on it", async () => {
+    const agent = agentOutside(origin);
+    await agent.initialize(true);
+    await proxy.outsideAnswered();
+    const slow = agent.request("tools/call", { name: "slowTool", arguments: {} });
+    await vi.waitFor(() => expect(held).toHaveLength(1));
+    let answered = false;
+    const waiting = proxy.outsideAnswered().then(() => (answered = true));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(answered).toBe(false);
+    held.shift()!();
+    expect((await agent.next()).id).toBe(slow);
+    await waiting;
+    expect(answered).toBe(true);
+  }, 30_000);
+
+  it("is told Parlor Host stopped when none comes back in time", async () => {
+    const agent = agentOutside(origin);
+    await agent.initialize(true);
+    await proxy.close();
+    proxy = createMcpProxy("parlor-host", { tokenWaitMs: 300 });
+    proxy.serveOutside((appOrigin) => (appOrigin === origin ? served : undefined));
+    try {
+      agent.request("tools/call", { name: "listCourses", arguments: {} });
+      const refused = await agent.next();
+      expect((refused.error as { message: string }).message).toMatch(
+        /^This computer no longer serves the app/,
+      );
+    } finally {
+      await proxy.listen(hostPaths(join(home, ".parlor", "host")).proxy);
+    }
   }, 30_000);
 
   it("says Parlor Host is not running when nothing listens", async () => {

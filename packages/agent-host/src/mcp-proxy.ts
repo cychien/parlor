@@ -26,6 +26,8 @@ export interface McpProxy {
    * any turn, such as Claude Code in a terminal. `undefined` refuses the app.
    */
   serveOutside(resolve: (appOrigin: string) => OutsideApp | undefined): void;
+  /** Resolves once no agent outside a turn waits on an answer, as a host handing over must. */
+  outsideAnswered(): Promise<void>;
   stopListening(): Promise<void>;
   close(): Promise<void>;
 }
@@ -613,8 +615,21 @@ export function createMcpProxy(
   let server: Server | undefined;
   let socketPath: string | undefined;
   let outside: (appOrigin: string) => OutsideApp | undefined = () => undefined;
+  /** Every socket an agent holds open, which would keep a closing server waiting forever. */
+  const agentSockets = new Set<Socket>();
+  /** Calls of agents outside a turn not answered yet, as `<socket> <id>`. */
+  const outsideCalls = new Set<string>();
+  const whenAnswered: (() => void)[] = [];
+  let sockets = 0;
+  const settledOutside = () => {
+    if (outsideCalls.size > 0) return;
+    for (const resolve of whenAnswered.splice(0)) resolve();
+  };
 
   const accept = (socket: Socket) => {
+    agentSockets.add(socket);
+    const serial = ++sockets;
+    const callOf = (id: JsonRpcId) => `${serial} ${JSON.stringify(id)}`;
     let live: Live | undefined;
     let outsideLine: ((line: string) => void) | undefined;
     const reply = (line: string) => {
@@ -622,6 +637,10 @@ export function createMcpProxy(
     };
     onLines(socket, (line) => {
       if (outsideLine !== undefined) {
+        const message = parse(line);
+        if (typeof message?.method === "string" && message.id !== undefined) {
+          outsideCalls.add(callOf(message.id));
+        }
         outsideLine(line);
         return;
       }
@@ -638,14 +657,33 @@ export function createMcpProxy(
           socket.end();
           return;
         }
-        outsideLine = outsideSession(app, socket, reply, tokenWaitMs);
+        outsideLine = outsideSession(
+          app,
+          socket,
+          (answer) => {
+            const message = parse(answer);
+            if (message?.id !== undefined && message.method === undefined) {
+              outsideCalls.delete(callOf(message.id));
+              settledOutside();
+            }
+            reply(answer);
+          },
+          tokenWaitMs,
+        );
         return;
       }
       live = sessions.get(first);
       if (live) live.sockets.add(socket);
       else socket.destroy();
     });
-    socket.on("close", () => live?.sockets.delete(socket));
+    socket.on("close", () => {
+      agentSockets.delete(socket);
+      for (const call of outsideCalls) {
+        if (call.startsWith(`${serial} `)) outsideCalls.delete(call);
+      }
+      settledOutside();
+      live?.sockets.delete(socket);
+    });
     socket.on("error", () => socket.destroy());
   };
 
@@ -727,6 +765,10 @@ export function createMcpProxy(
         },
       };
     },
+    outsideAnswered() {
+      if (outsideCalls.size === 0) return Promise.resolve();
+      return new Promise<void>((resolve) => whenAnswered.push(resolve));
+    },
     async stopListening() {
       const closing = server;
       server = undefined;
@@ -740,6 +782,7 @@ export function createMcpProxy(
         for (const socket of live.sockets) socket.destroy();
       }
       sessions.clear();
+      for (const socket of agentSockets) socket.destroy();
       const closing = server;
       server = undefined;
       if (closing) {
@@ -758,11 +801,19 @@ function notServedMessage(appOrigin: string): string {
 const notRunningMessage = (appOrigin: string) =>
   `Parlor Host is not running on this computer, so ${appOrigin} cannot be reached. Open the app's agent sidebar, or run \`npx @parlor/agent-host connect ${appOrigin}\`.`;
 
+/** How long a call waits for a restarted Parlor Host before it is answered that it stopped. */
+const RECONNECT_WAIT_MS = 5_000;
+const RECONNECT_POLL_MS = 100;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * `parlor-host mcp-proxy`: stdio to the daemon socket and back. Inside a turn the
- * environment names the session; `--app` serves an agent outside any turn. Once the daemon
- * hangs up, every request still unanswered, and every later one, is answered with an error
- * here.
+ * environment names the session, which ends when the daemon hangs up: every request still
+ * unanswered, and every later one, is answered with an error here. `--app` serves an agent
+ * outside any turn, which outlives the daemon: its next call reaches the one that replaced it,
+ * opened with the handshake the agent began with. A call in flight when it hung up is answered
+ * with an error, never sent again, since it may have run.
  */
 export async function runMcpProxyProcess(
   env: NodeJS.ProcessEnv,
@@ -779,43 +830,131 @@ export async function runMcpProxyProcess(
   const refuse = (id: JsonRpcId) => toAgent(failure(id, REFUSED_CODE, why));
   process.stdout.on("error", () => undefined);
 
-  const daemon = connect(path);
-  daemon.on("error", () => daemon.destroy());
-  daemon.once("connect", () => {
-    if (outside) why = DISCONNECTED_MESSAGE;
-  });
-  const hungUp = new Promise<void>((resolve) =>
-    daemon.once("close", () => {
+  const handshake = new Map<string, Message>();
+  /** The replayed initialize's id, answered here and never shown to the agent. */
+  const replies = new Map<JsonRpcId, () => void>();
+  let daemon: Socket | undefined;
+  let reached = false;
+  /** False once a wait for a restarted host ran out, so later calls try once instead of waiting. */
+  let waits = true;
+  let replays = 0;
+
+  const attach = (socket: Socket) => {
+    daemon = socket;
+    socket.on("error", () => socket.destroy());
+    socket.once("close", () => {
+      if (daemon === socket) daemon = undefined;
       for (const id of unanswered) refuse(id);
       unanswered.clear();
-      resolve();
-    }),
-  );
-  daemon.write(outside ? `${OUTSIDE_PREFIX}${outside.appOrigin}\n` : `${nonce}\n`);
-  onLines(daemon, (line) => {
-    const refused = (parse(line) as { readonly refused?: unknown } | undefined)?.refused;
-    if (typeof refused === "string") {
-      why = refused;
-      return;
-    }
-    const message = parse(line);
-    if (message?.id !== undefined && message.method === undefined) {
-      unanswered.delete(message.id);
-    }
-    toAgent(line);
-  });
+      for (const settle of replies.values()) settle();
+      replies.clear();
+    });
+    socket.write(outside ? `${OUTSIDE_PREFIX}${outside.appOrigin}\n` : `${nonce}\n`);
+    onLines(socket, (line) => {
+      const message = parse(line) as
+        | (Message & { readonly refused?: unknown })
+        | undefined;
+      if (typeof message?.refused === "string") {
+        why = message.refused;
+        return;
+      }
+      if (message?.id !== undefined && message.method === undefined) {
+        const settle = replies.get(message.id);
+        if (settle) {
+          replies.delete(message.id);
+          settle();
+          return;
+        }
+        unanswered.delete(message.id);
+      }
+      toAgent(line);
+    });
+  };
 
-  const agent = onLines(process.stdin, (line) => {
+  const connected = (socket: Socket) => {
+    reached = true;
+    if (outside) why = DISCONNECTED_MESSAGE;
+    attach(socket);
+  };
+
+  /** Opens the new host with the agent's handshake, waiting for initialize's answer first. */
+  const openAgain = async (socket: Socket) => {
+    const initialize = handshake.get("initialize");
+    if (initialize?.id !== undefined) {
+      const id = `parlor-replay-${++replays}`;
+      const answered = new Promise<void>((resolve) => replies.set(id, resolve));
+      socket.write(`${JSON.stringify({ ...initialize, id })}\n`);
+      await answered;
+    }
+    const initialized = handshake.get("notifications/initialized");
+    if (initialized && !socket.destroyed)
+      socket.write(`${JSON.stringify(initialized)}\n`);
+  };
+
+  const dial = () =>
+    new Promise<Socket | undefined>((resolve) => {
+      const socket = connect(path);
+      socket.once("connect", () => resolve(socket));
+      socket.once("error", () => {
+        socket.destroy();
+        resolve(undefined);
+      });
+    });
+
+  const reach = async (): Promise<Socket | undefined> => {
+    if (daemon && !daemon.destroyed) return daemon;
+    if (!outside) return undefined;
+    const again = reached;
+    const deadline = Date.now() + (again && waits ? RECONNECT_WAIT_MS : 0);
+    for (;;) {
+      const socket = await dial();
+      if (socket) {
+        waits = true;
+        connected(socket);
+        if (again) await openAgain(socket);
+        return socket.destroyed ? undefined : socket;
+      }
+      if (Date.now() >= deadline) {
+        if (again) waits = false;
+        return undefined;
+      }
+      await sleep(RECONNECT_POLL_MS);
+    }
+  };
+
+  const pass = async (line: string) => {
     const message = parse(line);
     const id = typeof message?.method === "string" ? message.id : undefined;
-    if (!daemon.destroyed) {
-      if (id !== undefined) unanswered.add(id);
-      daemon.write(`${line}\n`);
-    } else if (id !== undefined) {
-      refuse(id);
+    if (
+      message?.method === "initialize" ||
+      message?.method === "notifications/initialized"
+    ) {
+      handshake.set(message.method, message);
     }
+    const socket = await reach();
+    if (!socket) {
+      if (id !== undefined) refuse(id);
+      return;
+    }
+    if (id !== undefined) unanswered.add(id);
+    socket.write(`${line}\n`);
+  };
+
+  const first = connect(path);
+  first.once("connect", () => {
+    reached = true;
+    if (outside) why = DISCONNECTED_MESSAGE;
+  });
+  attach(first);
+  let forwarding = Promise.resolve();
+  const agent = onLines(process.stdin, (line) => {
+    forwarding = forwarding.then(() => pass(line));
   });
   await once(agent, "close");
-  daemon.end();
-  await hungUp;
+  await forwarding;
+  const last = daemon;
+  if (last && !last.destroyed) {
+    last.end();
+    await once(last, "close");
+  }
 }

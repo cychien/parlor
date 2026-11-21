@@ -52,7 +52,12 @@ import { type LocalPrompter, printable } from "./prompter.js";
 import { compareVersions, RELEASE_KEY, signedRelease } from "./release.js";
 import { revokeGrant } from "./revoke.js";
 import { selfEntry } from "./self.js";
-import { type HostRelease, installLoginItem, installRelease } from "./service.js";
+import {
+  hasInstalledRelease,
+  type HostRelease,
+  installLoginItem,
+  installRelease,
+} from "./service.js";
 import { agentEnvironment, rereadAgentPath } from "./shell-path.js";
 import type { TrustStore } from "./trust.js";
 import { runTurn } from "./turn.js";
@@ -99,6 +104,9 @@ const CONNECT_TIMEOUT_MS = 15_000;
 /** An agent token is asked for again this long before it runs out. */
 const AGENT_TOKEN_MARGIN_MS = 60_000;
 const OFFLINE_REPORT_MS = 1_000;
+/** How long a host handing over waits for the calls agents outside a turn are waiting on. */
+const OUTSIDE_ANSWER_MS = 60_000;
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms).unref());
 function incompatibleMessage(
   grant: AppGrant,
   welcome: Extract<HostWelcome, { readonly accepted: false }>,
@@ -535,6 +543,8 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
         const held = agentTokens.get(key);
         if (held && held.expiresAt - AGENT_TOKEN_MARGIN_MS > Date.now())
           return held.token;
+        // A host that just started is still greeting the app; one the app did not answer fails at once.
+        if (state.link.protocol === undefined) await state.link.greeted;
         if (state.link.protocol === undefined) throw new AppNotAnswering();
         const fresh = await state.link.api.calls.call("hostAgentToken", {
           agent: `${agent} on ${name}`.slice(0, 120),
@@ -745,7 +755,6 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
         });
         openHostLog(join(paths.root, "logs", "daemon.log"));
         await putHostCommandFirstOnPath(paths.root);
-        await deps.proxy.listen(paths.proxy);
         listedProfiles = await loadProfiles(paths.agents);
         const found = await findAgents(listedProfiles);
         profiles = found.profiles;
@@ -767,6 +776,8 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
           logEvent("link_failed", { appOrigin: grant.appOrigin, error: String(error) }),
         );
       }
+      // Only now: an agent's proxy that reconnects finds every app it served before.
+      await deps.proxy.listen(paths.proxy);
     },
     async connect(appOrigin) {
       const saved = await deps.grants.get(appOrigin);
@@ -858,6 +869,8 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
     if (!handedOver || running.size > 0 || finishing) return;
     finishing = true;
     void (async () => {
+      // An agent outside a turn may still be waiting on this host; its next call reaches the new one.
+      await Promise.race([deps.proxy.outsideAnswered(), sleep(OUTSIDE_ANSWER_MS)]);
       for (const origin of [...links.keys()]) await closeLink(origin, "handed_over");
       await Promise.all(
         [...clients].map(
@@ -883,6 +896,16 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
       return { ok: false, error: "unsigned" };
     }
     await installLoginItem(paths);
+    await daemon.handover();
+    setImmediate(settleHandover);
+    return { ok: true };
+  };
+
+  const stepAside = async (release: HostRelease): Promise<unknown> => {
+    if (compareVersions(release.version, deps.release.version) <= 0) {
+      return { ok: false, error: "downgrade" };
+    }
+    if (await hasInstalledRelease(paths)) return { ok: false, error: "installed" };
     await daemon.handover();
     setImmediate(settleHandover);
     return { ok: true };
@@ -935,6 +958,8 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
         return { ok: true, release: deps.release };
       case "handover":
         return handOverTo(request.binary, request.signature);
+      case "step_aside":
+        return stepAside(request.release);
       case "status":
         return { ok: true, status: status(), grants: grantsOf() };
       case "begin_local_pairing": {

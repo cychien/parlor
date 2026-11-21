@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import {
@@ -7,6 +8,7 @@ import {
   readlink,
   realpath,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
@@ -226,26 +228,44 @@ describe("the adopt decision", () => {
       "refuse_legacy",
     ],
     [
-      "a running service, a CLI of any release",
-      { service: "running", running },
+      "a running service, an older CLI",
+      { service: "running", running, installed: false },
       cli("0.0.1"),
       "use",
     ],
     [
+      "a running service, a CLI of the same release",
+      { service: "running", running, installed: false },
+      cli("1.2.0"),
+      "use",
+    ],
+    [
+      "a running service no app installed, a newer CLI",
+      { service: "running", running, installed: false },
+      cli("1.10.0"),
+      "replace",
+    ],
+    [
+      "a running service an app installed, a newer CLI",
+      { service: "running", running, installed: true },
+      cli("1.10.0"),
+      "use",
+    ],
+    [
       "a running service, an app of the same release",
-      { service: "running", running },
+      { service: "running", running, installed: true },
       sidecar("1.2.0", files),
       "use",
     ],
     [
       "a running service, an older app",
-      { service: "running", running },
+      { service: "running", running, installed: true },
       sidecar("1.1.9", files),
       "refuse_downgrade",
     ],
     [
       "a running service, a newer app",
-      { service: "running", running },
+      { service: "running", running, installed: true },
       sidecar("1.10.0", files),
       "hand_over",
     ],
@@ -427,6 +447,146 @@ describe("a service already running", () => {
     const plist = readFileSync(paths.launchAgent, "utf8");
     expect(plist).toContain(join(paths.current, "parlor-host"));
   }, 60_000);
+});
+
+describe("a newer CLI with a service running that no app installed", () => {
+  it("has the old service hand over to it and drain, and starts itself", async () => {
+    const old = await startDaemon("1.0.0");
+    const start = vi.fn(spawnDaemon("1.1.0"));
+    const outcome = await ensureServiceWith(
+      await withTrust({ start }),
+      paths,
+      cli("1.1.0"),
+    );
+    expect(outcome).toEqual({
+      kind: "upgraded",
+      from: release("1.0.0"),
+      to: release("1.1.0"),
+    });
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(await versionRunning()).toBe("1.1.0");
+    await old.drained;
+    expect(existsSync(paths.versions)).toBe(false);
+    expect(existsSync(paths.launchAgent)).toBe(false);
+  }, 60_000);
+
+  it("keeps using a service an app installed, which refuses to step aside for a CLI", async () => {
+    await startDaemon("1.0.0");
+    await mkdir(paths.versions, { recursive: true });
+    await writeFile(join(paths.versions, "parlor-host"), "installed", { mode: 0o755 });
+    await symlink("versions", paths.current);
+    const start = vi.fn(spawnDaemon("1.1.0"));
+    expect(
+      await ensureServiceWith(await withTrust({ start }), paths, cli("1.1.0")),
+    ).toEqual({
+      kind: "using",
+      running: release("1.0.0"),
+    });
+    const control = (await connectControl(paths.control))!;
+    expect(await control.send({ op: "step_aside", release: release("1.1.0") })).toEqual({
+      ok: false,
+      error: "installed",
+    });
+    control.close();
+    expect(start).not.toHaveBeenCalled();
+    expect(await versionRunning()).toBe("1.0.0");
+  }, 60_000);
+
+  it("is refused a step aside it asks with a release that is not newer", async () => {
+    await startDaemon("1.1.0");
+    const control = (await connectControl(paths.control))!;
+    expect(await control.send({ op: "step_aside", release: release("1.1.0") })).toEqual({
+      ok: false,
+      error: "downgrade",
+    });
+    control.close();
+    expect(await versionRunning()).toBe("1.1.0");
+  }, 30_000);
+
+  async function serviceWithoutStepAside(): Promise<Server> {
+    await mkdir(join(paths.root, "run"), { recursive: true });
+    const old: Server = createServer((socket) => {
+      socket.on("data", (data) => {
+        const { op } = JSON.parse(String(data)) as { op: string };
+        socket.write(
+          `${JSON.stringify(op === "hello" ? { ok: true, release: release("1.0.0") } : { ok: false, error: "Unknown op." })}\n`,
+        );
+      });
+    });
+    await new Promise<void>((resolve) => old.listen(paths.control, resolve));
+    return old;
+  }
+
+  it("stops a release from before step_aside itself, then starts", async () => {
+    const old = await serviceWithoutStepAside();
+    const stopOld = vi.fn(async () => {
+      old.closeAllConnections?.();
+      await new Promise((resolve) => old.close(resolve));
+    });
+    const outcome = await ensureServiceWith(
+      await withTrust({ start: spawnDaemon("1.1.0"), stopOld }),
+      paths,
+      cli("1.1.0"),
+    );
+    expect(stopOld).toHaveBeenCalledTimes(1);
+    expect(outcome).toEqual({
+      kind: "upgraded",
+      from: release("1.0.0"),
+      to: release("1.1.0"),
+    });
+    expect(await versionRunning()).toBe("1.1.0");
+  }, 60_000);
+
+  it("stops a release from before step_aside by its pid, killing one that ignores SIGTERM", async () => {
+    await mkdir(join(paths.root, "run"), { recursive: true });
+    const script = join(root, "parlor-host");
+    await writeFile(
+      script,
+      `const net = require("node:net");
+process.on("SIGTERM", () => undefined);
+net.createServer((socket) => socket.on("data", (data) => {
+  const { op } = JSON.parse(String(data));
+  socket.write(JSON.stringify(op === "hello" ? { ok: true, release: ${JSON.stringify(release("1.0.0"))} } : { ok: false, error: "Unknown op." }) + "\\n");
+})).listen(process.argv[2], () => process.stdout.write("listening\\n"));
+`,
+    );
+    const old = spawn(process.execPath, [script, paths.control, "daemon"], {
+      stdio: ["ignore", "pipe", "inherit"],
+    });
+    try {
+      await new Promise<void>((resolve) => old.stdout.once("data", () => resolve()));
+      const outcome = await ensureServiceWith(
+        await withTrust({ start: spawnDaemon("1.1.0") }),
+        paths,
+        cli("1.1.0"),
+      );
+      expect(outcome).toEqual({
+        kind: "upgraded",
+        from: release("1.0.0"),
+        to: release("1.1.0"),
+      });
+      expect(old.signalCode).toBe("SIGKILL");
+      expect(await versionRunning()).toBe("1.1.0");
+    } finally {
+      old.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  it("keeps using an old release that does not stop", async () => {
+    const old = await serviceWithoutStepAside();
+    try {
+      const start = vi.fn(spawnDaemon("1.1.0"));
+      const outcome = await ensureServiceWith(
+        await withTrust({ start, stopOld: async () => undefined, readyMs: 500 }),
+        paths,
+        cli("1.1.0"),
+      );
+      expect(outcome).toEqual({ kind: "using", running: release("1.0.0") });
+      expect(start).not.toHaveBeenCalled();
+    } finally {
+      old.close();
+    }
+  }, 30_000);
 });
 
 describe("no service running", () => {

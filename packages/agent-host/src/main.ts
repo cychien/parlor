@@ -348,6 +348,11 @@ const connect = defineCommand({
       );
       return;
     }
+    if (adopted.kind === "upgraded") {
+      process.stdout.write(
+        `Updated Parlor Host on this computer from ${adopted.from.version} to ${adopted.to.version}.\n`,
+      );
+    }
     const client = await kit.connectControl(paths.control);
     if (!client) {
       fail("Parlor Host stopped answering.");
