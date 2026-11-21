@@ -91,6 +91,7 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
+  for (const release of held.splice(0)) release();
   received.length = 0;
   served = {
     appOrigin: origin,
@@ -302,6 +303,22 @@ describe("an agent outside any turn", () => {
     agent.request("tools/call", { name: "listCourses", arguments: {} });
     expect(textOf(await agent.next())).toBe("ran listCourses");
     expect(received.map(({ tool }) => tool).filter(Boolean)).toEqual(["listCourses"]);
+  }, 30_000);
+
+  it("lets a host handing over know once no agent outside a turn waits on it", async () => {
+    const agent = agentOutside(origin);
+    await agent.initialize(true);
+    await proxy.outsideAnswered();
+    const slow = agent.request("tools/call", { name: "slowTool", arguments: {} });
+    await vi.waitFor(() => expect(held).toHaveLength(1));
+    let answered = false;
+    const waiting = proxy.outsideAnswered().then(() => (answered = true));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(answered).toBe(false);
+    held.shift()!();
+    expect((await agent.next()).id).toBe(slow);
+    await waiting;
+    expect(answered).toBe(true);
   }, 30_000);
 
   it("is told Parlor Host stopped when none comes back in time", async () => {

@@ -104,6 +104,9 @@ const CONNECT_TIMEOUT_MS = 15_000;
 /** An agent token is asked for again this long before it runs out. */
 const AGENT_TOKEN_MARGIN_MS = 60_000;
 const OFFLINE_REPORT_MS = 1_000;
+/** How long a host handing over waits for the calls agents outside a turn are waiting on. */
+const OUTSIDE_ANSWER_MS = 60_000;
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms).unref());
 function incompatibleMessage(
   grant: AppGrant,
   welcome: Extract<HostWelcome, { readonly accepted: false }>,
@@ -866,6 +869,8 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
     if (!handedOver || running.size > 0 || finishing) return;
     finishing = true;
     void (async () => {
+      // An agent outside a turn may still be waiting on this host; its next call reaches the new one.
+      await Promise.race([deps.proxy.outsideAnswered(), sleep(OUTSIDE_ANSWER_MS)]);
       for (const origin of [...links.keys()]) await closeLink(origin, "handed_over");
       await Promise.all(
         [...clients].map(

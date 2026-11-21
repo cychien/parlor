@@ -26,6 +26,8 @@ export interface McpProxy {
    * any turn, such as Claude Code in a terminal. `undefined` refuses the app.
    */
   serveOutside(resolve: (appOrigin: string) => OutsideApp | undefined): void;
+  /** Resolves once no agent outside a turn waits on an answer, as a host handing over must. */
+  outsideAnswered(): Promise<void>;
   stopListening(): Promise<void>;
   close(): Promise<void>;
 }
@@ -615,9 +617,19 @@ export function createMcpProxy(
   let outside: (appOrigin: string) => OutsideApp | undefined = () => undefined;
   /** Every socket an agent holds open, which would keep a closing server waiting forever. */
   const agentSockets = new Set<Socket>();
+  /** Calls of agents outside a turn not answered yet, as `<socket> <id>`. */
+  const outsideCalls = new Set<string>();
+  const whenAnswered: (() => void)[] = [];
+  let sockets = 0;
+  const settledOutside = () => {
+    if (outsideCalls.size > 0) return;
+    for (const resolve of whenAnswered.splice(0)) resolve();
+  };
 
   const accept = (socket: Socket) => {
     agentSockets.add(socket);
+    const serial = ++sockets;
+    const callOf = (id: JsonRpcId) => `${serial} ${JSON.stringify(id)}`;
     let live: Live | undefined;
     let outsideLine: ((line: string) => void) | undefined;
     const reply = (line: string) => {
@@ -625,6 +637,10 @@ export function createMcpProxy(
     };
     onLines(socket, (line) => {
       if (outsideLine !== undefined) {
+        const message = parse(line);
+        if (typeof message?.method === "string" && message.id !== undefined) {
+          outsideCalls.add(callOf(message.id));
+        }
         outsideLine(line);
         return;
       }
@@ -641,7 +657,19 @@ export function createMcpProxy(
           socket.end();
           return;
         }
-        outsideLine = outsideSession(app, socket, reply, tokenWaitMs);
+        outsideLine = outsideSession(
+          app,
+          socket,
+          (answer) => {
+            const message = parse(answer);
+            if (message?.id !== undefined && message.method === undefined) {
+              outsideCalls.delete(callOf(message.id));
+              settledOutside();
+            }
+            reply(answer);
+          },
+          tokenWaitMs,
+        );
         return;
       }
       live = sessions.get(first);
@@ -650,6 +678,10 @@ export function createMcpProxy(
     });
     socket.on("close", () => {
       agentSockets.delete(socket);
+      for (const call of outsideCalls) {
+        if (call.startsWith(`${serial} `)) outsideCalls.delete(call);
+      }
+      settledOutside();
       live?.sockets.delete(socket);
     });
     socket.on("error", () => socket.destroy());
@@ -732,6 +764,10 @@ export function createMcpProxy(
           for (const socket of live.sockets) socket.destroy();
         },
       };
+    },
+    outsideAnswered() {
+      if (outsideCalls.size === 0) return Promise.resolve();
+      return new Promise<void>((resolve) => whenAnswered.push(resolve));
     },
     async stopListening() {
       const closing = server;
