@@ -50,6 +50,10 @@ beforeAll(async () => {
         method: message.method,
         tool: message.params?.name,
       });
+      if (message.id === undefined) {
+        response.writeHead(202).end();
+        return;
+      }
       const result =
         message.method === "initialize"
           ? {
@@ -236,6 +240,53 @@ describe("an agent outside any turn", () => {
       `This computer does not let coding agents use ${origin}: it is not connected, or that was turned off. Connect it again with \`npx @parlor/agent-host connect ${origin}\`.`,
     );
     expect(received).toEqual([]);
+  }, 30_000);
+
+  it("reaches the Parlor Host that replaced a stopped one, opening it with the handshake it began with", async () => {
+    const agent = agentOutside(origin);
+    await agent.initialize(true);
+    agent.send({ method: "notifications/initialized" });
+    agent.request("tools/call", { name: "listCourses", arguments: {} });
+    expect(textOf(await agent.next())).toBe("ran listCourses");
+
+    await proxy.close();
+    proxy = createMcpProxy("parlor-host", { tokenWaitMs: 300 });
+    proxy.serveOutside((appOrigin) => (appOrigin === origin ? served : undefined));
+    received.length = 0;
+    const restarted = setTimeout(
+      () => void proxy.listen(hostPaths(join(home, ".parlor", "host")).proxy),
+      500,
+    );
+    try {
+      agent.request("tools/call", { name: "listCourses", arguments: {} });
+      const answer = await agent.next();
+      expect(textOf(answer)).toBe("ran listCourses");
+      expect(received.map(({ method, tool }) => [method, tool])).toEqual([
+        ["initialize", undefined],
+        ["notifications/initialized", undefined],
+        ["tools/list", undefined],
+        ["tools/call", "listCourses"],
+      ]);
+    } finally {
+      clearTimeout(restarted);
+    }
+  }, 30_000);
+
+  it("is told Parlor Host stopped when none comes back in time", async () => {
+    const agent = agentOutside(origin);
+    await agent.initialize(true);
+    await proxy.close();
+    proxy = createMcpProxy("parlor-host", { tokenWaitMs: 300 });
+    proxy.serveOutside((appOrigin) => (appOrigin === origin ? served : undefined));
+    try {
+      agent.request("tools/call", { name: "listCourses", arguments: {} });
+      const refused = await agent.next();
+      expect((refused.error as { message: string }).message).toMatch(
+        /^This computer no longer serves the app/,
+      );
+    } finally {
+      await proxy.listen(hostPaths(join(home, ".parlor", "host")).proxy);
+    }
   }, 30_000);
 
   it("says Parlor Host is not running when nothing listens", async () => {
