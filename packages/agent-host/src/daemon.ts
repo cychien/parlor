@@ -52,7 +52,12 @@ import { type LocalPrompter, printable } from "./prompter.js";
 import { compareVersions, RELEASE_KEY, signedRelease } from "./release.js";
 import { revokeGrant } from "./revoke.js";
 import { selfEntry } from "./self.js";
-import { type HostRelease, installLoginItem, installRelease } from "./service.js";
+import {
+  hasInstalledRelease,
+  type HostRelease,
+  installLoginItem,
+  installRelease,
+} from "./service.js";
 import { agentEnvironment, rereadAgentPath } from "./shell-path.js";
 import type { TrustStore } from "./trust.js";
 import { runTurn } from "./turn.js";
@@ -888,6 +893,16 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
     return { ok: true };
   };
 
+  const stepAside = async (release: HostRelease): Promise<unknown> => {
+    if (compareVersions(release.version, deps.release.version) <= 0) {
+      return { ok: false, error: "downgrade" };
+    }
+    if (await hasInstalledRelease(paths)) return { ok: false, error: "installed" };
+    await daemon.handover();
+    setImmediate(settleHandover);
+    return { ok: true };
+  };
+
   const pairings = new Map<string, LocalPairing>();
 
   const pendingPairing = (appOrigin: string) => {
@@ -935,6 +950,8 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
         return { ok: true, release: deps.release };
       case "handover":
         return handOverTo(request.binary, request.signature);
+      case "step_aside":
+        return stepAside(request.release);
       case "status":
         return { ok: true, status: status(), grants: grantsOf() };
       case "begin_local_pairing": {

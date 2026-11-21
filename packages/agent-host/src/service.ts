@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import {
   access,
   chmod,
@@ -60,7 +60,12 @@ export type AdoptOutcome =
 export type Situation =
   | { readonly service: "absent"; readonly installed: boolean }
   | { readonly service: "legacy" }
-  | { readonly service: "running"; readonly running: HostRelease };
+  | {
+      readonly service: "running";
+      readonly running: HostRelease;
+      /** A signed release is installed, so the service is that release's, kept up by apps. */
+      readonly installed: boolean;
+    };
 
 type Sidecar = Extract<ServiceClient, { readonly kind: "desktop-sidecar" }>;
 
@@ -70,6 +75,7 @@ export type Action =
   | { readonly do: "install_bundled"; readonly client: Sidecar }
   | { readonly do: "refuse_legacy" }
   | { readonly do: "use"; readonly running: HostRelease }
+  | { readonly do: "replace"; readonly running: HostRelease }
   | { readonly do: "refuse_downgrade"; readonly running: HostRelease }
   | { readonly do: "hand_over"; readonly client: Sidecar; readonly running: HostRelease };
 
@@ -84,7 +90,12 @@ export function actionFor(situation: Situation, client: ServiceClient): Action {
         : { do: "install_bundled", client };
     case "running": {
       const { running } = situation;
-      if (client.kind === "cli") return { do: "use", running };
+      if (client.kind === "cli") {
+        return !situation.installed &&
+          compareVersions(client.release.version, running.version) > 0
+          ? { do: "replace", running }
+          : { do: "use", running };
+      }
       const order = compareVersions(client.release.version, running.version);
       if (order > 0) return { do: "hand_over", client, running };
       return order === 0 ? { do: "use", running } : { do: "refuse_downgrade", running };
@@ -93,6 +104,8 @@ export function actionFor(situation: Situation, client: ServiceClient): Action {
 }
 
 export interface ServiceDeps {
+  /** Stops a service too old to step aside when asked; resolves once it no longer answers. */
+  readonly stopOld?: ((paths: HostPaths) => Promise<void>) | undefined;
   readonly releaseKey: string | undefined;
   readonly readyMs: number;
   readonly pollMs: number;
@@ -120,18 +133,25 @@ const exists = (path: string) =>
     () => false,
   );
 
+export const hasInstalledRelease = (paths: HostPaths) =>
+  exists(join(paths.current, SERVICE_BINARY));
+
 async function observe(paths: HostPaths, client: ServiceClient): Promise<Situation> {
   const control = await connectControl(paths.control);
   if (!control) {
     return {
       service: "absent",
-      installed: await exists(join(paths.current, SERVICE_BINARY)),
+      installed: await hasInstalledRelease(paths),
     };
   }
   const reply = await control.send({ op: "hello", client });
   control.close();
   return reply.ok
-    ? { service: "running", running: reply.release }
+    ? {
+        service: "running",
+        running: reply.release,
+        installed: await hasInstalledRelease(paths),
+      }
     : { service: "legacy" };
 }
 
@@ -303,6 +323,89 @@ async function handOver(
   return { kind: "upgraded", from: running, to };
 }
 
+const UNKNOWN_OP = "Unknown op.";
+const OLD_STOP_MS = 5_000;
+
+const run = (command: string, args: readonly string[]) =>
+  new Promise<string>((resolve) =>
+    execFile(command, args, (error, stdout) => resolve(error ? "" : stdout)),
+  );
+
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+async function exited(pid: number, ms: number): Promise<boolean> {
+  for (const deadline = Date.now() + ms; Date.now() < deadline; await sleep(100)) {
+    if (!alive(pid)) return true;
+  }
+  return !alive(pid);
+}
+
+/**
+ * Releases before step_aside only stop on a signal. Their stop can wait forever on the
+ * agents' open MCP sockets after it already reported offline, hence the kill.
+ */
+async function signalOldService(paths: HostPaths): Promise<void> {
+  const pid = Number(
+    (await run("lsof", ["-t", "--", paths.control])).trim().split("\n")[0],
+  );
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return;
+  const command = await run("ps", ["-o", "command=", "-p", String(pid)]);
+  if (!/parlor-host/.test(command) || !/\bdaemon\b/.test(command)) return;
+  process.kill(pid, "SIGTERM");
+  if (await exited(pid, OLD_STOP_MS)) return;
+  process.kill(pid, "SIGKILL");
+  await exited(pid, OLD_STOP_MS);
+}
+
+async function untilGone(paths: HostPaths, deps: ServiceDeps): Promise<boolean> {
+  for (const deadline = Date.now() + deps.readyMs; Date.now() < deadline;) {
+    const control = await connectControl(paths.control);
+    if (!control) return true;
+    control.close();
+    await sleep(deps.pollMs);
+  }
+  return false;
+}
+
+/**
+ * A newer CLI takes over from an older service no app installed: the old one hands its links
+ * over and finishes its running turns, as in an upgrade, and this CLI starts itself.
+ */
+async function replace(
+  paths: HostPaths,
+  client: ServiceClient,
+  running: HostRelease,
+  deps: ServiceDeps,
+  lockToken: string,
+): Promise<AdoptOutcome> {
+  const control = await connectControl(paths.control);
+  if (control) {
+    const reply = await control.send({ op: "step_aside", release: client.release });
+    control.close();
+    if (!reply.ok) {
+      if (reply.error !== UNKNOWN_OP) return { kind: "using", running };
+      await (deps.stopOld ?? signalOldService)(paths);
+    }
+  }
+  if (!(await untilGone(paths, deps))) return { kind: "using", running };
+  const self = selfInvocation(["daemon"]);
+  await startWith(deps)(paths, self.command, self.args, lockToken);
+  const to = await untilRunning(
+    paths,
+    client,
+    deps,
+    (release) => compareVersions(release.version, running.version) > 0,
+  );
+  return { kind: "upgraded", from: running, to };
+}
+
 /**
  * Leaves exactly one per-user service running, the newest: adopt, install or upgrade.
  * Only binaries signed by the Parlor release key, never a downgrade; installs hold a lock
@@ -322,6 +425,8 @@ export async function ensureServiceWith(
           return { kind: "refused", reason: "legacy_service" };
         case "use":
           return { kind: "using", running: action.running };
+        case "replace":
+          return replace(paths, client, action.running, deps, lockToken);
         case "refuse_downgrade":
           return { kind: "refused", reason: "downgrade", running: action.running };
         case "hand_over":
