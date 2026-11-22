@@ -257,15 +257,18 @@ describe("an agent outside any turn", () => {
     agent.send({ method: "notifications/initialized" });
     agent.request("tools/call", { name: "listCourses", arguments: {} });
     expect(textOf(await agent.next())).toBe("ran listCourses");
+    // The proxy hears the host close on its own time; its refusal of a call in flight says it has.
+    const slow = agent.request("tools/call", { name: "slowTool", arguments: {} });
+    await vi.waitFor(() => expect(held).toHaveLength(1));
 
     await proxy.close();
+    expect((await agent.next()).id).toBe(slow);
     proxy = createMcpProxy("parlor-host", { tokenWaitMs: 300 });
     proxy.serveOutside((appOrigin) => (appOrigin === origin ? served : undefined));
     received.length = 0;
-    const restarted = setTimeout(
-      () => void proxy.listen(hostPaths(join(home, ".parlor", "host")).proxy),
-      500,
-    );
+    const listening = hostPaths(join(home, ".parlor", "host")).proxy;
+    let listened: Promise<void> | undefined;
+    const restarted = setTimeout(() => void (listened = proxy.listen(listening)), 500);
     try {
       agent.request("tools/call", { name: "listCourses", arguments: {} });
       const answer = await agent.next();
@@ -278,6 +281,7 @@ describe("an agent outside any turn", () => {
       ]);
     } finally {
       clearTimeout(restarted);
+      await (listened ?? proxy.listen(listening));
     }
   }, 30_000);
 
