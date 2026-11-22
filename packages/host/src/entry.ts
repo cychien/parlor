@@ -261,6 +261,15 @@ export function topicName(channel: string, topic: string): string {
   return `${channel}\u0000${topic}`;
 }
 
+/**
+ * An account's object is created where the edge first reached it and stays there. Naming it by
+ * the region it serves gives an account a new object beside the database when that region
+ * changes; the old one held only the account's key.
+ */
+export function accountObjectName(key: string, hint: string | undefined): string {
+  return `${key}@${hint ?? "any"}`;
+}
+
 export interface ScaledEntryOptions extends DocumentOptions {
   readonly serverEntry: string;
   readonly locationHint?: string | undefined;
@@ -279,6 +288,7 @@ export function scaledEntrySource({
 }: ScaledEntryOptions): string {
   return `import { env, waitUntil } from "cloudflare:workers";
 import { createConnectionScope, installRequestHold } from "@parlor/data";
+import { routedAccount, routeSecret } from "@parlor/server";
 
 installRequestHold((work) => {
   try {
@@ -291,6 +301,8 @@ ${documentSource(document)}
 ${locationHintForDatabase.toString()}
 
 ${topicName.toString()}
+
+${accountObjectName.toString()}
 
 const UI_MANIFEST = ${UI_MANIFEST_PLACEHOLDER};
 const CONFIGURED_HINT = ${JSON.stringify(locationHint ?? null)};
@@ -315,7 +327,10 @@ let accountHint;
 function account(key) {
   accountHint ??= { hint: CONFIGURED_HINT ?? locationHintForDatabase(env.DATABASE_URL) };
   const accounts = env.${ACCOUNT_BINDING};
-  return accounts.get(accounts.idFromName(key), accountHint.hint ? { locationHint: accountHint.hint } : {});
+  return accounts.get(
+    accounts.idFromName(accountObjectName(key, accountHint.hint)),
+    accountHint.hint ? { locationHint: accountHint.hint } : {},
+  );
 }
 
 const bus = {
@@ -340,9 +355,17 @@ export default {
     const headers = new Headers(request.headers);
     headers.delete(ACCOUNT_HEADER);
     const incoming = new Request(request, { headers });
+    let served = false;
     try {
       return await withDocument(incoming, (request) =>
         scope.run(async () => {
+          // A signed-in browser's account is in a cookie its server signed: hand the request
+          // on before loading the app, which a cold isolate would otherwise evaluate first.
+          if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+            const routed = await routedAccount(request.headers.get("cookie"), routeSecret(env));
+            if (routed) return account(routed).fetch(forAccount(request, routed));
+          }
+          served = true;
           const server = await edge();
           let key;
           try {
@@ -361,11 +384,13 @@ export default {
     } finally {
       // The scope is never closed here: work the app hands to waitUntil may still use its
       // connections, and workerd ends them with the request once all of that has settled.
-      waitUntil(
-        scope
-          .run(async () => (await edge()).settle())
-          .catch((error) => console.error("[parlor] settling after a request failed:", error)),
-      );
+      if (served) {
+        waitUntil(
+          scope
+            .run(async () => (await edge()).settle())
+            .catch((error) => console.error("[parlor] settling after a request failed:", error)),
+        );
+      }
     }
   },
 };

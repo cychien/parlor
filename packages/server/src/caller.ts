@@ -38,6 +38,8 @@ export function streamsOf(caller: Caller): string[] {
 export interface CallerResolver {
   (request: Request): Promise<Caller>;
   readonly enforcing: boolean;
+  /** The caller already resolved for `request`, without resolving one. */
+  peek(request: Request): Promise<Caller> | undefined;
 }
 
 const SOURCES: ReadonlySet<string> = new Set<ActionSource>([
@@ -107,6 +109,9 @@ export function createCallerResolver(
       }
       return caller;
     },
-    { enforcing: auth?.enforcing === true },
+    {
+      enforcing: auth?.enforcing === true,
+      peek: (request: Request) => callers.get(request),
+    },
   );
 }

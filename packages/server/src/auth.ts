@@ -54,6 +54,16 @@ export interface AuthProvider extends ServerPlugin {
   device?(userId: UserId, deviceId: DeviceId): Promise<DeviceKeys | undefined>;
   /** Who the agent works for, for the turn's context block. */
   account?(userId: UserId): Promise<AccountProfile | undefined>;
+  /**
+   * Lets a split server send a signed-in browser's requests to its account's server without a
+   * database read. Without it, only live connections leave the edge.
+   */
+  readonly routing?: AuthRouting | undefined;
+}
+
+export interface AuthRouting {
+  /** The name of the cookie that carries the request's session, read without I/O. */
+  sessionCookie(request: Request): string | undefined;
 }
 
 /**

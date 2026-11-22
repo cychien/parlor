@@ -8,6 +8,7 @@ import { z } from "zod";
 import { AuthFailure, type AuthProvider } from "./auth.js";
 import { ANONYMOUS_ACCOUNT, createServer } from "./create-server.js";
 import type { PluginHost, ServerPlugin } from "./plugin.js";
+import { routedAccount } from "./route-hint.js";
 
 const actions = createRegistry({
   addNote: defineAction({
@@ -195,5 +196,87 @@ describe("a split server's accounts", { timeout: 30_000 }, () => {
     expect(
       await edge.placement(request(`/_parlor/sync/socket?ticket=${negotiated.ticket}`)),
     ).toBe(key);
+  });
+});
+
+describe("a split server's signed-in browsers", { timeout: 30_000 }, () => {
+  const routedAuth = (): AuthProvider => ({
+    ...auth(),
+    routing: { sessionCookie: () => "test.session" },
+  });
+
+  let previousSecret: string | undefined;
+  beforeAll(() => {
+    previousSecret = process.env.PARLOR_SECRET;
+    process.env.PARLOR_SECRET = "a-routing-secret";
+  });
+  afterAll(() => {
+    if (previousSecret === undefined) delete process.env.PARLOR_SECRET;
+    else process.env.PARLOR_SECRET = previousSecret;
+  });
+
+  function routedApp() {
+    return createServer(() => ({
+      actions,
+      database: { ...database, close: undefined },
+      auth: routedAuth(),
+    }));
+  }
+
+  const call = (user: string, session: string, route?: string) =>
+    request("/_parlor/actions/addNote", user, {
+      method: "POST",
+      body: "{}",
+      headers: {
+        cookie: [`test.session=${session}`, ...(route ? [route] : [])].join("; "),
+      },
+    });
+
+  const routeOf = (response: Response) =>
+    response.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith("parlor-route="))
+      ?.split(";")[0];
+
+  it("serve a session's first request at the edge, then send the rest to its account without a database read", async () => {
+    const { edge, account } = routedApp().split!();
+    expect(await edge.placement(call("alice", "session-a"))).toBeUndefined();
+
+    const first = await edge.fetch(call("alice", "session-a"));
+    expect(first.status).toBe(200);
+    const route = routeOf(first);
+    expect(route).toBeDefined();
+
+    expect(await edge.placement(call("alice", "session-a", route))).toBe(
+      accountKey("alice"),
+    );
+    expect(
+      await routedAccount(`test.session=session-a; ${route}`, "a-routing-secret"),
+    ).toBe(accountKey("alice"));
+    const later = await account(accountKey("alice")).fetch(
+      call("alice", "session-a", route),
+    );
+    expect(later.status).toBe(200);
+    expect(routeOf(later)).toBeUndefined();
+  });
+
+  it("ignore the cookie for another session, a forged account, another secret or an anonymous caller", async () => {
+    const { edge } = routedApp().split!();
+    const route = routeOf(await edge.fetch(call("alice", "session-a")))!;
+
+    expect(await edge.placement(call("bob", "session-b", route))).toBeUndefined();
+    const [, name, print, signature] = route.slice("parlor-route=".length).split("~");
+    const forged = `parlor-route=${accountKey("bob")}~${name}~${print}~${signature}`;
+    expect(await edge.placement(call("alice", "session-a", forged))).toBeUndefined();
+    expect(
+      await routedAccount(`test.session=session-a; ${route}`, "another-secret"),
+    ).toBeUndefined();
+
+    const anonymous = await edge.fetch(
+      request("/_parlor/manifest", undefined, {
+        headers: { cookie: "test.session=session-x" },
+      }),
+    );
+    expect(routeOf(anonymous)).toBeUndefined();
   });
 });

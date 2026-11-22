@@ -19,6 +19,7 @@ export {
   type AuthFailureOptions,
   type AuthFailureReason,
   type AuthProvider,
+  type AuthRouting,
   type AgentDelegation,
   type Delegation,
   type DeviceKeys,
@@ -83,3 +84,4 @@ export {
 export { DEFAULT_SCOPE, defaultScope, type ScopeResolver } from "./scope.js";
 export { type ActionVisibility, type VisibleTest } from "./visibility.js";
 export { type HibernationState, hostedSockets } from "./hosted-sockets.js";
+export { routedAccount, routeSecret } from "./route-hint.js";

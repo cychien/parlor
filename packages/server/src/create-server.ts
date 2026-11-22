@@ -65,6 +65,7 @@ import type {
 } from "./plugin.js";
 import { DEFAULT_BASE_PATH, type Manifest, PROTOCOL_VERSION } from "./protocol.js";
 import { refreshReads } from "./refresh.js";
+import { routeCookie, routedAccount, routeSecret } from "./route-hint.js";
 import { defaultScope, type ScopeResolver } from "./scope.js";
 import {
   type ActionVisibility,
@@ -773,11 +774,11 @@ function buildServer<T extends ActionMap>(
    * one the router may rebuild.
    */
   const serve = async (request: Request): Promise<Response> => {
-    if (!sockets?.installed) return stampBuild(await app.fetch(request));
+    if (!sockets?.installed) return routed(request, stampBuild(await app.fetch(request)));
     await ready();
     await sockets.ensure();
     if (new URL(request.url).pathname === socketPath) return sockets.open(request);
-    return stampBuild(await app.fetch(request));
+    return routed(request, stampBuild(await app.fetch(request)));
   };
 
   const realtime = [
@@ -788,6 +789,32 @@ function buildServer<T extends ActionMap>(
       .filter((plugin) => plugin.realtime)
       .map((plugin) => `${basePath}/${plugin.name}`),
   ];
+  const routing = role.kind === "whole" ? undefined : auth?.routing;
+  /**
+   * A split server's answer to a signed-in browser names the account that served it, so the
+   * edge sends that credential's next requests to the account's server, which keeps its
+   * connections and caches warm between them.
+   */
+  const routed = async (request: Request, response: Response): Promise<Response> => {
+    const resolving = routing ? callers.peek(request) : undefined;
+    if (!routing || !resolving) return response;
+    try {
+      const account = accountOf(await resolving);
+      const sessionCookie = routing.sessionCookie(request);
+      const secret = routeSecret();
+      if (account === ANONYMOUS_ACCOUNT || !sessionCookie || !secret) return response;
+      if ((await routedAccount(request.headers.get("cookie"), secret)) === account)
+        return response;
+      const cookie = await routeCookie(request, sessionCookie, account, secret);
+      if (!cookie) return response;
+      const answered = new Response(response.body, response);
+      answered.headers.append("set-cookie", cookie);
+      return answered;
+    } catch {
+      return response;
+    }
+  };
+
   const placement = async (request: Request): Promise<string | undefined> => {
     const url = new URL(request.url);
     if (url.pathname === socketPath) {
@@ -796,7 +823,10 @@ function buildServer<T extends ActionMap>(
     const live = realtime.some(
       (prefix) => url.pathname === prefix || url.pathname.startsWith(`${prefix}/`),
     );
-    if (!live) return undefined;
+    if (!live)
+      return routing
+        ? routedAccount(request.headers.get("cookie"), routeSecret())
+        : undefined;
     try {
       return accountOf(await callers(request));
     } catch (error) {

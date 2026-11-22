@@ -18,6 +18,7 @@ import {
   withServerMigration,
 } from "./build.js";
 import {
+  accountObjectName,
   cloudflareEntrySource,
   DURABLE_SERVER_BINDING,
   hostEntrySource,
@@ -864,6 +865,20 @@ describe("buildServer for cloudflare-scaled", () => {
       await rm(rootDir, { recursive: true, force: true });
     }
   }, 180_000);
+});
+
+describe("accountObjectName", () => {
+  it("names an account's object by the region it serves, so a new region gets a new object", () => {
+    expect(accountObjectName("uYWxpY2U", "apac")).not.toBe(
+      accountObjectName("uYWxpY2U", "enam"),
+    );
+    expect(accountObjectName("uYWxpY2U", "apac")).toBe(
+      accountObjectName("uYWxpY2U", "apac"),
+    );
+    expect(accountObjectName("uYWxpY2U", undefined)).not.toBe(
+      accountObjectName("uYmVu", undefined),
+    );
+  });
 });
 
 describe("withScaledMigration", () => {
