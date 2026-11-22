@@ -101,8 +101,8 @@ With `cloudflare-durable`, `parlor dev` runs the server on Node with the same bi
 
 `cloudflare-durable` runs the whole app in one Durable Object, which is simplest and fast for one organization's app, and is also a ceiling: every request of every account goes through one object. `cloudflare-scaled` splits the app:
 
-- **The Worker** serves the web app, documents, actions, plugin routes and sign-in, statelessly, so it runs wherever Cloudflare has capacity. Each request opens its own database connection: through [Hyperdrive](https://developers.cloudflare.com/hyperdrive/) when the Worker has a binding named `HYPERDRIVE`, directly otherwise, with [Smart Placement](https://developers.cloudflare.com/workers/configuration/smart-placement/) running the Worker near the database.
-- **A Durable Object per account** (`ParlorAccount`) holds that account's live connections, as WebSockets it keeps while it hibernates, the agent's view of its screens, MCP sessions, approvals and the chat with its computers. Plugins that keep state in memory, `realtime: true` such as chat, run there too.
+- **The Worker** serves the web app, documents, sign-in, and the requests of callers it cannot yet tell apart, statelessly. Each request it serves opens its own database connection: through [Hyperdrive](https://developers.cloudflare.com/hyperdrive/) when the Worker has a binding named `HYPERDRIVE`, directly otherwise.
+- **A Durable Object per account** (`ParlorAccount`) serves that account: a signed-in browser's actions and plugin routes, its live connections, as WebSockets it keeps while it hibernates, the agent's view of its screens, MCP sessions, approvals and the chat with its computers. Its database connections and caches stay warm between requests, and one account's load never queues another's. The Worker sends a browser there from its second request on, by a signed cookie (`parlor-route`) bound to the browser's session, so it reads no database to decide; an auth provider without `routing`, an API key and a bearer token stay with the Worker. Plugins that keep state in memory, `realtime: true` such as chat, run there too.
 - **A Durable Object per topic** (`ParlorTopic`) carries a write to the accounts that need it: an account's object listens to the scopes its open pages read, and a write in a scope reaches only the accounts listening to it. An idle page still costs the database nothing.
 
 To use it:
@@ -111,6 +111,7 @@ To use it:
 - Set `deploy.preset` to `cloudflare-scaled`. Wrangler gets `{ tag: "parlor-scaled-v1", new_sqlite_classes: ["ParlorAccount", "ParlorTopic"] }` at the end of the app's migrations, as with `cloudflare-durable`. Without migrations of its own, the app keeps `parlor-server-v1` first, so a deployment that ran `cloudflare-durable` finds the tag it applied.
 - A plugin's `start()` runs only in the accounts' objects; the Worker calls a plugin's `settle()` after each request, so work held for later, such as a batch of audit records, is written before the request ends.
 - Moving an app from `cloudflare-durable` adds the new classes and deletes `ParlorServer` in the same migration; it kept nothing in its storage. Open pages reconnect on the deploy, as on any deploy.
+- Run the Worker beside the database with [targeted placement](https://developers.cloudflare.com/workers/configuration/placement/), such as `placement: { mode: "targeted", region: "aws:ap-southeast-1" }` in `deploy.cloudflare.wrangler`. An account's object is created where the Worker first reaches it and stays there; the location hint only names a continent. Objects are named by that hint, so changing the database's region gives every account a new object beside it.
 
 ## Serverless is not supported yet
 
