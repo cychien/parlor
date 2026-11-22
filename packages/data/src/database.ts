@@ -18,7 +18,7 @@ import {
   type ScopedConnections,
 } from "./connection-scope.js";
 import { corkWrites } from "./cork.js";
-import { migrateDatabase } from "./migrations.js";
+import { migrateDatabase, migrationsApplied } from "./migrations.js";
 import {
   type Deliver,
   heldBy,
@@ -454,11 +454,15 @@ function warnUnheldTransaction(): void {
  */
 export function migrateOnPrepare(handle: DatabaseHandle, folder: string): DatabaseHandle {
   let migrated: Promise<void> | undefined;
-  const migrate = () =>
-    handle.migrate(folder).catch((error: unknown) => {
+  const migrate = async () => {
+    try {
+      if (await migrationsApplied(handle.db, folder)) return;
+      await handle.migrate(folder);
+    } catch (error) {
       migrated = undefined;
       throw error;
-    });
+    }
+  };
   return { ...handle, prepare: () => (migrated ??= holdUntilSettled(migrate())) };
 }
 

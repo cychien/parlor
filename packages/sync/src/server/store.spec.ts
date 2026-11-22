@@ -22,6 +22,34 @@ beforeAll(async () => {
 }, 30_000);
 afterAll(() => handle.close());
 
+describe("ensureSyncTables", () => {
+  it("finds tables that already exist with one read, so a new isolate runs no DDL", async () => {
+    let statements = 0;
+    const counted = new Proxy(handle.db, {
+      get(target, property, receiver) {
+        if (property !== "execute") return Reflect.get(target, property, receiver);
+        return (query: Parameters<typeof handle.db.execute>[0]) => {
+          statements += 1;
+          return target.execute(query);
+        };
+      },
+    });
+    await ensureSyncTables(counted);
+    expect(statements).toBe(1);
+  });
+
+  it("makes every table on a database that has none", async () => {
+    const fresh = await createDatabase({ dataDir: "memory://" });
+    try {
+      await ensureSyncTables(fresh.db);
+      const ready = await fresh.db.execute(sql`select v from sync_version where id = 1`);
+      expect(ready.rows).toHaveLength(1);
+    } finally {
+      await fresh.close();
+    }
+  }, 30_000);
+});
+
 describe("sync store", () => {
   it("allocates increasing versions and reads them back after a cursor, per scope", async () => {
     const a = await handle.transaction((tx) =>

@@ -58,4 +58,26 @@ describe("applyMigrations on PGlite", () => {
     );
     expect(rows.rows.map((row) => row.table_name)).toEqual(["demo_a", "demo_b"]);
   });
+
+  it("finds every migration applied with one read, taking no lock and opening no transaction", async () => {
+    const plugin = {
+      migrations: [{ id: "once/0001_items", sql: "create table once_items (id text)" }],
+    };
+    await applyMigrations(handle, [plugin]);
+    let transactions = 0;
+    const counted = {
+      read: () => handle.read(),
+      transaction: <T>(run: (tx: unknown) => Promise<T>) => {
+        transactions += 1;
+        return handle.transaction(run as never) as Promise<T>;
+      },
+    };
+    await applyMigrations(counted, [plugin]);
+    expect(transactions).toBe(0);
+    await applyMigrations(counted, [
+      plugin,
+      { migrations: [{ id: "once/0002_more", sql: "create table once_more (id text)" }] },
+    ]);
+    expect(transactions).toBe(1);
+  });
 });

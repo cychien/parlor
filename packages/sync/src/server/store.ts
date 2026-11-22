@@ -22,36 +22,49 @@ async function rows<T>(query: Promise<unknown>): Promise<T[]> {
   return Array.isArray(result) ? result : (result.rows ?? []);
 }
 
-export async function ensureSyncTables(db: SyncDatabase): Promise<void> {
-  await db.execute(sql`
-    create table if not exists sync_events (
+const SYNC_TABLE_STATEMENTS: readonly string[] = [
+  `create table if not exists sync_events (
       id text primary key,
       version bigint not null,
       scope text not null,
       tags jsonb not null,
       source text,
       created_at timestamptz not null default clock_timestamp()
-    )`);
-  await db.execute(
-    sql`create index if not exists sync_events_scope_version on sync_events (scope, version, id)`,
-  );
-  await db.execute(
-    sql`create index if not exists sync_events_version on sync_events (version, id)`,
-  );
-  await db.execute(
-    sql`create table if not exists sync_version (id int primary key, v bigint not null)`,
-  );
-  await db.execute(sql`
-    insert into sync_version (id, v)
+    )`,
+  "create index if not exists sync_events_scope_version on sync_events (scope, version, id)",
+  "create index if not exists sync_events_version on sync_events (version, id)",
+  "create table if not exists sync_version (id int primary key, v bigint not null)",
+  `insert into sync_version (id, v)
     select 1, greatest(coalesce((select max(version) from sync_events), 0), 0)
-    on conflict (id) do nothing`);
-  await db.execute(
-    sql`create table if not exists sync_pruned (id int primary key, version bigint not null)`,
-  );
-  await db.execute(sql`
-    insert into sync_pruned (id, version)
+    on conflict (id) do nothing`,
+  "create table if not exists sync_pruned (id int primary key, version bigint not null)",
+  `insert into sync_pruned (id, version)
     select 1, coalesce((select min(version) - 1 from sync_events), (select v from sync_version where id = 1))
-    on conflict (id) do nothing`);
+    on conflict (id) do nothing`,
+];
+
+/**
+ * One read that finds every object the statements above make, so a server that starts often, as
+ * each new isolate of a stateless Worker does, skips them. Keep it in step with the statements.
+ */
+async function syncTablesExist(db: SyncDatabase): Promise<boolean> {
+  try {
+    const found = await rows<{ ready: boolean }>(
+      db.execute(sql`
+        select to_regclass('sync_events_scope_version') is not null
+          and to_regclass('sync_events_version') is not null
+          and exists (select 1 from sync_version where id = 1)
+          and exists (select 1 from sync_pruned where id = 1) as ready`),
+    );
+    return found[0]?.ready === true;
+  } catch {
+    return false;
+  }
+}
+
+export async function ensureSyncTables(db: SyncDatabase): Promise<void> {
+  if (await syncTablesExist(db)) return;
+  for (const statement of SYNC_TABLE_STATEMENTS) await db.execute(sql.raw(statement));
 }
 
 export interface RecordSyncEventInput {
