@@ -60,10 +60,11 @@ export function splitStatements(script: string): string[] {
 
 export async function applyMigrations(
   database: DataProvider,
-  plugins: readonly ServerPlugin[],
+  plugins: readonly Pick<ServerPlugin, "migrations">[],
 ): Promise<void> {
   const migrations = plugins.flatMap((plugin) => plugin.migrations ?? []);
   if (migrations.length === 0) return;
+  if (await allApplied(database, migrations)) return;
   await database.transaction(async (handle) => {
     const tx = handle as Database;
     await tx.execute(sql`select pg_advisory_xact_lock(${MIGRATION_LOCK_KEY})`);
@@ -85,4 +86,24 @@ export async function applyMigrations(
       await tx.execute(sql`insert into parlor_migrations (id) values (${migration.id})`);
     }
   });
+}
+
+/**
+ * One read instead of a locked transaction: a server that starts often, as each new isolate of a
+ * stateless Worker does, finds every migration applied nearly always.
+ */
+async function allApplied(
+  database: DataProvider,
+  migrations: readonly { readonly id: string }[],
+): Promise<boolean> {
+  try {
+    const result = (await (database.read() as Database).execute(
+      sql`select id from parlor_migrations`,
+    )) as { rows?: { id: string }[] } | { id: string }[];
+    const rows = Array.isArray(result) ? result : (result.rows ?? []);
+    const applied = new Set(rows.map((row) => row.id));
+    return migrations.every((migration) => applied.has(migration.id));
+  } catch {
+    return false;
+  }
 }

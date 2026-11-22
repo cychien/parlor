@@ -83,6 +83,39 @@ describe("migrations deferred to the first request", () => {
   });
 });
 
+describe("migrations already applied", () => {
+  it("are found with one read on the request's connection, so a new isolate runs no migration", async () => {
+    const folder = await migrationsFolder("create table current_check (n int);");
+    const [migration] = readMigrationFiles({ migrationsFolder: folder });
+    globals.__PARLOR_MIGRATIONS__ = {
+      migrations: [{ ...migration!, folderMillis: Date.now() }],
+    };
+    let runs = 0;
+    const counted = {
+      ...pglite,
+      migrate: async (from: string) => {
+        runs += 1;
+        await pglite.migrate(from);
+      },
+    };
+    await migrateOnPrepare(counted, "migrations").prepare!();
+    await migrateOnPrepare(counted, "migrations").prepare!();
+    expect(runs).toBe(1);
+  });
+
+  it("are run again when the build holds a migration newer than the database's", async () => {
+    const folder = await migrationsFolder("create table newer_check (n int);");
+    const [migration] = readMigrationFiles({ migrationsFolder: folder });
+    globals.__PARLOR_MIGRATIONS__ = {
+      migrations: [{ ...migration!, folderMillis: Date.now() + 3_600_000 }],
+    };
+    let runs = 0;
+    const counted = { ...pglite, migrate: async () => void (runs += 1) };
+    await migrateOnPrepare(counted, "migrations").prepare!();
+    expect(runs).toBe(1);
+  });
+});
+
 describe("the workerd platform", () => {
   it("loads without DATABASE_URL, and says it is missing on every use", async () => {
     const handle = await workerd.pgliteHandle();

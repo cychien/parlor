@@ -166,7 +166,7 @@ function frameworkPlugins(
   // Better Auth's plugin types are not written for exactOptionalPropertyTypes.
   return [
     bearer(),
-    jwt(),
+    jwt({ disableSettingJwtHeader: true }),
     mcp({
       resource,
       loginPage: signInPage,

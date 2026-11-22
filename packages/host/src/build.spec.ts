@@ -475,17 +475,21 @@ async function fetchOnWrangler(outputDir: string, path: string): Promise<Respons
     },
   );
   try {
-    for (let i = 0; i < 200; i++) {
-      try {
-        const response = await fetch(`http://127.0.0.1:${port}${path}`);
-        return new Response(await response.arrayBuffer(), response);
-      } catch {}
-      await new Promise((r) => setTimeout(r, 100));
-    }
-    throw new Error("wrangler dev did not start");
+    const response = await waitForWorker(port, path);
+    return new Response(await response.arrayBuffer(), response);
   } finally {
     child.kill();
   }
+}
+
+async function waitForWorker(port: number, path: string): Promise<Response> {
+  for (let i = 0; i < 200; i++) {
+    try {
+      return await fetch(`http://127.0.0.1:${port}${path}`);
+    } catch {}
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error("wrangler dev did not start");
 }
 
 async function writePackage(
@@ -812,6 +816,54 @@ describe("buildServer for cloudflare-scaled", () => {
     const worker = await readFile(join(result.outputDir, "server", "index.mjs"), "utf8");
     expect(worker).toMatch(/export \{[^}]*\bParlorAccount\b[^}]*\bParlorTopic\b/);
   }, 120_000);
+
+  it("lets a request share work another request began and has since answered, as on workerd", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "parlor-host-scaled-shared-"));
+    await symlink(
+      fileURLToPath(new URL("../../../examples/hello/node_modules", import.meta.url)),
+      join(rootDir, "node_modules"),
+    );
+    await writeFile(
+      join(rootDir, "server.ts"),
+      [
+        'import { holdUntilSettled } from "@parlor/core";',
+        "let shared: Promise<string> | undefined;",
+        "const fetch = async (request: Request) => {",
+        "  const path = new URL(request.url).pathname;",
+        '  if (path === "/_parlor/begin") {',
+        '    shared = holdUntilSettled(new Promise<string>((resolve) => setTimeout(() => resolve("filled"), 300)));',
+        '    return new Response("begun");',
+        "  }",
+        "  return new Response(await shared);",
+        "};",
+        "const edge = { fetch, placement: async () => undefined, settle: async () => {} };",
+        "export default { fetch, split: () => ({ edge, account: () => edge }) };",
+      ].join("\n"),
+    );
+    await mkdir(join(rootDir, ".parlor", "web"), { recursive: true });
+    await writeFile(join(rootDir, ".parlor", "web", "index.html"), "<!doctype html>");
+    const config = parseConfig({
+      app: { id: "dev.parlor.scaledshared", name: "Shared" },
+    });
+    const result = await buildServer(
+      { config, rootDir, configFile: "parlor.config.ts" },
+      { preset: "cloudflare-scaled" },
+    );
+
+    const port = await freePort();
+    const child = startBuilt("cloudflare-scaled", result.outputDir, port);
+    try {
+      const begun = await waitForWorker(port, "/_parlor/begin");
+      await expect(begun.text()).resolves.toBe("begun");
+      const shared = await fetch(`http://127.0.0.1:${port}/_parlor/shared`, {
+        signal: AbortSignal.timeout(10_000),
+      });
+      await expect(shared.text()).resolves.toBe("filled");
+    } finally {
+      child.kill();
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  }, 180_000);
 });
 
 describe("withScaledMigration", () => {
@@ -963,7 +1015,7 @@ const PAYMENTS_SERVER = [
 ].join("\n");
 
 function startBuilt(
-  preset: "node-server" | "cloudflare-durable",
+  preset: "node-server" | "cloudflare-durable" | "cloudflare-scaled",
   outputDir: string,
   port: number,
 ) {

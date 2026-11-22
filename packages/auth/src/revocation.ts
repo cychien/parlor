@@ -1,4 +1,4 @@
-import type { DataProvider } from "@parlor/core";
+import { type DataProvider, holdUntilSettled } from "@parlor/core";
 import { sql } from "drizzle-orm";
 
 import { type Database, rowsOf } from "./database.js";
@@ -80,10 +80,12 @@ export class RevocationSet {
 
   /** Resolves once the set can answer; a failed start is retried by the next call. */
   ready(): Promise<void> {
-    this.#ready ??= this.#start().catch((error: unknown) => {
-      this.#ready = undefined;
-      throw error;
-    });
+    this.#ready ??= holdUntilSettled(
+      this.#start().catch((error: unknown) => {
+        this.#ready = undefined;
+        throw error;
+      }),
+    );
     return this.#ready;
   }
 

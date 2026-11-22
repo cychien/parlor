@@ -15,6 +15,7 @@ import {
   type DataProvider,
   decodeReadRequests,
   hasUser,
+  holdUntilSettled,
   REFRESH_HEADER,
 } from "@parlor/core";
 import type { ActionRegistry } from "@parlor/core/registry";
@@ -451,15 +452,21 @@ function buildServer<T extends ActionMap>(
   const installed = [...(auth ? [auth] : []), ...plugins];
   checkPlugins(installed, database);
   let prepared: Promise<void> | undefined;
+  const prepare = async () => {
+    if (database) {
+      await database.prepare?.();
+      if (syncEnabled) await ensureSyncTables(database.read() as SyncDatabase);
+      await applyMigrations(database, installed);
+    }
+    if (!edge) for (const { runtime } of runtimes) runtime.start?.();
+  };
   const ready = () =>
-    (prepared ??= (async () => {
-      if (database) {
-        await database.prepare?.();
-        if (syncEnabled) await ensureSyncTables(database.read() as SyncDatabase);
-        await applyMigrations(database, installed);
-      }
-      if (!edge) for (const { runtime } of runtimes) runtime.start?.();
-    })());
+    (prepared ??= holdUntilSettled(
+      prepare().catch((error: unknown) => {
+        prepared = undefined;
+        throw error;
+      }),
+    ));
   const callers = createCallerResolver(auth, scope, ready);
   const registryFor = createRegistryResolver(actions, options.visible, callers);
   const notify = database ? syncNotifyOf(database) : undefined;
