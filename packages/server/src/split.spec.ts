@@ -171,6 +171,16 @@ describe("a split server's accounts", { timeout: 30_000 }, () => {
     expect(seen.started).toBe(4);
   });
 
+  it("builds only the server a runtime serves, since an account's object starts cold often", () => {
+    const { server, built } = app();
+    expect(built()).toBe(0);
+    server.split!().account(accountKey("alice"));
+    expect(built()).toBe(1);
+    void server.split!().edge;
+    void server.split!().edge;
+    expect(built()).toBe(2);
+  });
+
   it("is refused for options given as an object, which every account would share", () => {
     const server = createServer({ actions, database: { ...database, close: undefined } });
     expect(() => server.split!().account("anonymous")).toThrow(/createServer\(\(\) =>/);

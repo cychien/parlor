@@ -409,13 +409,40 @@ export function createServer<T extends ActionMap>(
   source: ServerOptionsSource<T>,
 ): FrameworkServer {
   const optionsOf = typeof source === "function" ? source : () => source;
-  const whole = buildServer(optionsOf(), { kind: "whole" });
+  let whole =
+    typeof source === "function" ? undefined : buildServer(source, { kind: "whole" });
+  // From a function, each runtime of a split host builds only the server it serves: an account's
+  // object starts cold far more often than one server did.
+  const built = () => (whole ??= buildServer(optionsOf(), { kind: "whole" }));
+  let edge: EdgeServer | undefined;
   let split: SplitServer | undefined;
   return {
-    ...whole,
+    get installUiManifest() {
+      return built().installUiManifest;
+    },
+    get fetch() {
+      return built().fetch;
+    },
+    get close() {
+      return built().close;
+    },
+    get installSockets() {
+      return built().installSockets;
+    },
+    get socketClosed() {
+      return built().socketClosed;
+    },
+    get alarm() {
+      return built().alarm;
+    },
+    get awaken() {
+      return built().awaken;
+    },
     split: () =>
       (split ??= {
-        edge: buildServer(optionsOf(), { kind: "edge" }) as EdgeServer,
+        get edge() {
+          return (edge ??= buildServer(optionsOf(), { kind: "edge" }) as EdgeServer);
+        },
         account: (key) => {
           if (typeof source !== "function") {
             throw new Error(
