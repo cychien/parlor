@@ -477,6 +477,16 @@ export function betterAuthProvider(provided: BetterAuthProviderOptions): AuthPro
         },
       };
     },
+    routing: {
+      sessionCookie: (request: Request) => {
+        const prefix = instance.options.advanced?.cookiePrefix ?? "better-auth";
+        const names = [`__Secure-${prefix}.session_token`, `${prefix}.session_token`];
+        const present = (request.headers.get("cookie") ?? "")
+          .split(";")
+          .map((part) => part.slice(0, part.indexOf("=")).trim());
+        return names.find((name) => present.includes(name));
+      },
+    },
     async authenticate(request: Request): Promise<Principal> {
       const startedAt = Date.now();
       const principal = await authenticateRequest(request);

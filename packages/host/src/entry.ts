@@ -257,8 +257,35 @@ export const TOPIC_CLASS = "ParlorTopic";
 export const ACCOUNT_HEADER = "x-parlor-account";
 
 /** The Durable Object that relays one topic of one notification channel. */
+/**
+ * Reaches the database through Hyperdrive when the Worker has a binding named `HYPERDRIVE`, and
+ * keeps the direct URL for migrations and LISTEN. Hyperdrive holds the connections to the origin
+ * warm, so a runtime that starts cold skips the database's handshake.
+ */
+export function useHyperdrive(env: {
+  readonly HYPERDRIVE?: { readonly connectionString?: string } | undefined;
+}): void {
+  const through = env.HYPERDRIVE?.connectionString;
+  const url = process.env.DATABASE_URL;
+  if (!through || !url || url === through) return;
+  process.env.DATABASE_DIRECT_URL ??= url;
+  process.env.DATABASE_URL = through;
+}
+
+/** How long an account's object stays in memory after its last request. */
+export const ACCOUNT_WARM_MS = 10 * 60_000;
+
 export function topicName(channel: string, topic: string): string {
   return `${channel}\u0000${topic}`;
+}
+
+/**
+ * An account's object is created where the edge first reached it and stays there. Naming it by
+ * the region it serves gives an account a new object beside the database when that region
+ * changes; the old one held only the account's key.
+ */
+export function accountObjectName(key: string, hint: string | undefined): string {
+  return `${key}@${hint ?? "any"}`;
 }
 
 export interface ScaledEntryOptions extends DocumentOptions {
@@ -279,6 +306,7 @@ export function scaledEntrySource({
 }: ScaledEntryOptions): string {
   return `import { env, waitUntil } from "cloudflare:workers";
 import { createConnectionScope, installRequestHold } from "@parlor/data";
+import { routedAccount, routeSecret } from "@parlor/server";
 
 installRequestHold((work) => {
   try {
@@ -290,7 +318,11 @@ ${documentSource(document)}
 
 ${locationHintForDatabase.toString()}
 
+${useHyperdrive.toString()}
+
 ${topicName.toString()}
+
+${accountObjectName.toString()}
 
 const UI_MANIFEST = ${UI_MANIFEST_PLACEHOLDER};
 const CONFIGURED_HINT = ${JSON.stringify(locationHint ?? null)};
@@ -299,10 +331,7 @@ const ACCOUNT_HEADER = ${JSON.stringify(ACCOUNT_HEADER)};
 let loading;
 function edge() {
   return (loading ??= (async () => {
-    if (env.HYPERDRIVE?.connectionString && process.env.DATABASE_URL) {
-      process.env.DATABASE_DIRECT_URL ??= process.env.DATABASE_URL;
-      process.env.DATABASE_URL = env.HYPERDRIVE.connectionString;
-    }
+    useHyperdrive(env);
     const { default: server } = await import(${JSON.stringify(serverEntry)});
     const split = server.split?.();
     if (!split) throw new Error("cloudflare-scaled serves a server from @parlor/server's createServer.");
@@ -315,7 +344,10 @@ let accountHint;
 function account(key) {
   accountHint ??= { hint: CONFIGURED_HINT ?? locationHintForDatabase(env.DATABASE_URL) };
   const accounts = env.${ACCOUNT_BINDING};
-  return accounts.get(accounts.idFromName(key), accountHint.hint ? { locationHint: accountHint.hint } : {});
+  return accounts.get(
+    accounts.idFromName(accountObjectName(key, accountHint.hint)),
+    accountHint.hint ? { locationHint: accountHint.hint } : {},
+  );
 }
 
 const bus = {
@@ -340,9 +372,17 @@ export default {
     const headers = new Headers(request.headers);
     headers.delete(ACCOUNT_HEADER);
     const incoming = new Request(request, { headers });
+    let served = false;
     try {
       return await withDocument(incoming, (request) =>
         scope.run(async () => {
+          // A signed-in browser's account is in a cookie its server signed: hand the request
+          // on before loading the app, which a cold isolate would otherwise evaluate first.
+          if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+            const routed = await routedAccount(request.headers.get("cookie"), routeSecret(env));
+            if (routed) return account(routed).fetch(forAccount(request, routed));
+          }
+          served = true;
           const server = await edge();
           let key;
           try {
@@ -361,11 +401,13 @@ export default {
     } finally {
       // The scope is never closed here: work the app hands to waitUntil may still use its
       // connections, and workerd ends them with the request once all of that has settled.
-      waitUntil(
-        scope
-          .run(async () => (await edge()).settle())
-          .catch((error) => console.error("[parlor] settling after a request failed:", error)),
-      );
+      if (served) {
+        waitUntil(
+          scope
+            .run(async () => (await edge()).settle())
+            .catch((error) => console.error("[parlor] settling after a request failed:", error)),
+        );
+      }
     }
   },
 };
@@ -388,10 +430,12 @@ export function scaledServerSource({
   serverEntry,
   workerExports,
 }: ScaledServerOptions): string {
-  return `import { DurableObject } from "cloudflare:workers";
+  return `import { DurableObject, env } from "cloudflare:workers";
 import { hostedSockets } from "@parlor/server";
 import { createConnectionScope } from "@parlor/data";
 ${workerExports ? `export * from ${JSON.stringify(workerExports)};\n` : ""}
+${useHyperdrive.toString()}
+
 const UI_MANIFEST = ${UI_MANIFEST_PLACEHOLDER};
 const ACCOUNT_HEADER = ${JSON.stringify(ACCOUNT_HEADER)};
 const ACCOUNT_KEY = "parlor:account";
@@ -402,6 +446,7 @@ ${readUnreadBody.toString()}
 
 let loading;
 function app() {
+  useHyperdrive(env);
   return (loading ??= import(${JSON.stringify(serverEntry)}).then(({ default: server }) => {
     if (!server.split) throw new Error("cloudflare-scaled serves a server from @parlor/server's createServer.");
     return server;
@@ -413,6 +458,7 @@ export class ${ACCOUNT_CLASS} extends DurableObject {
   #server;
   #sockets;
   #scope;
+  #warm;
 
   constructor(ctx, env) {
     super(ctx, env);
@@ -451,7 +497,15 @@ export class ${ACCOUNT_CLASS} extends DurableObject {
   async fetch(request) {
     const response = await this.#serve(request.headers.get(ACCOUNT_HEADER) ?? undefined, (server) => server.fetch(request));
     await readUnreadBody(request, ${UNREAD_BODY_LIMIT_BYTES});
+    this.#keepWarm();
     return response;
+  }
+
+  // A pending timer keeps the object in memory: someone back within it finds the server and its
+  // connections ready, and an account nobody uses for longer sleeps and costs nothing.
+  #keepWarm() {
+    clearTimeout(this.#warm);
+    this.#warm = setTimeout(() => {}, ${ACCOUNT_WARM_MS});
   }
 
   webSocketMessage() {}

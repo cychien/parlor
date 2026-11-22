@@ -18,7 +18,9 @@ import {
   withServerMigration,
 } from "./build.js";
 import {
+  accountObjectName,
   cloudflareEntrySource,
+  useHyperdrive,
   DURABLE_SERVER_BINDING,
   hostEntrySource,
   INDEX_HTML_PLACEHOLDER,
@@ -864,6 +866,55 @@ describe("buildServer for cloudflare-scaled", () => {
       await rm(rootDir, { recursive: true, force: true });
     }
   }, 180_000);
+});
+
+describe("accountObjectName", () => {
+  it("names an account's object by the region it serves, so a new region gets a new object", () => {
+    expect(accountObjectName("uYWxpY2U", "apac")).not.toBe(
+      accountObjectName("uYWxpY2U", "enam"),
+    );
+    expect(accountObjectName("uYWxpY2U", "apac")).toBe(
+      accountObjectName("uYWxpY2U", "apac"),
+    );
+    expect(accountObjectName("uYWxpY2U", undefined)).not.toBe(
+      accountObjectName("uYmVu", undefined),
+    );
+  });
+});
+
+describe("useHyperdrive", () => {
+  it("swaps the database URL for Hyperdrive's once, and keeps the direct one for migrations", () => {
+    const saved = {
+      url: process.env.DATABASE_URL,
+      direct: process.env.DATABASE_DIRECT_URL,
+    };
+    try {
+      process.env.DATABASE_URL = "postgres://pooled";
+      delete process.env.DATABASE_DIRECT_URL;
+      const env = { HYPERDRIVE: { connectionString: "postgres://hyperdrive" } };
+      useHyperdrive(env);
+      useHyperdrive(env);
+      expect(process.env.DATABASE_URL).toBe("postgres://hyperdrive");
+      expect(process.env.DATABASE_DIRECT_URL).toBe("postgres://pooled");
+    } finally {
+      if (saved.url === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = saved.url;
+      if (saved.direct === undefined) delete process.env.DATABASE_DIRECT_URL;
+      else process.env.DATABASE_DIRECT_URL = saved.direct;
+    }
+  });
+
+  it("leaves the database URL alone without a binding", () => {
+    const saved = process.env.DATABASE_URL;
+    try {
+      process.env.DATABASE_URL = "postgres://pooled";
+      useHyperdrive({});
+      expect(process.env.DATABASE_URL).toBe("postgres://pooled");
+    } finally {
+      if (saved === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = saved;
+    }
+  });
 });
 
 describe("withScaledMigration", () => {
