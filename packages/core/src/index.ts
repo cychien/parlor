@@ -31,6 +31,11 @@ export {
   defaultConfirmationPolicy,
 } from "./confirmation.js";
 export {
+  holdUntilSettled,
+  installRequestHold,
+  type RequestHold,
+} from "./request-hold.js";
+export {
   decodeReadRequests,
   encodeReadRequests,
   MAX_REFRESHED_READS,

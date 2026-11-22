@@ -1,8 +1,9 @@
-import type {
-  DataProvider,
-  ListenOptions,
-  NotificationReach,
-  Unlisten,
+import {
+  type DataProvider,
+  holdUntilSettled,
+  type ListenOptions,
+  type NotificationReach,
+  type Unlisten,
 } from "@parlor/core";
 import { sql } from "drizzle-orm";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
@@ -458,7 +459,7 @@ export function migrateOnPrepare(handle: DatabaseHandle, folder: string): Databa
       migrated = undefined;
       throw error;
     });
-  return { ...handle, prepare: () => (migrated ??= migrate()) };
+  return { ...handle, prepare: () => (migrated ??= holdUntilSettled(migrate())) };
 }
 
 export async function createDatabase(

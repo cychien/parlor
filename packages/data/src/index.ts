@@ -16,3 +16,5 @@ export {
   resolveNotifications,
   resolvePgliteDir,
 } from "./database.js";
+// The hosts import @parlor/data, which an app always has: @parlor/core may not resolve from it.
+export { installRequestHold } from "@parlor/core";

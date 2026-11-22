@@ -46,4 +46,33 @@ describe("PluginHost.ready", () => {
     expect(tables.rows).toEqual([{ tablename: "parlor_late_items" }]);
     await server.close();
   }, 30_000);
+
+  it("tries again after a start that failed, rather than failing every later request", async () => {
+    let seen: PluginHost | undefined;
+    let attempts = 0;
+    const plugin: ServerPlugin = {
+      name: "flaky",
+      setup(host) {
+        seen = host;
+        return {};
+      },
+    };
+    const server = createServer({
+      actions: createRegistry({}),
+      database: {
+        read: () => database.read(),
+        transaction: (run) => database.transaction(run),
+        prepare: async () => {
+          attempts += 1;
+          if (attempts === 1) throw new Error("database unreachable");
+        },
+      },
+      plugins: [plugin],
+    });
+
+    await expect(seen?.ready?.()).rejects.toThrow("database unreachable");
+    await expect(seen?.ready?.()).resolves.toBeUndefined();
+    expect(attempts).toBe(2);
+    await server.close();
+  }, 30_000);
 });

@@ -278,7 +278,13 @@ export function scaledEntrySource({
   ...document
 }: ScaledEntryOptions): string {
   return `import { env, waitUntil } from "cloudflare:workers";
-import { createConnectionScope } from "@parlor/data";
+import { createConnectionScope, installRequestHold } from "@parlor/data";
+
+installRequestHold((work) => {
+  try {
+    waitUntil(work);
+  } catch {}
+});
 
 ${documentSource(document)}
 

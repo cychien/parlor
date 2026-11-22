@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:crypto";
 
-import type { DataProvider } from "@parlor/core";
+import { type DataProvider, holdUntilSettled } from "@parlor/core";
 import type { Migration } from "@parlor/server";
 import { sql } from "drizzle-orm";
 import { exportJWK, generateKeyPair } from "jose";
@@ -144,10 +144,12 @@ export function createTurnKeyStore(options: TurnKeyStoreOptions): TurnKeyStore {
   };
 
   const load = (): Promise<TurnTokenKeys> => {
-    loaded ??= build(true).catch((error: unknown) => {
-      loaded = undefined;
-      throw error;
-    });
+    loaded ??= holdUntilSettled(
+      build(true).catch((error: unknown) => {
+        loaded = undefined;
+        throw error;
+      }),
+    );
     return loaded;
   };
 
@@ -157,7 +159,7 @@ export function createTurnKeyStore(options: TurnKeyStoreOptions): TurnKeyStore {
       const current = await load();
       if (now() - refreshedAt < REFRESH_MIN_INTERVAL_MS) return current;
       refreshedAt = now();
-      loaded = build(false).catch(() => current);
+      loaded = holdUntilSettled(build(false).catch(() => current));
       return loaded;
     },
   };
