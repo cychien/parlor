@@ -257,6 +257,24 @@ export const TOPIC_CLASS = "ParlorTopic";
 export const ACCOUNT_HEADER = "x-parlor-account";
 
 /** The Durable Object that relays one topic of one notification channel. */
+/**
+ * Reaches the database through Hyperdrive when the Worker has a binding named `HYPERDRIVE`, and
+ * keeps the direct URL for migrations and LISTEN. Hyperdrive holds the connections to the origin
+ * warm, so a runtime that starts cold skips the database's handshake.
+ */
+export function useHyperdrive(env: {
+  readonly HYPERDRIVE?: { readonly connectionString?: string } | undefined;
+}): void {
+  const through = env.HYPERDRIVE?.connectionString;
+  const url = process.env.DATABASE_URL;
+  if (!through || !url || url === through) return;
+  process.env.DATABASE_DIRECT_URL ??= url;
+  process.env.DATABASE_URL = through;
+}
+
+/** How long an account's object stays in memory after its last request. */
+export const ACCOUNT_WARM_MS = 10 * 60_000;
+
 export function topicName(channel: string, topic: string): string {
   return `${channel}\u0000${topic}`;
 }
@@ -300,6 +318,8 @@ ${documentSource(document)}
 
 ${locationHintForDatabase.toString()}
 
+${useHyperdrive.toString()}
+
 ${topicName.toString()}
 
 ${accountObjectName.toString()}
@@ -311,10 +331,7 @@ const ACCOUNT_HEADER = ${JSON.stringify(ACCOUNT_HEADER)};
 let loading;
 function edge() {
   return (loading ??= (async () => {
-    if (env.HYPERDRIVE?.connectionString && process.env.DATABASE_URL) {
-      process.env.DATABASE_DIRECT_URL ??= process.env.DATABASE_URL;
-      process.env.DATABASE_URL = env.HYPERDRIVE.connectionString;
-    }
+    useHyperdrive(env);
     const { default: server } = await import(${JSON.stringify(serverEntry)});
     const split = server.split?.();
     if (!split) throw new Error("cloudflare-scaled serves a server from @parlor/server's createServer.");
@@ -413,10 +430,12 @@ export function scaledServerSource({
   serverEntry,
   workerExports,
 }: ScaledServerOptions): string {
-  return `import { DurableObject } from "cloudflare:workers";
+  return `import { DurableObject, env } from "cloudflare:workers";
 import { hostedSockets } from "@parlor/server";
 import { createConnectionScope } from "@parlor/data";
 ${workerExports ? `export * from ${JSON.stringify(workerExports)};\n` : ""}
+${useHyperdrive.toString()}
+
 const UI_MANIFEST = ${UI_MANIFEST_PLACEHOLDER};
 const ACCOUNT_HEADER = ${JSON.stringify(ACCOUNT_HEADER)};
 const ACCOUNT_KEY = "parlor:account";
@@ -427,6 +446,7 @@ ${readUnreadBody.toString()}
 
 let loading;
 function app() {
+  useHyperdrive(env);
   return (loading ??= import(${JSON.stringify(serverEntry)}).then(({ default: server }) => {
     if (!server.split) throw new Error("cloudflare-scaled serves a server from @parlor/server's createServer.");
     return server;
@@ -438,6 +458,7 @@ export class ${ACCOUNT_CLASS} extends DurableObject {
   #server;
   #sockets;
   #scope;
+  #warm;
 
   constructor(ctx, env) {
     super(ctx, env);
@@ -476,7 +497,15 @@ export class ${ACCOUNT_CLASS} extends DurableObject {
   async fetch(request) {
     const response = await this.#serve(request.headers.get(ACCOUNT_HEADER) ?? undefined, (server) => server.fetch(request));
     await readUnreadBody(request, ${UNREAD_BODY_LIMIT_BYTES});
+    this.#keepWarm();
     return response;
+  }
+
+  // A pending timer keeps the object in memory: someone back within it finds the server and its
+  // connections ready, and an account nobody uses for longer sleeps and costs nothing.
+  #keepWarm() {
+    clearTimeout(this.#warm);
+    this.#warm = setTimeout(() => {}, ${ACCOUNT_WARM_MS});
   }
 
   webSocketMessage() {}
