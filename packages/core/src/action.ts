@@ -101,6 +101,12 @@ export interface ActionConfig<TInput extends z.ZodType, TOutput> {
    */
   readonly confirm?: boolean | undefined;
   /**
+   * How MCP offers it to an agent: as its own tool (`listed`, the default), or only through
+   * the `search_actions` and `call_action` tools (`searchable`), which keeps a large app's
+   * tool list short for agents that load every tool up front. It runs the same either way.
+   */
+  readonly agent?: "listed" | "searchable" | undefined;
+  /**
    * Callable without signing in. Only read when the server has an enforcing auth provider,
    * which otherwise answers an anonymous caller with `unauthenticated`.
    */

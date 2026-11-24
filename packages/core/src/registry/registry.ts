@@ -7,6 +7,7 @@ export interface ActionDescriptor {
   readonly description: string;
   readonly mutating: boolean;
   readonly confirm?: boolean | undefined;
+  readonly agent?: "searchable" | undefined;
   readonly inputSchema: Record<string, unknown>;
 }
 
@@ -45,6 +46,7 @@ export function createRegistry<T extends ActionMap>(actions: T): ActionRegistry<
         description: action.description,
         mutating: isMutating(action),
         ...(action.confirm === true ? { confirm: true as const } : {}),
+        ...(action.agent === "searchable" ? { agent: "searchable" as const } : {}),
         inputSchema: z.toJSONSchema(action.input, { io: "input" }),
       }));
       return descriptors;
