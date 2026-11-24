@@ -1,8 +1,8 @@
 import type { UiError, UiOpInput, UiOpResults } from "../protocol.js";
+import { anyTarget, noSuchField, notMounted } from "./candidates.js";
 import type { BrowserEnvironment } from "./environment.js";
 import type { ViewRegistryRuntime } from "./registry.js";
 import { measure } from "./screen.js";
-import { notMounted } from "./write.js";
 
 export const HIGHLIGHT_ATTRIBUTE = "data-parlor-highlight";
 export const HIGHLIGHT_HOLD_MS = 2000;
@@ -95,18 +95,12 @@ export async function highlightView(
   marks: HighlightMarks,
 ): Promise<UiOpResults["highlight"] | UiError> {
   const root = registry.find(input)?.element;
-  if (!root) return notMounted(input);
+  if (!root) return notMounted(registry, input, anyTarget);
   const element =
     input.field === undefined
       ? root
       : root.querySelector<HTMLElement>(`[name="${quote(input.field)}"]`);
-  if (!element) {
-    return {
-      code: "not_mounted",
-      message: `${input.view} has no field ${input.field} on screen.`,
-      issues: [{ path: "field", message: input.field! }],
-    };
-  }
+  if (!element) return noSuchField(input.view, input.field!, root);
   const typing = typingElsewhere(registry, env, element);
   if (typing) {
     const name = typing.getAttribute("name") ?? typing.tagName.toLowerCase();

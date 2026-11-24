@@ -196,7 +196,7 @@ function setDescription(manifest: UiManifest | undefined): string {
       "Fill fields of a form the user sees, as a proposal: the user reviews it and submits it themselves. Call the matching action instead only when the user explicitly asks you to submit.",
       "value is merged into the view's current value field by field; fields you omit keep what the user typed.",
       "Returns the view's value read back from the screen and agentFields, the fields that still hold what you wrote; a field missing from agentFields was changed by the user.",
-      "Refuses with not_mounted, not_writable, user_editing (the user is typing in that field: wait or ask), invalid_value (issues name the fields), or ambiguous_client.",
+      "Refuses with not_mounted (it lists the forms on screen with their fields), not_writable, user_editing (the user is typing in that field: wait or ask), invalid_value (issues name the fields), or ambiguous_client.",
       "Returns reachable: false when the app is not open.",
     ].join(" ") + writableCatalog(manifest)
   );
@@ -206,7 +206,7 @@ function highlightDescription(): string {
   return [
     "Point at something on the user's screen: scrolls a view (a keyed item by key) or one field inside it into the middle of the screen, focuses the field (not on a touch screen, where that opens the keyboard), and marks it for two seconds.",
     "Use it to show the user what you mean or to ask which one they meant.",
-    "Returns shown, the visible fraction after scrolling, or not_mounted when it is not on screen, or reachable: false when the app is not open.",
+    "Returns shown, the visible fraction after scrolling, or not_mounted with what is on screen instead, or reachable: false when the app is not open.",
     "Refuses with user_editing when the user is typing in another field: wait or ask, and it moves nothing.",
   ].join(" ");
 }

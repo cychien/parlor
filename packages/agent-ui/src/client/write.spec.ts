@@ -201,6 +201,34 @@ describe("setView refusals", () => {
     expect(codeOf(outcome)).toBe("not_mounted");
   });
 
+  it("lists the views it can write, with their fields, when the view is not on screen", async () => {
+    const { mount, run } = setup();
+    mount(form, { value: { title: "", notes: "" } });
+    mount(loose, { value: { title: "", notes: "" } });
+    mount(shown, { value: { title: "", notes: "" } });
+    mount(titleOnly, { value: { title: "", notes: "" } }, { set: null });
+    mount(row, { value: { title: "", notes: "" } }, { key: "a" });
+    expect(await run({ view: "newTask", value: { title: "x" } })).toEqual({
+      code: "not_mounted",
+      message:
+        "newTask is not on screen. On screen now: form (title, notes), loose (any field), row a (notes).",
+      issues: [
+        { path: "view", message: "form (title, notes)" },
+        { path: "view", message: "loose (any field)" },
+        { path: "view", message: "row a (notes)" },
+      ],
+    });
+  });
+
+  it("says none is on screen when no view can be written", async () => {
+    const { mount, run } = setup();
+    mount(shown, { value: { title: "", notes: "" } });
+    expect(await run({ view: "form", value: { title: "x" } })).toEqual({
+      code: "not_mounted",
+      message: "form is not on screen. On screen now: none.",
+    });
+  });
+
   it("refuses a view that has been unmounted", async () => {
     const { mount, run } = setup();
     mount(form, { value: { title: "", notes: "" } }).unmount();

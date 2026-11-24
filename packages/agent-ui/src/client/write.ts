@@ -1,18 +1,11 @@
 import type { UiError, UiOpInput, UiOpResults } from "../protocol.js";
 import type { AnyAgentView } from "../view.js";
+import { notMounted, writableTarget } from "./candidates.js";
 import type { BrowserEnvironment } from "./environment.js";
 import { jsonEqual } from "./json-equal.js";
 import type { AgentWrites, MountedView, ViewRegistryRuntime } from "./registry.js";
 
 export { jsonEqual };
-
-export function notMounted(input: { view: string; key?: string | undefined }): UiError {
-  const target = input.key === undefined ? input.view : `${input.view} ${input.key}`;
-  return {
-    code: "not_mounted",
-    message: `${target} is not on screen. Call ui_screen to see what is.`,
-  };
-}
 
 export function userEditing(
   registry: Pick<ViewRegistryRuntime, "owner" | "agentFocus">,
@@ -77,7 +70,7 @@ export async function setView(
   env: Pick<BrowserEnvironment, "document">,
 ): Promise<UiOpResults["set"] | UiError> {
   const target = registry.find(input);
-  if (!target) return notMounted(input);
+  if (!target) return notMounted(registry, input, writableTarget);
   const { view, binding } = target;
   const changed = Object.keys(input.value);
 
