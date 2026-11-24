@@ -49,6 +49,10 @@ A user may connect one agent to many Parlor apps, and to the same app twice, in 
 
 The origin is `PARLOR_ORIGIN` in production, the web origin under `parlor dev`. Give the connection a clear name too (`claude mcp add --transport http course-admin …`), so "put this copy into Course Admin's React course" leaves the agent no doubt.
 
+## Large apps
+
+The screen tools describe every page, view and form the app shows. Past about 6000 characters of those descriptions, `ui_navigate`, `ui_screen` and `ui_set` list names only, and a read-only `ui_pages` tool describes the pages that match a few words: what each shows, its params and search params, and the views on it with the fields an agent can fill. An app with 53 pages went from 8929 to 3623 tokens of screen tools this way; a small app keeps its full descriptions and gets no `ui_pages`.
+
 ## What agents can and cannot do
 
 - An agent calls exactly the actions the app defines and lets it see, with the same validation as the UI.

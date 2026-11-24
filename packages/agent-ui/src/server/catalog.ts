@@ -136,7 +136,12 @@ export interface PagesResult {
   readonly more?: number;
 }
 
-const wordsOf = (text: string) => text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+/** `orders` and `order` match: a plural's trailing s is dropped. */
+const stem = (word: string) =>
+  word.length > 3 && word.endsWith("s") ? word.slice(0, -1) : word;
+
+const wordsOf = (text: string) =>
+  (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).map(stem);
 
 function entryOf(route: RouteEntry, views: ReadonlyMap<string, ViewEntry>): PageEntry {
   const search = searchOf(route.search);

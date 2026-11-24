@@ -106,6 +106,9 @@ describe("findPages", () => {
       "/settings",
     ]);
     expect(findPages(manifest, { query: "billing" })).toEqual({ pages: [] });
+    expect(
+      findPages(manifest, { query: "forms" }).pages.map((page) => page.path),
+    ).toEqual(["/"]);
   });
 
   it("lists at most ten pages and counts the rest", () => {
