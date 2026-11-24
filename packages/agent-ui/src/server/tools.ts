@@ -16,7 +16,12 @@ import {
   uiOpReadOnly,
 } from "../protocol.js";
 import { type UiBroker, UiFailure } from "./broker.js";
-import { type CompactClient, type CompactScreen, compactClient, compactScreen } from "./compact.js";
+import {
+  type CompactClient,
+  type CompactScreen,
+  compactClient,
+  compactScreen,
+} from "./compact.js";
 import type { ClientDirectory, Selection } from "./directory.js";
 import { uiOpInputs } from "./schemas.js";
 

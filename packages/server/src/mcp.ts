@@ -111,9 +111,7 @@ function errorBodyOf(error: unknown): ToolErrorBody {
 function toolError(error: unknown): CallToolResult {
   return {
     isError: true,
-    content: [
-      { type: "text", text: JSON.stringify({ error: errorBodyOf(error) }) },
-    ],
+    content: [{ type: "text", text: JSON.stringify({ error: errorBodyOf(error) }) }],
   };
 }
 

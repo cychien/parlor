@@ -35,7 +35,9 @@ export type CompactView =
   | { readonly value: JsonObject | TruncatedValue; readonly shown?: number }
   | { readonly items: readonly CompactItem[]; readonly offscreen?: number };
 
-export type CompactAttention = { readonly [K in keyof AttentionSnapshot]?: NonNullable<AttentionSnapshot[K]> };
+export type CompactAttention = {
+  readonly [K in keyof AttentionSnapshot]?: NonNullable<AttentionSnapshot[K]>;
+};
 
 export interface CompactScreen {
   readonly route?: CompactRoute;
@@ -56,21 +58,33 @@ export interface CompactClient {
 
 const isEmpty = (value: object) => Object.keys(value).length === 0;
 
+const EMPTY_ATTENTION: AttentionSnapshot = {
+  focus: null,
+  selection: null,
+  lastInteracted: null,
+  lastEntered: null,
+  focal: null,
+};
+
 const FULLY_SHOWN = 1;
 
 function compactRoute(route: RouteSnapshot): CompactRoute {
   if (route.notFound) return { notFound: true, url: route.url };
+  const { params = {}, search = {} } = route;
   return {
     path: route.path,
     url: route.url,
-    ...(isEmpty(route.params) ? {} : { params: route.params }),
-    ...(isEmpty(route.search) ? {} : { search: route.search }),
+    ...(isEmpty(params) ? {} : { params }),
+    ...(isEmpty(search) ? {} : { search }),
   };
 }
 
 const emptyInput = (input: unknown) =>
   input === undefined ||
-  (typeof input === "object" && input !== null && !Array.isArray(input) && isEmpty(input));
+  (typeof input === "object" &&
+    input !== null &&
+    !Array.isArray(input) &&
+    isEmpty(input));
 
 function compactItem(item: ItemSnapshot): CompactItem {
   return {
@@ -89,7 +103,9 @@ function compactView(view: ViewSnapshot): CompactView {
   }
   return {
     value: view.value,
-    ...(view.shown === undefined || view.shown === FULLY_SHOWN ? {} : { shown: view.shown }),
+    ...(view.shown === undefined || view.shown === FULLY_SHOWN
+      ? {}
+      : { shown: view.shown }),
   };
 }
 
@@ -99,13 +115,16 @@ function compactAttention(attention: AttentionSnapshot): CompactAttention {
   ) as CompactAttention;
 }
 
-/** The screen without what an agent can assume: empty, null, false, zero and fully shown. */
-export function compactScreen(snapshot: ScreenSnapshot): CompactScreen {
+/**
+ * The screen without what an agent can assume: empty, null, zero and fully shown. A client
+ * built before a section existed leaves it out, which reads as empty.
+ */
+export function compactScreen(snapshot: Partial<ScreenSnapshot>): CompactScreen {
   const views = Object.fromEntries(
-    Object.entries(snapshot.views).map(([name, view]) => [name, compactView(view)]),
+    Object.entries(snapshot.views ?? {}).map(([name, view]) => [name, compactView(view)]),
   );
-  const attention = compactAttention(snapshot.attention);
-  const queries = snapshot.queries.map(({ action, input, status }) => ({
+  const attention = compactAttention(snapshot.attention ?? EMPTY_ATTENTION);
+  const queries = (snapshot.queries ?? []).map(({ action, input, status }) => ({
     action,
     ...(emptyInput(input) ? {} : { input }),
     ...(status === "success" ? {} : { status }),

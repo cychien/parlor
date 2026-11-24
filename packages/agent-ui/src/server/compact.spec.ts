@@ -59,7 +59,11 @@ describe("compactScreen", () => {
       views: { task: { items: [], offscreen: 12 } },
       attention: {
         focus: { view: "task", key: "t1", field: "title" },
-        selection: { text: "milk", within: { view: "task", key: "t1" }, truncated: false },
+        selection: {
+          text: "milk",
+          within: { view: "task", key: "t1" },
+          truncated: false,
+        },
         lastInteracted: null,
         lastEntered: null,
         focal: null,
@@ -77,7 +81,11 @@ describe("compactScreen", () => {
       views: { task: { items: [], offscreen: 12 } },
       attention: {
         focus: { view: "task", key: "t1", field: "title" },
-        selection: { text: "milk", within: { view: "task", key: "t1" }, truncated: false },
+        selection: {
+          text: "milk",
+          within: { view: "task", key: "t1" },
+          truncated: false,
+        },
       },
       truncated: true,
     });
@@ -90,12 +98,28 @@ describe("compactScreen", () => {
         route: { notFound: true, url: "/nowhere" },
         queries: [],
         views: {},
-        attention: { focus: null, selection: null, lastInteracted: null, lastEntered: null, focal: null },
+        attention: {
+          focus: null,
+          selection: null,
+          lastInteracted: null,
+          lastEntered: null,
+          focal: null,
+        },
       }),
     ).toEqual({ route: { notFound: true, url: "/nowhere" } });
     expect(compactScreen({ ...empty, route: null, queries: [], views: {} })).toEqual({
       attention: { focal: { view: "task", key: "t1" } },
     });
+  });
+
+  it("reads sections an older client leaves out as empty", () => {
+    expect(compactScreen({ route: null })).toEqual({});
+    expect(
+      compactScreen({
+        route: { notFound: false, path: "/", url: "/" } as never,
+        views: {},
+      }),
+    ).toEqual({ route: { path: "/", url: "/" } });
   });
 });
 
