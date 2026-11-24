@@ -409,7 +409,7 @@ describe("agent UI over MCP", () => {
       arguments: { to: "/tasks/$taskId", params: { taskId: "t1" } },
     });
     expect(result.structuredContent).toMatchObject({
-      client: { id: "tab-n" },
+      client: { platform: "web", focused: true, visible: true },
       screen: { route: { path: "/tasks/$taskId" } },
     });
     expect(tab.requests).toEqual([
@@ -453,7 +453,7 @@ describe("agent UI over MCP", () => {
       arguments: { view: "newTask", value: { title: "Buy stamps" } },
     });
     expect(result.structuredContent).toEqual({
-      client: expect.objectContaining({ id: "tab-s" }),
+      client: { platform: "web", focused: true, visible: true },
       value: { title: "Buy stamps" },
       agentFields: ["title"],
     });
@@ -510,7 +510,7 @@ describe("agent UI over MCP", () => {
       arguments: { view: "task", key: "t1", field: "notes" },
     });
     expect(result.structuredContent).toEqual({
-      client: expect.objectContaining({ id: "tab-h" }),
+      client: { platform: "web", focused: true, visible: true },
       shown: 1,
     });
     expect(tab.requests).toEqual([
@@ -636,10 +636,10 @@ describe("agent UI over MCP", () => {
     const tab = await openBrowser("tab-a", "/");
     await tab.presence(false, true);
     const result = await (await mcp()).callTool({ name: "ui_screen", arguments: {} });
-    expect(result.structuredContent).toMatchObject({
-      ...screen("/"),
-      client: { id: "tab-a", platform: "web", focused: false, visible: true },
-      otherClients: [],
+    expect(result.structuredContent).toEqual({
+      route: { path: "/", url: "/" },
+      queries: [{ action: "hello" }],
+      client: { platform: "web", focused: false, visible: true },
     });
     expect(tab.requests).toEqual([
       expect.objectContaining({ op: "screen", input: {}, origin: { via: "mcp" } }),
@@ -719,10 +719,10 @@ describe("clients built without agent UI", () => {
     const started = Date.now();
     const result = await client.callTool({ name: "ui_screen", arguments: {} });
     expect(Date.now() - started).toBeLessThan(1000);
-    expect(result.structuredContent).toMatchObject({
-      route: { path: "/settings" },
-      client: { id: "tab-new" },
-      otherClients: [],
+    expect(result.structuredContent).toEqual({
+      route: { path: "/settings", url: "/settings" },
+      queries: [{ action: "hello" }],
+      client: { platform: "web", focused: false, visible: false },
     });
     const explicit = await client.callTool({
       name: "ui_screen",
@@ -754,9 +754,10 @@ describe("clients that are gone", () => {
     const client = await mcp();
     const result = await client.callTool({ name: "ui_screen", arguments: {} });
     expect(result.structuredContent).toMatchObject({
-      client: { id: "tab-live" },
-      otherClients: [],
+      route: { path: "/" },
+      client: { platform: "web", focused: false, visible: false },
     });
+    expect(result.structuredContent).not.toHaveProperty("otherClients");
   });
 
   it("fails a request waiting on a client the moment it leaves", async () => {
@@ -808,7 +809,7 @@ describe("reconnecting clients", () => {
     const result = await pending;
     expect(result.structuredContent).toMatchObject({
       route: { path: "/settings" },
-      client: { id: "tab-r" },
+      client: { platform: "web", focused: true, visible: true },
     });
     expect(reopened.requests).toHaveLength(1);
   });

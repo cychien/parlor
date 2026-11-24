@@ -16,6 +16,7 @@ import {
   uiOpReadOnly,
 } from "../protocol.js";
 import { type UiBroker, UiFailure } from "./broker.js";
+import { type CompactClient, type CompactScreen, compactClient, compactScreen } from "./compact.js";
 import type { ClientDirectory, Selection } from "./directory.js";
 import { uiOpInputs } from "./schemas.js";
 
@@ -43,21 +44,42 @@ export interface AgentTool<I extends z.ZodObject = z.ZodObject> {
   run(input: z.output<I>, ctx: AgentToolContext): Promise<unknown>;
 }
 
+/** @deprecated ui_screen returns {@link ScreenToolOutput}. */
 export interface ScreenToolResult extends ScreenSnapshot {
   readonly client: ClientSummary;
   readonly otherClients: readonly ClientSummary[];
   readonly tiedWith?: readonly string[] | undefined;
 }
 
+/** @deprecated ui_navigate returns {@link NavigateToolOutput}. */
 export interface NavigateToolResult {
   readonly client: ClientSummary;
   readonly screen: ScreenSnapshot;
 }
 
+/** @deprecated ui_set returns {@link SetToolOutput}. */
 export type SetToolResult = UiOpResults["set"] & { readonly client: ClientSummary };
 
+/** @deprecated ui_highlight returns {@link HighlightToolOutput}. */
 export type HighlightToolResult = UiOpResults["highlight"] & {
   readonly client: ClientSummary;
+};
+
+export interface ScreenToolOutput extends CompactScreen {
+  readonly client: CompactClient;
+  readonly otherClients?: readonly ClientSummary[];
+  readonly tiedWith?: readonly string[];
+}
+
+export interface NavigateToolOutput {
+  readonly client: CompactClient;
+  readonly screen: CompactScreen;
+}
+
+export type SetToolOutput = UiOpResults["set"] & { readonly client: CompactClient };
+
+export type HighlightToolOutput = UiOpResults["highlight"] & {
+  readonly client: CompactClient;
 };
 
 export interface UnreachableResult {
@@ -132,11 +154,12 @@ function routeCatalog(manifest: UiManifest | undefined): string {
 function screenDescription(manifest: UiManifest | undefined): string {
   return (
     [
-      "Read what the user currently sees in the app: the route, the actions feeding the screen (name and input, never data), the views on screen with their values, and attention.",
-      "route is the page the url matched, with notFound: false, its path pattern, params, search and url; when the url matches no page and the app shows its not-found screen, route is notFound: true with only the url.",
-      "attention holds focus (the focused element), selection (the text the user selected and the view holding it; null unless the selection lies inside one view), lastInteracted (the view the user last clicked or focused), lastEntered (the view the user last scrolled into view; null until the user scrolls, since items already on screen when the page renders never count), and focal (the view nearest the middle of the viewport).",
-      "Keyed views list only the items inside the viewport, in screen order, plus an offscreen count.",
-      "The result names the app client it came from and every other open client.",
+      "Read what the user currently sees in the app: the route, the actions feeding the screen (name and input, never data; status when not yet success), the views on screen with their values, and attention.",
+      "route is the page the url matched, with its path pattern, url, params and search; when the url matches no page and the app shows its not-found screen, route is notFound: true with only the url.",
+      "attention holds focus (the focused element), selection (the text the user selected and the view holding it, only when it lies inside one view), lastInteracted (the view the user last clicked or focused), lastEntered (the view the user last scrolled into view, only once the user scrolls, since items already on screen when the page renders never count), and focal (the view nearest the middle of the viewport).",
+      "Keyed views list only the items inside the viewport, in screen order, plus an offscreen count. shown is the visible fraction of a view or item that is partly visible.",
+      "Left out when they say nothing: empty params, search and input, null attention entries, a zero offscreen count, a success status, and shown when the whole view is visible. View values are always whole.",
+      "The result names the app client it came from; when other clients are open it also gives every client's id and lists the others.",
       "Returns reachable: false when the app is not open anywhere.",
     ].join(" ") + viewCatalog(manifest)
   );
@@ -193,18 +216,28 @@ function defineTool<I extends z.ZodObject>(tool: AgentTool<I>): AgentTool {
   return tool as unknown as AgentTool;
 }
 
+function clientOf(
+  directory: ClientDirectory,
+  scope: string,
+  selection: Selection,
+): CompactClient {
+  const alone = directory.summaries(scope).length <= 1;
+  return compactClient(directory.summary(selection.target.client), alone);
+}
+
 function withClients(
   directory: ClientDirectory,
   scope: string,
   selection: Selection,
   snapshot: ScreenSnapshot,
-): ScreenToolResult {
+): ScreenToolOutput {
   const chosen = selection.target.client;
+  const otherClients = directory.summaries(scope).filter((c) => c.id !== chosen.id);
   return {
-    client: directory.summary(chosen),
-    otherClients: directory.summaries(scope).filter((c) => c.id !== chosen.id),
+    client: clientOf(directory, scope, selection),
+    ...(otherClients.length > 0 ? { otherClients } : {}),
     ...(selection.tied.length > 0 ? { tiedWith: selection.tied.map((c) => c.id) } : {}),
-    ...snapshot,
+    ...compactScreen(snapshot),
   };
 }
 
@@ -342,9 +375,9 @@ export function createUiTools(
           ctx.origin,
           ctx.signal,
         );
-        const navigated: NavigateToolResult = {
-          client: directory.summary(selection.target.client),
-          screen: result.screen,
+        const navigated: NavigateToolOutput = {
+          client: clientOf(directory, ctx.scope, selection),
+          screen: compactScreen(result.screen),
         };
         return navigated;
       },
@@ -367,8 +400,8 @@ export function createUiTools(
           ctx.origin,
           ctx.signal,
         );
-        const written: SetToolResult = {
-          client: directory.summary(selection.target.client),
+        const written: SetToolOutput = {
+          client: clientOf(directory, ctx.scope, selection),
           ...result,
         };
         return written;
@@ -396,8 +429,8 @@ export function createUiTools(
           ctx.origin,
           ctx.signal,
         );
-        const pointed: HighlightToolResult = {
-          client: directory.summary(selection.target.client),
+        const pointed: HighlightToolOutput = {
+          client: clientOf(directory, ctx.scope, selection),
           ...result,
         };
         return pointed;
