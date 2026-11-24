@@ -8,7 +8,7 @@ import type {
   ScreenSnapshot,
   TruncatedValue,
   ViewSnapshot,
-} from "../protocol.js";
+} from "./protocol.js";
 
 export type CompactRoute =
   | {

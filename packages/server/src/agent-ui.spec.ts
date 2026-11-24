@@ -392,7 +392,20 @@ describe("agent UI over MCP", () => {
       uiManifest,
     );
     const response = await server.fetch(new Request("http://app.test/_parlor/manifest"));
-    expect(await response.json()).toMatchObject({
+    const body = (await response.json()) as {
+      uiTools: { name: string; description: string; inputSchema: unknown }[];
+    };
+    expect(body.uiTools.map((tool) => tool.name)).toEqual([
+      "ui_screen",
+      "ui_navigate",
+      "ui_set",
+      "ui_highlight",
+    ]);
+    expect(body.uiTools[0]!.description).not.toContain("reachable");
+    expect(body.uiTools[1]!.inputSchema).toMatchObject({
+      properties: { to: { enum: expect.any(Array) } },
+    });
+    expect(body).toMatchObject({
       protocol: 1,
       actions: [{ name: "hello" }],
       ui: uiManifest,

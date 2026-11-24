@@ -1,5 +1,12 @@
 import { z } from "zod";
 
+import { findPages, type PagesResult } from "../catalog.js";
+import {
+  type CompactClient,
+  type CompactScreen,
+  compactClient,
+  compactScreen,
+} from "../compact.js";
 import { routeHref, type RouteEntry, type UiManifest } from "../manifest.js";
 import {
   type AgentOrigin,
@@ -10,22 +17,17 @@ import {
   type UiOpResults,
   uiOpReadOnly,
 } from "../protocol.js";
-import { type UiBroker, UiFailure } from "./broker.js";
-import { type Catalogs, catalogsOf, findPages, type PagesResult } from "./catalog.js";
 import {
-  type CompactClient,
-  type CompactScreen,
-  compactClient,
-  compactScreen,
-} from "./compact.js";
+  type AgentToolName,
+  UI_PAGES_TOOL,
+  uiToolDescriptions,
+  uiToolInputs,
+  type UiToolName,
+} from "../ui-tools.js";
+import { type UiBroker, UiFailure } from "./broker.js";
 import type { ClientDirectory, Selection } from "./directory.js";
-import { uiOpInputs } from "./schemas.js";
 
-export type UiToolName = `ui_${UiOp}`;
-
-export const UI_PAGES_TOOL = "ui_pages";
-
-export type AgentToolName = UiToolName | typeof UI_PAGES_TOOL;
+export { type AgentToolName, UI_PAGES_TOOL, type UiToolName };
 
 const toolName = <O extends UiOp>(op: O): `ui_${O}` => `ui_${op}`;
 
@@ -107,65 +109,6 @@ const clientIdInput = z
   );
 
 const UNREACHABLE: UnreachableResult = { reachable: false, reason: "no_client" };
-
-function screenDescription(catalogs: Catalogs): string {
-  return (
-    [
-      "Read what the user sees in the app: the route, the actions feeding the screen (name and input, never data), the views on screen with their values, and attention.",
-      "route is the page the url matched: its path pattern, url, params and search, or notFound: true with only the url on the app's not-found screen.",
-      "attention holds focus (the focused element), selection (text selected inside one view, and that view), lastInteracted (the view last clicked or focused), lastEntered (the view last scrolled into view) and focal (the view nearest the middle of the viewport).",
-      "Keyed views list only the items inside the viewport, in screen order, plus an offscreen count; shown is the visible fraction of what is partly visible.",
-      "Empty or default fields (null attention, zero offscreen, success status, full visibility) are left out; view values are always whole.",
-      "The result names the app client it came from, with ids when several are open.",
-      "Returns reachable: false when the app is not open anywhere.",
-    ].join(" ") + catalogs.views
-  );
-}
-
-function navigateDescription(catalogs: Catalogs): string {
-  return (
-    [
-      "Take the user's app to a page, filling $params in the path from params.",
-      "Waits for the page's data to load (up to 1.5 s) and returns the new screen in ui_screen's shape, so its route shows the page the app landed on.",
-      "Returns reachable: false with an href to hand the user when the app is not open.",
-    ].join(" ") + catalogs.routes
-  );
-}
-
-function setDescription(catalogs: Catalogs): string {
-  return (
-    [
-      "Fill fields of a form the user sees, as a proposal: the user reviews it and submits it themselves. Call the matching action instead only when the user explicitly asks you to submit.",
-      "value is merged into the view's current value field by field; fields you omit keep what the user typed.",
-      "Returns the view's value read back from the screen and agentFields, the fields that still hold what you wrote; a field missing from agentFields was changed by the user.",
-      "Refuses with not_mounted, not_writable, user_editing (the user is typing in that field: wait or ask), invalid_value (issues name the fields), or ambiguous_client.",
-      "Returns reachable: false when the app is not open.",
-    ].join(" ") + catalogs.writable
-  );
-}
-
-function pagesDescription(): string {
-  return [
-    "Find the app's pages for a task: what each page shows, its params and search params, and the views on it with the fields you can fill.",
-    "query matches words in a page's path, description and views, best matches first; path gives that one page; with neither it lists every page.",
-    "It reads the app's own page list, so it works whether or not the app is open.",
-  ].join(" ");
-}
-
-function highlightDescription(): string {
-  return [
-    "Point at something on the user's screen: scrolls a view (a keyed item by key) or one field inside it into the middle of the screen, focuses the field (not on a touch screen, where that opens the keyboard), and marks it for two seconds.",
-    "Use it to show the user what you mean or to ask which one they meant.",
-    "Returns shown, the visible fraction after scrolling, or not_mounted when it is not on screen, or reachable: false when the app is not open.",
-    "Refuses with user_editing when the user is typing in another field: wait or ask, and it moves nothing.",
-  ].join(" ");
-}
-
-function routeEnum(manifest: UiManifest | undefined) {
-  const paths = manifest?.routes.map((route) => route.path) ?? [];
-  const [first, ...rest] = paths;
-  return first === undefined ? z.string() : z.enum([first, ...rest]);
-}
 
 function defineTool<I extends z.ZodObject>(tool: AgentTool<I>): AgentTool {
   return tool as unknown as AgentTool;
@@ -274,11 +217,12 @@ export function createUiTools(
   };
 
   const build = (manifest: UiManifest | undefined): readonly AgentTool[] => {
-    const catalogs = catalogsOf(manifest);
+    const text = uiToolDescriptions(manifest, "remote");
+    const inputs = uiToolInputs(manifest);
     const screen = defineTool({
       name: "ui_screen",
-      description: screenDescription(catalogs),
-      input: uiOpInputs.screen.extend({ clientId: clientIdInput }),
+      description: text.screen,
+      input: inputs.screen.extend({ clientId: clientIdInput }),
       readOnly: uiOpReadOnly.screen,
       async run({ clientId }, ctx) {
         const selection = select(ctx, clientId);
@@ -296,11 +240,8 @@ export function createUiTools(
 
     const navigate = defineTool({
       name: "ui_navigate",
-      description: navigateDescription(catalogs),
-      input: uiOpInputs.navigate.extend({
-        to: routeEnum(manifest).describe("The page's route path, exactly as listed."),
-        clientId: clientIdInput,
-      }),
+      description: text.navigate,
+      input: inputs.navigate.extend({ clientId: clientIdInput }),
       readOnly: uiOpReadOnly.navigate,
       async run({ to, params, search, replace, clientId }, ctx) {
         const selection = select(ctx, clientId);
@@ -341,8 +282,8 @@ export function createUiTools(
 
     const set = defineTool({
       name: toolName("set"),
-      description: setDescription(catalogs),
-      input: uiOpInputs.set.extend({ clientId: clientIdInput }),
+      description: text.set,
+      input: inputs.set.extend({ clientId: clientIdInput }),
       readOnly: uiOpReadOnly.set,
       async run({ view, key, value, clientId }, ctx) {
         const selection = select(ctx, clientId);
@@ -366,8 +307,8 @@ export function createUiTools(
 
     const highlight = defineTool({
       name: toolName("highlight"),
-      description: highlightDescription(),
-      input: uiOpInputs.highlight.extend({ clientId: clientIdInput }),
+      description: text.highlight,
+      input: inputs.highlight.extend({ clientId: clientIdInput }),
       readOnly: uiOpReadOnly.highlight,
       async run({ view, key, field, clientId }, ctx) {
         const selection = select(ctx, clientId);
@@ -395,14 +336,8 @@ export function createUiTools(
 
     const pages = defineTool({
       name: UI_PAGES_TOOL,
-      description: pagesDescription(),
-      input: z.object({
-        query: z.string().optional().describe("Words for what the page is for."),
-        path: z
-          .string()
-          .optional()
-          .describe("One page's route path, as ui_navigate takes it."),
-      }),
+      description: text.pages,
+      input: inputs.pages,
       readOnly: true,
       async run({ query, path }): Promise<PagesResult> {
         return findPages(manifest, { query, path });
@@ -416,7 +351,7 @@ export function createUiTools(
       highlight,
     };
     const tools = UI_OPS.map((op) => byOp[op]);
-    return catalogs.brief ? [...tools, pages] : tools;
+    return text.brief ? [...tools, pages] : tools;
   };
 
   let cachedFor: UiManifest | undefined;

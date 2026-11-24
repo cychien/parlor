@@ -76,6 +76,15 @@ export interface AgentUiClient extends ClientChannel {
   readonly activity: ActivityStore;
   readonly confirmations: ConfirmationStore;
   screen(): Promise<ScreenSnapshot>;
+  /**
+   * Runs one op for an agent in this page, such as a browser's own agent, in turn with the
+   * ones the server sends and shown in the activity the same way.
+   */
+  perform<O extends UiOp>(
+    op: O,
+    input: UiOpInput<O>,
+    origin: AgentOrigin,
+  ): Promise<UiReply>;
   start(): () => void;
   /** Forgets what belongs to the signed-in user: the pending confirmations. */
   reset(): void;
@@ -84,6 +93,7 @@ export interface AgentUiClient extends ClientChannel {
 }
 
 const REPLY_CACHE_SIZE = 64;
+const PERFORMED_TIMEOUT_MS = 10_000;
 const DEFAULT_SETTLE_MS = 1500;
 const OBSERVER_WAIT_MS = 100;
 
@@ -200,6 +210,8 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
   const replies = new Map<string, UiReply>();
   const queued = new Set<string>();
   const queue: UiRequest[] = [];
+  const performed = new Map<string, (reply: UiReply) => void>();
+  let performedCount = 0;
   let draining = false;
   let warnedUnwatched = false;
 
@@ -339,8 +351,14 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
       const request = queue.shift()!;
       activity.begin(request, env.now());
       const reply = await execute(request);
-      queued.delete(request.id);
-      remember(reply);
+      const settle = performed.get(request.id);
+      if (settle) {
+        performed.delete(request.id);
+        settle(reply);
+      } else {
+        queued.delete(request.id);
+        remember(reply);
+      }
       activity.end(reply);
     }
     draining = false;
@@ -459,12 +477,26 @@ export function createAgentUiClient(options: AgentUiClientOptions): AgentUiClien
     void drain();
   };
 
+  const perform = <O extends UiOp>(
+    op: O,
+    input: UiOpInput<O>,
+    origin: AgentOrigin,
+  ): Promise<UiReply> =>
+    new Promise((resolve) => {
+      const id = `performed-${++performedCount}`;
+      performed.set(id, resolve);
+      warnIfUnwatched();
+      queue.push({ id, op, input, origin, timeoutMs: PERFORMED_TIMEOUT_MS } as UiRequest);
+      void drain();
+    });
+
   return {
     event: UI_CHANNEL,
     views,
     activity,
     confirmations,
     screen,
+    perform,
     opened() {
       gone = false;
       connected = true;

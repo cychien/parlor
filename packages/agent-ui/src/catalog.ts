@@ -1,4 +1,4 @@
-import type { JsonSchema, RouteEntry, UiManifest, ViewEntry } from "../manifest.js";
+import type { JsonSchema, RouteEntry, UiManifest, ViewEntry } from "./manifest.js";
 
 /**
  * The most catalog text, in characters, the ui_ tool descriptions carry in full. Past it

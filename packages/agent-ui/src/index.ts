@@ -43,6 +43,7 @@ export {
   uiOps,
   type UiOpResults,
   type UiReply,
+  parseUiFrame,
   type UiRequest,
   type ViewSnapshot,
 } from "./protocol.js";
@@ -62,3 +63,24 @@ export {
   type WritableField,
 } from "./view.js";
 export { pagePattern, UNROUTED_HEADER } from "./pages.js";
+export {
+  CATALOG_BUDGET,
+  type Catalogs,
+  catalogsOf,
+  findPages,
+  type PageEntry,
+  type PagesResult,
+  type PageView,
+} from "./catalog.js";
+export {
+  type CompactClient,
+  type CompactScreen,
+  compactClient,
+  compactScreen,
+} from "./compact.js";
+export type {
+  AgentToolName,
+  PageToolSpec,
+  UiToolName,
+  UiToolSurface,
+} from "./ui-tools.js";
