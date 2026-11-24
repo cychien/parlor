@@ -159,12 +159,12 @@ function routeCatalog(manifest: UiManifest | undefined): string {
 function screenDescription(manifest: UiManifest | undefined): string {
   return (
     [
-      "Read what the user currently sees in the app: the route, the actions feeding the screen (name and input, never data; status when not yet success), the views on screen with their values, and attention.",
-      "route is the page the url matched, with its path pattern, url, params and search; when the url matches no page and the app shows its not-found screen, route is notFound: true with only the url.",
-      "attention holds focus (the focused element), selection (the text the user selected and the view holding it, only when it lies inside one view), lastInteracted (the view the user last clicked or focused), lastEntered (the view the user last scrolled into view, only once the user scrolls, since items already on screen when the page renders never count), and focal (the view nearest the middle of the viewport).",
-      "Keyed views list only the items inside the viewport, in screen order, plus an offscreen count. shown is the visible fraction of a view or item that is partly visible.",
-      "Left out when they say nothing: empty params, search and input, null attention entries, a zero offscreen count, a success status, and shown when the whole view is visible. View values are always whole.",
-      "The result names the app client it came from; when other clients are open it also gives every client's id and lists the others.",
+      "Read what the user sees in the app: the route, the actions feeding the screen (name and input, never data), the views on screen with their values, and attention.",
+      "route is the page the url matched: its path pattern, url, params and search, or notFound: true with only the url on the app's not-found screen.",
+      "attention holds focus (the focused element), selection (text selected inside one view, and that view), lastInteracted (the view last clicked or focused), lastEntered (the view last scrolled into view) and focal (the view nearest the middle of the viewport).",
+      "Keyed views list only the items inside the viewport, in screen order, plus an offscreen count; shown is the visible fraction of what is partly visible.",
+      "Empty or default fields (null attention, zero offscreen, success status, full visibility) are left out; view values are always whole.",
+      "The result names the app client it came from, with ids when several are open.",
       "Returns reachable: false when the app is not open anywhere.",
     ].join(" ") + viewCatalog(manifest)
   );
