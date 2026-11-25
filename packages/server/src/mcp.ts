@@ -74,7 +74,7 @@ export function appIdentity(
 }
 
 function toolResult(result: unknown): CallToolResult {
-  const text = result === undefined ? "ok" : JSON.stringify(result, null, 2);
+  const text = result === undefined ? "ok" : JSON.stringify(result);
   return {
     content: [{ type: "text", text }],
     ...(result !== null && typeof result === "object" && !Array.isArray(result)
@@ -113,9 +113,7 @@ function errorBodyOf(error: unknown): ToolErrorBody {
 function toolError(error: unknown): CallToolResult {
   return {
     isError: true,
-    content: [
-      { type: "text", text: JSON.stringify({ error: errorBodyOf(error) }, null, 2) },
-    ],
+    content: [{ type: "text", text: JSON.stringify({ error: errorBodyOf(error) }) }],
   };
 }
 
@@ -380,7 +378,7 @@ export function createMcpHandler<T extends ActionMap>(
             {
               uri: uri.href,
               mimeType: "application/json",
-              text: JSON.stringify(uiManifest, null, 2),
+              text: JSON.stringify(uiManifest),
             },
           ],
         }),
