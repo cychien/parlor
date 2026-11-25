@@ -29,7 +29,7 @@ function render(container: Element, element: ReactNode): void {
 
 /**
  * Starts the app in `container`: it hydrates what the server rendered there, and renders from
- * scratch otherwise, as on a page the server did not render and in the native shells.
+ * scratch on a page the server did not render.
  */
 export function mount(container: Element, { router, element }: ParlorApp): void {
   if (!container.hasAttribute(SERVER_RENDERED)) {

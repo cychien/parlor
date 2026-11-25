@@ -11,7 +11,6 @@ import { asId } from "@parlor/core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { type AppGrant, fileGrantStore, keychainHostKeys } from "./grants.js";
-import { pair, UnrevokedGrant } from "./pairing.js";
 import { hostPaths } from "./paths.js";
 
 const BIN = fileURLToPath(new URL("../bin/parlor-host-dev.mjs", import.meta.url));
@@ -139,34 +138,6 @@ describe("revoking a grant the app refuses to revoke", () => {
     const agreed = await parlorHost(["disconnect", origin]);
     expect(agreed).toMatchObject({ code: 0, stderr: "" });
     expect(revokes.length).toBe(revokedBefore + 1);
-    expect(await savedGrants()).toEqual({});
-    expect(await keyKept()).toBe(false);
-  }, 60_000);
-
-  it("T4-12: a pairing declined in the native dialog keeps the grant and key, never served, until the revoke goes through", async () => {
-    revokeStatus = 500;
-    const declined = await pair({
-      appOrigin: origin,
-      hostName: "Alice's MacBook Pro",
-      platform: "macos",
-      keys: keychainHostKeys(SERVICE),
-      workspaceRoot: join(home, "Parlor"),
-      channel: {
-        kind: "ipc",
-        authorize: async () => "code-1",
-        confirm: async () => false,
-      },
-    }).catch((error: unknown) => error);
-    expect(declined).toBeInstanceOf(UnrevokedGrant);
-    await fileGrantStore(paths().grants).save((declined as UnrevokedGrant).grant);
-    expect(await savedGrants()).toMatchObject({
-      [origin]: { grantId: "host:declined", declined: true },
-    });
-    expect(await keyKept()).toBe(true);
-
-    revokeStatus = 200;
-    const agreed = await parlorHost(["disconnect", origin]);
-    expect(agreed).toMatchObject({ code: 0, stderr: "" });
     expect(await savedGrants()).toEqual({});
     expect(await keyKept()).toBe(false);
   }, 60_000);

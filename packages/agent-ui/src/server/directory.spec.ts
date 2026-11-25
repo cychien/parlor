@@ -86,7 +86,7 @@ describe("ClientDirectory selection", () => {
     connect("phone");
     directory.presence("desk", "default", presence(true, true));
     tick(10);
-    directory.presence("phone", "default", presence(true, true, "capacitor"));
+    directory.presence("phone", "default", presence(true, true, "web"));
     expect(pick(directory)).toEqual({ id: "phone", tied: ["desk"] });
   });
 
@@ -280,14 +280,14 @@ describe("ClientDirectory connections", () => {
     const { directory, connect, presence, tick } = setup();
     connect("a");
     directory.presence("a", "default", {
-      ...presence(true, true, "tauri"),
+      ...presence(true, true, "web"),
       buildId: "b1",
     });
     tick(250);
     expect(directory.summaries("default")).toEqual([
       {
         id: "a",
-        platform: "tauri",
+        platform: "web",
         buildId: "b1",
         focused: true,
         visible: true,

@@ -141,36 +141,18 @@ describe("appOrigin", () => {
     vi.stubGlobal("location", { origin });
   }
 
-  it("is the origin parlor dev names for every target it runs, over this page's own", () => {
-    pageAt("http://localhost:5176");
-    expect(appOrigin(SERVER, "http://localhost:5174/")).toBe("http://localhost:5174");
-  });
-
   it("is the page origin when the app is served over http(s)", () => {
     pageAt("https://hello.example.com");
     expect(appOrigin(SERVER)).toBe("https://hello.example.com");
   });
 
-  it.each([
-    "tauri://localhost",
-    "http://tauri.localhost",
-    "https://tauri.localhost",
-    "capacitor://localhost",
-    "ionic://localhost",
-    "http://localhost",
-    "https://localhost",
-  ])("is the server origin in the %s webview", (origin) => {
-    pageAt(origin);
-    expect(appOrigin(SERVER)).toBe("https://hello.example.com");
-  });
-
-  it("keeps a dev server page origin that is not a shell origin", () => {
+  it("keeps a dev server page origin", () => {
     pageAt("http://localhost:5173");
     expect(appOrigin(SERVER)).toBe("http://localhost:5173");
   });
 
-  it("is the server URL itself when it is not a URL", () => {
-    pageAt("tauri://localhost");
+  it("is the server URL itself, when it is not a URL, off an http(s) page", () => {
+    pageAt("null");
     expect(appOrigin("not a url")).toBe("not a url");
   });
 });

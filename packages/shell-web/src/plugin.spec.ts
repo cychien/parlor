@@ -118,64 +118,15 @@ describe("parlorWeb", () => {
   });
 });
 
-describe("resolve conditions", () => {
-  it("appends shell conditions after Vite's defaults", async () => {
+describe("defines", () => {
+  it("injects nothing a native shell read", async () => {
     const resolved = await resolveConfig(
-      { configFile: false, plugins: parlorWeb(config, { conditions: ["parlor-tauri"] }) },
-      "build",
-    );
-    expect(resolved.resolve.conditions.at(-1)).toBe("parlor-tauri");
-    expect(resolved.resolve.conditions).toContain("browser");
-  });
-});
-
-describe("server url", () => {
-  it("injects the shell server url for the action client, empty for same-origin web", async () => {
-    const withUrl = await resolveConfig(
-      {
-        configFile: false,
-        plugins: parlorWeb(config, { serverUrl: "https://api.test" }),
-      },
-      "build",
-    );
-    const without = await resolveConfig(
       { configFile: false, plugins: parlorWeb(config) },
       "build",
     );
-    expect(withUrl.define?.["import.meta.env.PARLOR_SERVER_URL"]).toBe(
-      '"https://api.test"',
-    );
-    expect(without.define?.["import.meta.env.PARLOR_SERVER_URL"]).toBe('""');
-    expect(without.define?.["import.meta.env.PARLOR_APP_ORIGIN"]).toBe('""');
-  });
-
-  it("injects the app origin parlor dev names for a target next to the web one", async () => {
-    const injected = await resolveConfig(
-      {
-        configFile: false,
-        plugins: parlorWeb(config, { appOrigin: "http://localhost:5174" }),
-      },
-      "serve",
-    );
-    expect(injected.define?.["import.meta.env.PARLOR_APP_ORIGIN"]).toBe(
-      '"http://localhost:5174"',
-    );
-  });
-
-  it("injects app.scheme, which a native shell's social sign-in returns to", async () => {
-    const withScheme = await resolveConfig(
-      {
-        configFile: false,
-        plugins: parlorWeb(parseConfig({ app: { ...config.app, scheme: "todo" } })),
-      },
-      "build",
-    );
-    const without = await resolveConfig(
-      { configFile: false, plugins: parlorWeb(config) },
-      "build",
-    );
-    expect(withScheme.define?.["import.meta.env.PARLOR_APP_SCHEME"]).toBe('"todo"');
-    expect(without.define?.["import.meta.env.PARLOR_APP_SCHEME"]).toBe('""');
+    expect(
+      Object.keys(resolved.define ?? {}).filter((key) => key.includes("PARLOR")),
+    ).toEqual([]);
   });
 });
 
@@ -317,7 +268,7 @@ describe("content security policy", () => {
             csp: { "img-src": ["https://cdn.test"] },
           },
         },
-        { root, serverUrl: "http://localhost:3100" },
+        { root },
       ),
     });
     await server.listen();
@@ -330,7 +281,7 @@ describe("content security policy", () => {
           "style-src 'self' 'unsafe-inline'",
           "img-src 'self' data: https://cdn.test",
           "font-src 'self'",
-          "connect-src 'self' http://localhost:3100 ws:",
+          "connect-src 'self' ws:",
           "media-src 'self'",
           "worker-src 'self'",
           "manifest-src 'self'",
@@ -347,42 +298,4 @@ describe("content security policy", () => {
       await server.close();
     }
   });
-
-  it("writes the build policy as a meta tag only when the shell asks, without frame-ancestors", async () => {
-    const built = async (cspMeta: boolean) => {
-      const root = await emptyApp();
-      const outDir = join(root, "out");
-      await build({
-        root,
-        configFile: false,
-        logLevel: "silent",
-        plugins: parlorWeb(
-          { ...config, web: { ...config.web, pwa: false } },
-          { root, serverUrl: "https://api.test", cspMeta },
-        ),
-        build: { outDir },
-      });
-      return readFile(join(outDir, "index.html"), "utf8");
-    };
-    const withMeta = await built(true);
-    const policy = [
-      "default-src 'self'",
-      "script-src 'self'",
-      "style-src 'self'",
-      "img-src 'self' data:",
-      "font-src 'self'",
-      "connect-src 'self' https://api.test",
-      "media-src 'self'",
-      "worker-src 'self'",
-      "manifest-src 'self'",
-      "frame-src 'none'",
-      "object-src 'none'",
-      "base-uri 'self'",
-      "form-action 'self'",
-    ].join("; ");
-    expect(withMeta).toContain(
-      `<meta http-equiv="Content-Security-Policy" content="${policy.replaceAll("'", "&#39;")}">`,
-    );
-    expect(await built(false)).not.toContain("Content-Security-Policy");
-  }, 30_000);
 });

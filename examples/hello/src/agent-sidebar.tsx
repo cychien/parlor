@@ -126,19 +126,11 @@ function Computers() {
         <p>
           {hosts.length > 0
             ? "None of your connected computers has an agent set up."
-            : connect.kind === "command"
-              ? "To chat with the AI agents on your computer, set it up once: run this in a terminal on it, then link this device."
-              : "Connect a computer to your account to chat with an agent here."}
+            : "To chat with the AI agents on your computer, set it up once: run this in a terminal on it, then link this device."}
         </p>
-        {connect.kind === "here" ? (
-          <button type="button" onClick={() => void connect.start()}>
-            Use agents on this computer
-          </button>
-        ) : (
-          <code className="connect-command" data-testid="connect-command">
-            {connect.command}
-          </code>
-        )}
+        <code className="connect-command" data-testid="connect-command">
+          {connect.command}
+        </code>
       </div>
     );
   }

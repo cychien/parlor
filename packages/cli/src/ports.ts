@@ -38,27 +38,19 @@ export async function firstFreePort(
 
 export interface DevPorts {
   readonly server: number;
-  /** One per target, in the order asked; the first starts at the wanted web port. */
-  readonly web: readonly number[];
+  readonly web: number;
 }
 
 /** Moves each busy port to the next free one, saying so, as Vite and Next.js do. */
 export async function resolveDevPorts(
-  wanted: { readonly server: number; readonly web: number; readonly targets?: number },
+  wanted: { readonly server: number; readonly web: number },
   log: (line: string) => void = console.log,
 ): Promise<DevPorts> {
   const server = await firstFreePort(wanted.server);
-  const taken = new Set([server]);
-  const web: number[] = [];
-  for (let index = 0; index < (wanted.targets ?? 1); index += 1) {
-    const port = await firstFreePort(web.at(-1) ?? wanted.web, taken);
-    taken.add(port);
-    web.push(port);
-  }
+  const web = await firstFreePort(wanted.web, new Set([server]));
   if (server !== wanted.server) {
     log(`Port ${wanted.server} is in use, so the server uses ${server}.`);
   }
-  if (web[0] !== wanted.web)
-    log(`Port ${wanted.web} is in use, so the page uses ${web[0]}.`);
+  if (web !== wanted.web) log(`Port ${wanted.web} is in use, so the page uses ${web}.`);
   return { server, web };
 }

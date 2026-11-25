@@ -27,9 +27,15 @@ import {
   statementBytes,
   verifyStatement,
 } from "../statements.js";
-import { createTestApp, ORIGIN, PASSWORD, type TestApp } from "../testing/app.js";
+import {
+  Browser,
+  createTestApp,
+  ORIGIN,
+  PASSWORD,
+  type TestApp,
+} from "../testing/app.js";
 import { TestDeviceKey } from "../testing/device.js";
-import { type AuthClient, createAuthClient, type SessionStore } from "./index.js";
+import { type AuthClient, createAuthClient } from "./index.js";
 
 const PAGE = "https://hello.example";
 const page = globalThis as {
@@ -76,32 +82,25 @@ const withoutDeviceActions = (request: Request): Response | undefined =>
       )
     : undefined;
 
-function client(
-  deviceKey?: TestDeviceKey,
-  answer: (request: Request) => Response | Promise<Response> | undefined = () =>
-    undefined,
-) {
+/** What a test answers in place of the server; `tab` reaches the server with the page's cookies. */
+type Answer = (
+  request: Request,
+  tab: Browser,
+) => Response | Promise<Response> | undefined;
+
+function client(deviceKey?: TestDeviceKey, answer: Answer = () => undefined) {
   const calls: string[] = [];
-  let token: string | undefined;
-  const store: SessionStore = {
-    get: () => Promise.resolve(token),
-    set: (next) => {
-      token = next;
-      return Promise.resolve();
-    },
-  };
+  const tab = new Browser(server);
   const auth = createAuthClient({
     baseUrl: ORIGIN,
-    session: store,
     ...(deviceKey ? { deviceKey } : {}),
     fetch: (input, init) => {
       const request = new Request(input, init);
       calls.push(new URL(request.url).pathname.replace("/_parlor/auth/", ""));
-      if (request.method === "POST") request.headers.set("origin", "tauri://localhost");
-      return Promise.resolve(answer(request) ?? server.fetch(request));
+      return Promise.resolve(answer(request, tab) ?? tab.asFetch(request));
     },
   });
-  return { auth, calls };
+  return { auth, calls, tab };
 }
 
 function settled(auth: AuthClient): Promise<SessionSnapshot> {
@@ -117,20 +116,17 @@ function settled(auth: AuthClient): Promise<SessionSnapshot> {
   });
 }
 
-async function signedIn(
-  deviceKey?: TestDeviceKey,
-  answer?: (request: Request) => Response | Promise<Response> | undefined,
-) {
-  const { auth, calls } = client(deviceKey, answer);
+async function signedIn(deviceKey?: TestDeviceKey, answer?: Answer) {
+  const { auth, calls, tab } = client(deviceKey, answer);
   await auth.signUp({ name: "Alice", email: "alice@example.com", password: PASSWORD });
   await settled(auth);
-  return { auth, calls };
+  return { auth, calls, tab };
 }
 
 describe("linking a device", () => {
   async function secondDevice(
     key = new TestDeviceKey(),
-    answer?: (request: Request) => Response | Promise<Response> | undefined,
+    answer?: Answer,
     email = "alice@example.com",
   ) {
     const { auth } = client(key, answer);
@@ -199,20 +195,13 @@ describe("linking a device", () => {
       userName: "u",
       challenge: new Uint8Array([1]),
     });
-    let token: string | undefined;
+    const tab = new Browser(server);
     const laptop = createAuthClient({
       baseUrl: ORIGIN,
       deviceKey: new TestDeviceKey(),
-      session: {
-        get: async () => token,
-        set: async (next) => {
-          token = next;
-        },
-      },
       fetch: async (input, init) => {
         const request = new Request(input, init);
-        if (request.method === "POST") request.headers.set("origin", "tauri://localhost");
-        const response = await server.fetch(request);
+        const response = await tab.asFetch(request);
         if (!new URL(request.url).pathname.endsWith("/resolveDeviceLink"))
           return response;
         const body = (await response.json()) as { data: Record<string, unknown> };
@@ -252,10 +241,7 @@ describe("linking a device", () => {
 });
 
 describe("removing a device", () => {
-  async function another(
-    key: TestDeviceKey,
-    answer?: (request: Request) => Response | Promise<Response> | undefined,
-  ) {
+  async function another(key: TestDeviceKey, answer?: Answer) {
     const { auth } = client(key, answer);
     await auth.signIn({ email: "alice@example.com", password: PASSWORD });
     await settled(auth);
@@ -289,9 +275,9 @@ describe("removing a device", () => {
   });
 
   it("D3: refuses a removal signed for another device, and a device with no presence key cannot remove", async () => {
-    const tamper = async (request: Request) => {
+    const tamper = async (request: Request, tab: Browser) => {
       const body = (await request.json()) as Record<string, unknown>;
-      return server.fetch(
+      return tab.asFetch(
         new Request(request.url, {
           method: "POST",
           headers: request.headers,
@@ -299,8 +285,8 @@ describe("removing a device", () => {
         }),
       );
     };
-    const { auth: laptop } = await signedIn(new TestDeviceKey(), (request) =>
-      request.url.endsWith("/actions/removeDevice") ? tamper(request) : undefined,
+    const { auth: laptop } = await signedIn(new TestDeviceKey(), (request, tab) =>
+      request.url.endsWith("/actions/removeDevice") ? tamper(request, tab) : undefined,
     );
     await laptop.device();
     const phone = await another(new TestDeviceKey(false));
@@ -356,14 +342,15 @@ describe("the auth client's device", () => {
     await expect(auth.device()).rejects.toBeInstanceOf(PresenceSetupCancelled);
     expect(calls.filter((call) => call.endsWith("/enrollDevice"))).toEqual([]);
     const device = await auth.device();
-    expect(device?.keys.presenceKey).toBeDefined();
+    expect(device).toBeDefined();
+    expect(await auth.canVouch()).toBe(true);
     expect(calls.filter((call) => call.endsWith("/enrollDevice"))).toHaveLength(1);
   });
 
   it("enrolls without a presence key when the user skips the passkey", async () => {
     const { auth } = await signedIn(new TestDeviceKey());
     const device = await auth.device({ presence: false });
-    expect(device?.keys.presenceKey).toBeUndefined();
+    expect(await auth.canVouch()).toBe(false);
     const devices = await auth.account.call("devices", {});
     expect(devices).toEqual([expect.objectContaining({ id: device!.id })]);
   });
@@ -378,18 +365,8 @@ describe("the auth client's device", () => {
     ]);
   });
 
-  async function pinnedFor(auth: AuthClient, deviceId: string) {
-    const whoami = await server.fetch(
-      new Request(`${ORIGIN}/_parlor/actions/whoami`, {
-        method: "POST",
-        headers: {
-          ...Object.fromEntries(new Headers(await auth.headers())),
-          "content-type": "application/json",
-          origin: ORIGIN,
-        },
-        body: "{}",
-      }),
-    );
+  async function pinnedFor(tab: Browser, deviceId: string) {
+    const whoami = await tab.post("/_parlor/actions/whoami", {});
     const { userId } = (await whoami.json()).data.principal;
     const keys = (await app.provider.device!(
       asId("user", userId),
@@ -411,7 +388,7 @@ describe("the auth client's device", () => {
   const maxAge = { requirePresence: false, now: Date.now(), maxAgeMs: 60_000 };
 
   it("signs a prompt the host rebuilds from the logged item and verifies with the account's keys", async () => {
-    const { auth } = await signedIn(new TestDeviceKey());
+    const { auth, tab } = await signedIn(new TestDeviceKey());
     const device = (await auth.device())!;
     const before = Date.now();
     const signed = await device.signPrompt(prompt);
@@ -432,14 +409,14 @@ describe("the auth client's device", () => {
       kind: "prompt",
       at: signed.at,
     });
-    const pinned = await pinnedFor(auth, device.id);
+    const pinned = await pinnedFor(tab, device.id);
     expect(await verifyStatement(rebuilt!, pinned, { ...maxAge, now: signed.at })).toBe(
       "valid",
     );
   });
 
   it("D4: signs a prompt with Face ID or Touch ID when asked, which a host that wants presence accepts", async () => {
-    const { auth } = await signedIn(new TestDeviceKey());
+    const { auth, tab } = await signedIn(new TestDeviceKey());
     const device = (await auth.device())!;
     const plain = await device.signPrompt(prompt);
     const present = await device.signPrompt(prompt, { presence: true });
@@ -447,7 +424,7 @@ describe("the auth client's device", () => {
       "none",
       "user",
     ]);
-    const pinned = await pinnedFor(auth, device.id);
+    const pinned = await pinnedFor(tab, device.id);
     const verify = async (signed: typeof plain) =>
       verifyStatement(
         (await signedPrompt(PAGE, {
@@ -470,7 +447,7 @@ describe("the auth client's device", () => {
   });
 
   it("signs an answer with presence only when asked to", async () => {
-    const { auth } = await signedIn(new TestDeviceKey());
+    const { auth, tab } = await signedIn(new TestDeviceKey());
     const device = (await auth.device())!;
     const answer = {
       threadId: prompt.threadId,
@@ -483,7 +460,7 @@ describe("the auth client's device", () => {
       "none",
       "user",
     ]);
-    const pinned = await pinnedFor(auth, device.id);
+    const pinned = await pinnedFor(tab, device.id);
     const { answerStatement } = await import("../statements.js");
     const verify = async (signed: typeof plain, requirePresence: boolean) =>
       verifyStatement(
@@ -511,7 +488,7 @@ describe("the auth client's device", () => {
     scope.history = { state: null, replaceState };
     page.location = new URL(`${PAGE}/todos?x=1#parlor-host-pairing=${secret}`);
     try {
-      const { auth } = await signedIn(new TestDeviceKey());
+      const { auth, tab } = await signedIn(new TestDeviceKey());
       expect(stored.get("parlor:host-pairing")).toBe(secret);
       expect(replaceState).toHaveBeenCalledWith(null, "", "/todos?x=1");
       const device = (await auth.device())!;
@@ -521,7 +498,7 @@ describe("the auth client's device", () => {
           secret,
           signed.pairing!,
           device.id,
-          device.keys.signingKey,
+          (await pinnedFor(tab, device.id)).signingKey,
         ),
       ).toBe(true);
     } finally {
@@ -655,33 +632,11 @@ describe("the auth client's device", () => {
     });
 
     it("T6-05: is the page's origin in a browser, whatever server the page talks to", async () => {
-      const { auth } = await signedIn(new TestDeviceKey());
+      const { auth, tab } = await signedIn(new TestDeviceKey());
       const device = (await auth.device())!;
       const signed = await device.signPrompt(prompt);
       const statement = await promptStatement(PAGE, prompt, signed.at);
-      const pinned = await pinnedFor(auth, device.id);
-      expect(
-        await verifyStatement(
-          { statement, deviceId: signed.deviceId, signature: signed.signature },
-          pinned,
-          { ...maxAge, now: signed.at },
-        ),
-      ).toBe("valid");
-    });
-
-    it("is the backend's origin in a shell, and its passkey is made for that site", async () => {
-      page.location = new URL("tauri://app.local");
-      const key = new TestDeviceKey();
-      const enrolled = vi.spyOn(key, "publicKeys");
-      const { auth } = await signedIn(key);
-      const device = (await auth.device())!;
-      expect(enrolled).toHaveBeenCalledWith(
-        expect.objectContaining({ rpId: new URL(ORIGIN).hostname }),
-        { presence: true },
-      );
-      const signed = await device.signPrompt(prompt);
-      const statement = await promptStatement(ORIGIN, prompt, signed.at);
-      const pinned = await pinnedFor(auth, device.id);
+      const pinned = await pinnedFor(tab, device.id);
       expect(
         await verifyStatement(
           { statement, deviceId: signed.deviceId, signature: signed.signature },

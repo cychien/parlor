@@ -155,10 +155,6 @@ function Computers() {
       <Note title={hosts.length === 0 ? "No computer connected" : "No agent ready"}>
         {hosts.length > 0 ? (
           <p>None of your connected computers has an agent set up.</p>
-        ) : connect.kind === "here" ? (
-          <button type="button" onClick={() => void connect.start()} className={PRIMARY}>
-            Use agents on this computer
-          </button>
         ) : (
           <>
             <p>

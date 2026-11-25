@@ -11,7 +11,6 @@ import { buildRender, buildWeb, startWebDev } from "@parlor/shell-web";
 import { CliError } from "./errors.js";
 import { serverlessWarning } from "./serverless-warning.js";
 import { onShutdown } from "./shutdown.js";
-import type { BuildOptions, TargetHandler } from "./targets.js";
 
 function isPortInUse(error: unknown): boolean {
   return error instanceof Error && /already in use/.test(error.message);
@@ -19,7 +18,7 @@ function isPortInUse(error: unknown): boolean {
 
 export async function buildWebAndServer(
   loaded: LoadedConfig,
-  options: BuildOptions,
+  options: { readonly preset?: string | undefined },
 ): Promise<ServerBuildResult> {
   const outDir = await buildWeb(loaded);
   console.log(`web build written to ${outDir}`);
@@ -43,22 +42,17 @@ export async function buildWebAndServer(
   }
 }
 
-export const webTarget: TargetHandler = {
-  async dev(loaded, options) {
-    try {
-      const server = await startWebDev(loaded, { appOrigin: options.appOrigin });
-      onShutdown(() => server.close());
-    } catch (error) {
-      if (isPortInUse(error)) {
-        throw new CliError(
-          `Port ${loaded.config.web.port} was taken while parlor dev was starting. Run it again.`,
-          { cause: error },
-        );
-      }
-      throw error;
+export async function startWeb(loaded: LoadedConfig): Promise<void> {
+  try {
+    const server = await startWebDev(loaded);
+    onShutdown(() => server.close());
+  } catch (error) {
+    if (isPortInUse(error)) {
+      throw new CliError(
+        `Port ${loaded.config.web.port} was taken while parlor dev was starting. Run it again.`,
+        { cause: error },
+      );
     }
-  },
-  async build(loaded, options) {
-    await buildWebAndServer(loaded, options);
-  },
-};
+    throw error;
+  }
+}

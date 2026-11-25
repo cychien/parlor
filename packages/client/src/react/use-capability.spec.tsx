@@ -33,7 +33,7 @@ describe("useCapability", () => {
     render(<Probe definition={missing} />);
     await waitFor(() =>
       expect(screen.getByRole("status").textContent).toBe(
-        'Capability "missing" has no available adapter on web',
+        'Capability "missing" is not available in this browser',
       ),
     );
   });

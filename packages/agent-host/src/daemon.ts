@@ -10,7 +10,6 @@ import {
 import { createServer, type Server, type Socket } from "node:net";
 import { basename, delimiter, dirname, join } from "node:path";
 
-import type { LocalHostStatus } from "@parlor/capabilities";
 import {
   type AgentInfo,
   type ClaimedTurn,
@@ -29,7 +28,7 @@ import {
   unregisterAgentTools,
 } from "./agent-tools.js";
 import { type AgentProfile, findAgents, loadProfiles } from "./agents.js";
-import { connectControl, type ControlRequest } from "./control.js";
+import { connectControl, type ControlRequest, type LocalHostStatus } from "./control.js";
 import { requestDevHostToken } from "./dev-host.js";
 import { type AppGrant, devHostKeys, type GrantStore, type HostKeys } from "./grants.js";
 import { type LearnedNews, learnedStore } from "./learned.js";
@@ -39,12 +38,6 @@ import { withInheritedLock } from "./lock.js";
 import { logEvent, openHostLog } from "./log.js";
 import { AppNotAnswering, type McpProxy } from "./mcp-proxy.js";
 import { computerName, platformName, workspaceOf } from "./naming.js";
-import {
-  type LocalPairing,
-  pairingDeviceOf,
-  startLocalPairing,
-  UnrevokedGrant,
-} from "./pairing.js";
 import type { HostPaths } from "./paths.js";
 import { DEV_POLICY, loadPolicy, presenceDueAt, type RemotePolicy } from "./policy.js";
 import type { SessionPool } from "./pool.js";
@@ -448,7 +441,7 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
 
   const handToNewAgentsNow = async (grant: AppGrant) => {
     const tools = grant.agentTools;
-    if (grant.declined || grant.dev || !tools?.on || !tools.agents) return;
+    if (grant.dev || !tools?.on || !tools.agents) return;
     const have = new Set(tools.agents);
     const fresh = toolsDeps().profiles.filter((profile) => !have.has(profile.id));
     if (fresh.length === 0) {
@@ -770,7 +763,6 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
         agents: agents.map((a) => a.id),
       });
       for (const grant of await deps.grants.list()) {
-        if (grant.declined) continue;
         void handToNewAgents(grant.appOrigin).catch(() => undefined);
         void report(open(grant, deps.keys), true).catch((error: unknown) =>
           logEvent("link_failed", { appOrigin: grant.appOrigin, error: String(error) }),
@@ -781,7 +773,7 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
     },
     async connect(appOrigin) {
       const saved = await deps.grants.get(appOrigin);
-      if (!saved || saved.declined) {
+      if (!saved) {
         throw new Error(`This computer is not connected to ${appOrigin}.`);
       }
       const grant = await ensureAgentTools(saved);
@@ -799,7 +791,7 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
     },
     async agentTools(appOrigin, on) {
       const saved = await deps.grants.get(appOrigin);
-      if (!saved || saved.declined || saved.dev) {
+      if (!saved || saved.dev) {
         throw new Error(`This computer is not connected to ${appOrigin}.`);
       }
       if (!on) await removeAgentTools(saved);
@@ -911,46 +903,6 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
     return { ok: true };
   };
 
-  const pairings = new Map<string, LocalPairing>();
-
-  const pendingPairing = (appOrigin: string) => {
-    const origin = new URL(appOrigin).origin;
-    return { origin, pairing: pairings.get(origin) };
-  };
-
-  const confirmPairing = async (
-    request: Extract<ControlRequest, { readonly op: "confirm_local_pairing" }>,
-  ): Promise<unknown> => {
-    const { origin, pairing } = pendingPairing(request.appOrigin);
-    if (!pairing) return { ok: false, error: "No pairing was started for this app." };
-    pairings.delete(origin);
-    let outcome: Awaited<ReturnType<LocalPairing["confirm"]>>;
-    try {
-      outcome = await pairing.confirm(request.connect);
-    } catch (error) {
-      if (!(error instanceof UnrevokedGrant)) throw error;
-      await deps.grants.save(error.grant);
-      return { ok: false, error: "declined_locally" };
-    }
-    if (!outcome.paired) return { ok: false, error: outcome.reason };
-    const { grant } = outcome;
-    await deps.grants.save(grant);
-    const device = pairingDeviceOf(request.device);
-    if (device) {
-      await deps.trust.pin(grant.appOrigin, {
-        deviceId: asId("device", device.deviceId),
-        signingKey: device.signingKey,
-        presenceKey: device.presenceKey,
-        name: device.name,
-        platform: device.platform,
-        approvedAt: Date.now(),
-        via: "pairing",
-      });
-    }
-    await daemon.connect(grant.appOrigin);
-    return { ok: true };
-  };
-
   const handle = async (request: ControlRequest): Promise<unknown> => {
     if (request.op !== "hello") await startup;
     switch (request.op) {
@@ -962,37 +914,6 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
         return stepAside(request.release);
       case "status":
         return { ok: true, status: status(), grants: grantsOf() };
-      case "begin_local_pairing": {
-        const { origin } = pendingPairing(request.appOrigin);
-        const existing = await deps.grants.get(origin);
-        if (existing && !existing.declined) {
-          return {
-            ok: false,
-            error: `This computer is already connected to ${existing.appName}.`,
-          };
-        }
-        const pairing = startLocalPairing({
-          appOrigin: origin,
-          hostName: name,
-          platform,
-          keys: deps.keys,
-          workspaceRoot: paths.workspaces,
-        });
-        pairings.set(origin, pairing);
-        const begun = await pairing.pairing;
-        logEvent("local_pairing_begun", {
-          appOrigin: origin,
-          matchingCode: begun.matchingCode,
-        });
-        return { ok: true, pairing: begun };
-      }
-      case "finish_local_pairing": {
-        const { pairing } = pendingPairing(request.appOrigin);
-        if (!pairing) return { ok: false, error: "No pairing was started for this app." };
-        return { ok: true, ...(await pairing.finish(request.code)) };
-      }
-      case "confirm_local_pairing":
-        return confirmPairing(request);
       case "connect": {
         const agentTools = await daemon.connect(request.appOrigin);
         return { ok: true, ...(agentTools ? { agentTools } : {}) };

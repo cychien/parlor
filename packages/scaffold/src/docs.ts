@@ -33,7 +33,6 @@ Open http://localhost:5173 and press **Agent** to chat with the coding agent on 
 | \`${pm.run("db:generate")}\` | A SQL migration from \`schema/\` |
 | \`${pm.run("build")}\` | Production build in \`.parlor/\` |
 | \`${pm.exec("parlor", ["add", "auth"])}\` | Sign-in, so each user sees only their own data |
-| \`${pm.exec("parlor", ["dev", "--target", "mac"])}\` | The same app as a macOS window |
 
 ## Layout
 

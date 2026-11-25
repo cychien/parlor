@@ -9,7 +9,7 @@ type Chat = ReturnType<typeof useChat>;
 
 test("adding a computer is data with two kinds, so the app never asks which shell it runs in", () => {
   expectTypeOf<Chat["connect"]>().toEqualTypeOf<ConnectOption>();
-  expectTypeOf<ConnectOption["kind"]>().toEqualTypeOf<"command" | "here">();
+  expectTypeOf<ConnectOption["kind"]>().toEqualTypeOf<"command">();
 });
 
 test("the chat's items are the folded log; an inline confirmation is the app's own card", () => {

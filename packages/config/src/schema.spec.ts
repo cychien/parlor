@@ -8,7 +8,6 @@ describe("parseConfig", () => {
       app: { id: "com.example.todo", name: "Todo", version: "0.1.0" },
       server: { entry: "server.ts", port: 3000 },
       web: { port: 5173, pwa: true, themeColor: "#ffffff", backgroundColor: "#ffffff" },
-      desktop: { width: 1024, height: 768 },
       database: { schema: "schema", migrations: "migrations" },
       deploy: {},
     });
@@ -26,18 +25,24 @@ describe("parseConfig", () => {
   });
 });
 
-describe("app.version and app.scheme", () => {
-  it("validates semver and url scheme formats", () => {
+describe("app.version", () => {
+  it("validates semver", () => {
     expect(() =>
       parseConfig({ app: { id: "com.example.todo", name: "T", version: "1.0" } }),
     ).toThrow(/semver/);
-    expect(() =>
-      parseConfig({ app: { id: "com.example.todo", name: "T", scheme: "Hello App" } }),
-    ).toThrow(/URL scheme/);
-    expect(
-      parseConfig({ app: { id: "com.example.todo", name: "T", scheme: "todo" } }).app
-        .scheme,
-    ).toBe("todo");
+  });
+});
+
+describe("a config written for the native shells", () => {
+  it("still loads, without the keys only those shells read", () => {
+    const config = parseConfig({
+      app: { id: "com.example.todo", name: "T", scheme: "todo" },
+      server: { url: "https://api.example.com" },
+      desktop: { width: 800, agentHost: true },
+    });
+    expect(config.app).not.toHaveProperty("scheme");
+    expect(config.server).not.toHaveProperty("url");
+    expect(config).not.toHaveProperty("desktop");
   });
 });
 
@@ -93,20 +98,5 @@ describe("web.ssr", () => {
       app: "src/app.tsx",
     });
     expect(() => parseConfig({ app, web: { ssr: {} } })).toThrow();
-  });
-});
-
-describe("desktop.agentHost", () => {
-  const app = { id: "com.example.todo", name: "Todo" };
-
-  it("K6: is a boolean left unset by default, so a desktop app carries no host until it asks", () => {
-    expect(parseConfig({ app }).desktop).not.toHaveProperty("agentHost");
-    expect(parseConfig({ app, desktop: { agentHost: true } }).desktop.agentHost).toBe(
-      true,
-    );
-    expect(parseConfig({ app, desktop: { agentHost: false } }).desktop.agentHost).toBe(
-      false,
-    );
-    expect(() => parseConfig({ app, desktop: { agentHost: "yes" } })).toThrow();
   });
 });

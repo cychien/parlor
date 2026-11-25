@@ -151,7 +151,7 @@ describe("a cloudflare-durable app", () => {
     const loaded = { config, rootDir, configFile: "" };
 
     const cloudflare = await prepareCloudflareDev(loaded, {});
-    const devServer = startServerProcess(loaded, undefined, cloudflare);
+    const devServer = startServerProcess(loaded, cloudflare);
     try {
       const origin = `http://localhost:${port}`;
       await expect(

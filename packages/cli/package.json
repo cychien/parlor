@@ -16,18 +16,9 @@
     "dist"
   ],
   "type": "module",
-  "exports": {
-    ".": "./src/index.ts"
-  },
   "publishConfig": {
     "bin": {
       "parlor": "./dist/main.js"
-    },
-    "exports": {
-      ".": {
-        "types": "./dist/index.d.ts",
-        "import": "./dist/index.js"
-      }
     }
   },
   "scripts": {
@@ -42,8 +33,6 @@
     "@parlor/data": "workspace:*",
     "@parlor/host": "workspace:*",
     "@parlor/scaffold": "workspace:*",
-    "@parlor/shell-desktop": "workspace:*",
-    "@parlor/shell-mobile": "workspace:*",
     "@parlor/shell-web": "workspace:*",
     "citty": "^0.2.2",
     "drizzle-kit": "^0.31.11",

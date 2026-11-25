@@ -4,10 +4,10 @@ Read this before changing anything. It holds what stays true across features: wh
 
 ## What this is
 
-An application framework. Apps built with it have two properties:
+A web application framework. Apps built with it have two properties:
 
 1. **Agent-operable.** Everything the UI can do, an agent can do through the same interface. This covers the app's built-in agent and external agents such as Claude Code or Codex.
-2. **One source, many artifacts.** One React + TypeScript app ships as a web app, a desktop app, and a mobile app.
+2. **One React + TypeScript app on the web.** It ships as a web app that installs as a PWA. Desktop and mobile shells are out of scope.
 
 ## Architecture
 
@@ -16,20 +16,19 @@ developer's app:  actions/  schema/  routes/  AGENTS.md
         │                              │
    built as server               built as static frontend
         ▼                              ▼
-  Cloud backend (Nitro + Postgres)   Same frontend in each shell:
-  action runtime, sync events,       Web / PWA, Capacitor (iOS, Android),
-  HTTP, MCP                          Tauri (macOS, Windows, Linux)
+  Cloud backend (Nitro + Postgres)   Web app / PWA in the browser
+  action runtime, sync events,
+  HTTP, MCP
         ▲
   external agents enter via MCP
 ```
 
-| Layer      | Responsibility                                                                                           |
-| ---------- | -------------------------------------------------------------------------------------------------------- |
-| Action     | Typed server function. Defined once, exposed as UI hook, agent tool, HTTP endpoint, MCP tool             |
-| Backend    | The only place business logic runs. Nitro, PostgreSQL, sync events                                       |
-| Frontend   | One React app. Talks only through the action client, never raw fetch                                     |
-| Shell      | Turns the static frontend into an installable app. No business logic                                     |
-| Capability | Uniform API for what browsers cannot do: notifications, files, deep links. One interface, three adapters |
+| Layer      | Responsibility                                                                               |
+| ---------- | -------------------------------------------------------------------------------------------- |
+| Action     | Typed server function. Defined once, exposed as UI hook, agent tool, HTTP endpoint, MCP tool |
+| Backend    | The only place business logic runs. Nitro, PostgreSQL, sync events                           |
+| Frontend   | One React app. Talks only through the action client, never raw fetch                         |
+| Capability | Uniform API for browser features that vary: notifications, files, deep links, a device key   |
 
 ## Principles
 
@@ -37,9 +36,9 @@ Apply these when planning and when writing code. Stop and discuss before breakin
 
 1. **Actions are the only entry point for business logic.** UI, agent, HTTP, and MCP always reflect the same action definition. A new surface feature lands on all four.
 2. **Additive, never breaking.** New features add API. They never break an existing user app. Changing a public interface requires a deprecation path.
-3. **Composed from replaceable parts.** Database driver, shell, capability, transport, and server host sit behind interfaces. Any one can be swapped without touching the others.
-4. **Progressive enhancement.** Not every OS has every capability and not every deployment supports every feature, for example serverless has no SSE. Every feature has a baseline that works everywhere and upgrades itself where the platform allows more.
-5. **No platform branching in application code.** No `if (isIOS)`, no `if (platform === "vercel")`. Platform differences stay inside adapters.
+3. **Composed from replaceable parts.** Database driver, capability, transport, and server host sit behind interfaces. Any one can be swapped without touching the others.
+4. **Progressive enhancement.** Not every browser has every capability and not every deployment supports every feature, for example serverless has no SSE. Every feature has a baseline that works everywhere and upgrades itself where the platform allows more.
+5. **No platform branching in application code.** No `if (isSafari)`, no `if (platform === "vercel")`. Platform differences stay inside adapters.
 
 ## Quality bar
 
@@ -56,12 +55,11 @@ Make every decision to a staff engineer's standard. Weigh quality, simplicity, r
 
 - pnpm workspace, strict TypeScript, ESM.
 - oxlint and oxfmt. Vitest for unit tests, Playwright for E2E.
-- Packages: `core`, `server`, `client`, `capabilities`, `config`, `data`, `sync`, `host`, `shell-web`, `shell-mobile`, `shell-desktop`, `cli`, `agent-ui`.
+- Packages: `core`, `server`, `client`, `capabilities`, `config`, `data`, `sync`, `host`, `shell-web`, `cli`, `agent-ui`.
 - A user app's `server.ts` default-exports the `createServer` result. `parlor dev` serves it with srvx; `parlor build` wraps it in a Nitro server entry that also serves the web build and the SPA fallback.
 - Framework HTTP routes are prefixed `/_parlor/`.
-- A capability is always: one interface, three adapters (web, capacitor, tauri), one availability query, tests per adapter.
-- Platform adapters are picked at build time through the `#adapters` package import and its conditions (`parlor-tauri`, later `parlor-capacitor`), never by runtime checks in application code.
-- The CLI only orchestrates Vite, Capacitor, Tauri, and Nitro CLIs. It compiles nothing itself.
+- A capability is always: one interface, a web adapter, one availability query, tests for the adapter.
+- The CLI only orchestrates Vite and Nitro. It compiles nothing itself.
 - `.parlor/` in a user project is generated output. Never hand-edit it.
 
 ## Adding a feature
@@ -69,7 +67,7 @@ Make every decision to a staff engineer's standard. Weigh quality, simplicity, r
 1. **Study first.** Read how related or similar logic is already implemented until you have the big picture.
 2. **Plan.** Scope, files, public interface, verification, out of scope. Check against the principles. Get agreement if cross-cutting.
 3. **Implement.** Match the coding patterns already in the codebase: file layout, naming, error handling, how adapters and tests are organized. The more consistent with existing code, the better. Keep all code for one feature in one folder.
-4. **Verify end to end** on at least two shells.
+4. **Verify end to end** in a real browser.
 
 ## Pull requests and commits
 

@@ -7,7 +7,7 @@ import * as zm from "zod/mini";
 import { defineAgentView } from "../view.js";
 import { buildUiManifest } from "./manifest.js";
 
-const app = { id: "dev.parlor.test", name: "Test", scheme: "test" };
+const app = { id: "dev.parlor.test", name: "Test" };
 
 const task = defineAgentView({
   name: "task",

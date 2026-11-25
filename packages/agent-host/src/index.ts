@@ -73,13 +73,7 @@ export {
   type ProxySession,
   runMcpProxyProcess,
 } from "./mcp-proxy.js";
-export {
-  pair,
-  PAIRING_TIMEOUT_MS,
-  type PairingChannel,
-  type PairInput,
-  type PairOutcome,
-} from "./pairing.js";
+export { pair, PAIRING_TIMEOUT_MS, type PairInput, type PairOutcome } from "./pairing.js";
 export { type HostPaths, hostPaths } from "./paths.js";
 export {
   approvalFor,

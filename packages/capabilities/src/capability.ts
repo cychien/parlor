@@ -1,7 +1,4 @@
-import { detectPlatform, type Platform } from "./runtime.js";
-
 export interface CapabilityAdapter<T> {
-  readonly platform: Platform;
   available(): boolean | Promise<boolean>;
   create(): T | Promise<T>;
 }
@@ -12,7 +9,7 @@ export interface CapabilityDefinition<T> {
 }
 
 export type CapabilityHandle<T> =
-  | { readonly available: true; readonly platform: Platform; readonly api: T }
+  | { readonly available: true; readonly api: T }
   | { readonly available: false; readonly reason: string };
 
 export function defineCapability<T>(
@@ -21,24 +18,16 @@ export function defineCapability<T>(
   return definition;
 }
 
-function candidates<T>(definition: CapabilityDefinition<T>, platform: Platform) {
-  const native = definition.adapters.filter((a) => a.platform === platform);
-  const baseline =
-    platform === "web" ? [] : definition.adapters.filter((a) => a.platform === "web");
-  return [...native, ...baseline];
-}
-
+/** The first adapter this browser can run wins. */
 export async function resolveCapability<T>(
   definition: CapabilityDefinition<T>,
-  platform: Platform = detectPlatform(),
 ): Promise<CapabilityHandle<T>> {
-  for (const adapter of candidates(definition, platform)) {
-    if (await adapter.available()) {
-      return { available: true, platform: adapter.platform, api: await adapter.create() };
-    }
+  for (const adapter of definition.adapters) {
+    if (await adapter.available())
+      return { available: true, api: await adapter.create() };
   }
   return {
     available: false,
-    reason: `Capability "${definition.name}" has no available adapter on ${platform}`,
+    reason: `Capability "${definition.name}" is not available in this browser`,
   };
 }

@@ -39,7 +39,7 @@ export {
   sourceFor,
   sourceOf,
 } from "./caller.js";
-export { type CorsConfig, isAllowedOrigin, SHELL_ORIGINS } from "./cors.js";
+export { type CorsConfig, isAllowedOrigin } from "./cors.js";
 export {
   createServer,
   type FrameworkServer,
@@ -78,7 +78,6 @@ export {
   DEFAULT_BASE_PATH,
   type Manifest,
   PROTOCOL_VERSION,
-  SESSION_TOKEN_HEADER,
   SOURCE_HEADER,
 } from "./protocol.js";
 export { DEFAULT_SCOPE, defaultScope, type ScopeResolver } from "./scope.js";

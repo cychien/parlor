@@ -1,10 +1,5 @@
 import type { AgentConfirmation, AgentUiClient } from "@parlor/agent-ui/client";
 import type {
-  CapabilityHandle,
-  LocalAgentHost,
-  PairingDevice,
-} from "@parlor/capabilities";
-import type {
   AnswerToSign,
   ChatSnapshot,
   ThreadHistory,
@@ -37,13 +32,6 @@ const claudeOnMac = (online = true): HostSummary => ({
   platform: "macos",
   online,
   agents: [{ id: "claude", name: "Claude Code", ready: true }],
-});
-
-const keysOf = (deviceId: string): PairingDevice => ({
-  deviceId,
-  name: "Hello on macOS",
-  platform: "tauri",
-  signingKey: { kty: "EC", crv: "P-256", x: "x", y: "y" },
 });
 
 const logged = (
@@ -101,7 +89,6 @@ function setup(
     open?: (input: { threadId?: string }) => Promise<ChatSnapshot>;
     items?: (afterSeq: number) => LoggedItem[];
     threadId?: string;
-    localHost?: CapabilityHandle<LocalAgentHost>;
     auth?: Partial<DeviceSource & HostAuthorizer>;
     transport?: "sse" | "poll";
     hidden?: () => boolean;
@@ -172,9 +159,6 @@ function setup(
     },
     isHidden: options.hidden,
     auth: options.auth,
-    localHost: Promise.resolve(
-      options.localHost ?? { available: false, reason: "no host" },
-    ),
     threadId: options.threadId,
   });
   return {
@@ -305,7 +289,7 @@ describe("createChatRuntime start", () => {
     expect(h.runtime.get().unavailable).toBeUndefined();
   });
 
-  it("offers the install command for adding a computer when the shell cannot host one", async () => {
+  it("offers the install command for adding a computer", async () => {
     const h = setup();
     h.runtime.start();
     await vi.waitFor(() => expect(h.runtime.get().status).toBe("idle"));
@@ -1241,63 +1225,6 @@ describe("createChatRuntime recovery", () => {
   });
 });
 
-describe("createChatRuntime adding a computer", () => {
-  it("pairs through the local host when the shell has one and the session can authorize", async () => {
-    const connect = vi.fn(async () => ({ connected: true as const }));
-    const authorizeHost = vi.fn(async () => "code");
-    const h = setup({
-      localHost: {
-        available: true,
-        platform: "tauri",
-        api: { status: async () => ({ state: "stopped" as const }), connect },
-      },
-      auth: { authorizeHost },
-    });
-    h.runtime.start();
-    await vi.waitFor(() => expect(h.runtime.get().connect.kind).toBe("here"));
-    const option = h.runtime.get().connect;
-    if (option.kind !== "here") throw new Error("expected a local host");
-    await option.start();
-    expect(connect).toHaveBeenCalledWith({
-      appOrigin: "https://hello.test",
-      authorize: authorizeHost,
-    });
-    expect(h.names()).toEqual(["open", "hosts"]);
-  });
-
-  it("pins this app's own device at pairing by handing the host its public keys", async () => {
-    const connect = vi.fn(async () => ({ connected: true as const }));
-    const authorizeHost = vi.fn(async () => "code");
-    const signAnswer = vi.fn();
-    const h = setup({
-      localHost: {
-        available: true,
-        platform: "tauri",
-        api: { status: async () => ({ state: "stopped" as const }), connect },
-      },
-      auth: {
-        authorizeHost,
-        device: async () => ({
-          id: asId("device", "dev_1"),
-          keys: keysOf("dev_1"),
-          signPrompt: vi.fn(),
-          signAnswer,
-        }),
-      },
-    });
-    h.runtime.start();
-    await vi.waitFor(() => expect(h.runtime.get().connect.kind).toBe("here"));
-    const option = h.runtime.get().connect;
-    if (option.kind !== "here") throw new Error("expected a local host");
-    await option.start();
-    expect(connect).toHaveBeenCalledWith({
-      appOrigin: "https://hello.test",
-      authorize: authorizeHost,
-      device: keysOf("dev_1"),
-    });
-  });
-});
-
 describe("createChatRuntime device signatures", () => {
   const deviceId = asId("device", "dev_1");
   const signature = (presence: "none" | "user"): ItemSignature => ({
@@ -1319,7 +1246,6 @@ describe("createChatRuntime device signatures", () => {
     const source = {
       device: vi.fn(async () => ({
         id: deviceId,
-        keys: keysOf("dev_1"),
         signPrompt,
         signAnswer,
       })),
@@ -2042,7 +1968,6 @@ describe("createChatRuntime resend", () => {
       auth: {
         device: async () => ({
           id: asId("device", "dev_1"),
-          keys: keysOf("dev_1"),
           signPrompt,
           signAnswer: vi.fn(),
         }),

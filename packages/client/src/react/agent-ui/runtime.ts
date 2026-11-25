@@ -1,5 +1,4 @@
 import { type AgentUiClient, createAgentUiClient } from "@parlor/agent-ui/client";
-import { detectPlatform } from "@parlor/capabilities";
 import type { QueryClient } from "@tanstack/react-query";
 import type { AnyRouter } from "@tanstack/react-router";
 
@@ -60,7 +59,7 @@ export function createAgentUiRuntime({
       });
       return response.status === 200 ? response.text() : undefined;
     },
-    platform: detectPlatform(),
+    platform: "web",
     dev: import.meta.env.DEV,
   });
 }

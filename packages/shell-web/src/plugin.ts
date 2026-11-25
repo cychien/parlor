@@ -6,10 +6,10 @@ import { agentManifest, DEFAULT_ROUTE_TREE } from "@parlor/agent-ui/vite";
 import { GENERATED_DIR, generatedDir, type ParlorConfig } from "@parlor/config";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
-import { defaultClientConditions, type PluginOption } from "vite";
+import type { PluginOption } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
-import { appCsp, metaCsp, serializeCsp } from "./csp.js";
+import { appCsp, serializeCsp } from "./csp.js";
 import { routeGeneratorOptions, routesDirectory, routeTreeFile } from "./route-tree.js";
 import { pageMatcher, serverRoutes } from "./server-routes.js";
 import { serviceWorkerRegistration } from "./service-worker.js";
@@ -24,13 +24,7 @@ export const OAUTH_DISCOVERY_PREFIXES = [
 export { DEFAULT_ROUTE_TREE };
 
 export interface WebOptions {
-  readonly conditions?: readonly string[] | undefined;
-  readonly serverUrl?: string | undefined;
-  /** The origin every target of one `parlor dev` signs for and pairs with, when it is not this page's. */
-  readonly appOrigin?: string | undefined;
   readonly root?: string | undefined;
-  /** Writes the policy into the built `index.html` for shells that serve it without HTTP headers. */
-  readonly cspMeta?: boolean | undefined;
   /** Builds the server render module (`web.ssr`) instead of the browser app. */
   readonly render?: boolean | undefined;
 }
@@ -42,29 +36,17 @@ function isFrameworkPath(url: string | undefined): boolean {
   );
 }
 
-function cspPlugin(config: ParlorConfig, options: WebOptions): PluginOption {
-  const serverOrigin = options.serverUrl || undefined;
+function cspPlugin(config: ParlorConfig): PluginOption {
   return {
     name: "parlor:csp",
     configureServer(server) {
-      const header = serializeCsp(appCsp(config, { serverOrigin, dev: true }));
+      const header = serializeCsp(appCsp(config, { dev: true }));
       server.middlewares.use((request, response, next) => {
         if (!isFrameworkPath(request.url)) {
           response.setHeader("content-security-policy", header);
         }
         next();
       });
-    },
-    transformIndexHtml(_html, context) {
-      if (context.server || !options.cspMeta) return;
-      const content = serializeCsp(metaCsp(appCsp(config, { serverOrigin })));
-      return [
-        {
-          tag: "meta",
-          attrs: { "http-equiv": "Content-Security-Policy", content },
-          injectTo: "head-prepend",
-        },
-      ];
     },
   };
 }
@@ -121,7 +103,6 @@ export function parlorWeb(
   config: ParlorConfig,
   options: WebOptions = {},
 ): PluginOption[] {
-  const conditions = options.conditions ?? [];
   const root = options.root ?? process.cwd();
   const generated = generatedDir(root);
   const ownGeneratedDir = generated !== resolve(root, GENERATED_DIR);
@@ -130,7 +111,6 @@ export function parlorWeb(
       id: config.app.id,
       name: config.app.name,
       ...(config.app.description ? { description: config.app.description } : {}),
-      ...(config.app.scheme ? { scheme: config.app.scheme } : {}),
     },
     routeTree: routeTreeFile(config),
     generatedDir: generated,
@@ -138,26 +118,17 @@ export function parlorWeb(
   const plugins: PluginOption[] = [
     ...fileRoutes(config, root),
     react(),
-    cspPlugin(config, options),
+    cspPlugin(config),
     titlePlugin(config),
     manifest,
     serverRoutes(
       config.server.port,
       pageMatcher(() => manifest.api?.manifest()),
-      {
-        // A native shell's platform conditions: it runs the static build, never a server render.
-        render: config.web.ssr !== undefined && conditions.length === 0,
-      },
+      { render: config.web.ssr !== undefined },
     ),
     {
       name: "parlor:web",
       config: () => ({
-        define: {
-          "import.meta.env.PARLOR_SERVER_URL": JSON.stringify(options.serverUrl ?? ""),
-          "import.meta.env.PARLOR_APP_ORIGIN": JSON.stringify(options.appOrigin ?? ""),
-          "import.meta.env.PARLOR_APP_SCHEME": JSON.stringify(config.app.scheme ?? ""),
-        },
-        resolve: { conditions: [...defaultClientConditions, ...conditions] },
         // A run with its own generated directory may run beside another Vite on this root.
         ...(ownGeneratedDir ? { cacheDir: join(generated, "vite") } : {}),
         server: {

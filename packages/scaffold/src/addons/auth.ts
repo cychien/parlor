@@ -31,13 +31,6 @@ export const auth = defineAddon({
       ops: [
         { kind: "import", names: ["auth"], from: "./auth/client.js" },
         {
-          kind: "set-property",
-          call: { callee: "createActionClient", from: "@parlor/client" },
-          path: ["headers"],
-          value: "auth.headers",
-          onConflict: "unsafe",
-        },
-        {
           kind: "jsx-attribute",
           element: "FrameworkProvider",
           name: "auth",

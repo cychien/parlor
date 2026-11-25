@@ -11,21 +11,14 @@ import { onShutdown } from "./shutdown.js";
 
 const require = createRequire(import.meta.url);
 
-/**
- * The first of `frontends` is the app's origin; the others are the other targets of the same
- * `parlor dev`, which the server trusts too.
- */
 export function serverEnv(
   config: ParlorConfig,
   base: NodeJS.ProcessEnv = process.env,
-  frontends: readonly string[] = [`http://localhost:${config.web.port}`],
 ): NodeJS.ProcessEnv {
-  const [origin, ...others] = frontends;
   return {
     ...base,
     PORT: String(config.server.port),
-    PARLOR_WEB_ORIGIN: origin,
-    ...(others.length > 0 ? { PARLOR_DEV_ORIGINS: others.join(",") } : {}),
+    PARLOR_WEB_ORIGIN: `http://localhost:${config.web.port}`,
     PARLOR_DEV: "1",
     ...appServerEnv(config),
   };
@@ -73,7 +66,6 @@ export async function untilListening(
 
 export function startServerProcess(
   { config, rootDir }: LoadedConfig,
-  frontends?: readonly string[],
   cloudflare?: CloudflareDev,
 ): ChildProcess {
   const tsxBin = require.resolve("tsx/cli");
@@ -95,7 +87,7 @@ export function startServerProcess(
     {
       cwd: rootDir,
       stdio: "inherit",
-      env: serverEnv(config, process.env, frontends),
+      env: serverEnv(config),
     },
   );
   onShutdown((signaled) => stopServerProcess(child, signaled ? undefined : 0));

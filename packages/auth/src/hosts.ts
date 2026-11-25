@@ -21,7 +21,6 @@ import {
   type PluginHost,
   pluginRoute,
   readBoundedText,
-  SHELL_ORIGINS,
   REVOCATION_HORIZON_MS,
 } from "@parlor/server";
 import { sql } from "drizzle-orm";
@@ -29,7 +28,7 @@ import { calculateJwkThumbprint, compactVerify, decodeProtectedHeader } from "jo
 import { z } from "zod";
 
 import { CHAT_REFUSED, chatAllows, signedIn } from "./account.js";
-import { AUTH_PLUGIN, devOrigins, type ParlorAuthSettings } from "./better-auth.js";
+import { AUTH_PLUGIN, type ParlorAuthSettings } from "./better-auth.js";
 import { type Database, jwkOf, rowsOf } from "./database.js";
 import { findPendingDevice } from "./devices.js";
 import { escape, failure, page } from "./pages.js";
@@ -41,7 +40,7 @@ export const HOST_CLIENT_ID = "parlor-host";
 
 export const MATCHING_CODE = /^[A-Z2-9]{3}-[A-Z2-9]{3}$/;
 
-export type HostRedirect = `http://127.0.0.1:${number}/callback` | "urn:parlor:ipc";
+export type HostRedirect = `http://127.0.0.1:${number}/callback`;
 
 export interface HostAuthorizeRequest {
   readonly redirectUri: HostRedirect;
@@ -55,6 +54,9 @@ export interface HostAuthorizeRequest {
   /** The host can also hand the app to the coding agents on the computer, outside the sidebar. */
   readonly agentTools?: "offered" | undefined;
 }
+
+/** What the host starts a pairing with, and the consent page shows. */
+export type HostPairing = Omit<HostAuthorizeRequest, "redirectUri" | "agentTools">;
 
 /** `POST /hosts/token` */
 export interface HostKeyExchange {
@@ -468,11 +470,9 @@ const isPrintable = (text: string) =>
     return code >= 0x20 && code !== 0x7f;
   });
 const LOOPBACK = /^http:\/\/127\.0\.0\.1:(\d{1,5})\/callback$/;
-const IPC_REDIRECT = "urn:parlor:ipc";
 const CODE_TTL_MS = 10 * 60_000;
 
 function isHostRedirect(value: unknown): value is HostRedirect {
-  if (value === IPC_REDIRECT) return true;
   if (typeof value !== "string") return false;
   const port = LOOPBACK.exec(value)?.[1];
   return port !== undefined && Number(port) >= 1 && Number(port) <= 65_535;
@@ -654,11 +654,10 @@ ${
 <button type="submit" name="decision" value="cancel">Cancel</button>
 <button type="submit" name="decision" value="connect">Connect</button>
 </form>`;
-        const target =
-          pairing.redirectUri === IPC_REDIRECT
-            ? []
-            : [new URL(pairing.redirectUri).origin];
-        return page("Connect a computer", body, ["'self'", ...target]);
+        return page("Connect a computer", body, [
+          "'self'",
+          new URL(pairing.redirectUri).origin,
+        ]);
       },
     },
     pluginRoute({
@@ -672,10 +671,7 @@ ${
             ? Response.json({ error: { code, message } }, { status })
             : failure(message, status);
         const origin = request.headers.get("origin");
-        if (
-          origin !== settings.origin &&
-          !(origin && [...SHELL_ORIGINS, ...devOrigins()].includes(origin))
-        ) {
+        if (origin !== settings.origin) {
           return refuse(
             403,
             "forbidden",
@@ -690,13 +686,10 @@ ${
           return refuse(400, "invalid_input", "This connection request is incomplete.");
         }
         const { decision, useAgentTools, ...pairing } = parsed.data;
-        const target =
-          pairing.redirectUri === IPC_REDIRECT ? undefined : new URL(pairing.redirectUri);
+        const target = new URL(pairing.redirectUri);
         const answer = (location: URL) =>
           json ? Response.json({ location: location.href }) : seeOther(location.href);
         if (decision === "cancel") {
-          if (!target)
-            return Response.json({ error: "access_denied", state: pairing.state });
           target.searchParams.set("error", "access_denied");
           target.searchParams.set("state", pairing.state);
           return answer(target);
@@ -716,13 +709,6 @@ ${
         });
         const agentTools =
           pairing.agentTools === "offered" ? useAgentTools === "on" : undefined;
-        if (!target) {
-          return Response.json({
-            code,
-            state: pairing.state,
-            ...(agentTools === undefined ? {} : { agentTools }),
-          });
-        }
         target.searchParams.set("code", code);
         target.searchParams.set("state", pairing.state);
         if (agentTools !== undefined)

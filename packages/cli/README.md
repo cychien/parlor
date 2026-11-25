@@ -1,12 +1,11 @@
 # @parlor/cli
 
-The `parlor` command: `dev`, `build`, `deploy`, `db`, `add` and `typegen` for a Parlor app, on web, desktop and mobile.
+The `parlor` command: `dev`, `build`, `deploy`, `db`, `add` and `typegen` for a Parlor app.
 
 ```sh
 pnpm add -D @parlor/cli
 pnpm parlor dev
 pnpm parlor add auth
-pnpm parlor dev --target mac
 ```
 
 Its configuration is `parlor.config.ts`:

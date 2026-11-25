@@ -1,5 +1,4 @@
 import type { AgentConfirmation, AgentUiClient } from "@parlor/agent-ui/client";
-import type { CapabilityHandle, LocalAgentHost } from "@parlor/capabilities";
 import {
   type AgentOption,
   type AgentUsage,
@@ -39,7 +38,6 @@ import type {
   ComputerDisconnector,
   DeviceLinker,
   DeviceSource,
-  HostAuthorizer,
   SessionDevice,
 } from "../../session.js";
 import {
@@ -81,10 +79,11 @@ export interface AgentChoiceOption extends AgentOption {
   readonly selected: string;
 }
 
-/** How this client adds a computer, decided by the `localAgentHost` capability. */
-export type ConnectOption =
-  | { readonly kind: "command"; readonly command: string }
-  | { readonly kind: "here"; start(): Promise<void> };
+/** How the user adds a computer: the command to run on it. */
+export interface ConnectOption {
+  readonly kind: "command";
+  readonly command: string;
+}
 
 /**
  * `waiting`: a prompt waits for a computer, which `ChatState.wait` names: one that must
@@ -247,10 +246,7 @@ export interface ChatRuntimeDeps {
   readonly transport: () => SyncTransport | undefined;
   readonly onNegotiated: (listener: (transport: SyncTransport) => void) => () => void;
   readonly isHidden?: (() => boolean) | undefined;
-  readonly auth:
-    | Partial<DeviceSource & HostAuthorizer & DeviceLinker & ComputerDisconnector>
-    | undefined;
-  readonly localHost: Promise<CapabilityHandle<LocalAgentHost>>;
+  readonly auth: Partial<DeviceSource & DeviceLinker & ComputerDisconnector> | undefined;
   readonly threadId: string | undefined;
 }
 
@@ -356,7 +352,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
   /** The prompt in flight, shown in its thread until the server's copy arrives. */
   let shownSend: PendingSend | undefined;
   let startedNew = false;
-  let connect: ConnectOption = {
+  const connect: ConnectOption = {
     kind: "command",
     command: `npx @parlor/agent-host connect ${deps.appOrigin}`,
   };
@@ -1419,25 +1415,6 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatRuntime {
   }
 
   async function initial() {
-    void deps.localHost.then((handle) => {
-      const authorizeHost = deps.auth?.authorizeHost;
-      if (!handle.available || !authorizeHost || !running) return;
-      connect = {
-        kind: "here",
-        start: async () => {
-          const own = await deps.auth?.device?.();
-          const outcome = await handle.api.connect({
-            appOrigin: deps.appOrigin,
-            authorize: authorizeHost,
-            ...(own ? { device: own.keys } : {}),
-          });
-          if (!outcome.connected) throw new Error(`Connecting failed: ${outcome.reason}`);
-          await refreshHosts();
-          await refreshLink();
-        },
-      };
-      emit();
-    });
     void refreshLink();
     await loadFirst();
     announceActivity();

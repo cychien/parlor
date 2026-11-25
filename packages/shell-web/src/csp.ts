@@ -5,8 +5,6 @@ export type CspDirective = (typeof CSP_DIRECTIVES)[number];
 export type CspDirectives = { readonly [D in CspDirective]?: readonly string[] };
 
 export interface DefaultCspInput {
-  /** The backend origin the shell build talks to (`server.url`), or the page's own. */
-  readonly serverOrigin?: string | undefined;
   /** Extra origins `connect-src` needs, such as a sync relay. */
   readonly connect?: readonly string[] | undefined;
   /** Allows Vite's HMR client and websocket. */
@@ -24,12 +22,7 @@ const UNSAFE_SOURCE = /[\s;,]/;
  * `object-src 'none'`.
  */
 export function defaultCsp(input: DefaultCspInput = {}): CspDirectives {
-  const connect = [
-    SELF,
-    ...(input.serverOrigin ? [new URL(input.serverOrigin).origin] : []),
-    ...(input.connect ?? []),
-    ...(input.dev ? ["ws:"] : []),
-  ];
+  const connect = [SELF, ...(input.connect ?? []), ...(input.dev ? ["ws:"] : [])];
   const inline = input.dev ? ["'unsafe-inline'"] : [];
   return {
     "default-src": [SELF],
@@ -76,7 +69,7 @@ export function extendCsp(base: CspDirectives, additions: CspDirectives): CspDir
   return extended;
 }
 
-/** The header or `<meta http-equiv>` value. */
+/** The header value. */
 export function serializeCsp(directives: CspDirectives): string {
   return CSP_DIRECTIVES.flatMap((directive) => {
     const sources = directives[directive];
@@ -90,13 +83,7 @@ export function serializeCsp(directives: CspDirectives): string {
   }).join("; ");
 }
 
-/** A `<meta http-equiv>` policy cannot carry `frame-ancestors`; browsers ignore it and warn. */
-export function metaCsp(directives: CspDirectives): CspDirectives {
-  const { "frame-ancestors": _ignored, ...rest } = directives;
-  return rest;
-}
-
-/** The policy an app ships: the default for this shell's backend plus `web.csp`. */
+/** The policy an app ships: the default plus `web.csp`. */
 export function appCsp(config: ParlorConfig, input: DefaultCspInput): CspDirectives {
   return extendCsp(defaultCsp(input), config.web.csp ?? {});
 }

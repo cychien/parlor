@@ -1,4 +1,5 @@
 import type { CapabilityAdapter } from "../capability.js";
+import { bytesOf } from "./bytes.js";
 import type {
   Files,
   PickedFile,
@@ -6,7 +7,6 @@ import type {
   SaveOptions,
   SaveOutcome,
 } from "./interface.js";
-import { bytesOf } from "./mime.js";
 
 interface SaveFilePicker {
   (options: { suggestedName: string }): Promise<{
@@ -37,7 +37,7 @@ const pickedFrom = (file: File): PickedFile => ({
   text: () => file.text(),
 });
 
-/** An `<input type="file">` the user answers or cancels; also what a phone's webview shows. */
+/** An `<input type="file">` the user answers or cancels; also what a phone's browser shows. */
 export function pickWithInput(
   document: Document,
   options: PickOptions = {},
@@ -103,7 +103,6 @@ export function webFiles(
   getApis: () => WebFilesApis = browserApis,
 ): CapabilityAdapter<Files> {
   return {
-    platform: "web",
     available: () => getApis().document !== undefined,
     create: () => {
       const apis = getApis();

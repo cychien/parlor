@@ -1,11 +1,10 @@
 import { cimd } from "@better-auth/cimd";
 import { fetchClientMetadataResource } from "@better-auth/cimd/node";
 import { mcp } from "@better-auth/mcp";
-import { DEFAULT_BASE_PATH, REVOCATION_HORIZON_MS, SHELL_ORIGINS } from "@parlor/server";
+import { DEFAULT_BASE_PATH, REVOCATION_HORIZON_MS } from "@parlor/server";
 import type { BetterAuthOptions, BetterAuthPlugin } from "better-auth";
 import { bearer, jwt } from "better-auth/plugins";
 
-import { nativeSignIn } from "./native-sign-in.js";
 import type { RevocationNotice } from "./revocation.js";
 
 export const AUTH_PLUGIN = "auth";
@@ -46,11 +45,6 @@ export interface ParlorAuthOptions extends Omit<
    * `connect` request's query; `parseComputerConnection` reads it. Parlor's own page when absent.
    */
   readonly connectComputerPage?: `/${string}` | undefined;
-  /**
-   * The app's URL scheme, `app.scheme`, where social sign-in in a native shell returns.
-   * Defaults to `PARLOR_APP_SCHEME`, which `parlor dev` and `parlor build` set from it.
-   */
-  readonly scheme?: string | undefined;
 }
 
 export interface ParlorAuthSettings {
@@ -104,15 +98,6 @@ export function bridgeOf(options: BetterAuthOptions): Bridge {
   return (plugin as BridgePlugin).bridge;
 }
 
-/** The other frontends one `parlor dev` serves next to the web target, each on its own port. */
-export function devOrigins(env: NodeJS.ProcessEnv = process.env): readonly string[] {
-  if (env.PARLOR_DEV !== "1") return [];
-  return (env.PARLOR_DEV_ORIGINS ?? "")
-    .split(",")
-    .map((origin) => origin.trim())
-    .filter((origin) => /^https?:\/\//.test(origin));
-}
-
 function originOf(options: ParlorAuthOptions): string {
   const origin =
     options.origin ?? process.env.PARLOR_ORIGIN ?? process.env.PARLOR_WEB_ORIGIN;
@@ -124,12 +109,12 @@ function originOf(options: ParlorAuthOptions): string {
 
 /**
  * The Better Auth options Parlor needs, merged into the app's own: sessions as a cookie
- * on the web and a bearer token in native shells, and an OAuth authorization server for
+ * (or a bearer token for API clients), and an OAuth authorization server for
  * MCP clients (MCP 2026-07-28: protected resource metadata, Client ID Metadata Documents,
  * PKCE, tokens bound to `/_parlor/mcp`).
  */
 export function parlorAuth(options: ParlorAuthOptions): BetterAuthOptions {
-  const { origin: _origin, signInPage, connectComputerPage, scheme, ...rest } = options;
+  const { origin: _origin, signInPage, connectComputerPage, ...rest } = options;
   const origin = originOf(options);
   const baseURL = `${origin}${AUTH_BASE_PATH}`;
   const resource = `${origin}${DEFAULT_BASE_PATH}/mcp`;
@@ -142,27 +127,21 @@ export function parlorAuth(options: ParlorAuthOptions): BetterAuthOptions {
     baseURL,
     basePath: AUTH_BASE_PATH,
     trustedOrigins: Array.isArray(trusted)
-      ? [origin, ...SHELL_ORIGINS, ...devOrigins(), ...trusted]
+      ? [origin, ...trusted]
       : async (request) => [
           origin,
-          ...SHELL_ORIGINS,
-          ...devOrigins(),
           ...(typeof trusted === "function" ? await trusted(request) : []),
         ],
     disabledPaths: [...DISABLED_PATHS, ...(rest.disabledPaths ?? [])],
     plugins: [
       ...(rest.plugins ?? []),
-      ...frameworkPlugins(resource, signInPage, scheme ?? process.env.PARLOR_APP_SCHEME),
+      ...frameworkPlugins(resource, signInPage),
       bridgePlugin(bridge),
     ],
   };
 }
 
-function frameworkPlugins(
-  resource: string,
-  signInPage: string,
-  scheme: string | undefined,
-): BetterAuthPlugin[] {
+function frameworkPlugins(resource: string, signInPage: string): BetterAuthPlugin[] {
   // Better Auth's plugin types are not written for exactOptionalPropertyTypes.
   return [
     bearer(),
@@ -175,6 +154,5 @@ function frameworkPlugins(
       accessTokenExpiresIn: ACCESS_TOKEN_TTL_S,
     }),
     cimd({ fetchClientMetadataResource, metadataProfile: "mcp-2026-07-28" }),
-    nativeSignIn({ scheme: scheme || undefined }),
   ] as BetterAuthPlugin[];
 }

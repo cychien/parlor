@@ -289,7 +289,6 @@ export function webDeviceKey(
   }),
 ): CapabilityAdapter<DeviceKey> {
   return {
-    platform: "web",
     available: () => {
       const { subtle, indexedDB } = apis();
       return subtle !== undefined && indexedDB !== undefined;

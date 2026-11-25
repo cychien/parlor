@@ -1,10 +1,8 @@
-import { REFRESH_HEADER, SHELL_ORIGINS } from "@parlor/core";
+import { REFRESH_HEADER } from "@parlor/core";
 import { BUILD_HEADER } from "@parlor/sync";
 import { type H3Event, handleCors } from "h3";
 
-import { CLIENT_HEADER, SESSION_TOKEN_HEADER, SOURCE_HEADER } from "./protocol.js";
-
-export { SHELL_ORIGINS };
+import { CLIENT_HEADER, SOURCE_HEADER } from "./protocol.js";
 
 const LOCAL_DEV_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
 
@@ -16,7 +14,7 @@ export function isAllowedOrigin(
   origin: string,
   extra: readonly (string | RegExp)[] = [],
 ) {
-  if (SHELL_ORIGINS.includes(origin) || LOCAL_DEV_ORIGIN.test(origin)) return true;
+  if (LOCAL_DEV_ORIGIN.test(origin)) return true;
   return extra.some((rule) =>
     typeof rule === "string" ? rule === origin : rule.test(origin),
   );
@@ -36,12 +34,7 @@ export function corsMiddleware(config: CorsConfig = {}) {
         REFRESH_HEADER,
       ],
       credentials: true,
-      exposeHeaders: [
-        "content-type",
-        "content-length",
-        SESSION_TOKEN_HEADER,
-        BUILD_HEADER,
-      ],
+      exposeHeaders: ["content-type", "content-length", BUILD_HEADER],
       preflight: { statusCode: 204 },
     });
     return preflight || undefined;

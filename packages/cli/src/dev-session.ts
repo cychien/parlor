@@ -15,8 +15,7 @@ import { CliError } from "./errors.js";
 
 export interface DevSession {
   readonly pid: number;
-  readonly targets: readonly string[];
-  readonly urls: readonly string[];
+  readonly url?: string | undefined;
 }
 
 export const DEV_SESSION_FILE = "dev.json";
@@ -34,7 +33,7 @@ function read(path: string): DevSession | undefined {
   try {
     const session = JSON.parse(readFileSync(path, "utf8")) as Partial<DevSession>;
     return typeof session.pid === "number"
-      ? { pid: session.pid, targets: session.targets ?? [], urls: session.urls ?? [] }
+      ? { pid: session.pid, url: session.url }
       : undefined;
   } catch {
     return undefined;
@@ -42,13 +41,8 @@ function read(path: string): DevSession | undefined {
 }
 
 function running(owner: DevSession): string {
-  const targets = owner.targets.length > 0 ? owner.targets : ["web"];
-  const where = targets
-    .map((target, index) =>
-      owner.urls[index] ? `${target} at ${owner.urls[index]}` : target,
-    )
-    .join(", ");
-  return `parlor dev is already running for this project (${where}, pid ${owner.pid}). A second one would open the same database. Stop it first, run every target from one: parlor dev --target web,mac, or give the second its own directory: ${GENERATED_DIR_ENV}=.parlor/second parlor dev.`;
+  const where = owner.url ? `at ${owner.url}, ` : "";
+  return `parlor dev is already running for this project (${where}pid ${owner.pid}). A second one would open the same database. Stop it first, or give the second its own directory: ${GENERATED_DIR_ENV}=.parlor/second parlor dev.`;
 }
 
 /**
@@ -58,19 +52,18 @@ function running(owner: DevSession): string {
  */
 export function claimDevSession(
   rootDir: string,
-  targets: readonly string[],
   pid: number = process.pid,
-): { update(urls: readonly string[]): void; release(): void } {
+): { update(url: string): void; release(): void } {
   const path = join(generatedDir(rootDir), DEV_SESSION_FILE);
   mkdirSync(dirname(path), { recursive: true });
-  const write = (urls: readonly string[]) => JSON.stringify({ pid, targets, urls });
+  const write = (url?: string) => JSON.stringify({ pid, ...(url ? { url } : {}) });
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const fd = openSync(path, "wx");
-      writeSync(fd, write([]));
+      writeSync(fd, write());
       closeSync(fd);
       return {
-        update: (urls) => writeFileSync(path, write(urls)),
+        update: (url) => writeFileSync(path, write(url)),
         release: () => {
           if (read(path)?.pid === pid) rmSync(path, { force: true });
         },

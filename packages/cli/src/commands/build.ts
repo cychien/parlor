@@ -2,28 +2,19 @@ import { loadParlorConfig } from "@parlor/config";
 import { defineCommand } from "citty";
 
 import { warnChatWithoutAuth } from "../chat-warning.js";
-import { handlers } from "../handlers.js";
-import { parseTarget, resolveHandler } from "../targets.js";
+import { buildWebAndServer } from "../web-target.js";
 
 export const build = defineCommand({
-  meta: { name: "build", description: "Build the app for a target" },
+  meta: { name: "build", description: "Build the web app and its server" },
   args: {
-    target: {
-      type: "string",
-      description: "web | ios | android | mac | windows | linux",
-      default: "web",
-    },
     preset: {
       type: "string",
-      description:
-        "Server deploy preset for the web target: node-server, vercel, netlify, …",
+      description: "Server deploy preset: node-server, vercel, netlify, …",
     },
   },
   async run({ args }) {
-    const target = parseTarget(args.target);
-    const handler = resolveHandler(handlers, target);
     const loaded = await loadParlorConfig();
     await warnChatWithoutAuth(loaded);
-    await handler.build(loaded, { preset: args.preset });
+    await buildWebAndServer(loaded, { preset: args.preset });
   },
 });
