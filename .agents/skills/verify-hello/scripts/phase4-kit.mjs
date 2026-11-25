@@ -1223,7 +1223,7 @@ export function addFakeAgent(
 }
 
 /**
- * Stands up an instance, connects the Mac the way a user does and waits for the picker.
+ * Stands up an instance, connects the computer the way a user does and waits for the picker.
  * `profiles` are user-added agent profiles written to agents.json before the host starts;
  * `fake` (`{ script, log }`) adds the fake agent, returned as `fake`.
  */

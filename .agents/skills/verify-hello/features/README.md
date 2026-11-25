@@ -4,7 +4,7 @@ This directory is the maintained source for verifying the user-facing behavior o
 
 ## Baseline preconditions
 
-- Start an instance with `$H up --seed baseline` (add `--target mac` or `--target ios` for a shell) and note its `id` and `urls` from the printed JSON.
+- Start an instance with `$H up --seed baseline` and note its `id` and `urls` from the printed JSON.
 - `$H doctor <id>` prints no `FAIL`.
 - Sign the tab in with `$H browser <id> signin` (Alice); the page lists `Buy milk`, `Write report`, `Call Amy` in that order, all unchecked.
 - Never drive an instance this run did not start, and never run chrome-devtools-axi outside `$H browser <id>`.
@@ -14,7 +14,7 @@ This directory is the maintained source for verifying the user-facing behavior o
 - Start every recipe from `baseline` unless its preconditions name another dataset. Reload it with `$H seed <id> baseline`, then `$H browser <id> signin` (the seed restarts Chrome with a fresh profile) and `$H browser <id> open /`.
 - Every request needs a user. The browser is Alice after `signin`; `$H mcp` and `$H agent` act as Alice unless `--as bob`; curl carries `-H "authorization: Bearer $($H token <id>)"`.
 - Find UI elements by ARIA role and accessible name through `$H browser <id> click|fill ROLE NAME`, never by ref numbers copied from an old snapshot or by position.
-- Drive the surface the claim is about. A UI claim is driven in the browser or shell window, an agent claim through `$H agent`, an HTTP claim with curl.
+- Drive the surface the claim is about. A UI claim is driven in the browser, an agent claim through `$H agent`, an HTTP claim with curl.
 - Read every mutation back from a second view: `$H sql`, `listTasks` over HTTP or MCP, or another surface.
 - Wait for text with `$H browser <id> wait "<text>"`, never a fixed sleep.
 
@@ -24,7 +24,6 @@ This directory is the maintained source for verifying the user-facing behavior o
 - UI proof is an ARIA snapshot plus a screenshot, before and after the action.
 - Agent proof is `agent-summary.json` and `agent-transcript.jsonl` plus the state read back afterwards.
 - HTTP proof is the request and the response body with its status code.
-- Shell proof (mac, iOS) is `$H doctor` output, `$H screenshot` images and `$H webview <id> snapshot` before and after, with the shell driven through `$H webview <id> click|fill` (see SKILL.md, Shell webviews).
 - Report an unreachable entry point with the command tried and the unmet precondition. Never report it as verified through a different entry point.
 
 ## Feature entry contract
@@ -35,9 +34,9 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 
 - [Tasks list and create](./tasks.md) covers the ordered list, adding from the form, the empty-title guard, and persistence across a restart.
 - [Toggle a task](./toggle.md) covers checking and unchecking a task and the stored `done` flag.
-- [Live sync from an external writer](./live-sync.md) covers writes from HTTP, MCP, or another window appearing without a reload, on web, mac, and iOS.
+- [Live sync from an external writer](./live-sync.md) covers writes from HTTP, MCP, or another window appearing without a reload.
 - [MCP tools](./mcp-tools.md) covers tool discovery and calls from Claude Code headless and a raw MCP client.
-- [Notifications and deep link panels](./capability-panels.md) covers the platform each panel reports, sending a notification, and receiving a deep link.
+- [Notifications and deep link panels](./capability-panels.md) covers what each panel on `/settings` reports, sending a notification, and the opening link.
 - [Agent UI](./agent-ui.md) covers `ui_screen` and `ui_navigate`: what the agent sees, resolving "this task", navigation, the no-app link, client targeting, the route catalog, the external policy, the activity status, and the `agentPanel` view.
 - [Agent forms and pointing](./agent-forms.md) covers `ui_set` filling the New task form, the agent-filled marking, the refusals, and `ui_highlight`.
 - [Agent panel](./agent-panel.md) covers the topbar `Agent` button and the docked Agent sidebar it opens: 400 px beside the page on desktop, full width on a phone, the pending count, the no-computer state, both color schemes, and the `agentPanel` view.

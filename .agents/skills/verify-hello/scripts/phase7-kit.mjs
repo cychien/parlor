@@ -75,7 +75,7 @@ export async function upInstance7(
 }
 
 /**
- * An instance with Alice signed in, her sidebar open and the Mac connected the way a user
+ * An instance with Alice signed in, her sidebar open and the computer connected the way a user
  * connects it, with the fake agent as its only agent. Prints `verify: ready` unless
  * `announce` is false.
  */
