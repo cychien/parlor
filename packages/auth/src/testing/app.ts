@@ -140,6 +140,17 @@ export class Browser {
     return response;
   }
 
+  /** This tab as `fetch`, for a client that runs in it. */
+  readonly asFetch: typeof fetch = async (input, init) => {
+    const request = new Request(input, init);
+    const url = new URL(request.url);
+    return this.fetch(`${url.pathname}${url.search}`, {
+      method: request.method,
+      headers: request.headers,
+      ...(request.method === "GET" ? {} : { body: await request.text() }),
+    });
+  };
+
   post(path: string, body: unknown, headers: HeadersInit = {}) {
     return this.fetch(path, {
       method: "POST",

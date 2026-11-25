@@ -6,8 +6,6 @@ import { vi } from "vitest";
 import type { ParlorAuthOptions } from "../better-auth.js";
 import { createTestApp, type TestApp } from "./app.js";
 
-export const SHELL_ORIGIN = "tauri://localhost";
-export const APP_CALLBACK = "hello://_parlor/auth/callback";
 export const GOOGLE_AUTHORIZE = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN = "https://oauth2.googleapis.com/token";
 export const FAKE_PROVIDER = "https://id.example.test";
@@ -80,7 +78,6 @@ export function createSignInTestApp(
 ): TestApp {
   return createTestApp(database, {
     auth: {
-      scheme: "hello",
       emailAndPassword: { enabled: false },
       socialProviders: {
         google: { clientId: "google-client", clientSecret: "google-secret" },

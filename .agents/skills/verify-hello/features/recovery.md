@@ -17,7 +17,7 @@ An open tab stays reachable for an external agent across two events that interru
 
 Preconditions:
 
-- A web instance seeded with `baseline`, doctor clean, a page opened with `$H browser <id> open /`, and `$H browser <id> emulate --viewport 1280x720x1`.
+- An instance seeded with `baseline`, doctor clean, a page opened with `$H browser <id> open /`, and `$H browser <id> emulate --viewport 1280x720x1`.
 - `$E` is the evidence directory. `jq` is on PATH.
 - Set up a helper that prints the connected client's id, or `none`. `ui_screen` leaves the id out while only one client is open, so ask for a client that does not exist: the `unknown_client` error lists every connected id.
 
@@ -51,6 +51,5 @@ Preconditions:
 - `$H sync`, `$H seed`, `$H sql`, `$H stop` and `$H start` restart or kill more than the app server: Vite reloads the page after a `sync`, and `stop` removes the instance's browser. Use them for state, not for this recipe.
 - Killing only the server process leaves `tsx watch` unable to start a new one; kill both the listener and its parent, as above, then start `tsx watch` again. Edits to `server.ts` do not revive a killed one.
 - `__kept` is `undefined` after the return when the browser did not restore the page from the back-forward cache and reloaded it instead. That is a different path: the tab then joins with a new client id. Re-run, or report it as not verified rather than as a pass.
-- The mac and iOS shells are not covered here: there is no way to navigate their webview to another origin from the harness.
 - `ui_screen` without a connected tab answers `no_client` right away, so a wait that never ends points at a tab that did not come back, not a slow call.
 - The manually started server runs under the instance directory, so `$H down` kills it with the rest.

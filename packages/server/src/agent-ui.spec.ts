@@ -480,7 +480,7 @@ describe("agent UI over MCP", () => {
 
   it("refuses ui_set and ui_highlight with unsupported_op for an app that predates them, and keeps screen and navigate working", async () => {
     const tab = await openBrowser("old-tab", "/");
-    await tab.presence(true, true, "tauri", false, null);
+    await tab.presence(true, true, "web", false, null);
     const client = await mcp();
     const refusals = await Promise.all([
       client.callTool({

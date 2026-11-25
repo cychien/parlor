@@ -17,7 +17,7 @@ export default defineConfig({
 
 ## The vite field
 
-There is no `vite.config.ts` in a Parlor app: the CLI owns the Vite config for the web, desktop and mobile builds. The `vite` field of `parlor.config.ts` is merged into it, so any Vite plugin or option works the same on every target.
+There is no `vite.config.ts` in a Parlor app: the CLI owns the Vite config for `parlor dev` and `parlor build`. The `vite` field of `parlor.config.ts` is merged into it, so any Vite plugin or option works the same in both.
 
 - Your plugins run after Parlor's.
 - Objects merge, and Parlor's own values win: `root`, `base`, `configFile`, `build.outDir`, `build.emptyOutDir`, `server.port` and `server.strictPort` are ignored with a warning. Set the port with `web.port` instead.

@@ -39,4 +39,3 @@ Preconditions:
 - Claude Code calls tools `mcp__hello__<tool>`; the raw client uses the bare name.
 - `--out` takes the file path after the call arguments and applies to `mcp ID call` only; a request that fails (unknown tool, timeout) still writes the file with `isError: true` and `result: {error}`.
 - Right after `$H sync <id>` the server restarts and `mcp` answers `fetch failed` for a few seconds.
-- MCP connects to the server port directly, not through Vite, so it works the same for web, mac, and iOS instances.

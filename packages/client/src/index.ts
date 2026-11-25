@@ -23,7 +23,6 @@ export type {
   DeviceLinker,
   DeviceSource,
   FrameworkAuth,
-  HostAuthorizer,
   PendingLink,
   ScopeSource,
   SessionDevice,

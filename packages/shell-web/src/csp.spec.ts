@@ -1,7 +1,7 @@
 import { parseConfig } from "@parlor/config";
 import { describe, expect, it } from "vitest";
 
-import { appCsp, defaultCsp, extendCsp, metaCsp, serializeCsp } from "./csp.js";
+import { appCsp, defaultCsp, extendCsp, serializeCsp } from "./csp.js";
 
 describe("defaultCsp", () => {
   it("serializes to the strict production policy", () => {
@@ -25,15 +25,10 @@ describe("defaultCsp", () => {
     );
   });
 
-  it("lets connect-src reach the backend origin and extra origins, without a path", () => {
+  it("lets connect-src reach extra origins", () => {
     expect(
-      serializeCsp(
-        defaultCsp({
-          serverOrigin: "http://localhost:3000/_parlor/",
-          connect: ["https://relay.example.com"],
-        }),
-      ),
-    ).toContain("connect-src 'self' http://localhost:3000 https://relay.example.com;");
+      serializeCsp(defaultCsp({ connect: ["https://relay.example.com"] })),
+    ).toContain("connect-src 'self' https://relay.example.com;");
   });
 
   it("allows Vite's inline preamble, inline styles and websocket only in dev", () => {
@@ -98,25 +93,17 @@ describe("serializeCsp", () => {
   );
 });
 
-describe("metaCsp", () => {
-  it("drops directives a meta element ignores", () => {
-    expect(
-      serializeCsp(metaCsp({ "script-src": ["'self'"], "frame-ancestors": ["'none'"] })),
-    ).toBe("script-src 'self'");
-  });
-});
-
 describe("appCsp", () => {
   const app = { id: "com.example.todo", name: "Todo" };
 
-  it("applies the app's additions on the default for the shell's backend", () => {
+  it("applies the app's additions on the default", () => {
     const config = parseConfig({
       app,
       web: { csp: { "connect-src": ["https://api.example.com"] } },
     });
-    expect(
-      serializeCsp(appCsp(config, { serverOrigin: "https://app.example.com" })),
-    ).toContain("connect-src 'self' https://app.example.com https://api.example.com;");
+    expect(serializeCsp(appCsp(config, {}))).toContain(
+      "connect-src 'self' https://api.example.com;",
+    );
   });
 
   it("is the plain default for an app that adds nothing", () => {

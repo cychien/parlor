@@ -20,8 +20,6 @@ export interface AppGrant {
   readonly createdAt: number;
   /** A `parlor dev` grant: in memory only. */
   readonly dev?: true | undefined;
-  /** Refused here but not yet revoked by the app: kept only to retry the revoke, never served. */
-  readonly declined?: true | undefined;
   /**
    * Handed only to the browser that approved `connect`, through the loopback redirect; that
    * browser proves it on its first prompt and is trusted without asking, then this is dropped.

@@ -9,19 +9,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { parlorWeb, type WebOptions } from "./plugin.js";
 import { mergeViteConfig, parlorViteConfig } from "./vite-config.js";
 
-const SHELLS: ReadonlyArray<readonly [string, WebOptions, InlineConfig]> = [
+const MODES: ReadonlyArray<readonly [string, WebOptions, InlineConfig]> = [
   ["web dev", {}, {}],
   ["web build", {}, { build: { outDir: "out", emptyOutDir: true }, logLevel: "warn" }],
-  ["tauri", { conditions: ["parlor-tauri"], serverUrl: "http://localhost:3000" }, {}],
-  [
-    "capacitor",
-    {
-      conditions: ["parlor-capacitor"],
-      serverUrl: "http://localhost:3000",
-      cspMeta: true,
-    },
-    {},
-  ],
 ];
 
 function names(plugins: readonly PluginOption[] | undefined): string[] {
@@ -53,14 +43,14 @@ describe("parlorViteConfig", () => {
     vi.restoreAllMocks();
   });
 
-  it("puts the app's plugins after the framework's in every shell and warns once about root", async () => {
+  it("puts the app's plugins after the framework's in every mode and warns once about root", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const loaded = await project({
       plugins: [marker()],
       define: { X: "1" },
       root: "elsewhere",
     });
-    for (const [, options, framework] of SHELLS) {
+    for (const [, options, framework] of MODES) {
       const config = parlorViteConfig(loaded, options, framework);
       const frameworkNames = names(
         parlorWeb(loaded.config, { ...options, root: loaded.rootDir }),
@@ -76,9 +66,9 @@ describe("parlorViteConfig", () => {
     ]);
   });
 
-  it.each(SHELLS)(
+  it.each(MODES)(
     "builds the same config as before for a project without the field for %s",
-    async (_shell, options, framework) => {
+    async (_mode, options, framework) => {
       const loaded = await project();
       const base = {
         root: loaded.rootDir,

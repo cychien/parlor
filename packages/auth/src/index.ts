@@ -22,6 +22,7 @@ export {
   type HostGrantResponse,
   type HostKeyExchange,
   hostPrincipalOf,
+  type HostPairing,
   type HostRedirect,
   hostRoutes,
   HOSTS_MIGRATION,

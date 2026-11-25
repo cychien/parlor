@@ -2,17 +2,12 @@ import { oauthProviderClient } from "@better-auth/oauth-provider/client";
 import {
   type AuthBrowser,
   authBrowser,
-  detectPlatform,
   type DeviceKey,
   deviceKey,
-  type HostPairing,
-  type PairingPresenceKey,
   type PresencePublicKey,
   resolveCapability,
-  type SessionStore,
-  sessionStore,
 } from "@parlor/capabilities";
-import { decodeBase64url, encodeBase64url } from "@parlor/capabilities/encoding";
+import { decodeBase64url } from "@parlor/capabilities/encoding";
 import {
   type ActionClient,
   appOrigin,
@@ -20,7 +15,6 @@ import {
   createActionClient,
   type DeviceLinker,
   type DeviceSource,
-  type HostAuthorizer,
   LinkOnComputer,
   type PendingLink,
   type SessionDevice,
@@ -29,12 +23,11 @@ import {
   type SessionUser,
 } from "@parlor/client";
 import { ActionError } from "@parlor/core";
-import type { BetterAuthClientPlugin } from "better-auth/client";
 import { createAuthClient as createBetterAuthClient } from "better-auth/client";
 import { emailOTPClient } from "better-auth/client/plugins";
 
 import type { AccountActions } from "../account.js";
-import type { nativeSignIn } from "../native-sign-in.js";
+import type { HostPairing } from "../hosts.js";
 import {
   answerStatement,
   deviceCommitment,
@@ -53,56 +46,16 @@ import {
 const DEFAULT_BASE_PATH = "/_parlor";
 const RETRY_BASE_MS = 1000;
 const RETRY_MAX_MS = 30_000;
-const TOKEN_HEADER = "set-auth-token";
-const HOST_IPC_REDIRECT = "urn:parlor:ipc";
 const DEBUG_KEY = "parlor:debug";
 
-const NATIVE_CALLBACK = "//_parlor/auth/callback";
-
-function injectedServerUrl(): string {
-  const env = (import.meta as { env?: { PARLOR_SERVER_URL?: string } }).env;
-  return env?.PARLOR_SERVER_URL ?? "";
-}
-
-function injectedScheme(): string {
-  const env = (import.meta as { env?: { PARLOR_APP_SCHEME?: string } }).env;
-  return env?.PARLOR_APP_SCHEME ?? "";
-}
-
-const nativeSignInClient = {
-  id: "parlor-native-sign-in",
-  $InferServerPlugin: {} as ReturnType<typeof nativeSignIn>,
-  atomListeners: [
-    { matcher: (path: string) => path === "/native/token", signal: "$sessionSignal" },
-  ],
-} satisfies BetterAuthClientPlugin;
-
-const randomText = (bytes: number) =>
-  encodeBase64url(crypto.getRandomValues(new Uint8Array(bytes)));
-
-async function pkceChallenge(verifier: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(verifier),
-  );
-  return encodeBase64url(new Uint8Array(digest));
-}
-
 export interface AuthClientOptions {
-  /** The backend origin; defaults to the shell's `server.url`, or this page's origin. */
+  /** The backend origin; defaults to this page's origin. */
   readonly baseUrl?: string | undefined;
   readonly basePath?: string | undefined;
-  /**
-   * Where a bearer session is kept. Defaults to the `sessionStore` capability: native
-   * shells keep a bearer token, the web keeps a cookie.
-   */
-  readonly session?: SessionStore | undefined;
   /** Where this device's signing keys live. Defaults to the `deviceKey` capability. */
   readonly deviceKey?: DeviceKey | undefined;
   /** Where social sign-in runs. Defaults to the `authBrowser` capability. */
   readonly browser?: AuthBrowser | undefined;
-  /** The app's URL scheme, where social sign-in returns in a native shell. Defaults to `app.scheme`. */
-  readonly scheme?: string | undefined;
   readonly fetch?: typeof fetch | undefined;
 }
 
@@ -119,6 +72,12 @@ export class AuthClientError extends Error {
 
 export type DeviceHandle = SessionDevice;
 
+/** This device as the account registered it: the public keys a link commits to. */
+interface EnrolledDevice extends SessionDevice {
+  readonly signingKey: JsonWebKey;
+  readonly presenceKey?: JsonWebKey | undefined;
+}
+
 export interface SocialSignInInput {
   /** A provider in Better Auth's `socialProviders`, or a `genericOAuth` provider id. */
   readonly provider: string;
@@ -129,14 +88,9 @@ export interface SocialSignInInput {
 }
 
 export interface AuthClient
-  extends
-    SessionSource,
-    DeviceSource,
-    HostAuthorizer,
-    DeviceLinker,
-    ComputerDisconnector {
+  extends SessionSource, DeviceSource, DeviceLinker, ComputerDisconnector {
   deviceSetup(): Promise<"needed" | "ready">;
-  /** Plug into `createActionClient({ headers })` so every surface carries the session. */
+  /** @deprecated The browser sends the session cookie itself; there is nothing to plug in. */
   readonly headers: () => Promise<HeadersInit>;
   signIn(input: { readonly email: string; readonly password: string }): Promise<void>;
   signUp(input: {
@@ -157,14 +111,9 @@ export interface AuthClient
   };
   /** Sign-in with a provider such as Google, through Better Auth's `socialProviders`. */
   readonly social: {
-    /** Whether this platform can run it: false in a native shell without the `authBrowser` capability. */
+    /** Whether this browser can run it: false without the `authBrowser` capability. */
     available(): Promise<boolean>;
-    /**
-     * On the web the page leaves for the provider and comes back to `callbackURL`, so this
-     * never resolves. In a native shell the provider opens in the system's sign-in browser
-     * and this resolves once the app is signed in; it throws `AuthClientError` with code
-     * `CANCELLED` when the user closes it.
-     */
+    /** The page leaves for the provider and comes back to `callbackURL`, so this never resolves. */
     signIn(input: SocialSignInInput): Promise<void>;
   };
   /** The account actions: `sessions`, `revokeSession`, `agents`, `revokeAgent`. */
@@ -343,14 +292,6 @@ function enrollmentPresence(presence: PresencePublicKey | undefined, rpId: strin
       };
 }
 
-function registered(
-  presence: ReturnType<typeof enrollmentPresence>,
-): PairingPresenceKey | undefined {
-  if (presence?.format !== "webauthn") return presence;
-  const { attestation: _attestation, ...key } = presence;
-  return key;
-}
-
 function hostnameOf(origin: string): string {
   try {
     return new URL(origin).hostname;
@@ -361,45 +302,17 @@ function hostnameOf(origin: string): string {
 
 export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
   keepHostPairing();
-  const baseUrl = options.baseUrl ?? injectedServerUrl();
+  const baseUrl = options.baseUrl ?? "";
   const basePath = options.basePath ?? DEFAULT_BASE_PATH;
-  const store: Promise<SessionStore | undefined> = options.session
-    ? Promise.resolve(options.session)
-    : resolveCapability(sessionStore).then((handle) =>
-        handle.available ? handle.api : undefined,
-      );
-
-  const headers = async (): Promise<HeadersInit> => {
-    const token = await (await store)?.get();
-    return token ? { authorization: `Bearer ${token}` } : {};
-  };
+  const headers = (): Promise<HeadersInit> => Promise.resolve({});
 
   // Built on first use: importing a module that creates the client must work outside a page.
   let client: ReturnType<typeof connect> | undefined;
   const connect = () =>
     createBetterAuthClient({
       baseURL: `${baseUrl || globalThis.location.origin}${basePath}/auth`,
-      plugins: [oauthProviderClient(), emailOTPClient(), nativeSignInClient],
-      fetchOptions: {
-        ...(options.fetch ? { customFetchImpl: options.fetch } : {}),
-        onRequest: async (context) => {
-          for (const [name, value] of new Headers(await headers())) {
-            context.headers.set(name, value);
-          }
-          return context;
-        },
-        onSuccess: async (context) => {
-          const token = context.response.headers.get(TOKEN_HEADER);
-          if (token) await (await store)?.set(token);
-          else if (
-            context.request.url.toString().endsWith("/get-session") &&
-            !context.data
-          ) {
-            // A bearer token the server no longer knows would fail every later request.
-            await (await store)?.set(undefined);
-          }
-        },
-      },
+      plugins: [oauthProviderClient(), emailOTPClient()],
+      ...(options.fetch ? { fetchOptions: { customFetchImpl: options.fetch } } : {}),
     });
   const betterAuth = () => (client ??= connect());
 
@@ -444,7 +357,6 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
     baseUrl,
     fetch: options.fetch,
     basePath: `${basePath}/auth`,
-    headers,
   });
 
   const signInBrowser = async (): Promise<AuthBrowser | undefined> => {
@@ -472,60 +384,16 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
     await browser.open(url, callbackURL);
   };
 
-  const signInInTheApp = async (browser: AuthBrowser, provider: string) => {
-    const scheme = options.scheme ?? injectedScheme();
-    if (!scheme) {
-      throw new AuthClientError(
-        "Set app.scheme in parlor.config.ts to sign in with a provider in the app.",
-        0,
-        "NO_SCHEME",
-      );
-    }
-    const callback = `${scheme}:${NATIVE_CALLBACK}`;
-    const verifier = randomText(32);
-    const state = randomText(16);
-    const start = new URL(
-      `${baseUrl || globalThis.location.origin}${basePath}/auth/native/sign-in/social`,
-    );
-    start.search = new URLSearchParams({
-      provider,
-      redirect_uri: callback,
-      code_challenge: await pkceChallenge(verifier),
-      code_challenge_method: "S256",
-      state,
-    }).toString();
-    const returned = await browser.open(start.href, callback);
-    if (!returned) throw new AuthClientError("Sign-in was cancelled.", 0, "CANCELLED");
-    const answer = new URL(returned).searchParams;
-    if (answer.get("state") !== state) {
-      throw new AuthClientError(
-        "This sign-in was not started here.",
-        0,
-        "STATE_MISMATCH",
-      );
-    }
-    const failed = answer.get("error");
-    const code = answer.get("code");
-    if (failed || !code) {
-      throw new AuthClientError(
-        answer.get("error_description") || `Sign-in failed (${failed ?? "no code"}).`,
-        400,
-        failed ?? undefined,
-      );
-    }
-    settle(await betterAuth().native.token({ code, code_verifier: verifier }));
-  };
-
   const keysOfThisPlatform = async (): Promise<DeviceKey | undefined> => {
     const handle = await resolveCapability(deviceKey);
     return handle.available ? handle.api : undefined;
   };
 
-  const devices = new Map<string, Promise<DeviceHandle | undefined>>();
+  const devices = new Map<string, Promise<EnrolledDevice | undefined>>();
   const enroll = async (
     user: SessionUser,
     wantsPresence: boolean,
-  ): Promise<DeviceHandle | undefined> => {
+  ): Promise<EnrolledDevice | undefined> => {
     const key = options.deviceKey ?? (await keysOfThisPlatform());
     if (!key) return undefined;
     const app = appOrigin(baseUrl || undefined);
@@ -542,11 +410,10 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
     );
     const presence = enrollmentPresence(keys.presence, rpId);
     const name = deviceName();
-    const platform = detectPlatform();
     const signingKey = { ...keys.signing.publicKey };
     const { id } = await account.call("enrollDevice", {
       name,
-      platform,
+      platform: "web",
       challenge,
       signing: { keyId: keys.signing.keyId, publicKey: signingKey },
       ...(presence ? { presence } : {}),
@@ -554,13 +421,8 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
     });
     return {
       id,
-      keys: {
-        deviceId: id,
-        name,
-        platform,
-        signingKey,
-        presenceKey: registered(presence),
-      },
+      signingKey,
+      presenceKey: presence?.publicKey,
       signPrompt: async (prompt, wanted) => {
         const at = Date.now();
         const statement = await promptStatement(app, prompt, at);
@@ -588,7 +450,7 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
 
   const device = async (wanted?: {
     readonly presence?: boolean;
-  }): Promise<DeviceHandle | undefined> => {
+  }): Promise<EnrolledDevice | undefined> => {
     const session = current();
     if (session.status !== "signed-in") return undefined;
     const known = devices.get(session.user.id);
@@ -650,17 +512,10 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
             "UNSUPPORTED",
           );
         }
-        if (await store) await signInInTheApp(browser, input.provider);
-        else await signInOnThePage(browser, input);
+        await signInOnThePage(browser, input);
       },
     },
-    signOut: async () => {
-      try {
-        settle(await betterAuth().signOut());
-      } finally {
-        await (await store)?.set(undefined);
-      }
-    },
+    signOut: async () => settle(await betterAuth().signOut()),
     subscribeLink: watchHostPairing,
     linkState: async () => {
       const pairing = hostPairing() !== undefined;
@@ -688,8 +543,8 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
       const commitment = await deviceCommitment(
         app,
         own.id,
-        own.keys.signingKey,
-        own.keys.presenceKey?.publicKey,
+        own.signingKey,
+        own.presenceKey,
       );
       const code = linkCode(commitment);
       const { expiresAt } = await account.call("startDeviceLink", {
@@ -740,7 +595,7 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
     removeDevice: async (id) => {
       const own = await device();
       const key = options.deviceKey ?? (await keysOfThisPlatform());
-      if (!own?.keys.presenceKey || !key) {
+      if (!own?.presenceKey || !key) {
         throw new LinkOnComputer("This device cannot confirm it is you.");
       }
       const app = appOrigin(baseUrl || undefined);
@@ -768,12 +623,12 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
       const known = devices.get(session.user.id);
       const key = options.deviceKey ?? (await keysOfThisPlatform());
       if (!known && (await key?.presenceSetup?.()) === "needed") return false;
-      return (await device())?.keys.presenceKey !== undefined;
+      return (await device())?.presenceKey !== undefined;
     },
     vouch: async (link) => {
       const own = await device();
       const key = options.deviceKey ?? (await keysOfThisPlatform());
-      if (!own?.keys.presenceKey || !key) {
+      if (!own?.presenceKey || !key) {
         throw new LinkOnComputer("This device cannot confirm it is you.");
       }
       const app = appOrigin(baseUrl || undefined);
@@ -802,7 +657,7 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
         `${baseUrl}${basePath}/auth/hosts/authorize`,
         {
           method: "POST",
-          headers: { ...(await headers()), "content-type": "application/json" },
+          headers: { "content-type": "application/json" },
           body: JSON.stringify({
             ...pairing,
             ...(offersAgentTools ? { agentTools: "offered" } : {}),
@@ -825,37 +680,9 @@ export function createAuthClient(options: AuthClientOptions = {}): AuthClient {
       }
       return body.location;
     },
-    authorizeHost: async (pairing) => {
-      const response = await (options.fetch ?? fetch)(
-        `${baseUrl}${basePath}/auth/hosts/authorize`,
-        {
-          method: "POST",
-          headers: { ...(await headers()), "content-type": "application/json" },
-          body: JSON.stringify({
-            ...pairing,
-            redirectUri: HOST_IPC_REDIRECT,
-            decision: "connect",
-          }),
-        },
-      );
-      const body = (await response.json().catch(() => undefined)) as
-        | { code?: unknown; state?: unknown; error?: { message?: string; code?: string } }
-        | undefined;
-      if (
-        !response.ok ||
-        typeof body?.code !== "string" ||
-        body.state !== pairing.state
-      ) {
-        throw new AuthClientError(
-          body?.error?.message ?? "The computer could not be connected.",
-          response.status,
-          body?.error?.code,
-        );
-      }
-      return body.code;
-    },
     account,
   };
 }
 
-export type { AuthBrowser, HostPairing, SessionStore } from "@parlor/capabilities";
+export type { AuthBrowser } from "@parlor/capabilities";
+export type { HostPairing } from "../hosts.js";

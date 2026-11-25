@@ -12,7 +12,6 @@ export {
   defaultCsp,
   type DefaultCspInput,
   extendCsp,
-  metaCsp,
   serializeCsp,
 } from "./csp.js";
 export { startWebDev } from "./dev.js";

@@ -53,7 +53,7 @@ Wraps the app: `client` (the action client), `router` (the TanStack router) and,
 ## Sessions and capabilities
 
 - `useSession()`: `{ status: "loading" | "signed-in" | "signed-out" | "anonymous", user? }`.
-- `useCapability(definition)`: resolves a capability from `@parlor/capabilities` on the current platform; `{ available: true, api }` or `{ available: false, reason }`.
+- `useCapability(definition)`: resolves a capability from `@parlor/capabilities` in this browser; `{ available: true, api }` or `{ available: false, reason }`.
 - `useActionClient()`: the client from the provider.
 
 ## Agents
@@ -62,6 +62,7 @@ Wraps the app: `client` (the action client), `router` (the TanStack router) and,
 - `useAgentConfirmations()`: the agent calls waiting for the user's approval.
 - `useAgentActivity()`: what the agent is doing in the app right now.
 - `useChat()`: the sidebar's state and commands; `status` is `"unavailable"` when the server has no chat or will not serve this user, and `unavailable.reason` says which: `"forbidden"` when `chat({ access })` refuses the user, `"not_found"` when the server has no chat, `"unauthenticated"`, or `"error"` while a failed read is retried. `Chat.Status` carries it as `data-unavailable`.
+- `useChat().connect`: how the user adds a computer, `{ kind: "command", command }`, where `command` is `npx @parlor/agent-host connect <app origin>` to run on it.
 - `useChat().link` and `startLink()`: whether this device may send (`linked`, `checking`, or `unlinked`). Send stays disabled until it is linked. It turns `linked` on its own when another tab of the same browser approves `connect`. Once `startLink` made a code, `unlinked` carries the `code`, the `qr` URL a linked phone's camera opens (`<app>/link#d=<device>&c=<commitment>`; the fragment never reaches a server, so render it with any QR library), and the `command` that links it on the computer instead. When the code runs out it is dropped and `expired` is true until the next `startLink`. `onlyComputer` is true while no other device is linked, so only `command` can link this one.
 - `useChat().hasOlder` and `loadOlder()`: the thread has items before the first one shown, and reads the next earlier page; `moreThreads` and `loadMoreThreads()` do the same for the conversation list past its first 200. `loadingOlder` is set while either reads.
 - `useChat().agent.options` and `setOption(id, value)`: what a prompt to the chosen agent may choose, such as its model or how hard it thinks, each with the `selected` value the next prompt runs with. They appear once an app links to the computer, which asks each agent for them without running a turn, and follow every turn after; this device's choices are kept in `localStorage` and sent with each prompt, and the computer runs only values the agent offers. The permission mode is never among them: the computer sets it.

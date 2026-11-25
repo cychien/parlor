@@ -4,14 +4,9 @@ import { createDatabase, type DatabaseHandle } from "@parlor/data";
 import { createServer, type FrameworkServer } from "@parlor/server";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { createTestApp, ORIGIN, PASSWORD, signUp } from "../testing/app.js";
+import { Browser, createTestApp, ORIGIN, PASSWORD, signUp } from "../testing/app.js";
 import { Computer } from "../testing/computer.js";
-import {
-  type AuthClient,
-  createAuthClient,
-  parseComputerConnection,
-  type SessionStore,
-} from "./index.js";
+import { type AuthClient, createAuthClient, parseComputerConnection } from "./index.js";
 
 let database: DatabaseHandle;
 let server: FrameworkServer;
@@ -39,37 +34,24 @@ afterEach(async () => {
   await server.close();
 });
 
-function memoryStore(): SessionStore & { token: string | undefined } {
-  return {
-    token: undefined,
-    get() {
-      return Promise.resolve(this.token);
-    },
-    set(token) {
-      this.token = token;
-      return Promise.resolve();
-    },
-  };
-}
-
-/** A native shell: the backend is another origin, so the session is a bearer token in a store. */
-function shell({ unreachableFor = 0 } = {}) {
-  const store = memoryStore();
+/** A page of the app: the tab keeps its cookies, and the network may be down for a while. */
+function tab({ browser = new Browser(server), unreachableFor = 0 } = {}) {
   let failures = unreachableFor;
   const auth = createAuthClient({
     baseUrl: ORIGIN,
-    session: store,
     fetch: (input, init) => {
       if (failures > 0) {
         failures -= 1;
         return Promise.reject(new TypeError("fetch failed"));
       }
-      const request = new Request(input, init);
-      if (request.method === "POST") request.headers.set("origin", "tauri://localhost");
-      return server.fetch(request);
+      return browser.asFetch(input, init);
     },
   });
-  return { auth, store };
+  return { auth, browser };
+}
+
+async function sessionOf(browser: Browser): Promise<unknown> {
+  return (await browser.fetch("/_parlor/auth/get-session")).json();
 }
 
 function settled(auth: AuthClient): Promise<SessionSnapshot> {
@@ -90,12 +72,14 @@ function settled(auth: AuthClient): Promise<SessionSnapshot> {
   });
 }
 
-describe("the auth client in a native shell", () => {
-  it("keeps a bearer session in its store and signs every surface with it", async () => {
-    const { auth, store } = shell();
+describe("the auth client on a page", () => {
+  it("keeps the session in the tab's cookie and reads the account with it", async () => {
+    const { auth, browser } = tab();
     await auth.signUp({ name: "Alice", email: "alice@example.com", password: PASSWORD });
-    expect(store.token).toBeTruthy();
-    expect(await auth.headers()).toEqual({ authorization: `Bearer ${store.token}` });
+    expect(await sessionOf(browser)).toMatchObject({
+      user: { email: "alice@example.com" },
+    });
+    expect(await auth.headers()).toEqual({});
     const sessions = await auth.account.call("sessions", {});
     expect(sessions).toHaveLength(1);
     expect(sessions[0]!.current).toBe(true);
@@ -105,17 +89,16 @@ describe("the auth client in a native shell", () => {
     });
 
     await auth.signOut();
-    expect(store.token).toBeUndefined();
-    expect(await auth.headers()).toEqual({});
+    expect(await sessionOf(browser)).toBeNull();
   });
 
-  it("reports a wrong password and stores nothing", async () => {
+  it("reports a wrong password and signs nobody in", async () => {
     await signUp(server, "Alice");
-    const { auth, store } = shell();
+    const { auth, browser } = tab();
     await expect(
       auth.signIn({ email: "alice@example.com", password: "wrong password here" }),
     ).rejects.toMatchObject({ name: "AuthClientError", status: 401 });
-    expect(store.token).toBeUndefined();
+    expect(await sessionOf(browser)).toBeNull();
   });
 
   it("reports an anonymous session, without retrying, when the server runs without auth", async () => {
@@ -123,7 +106,6 @@ describe("the auth client in a native shell", () => {
     let asked = 0;
     const auth = createAuthClient({
       baseUrl: ORIGIN,
-      session: memoryStore(),
       fetch: (input, init) => {
         asked += 1;
         return bare.fetch(new Request(input, init));
@@ -140,8 +122,7 @@ describe("the auth client in a native shell", () => {
 
   it("waits out an unreachable server instead of signing the user out", async () => {
     const signedUp = await signUp(server, "Alice");
-    const { auth, store } = shell({ unreachableFor: 2 });
-    await store.set(signedUp.token);
+    const { auth } = tab({ browser: signedUp, unreachableFor: 2 });
     const seen: string[] = [];
     const stop = auth.subscribe(() => seen.push(auth.current().status));
     try {
@@ -150,26 +131,13 @@ describe("the auth client in a native shell", () => {
       stop();
     }
     expect(seen).not.toContain("signed-out");
-    expect(store.token).toBe(signedUp.token);
+    expect(await sessionOf(signedUp)).toMatchObject({
+      user: { email: "alice@example.com" },
+    });
   }, 15_000);
 
-  it("approves a computer's pairing with its session and answers the code", async () => {
-    const { auth } = shell();
-    await auth.signUp({ name: "Alice", email: "alice@example.com", password: PASSWORD });
-    const computer = new Computer("Alice's Mac", "macos", "urn:parlor:ipc");
-    const { redirectUri: _ipc, ...pairing } = await computer.pairing();
-
-    const code = await auth.authorizeHost(pairing);
-
-    const exchanged = await computer.exchange(server, code);
-    expect(exchanged.status).toBe(200);
-    expect(exchanged.body.account).toMatchObject({ email: "alice@example.com" });
-    const hosts = await auth.account.call("hosts", {});
-    expect(hosts.map((host) => host.name)).toEqual(["Alice's Mac"]);
-  });
-
   it("answers a request from the app's connect page with where the computer waits", async () => {
-    const { auth } = shell();
+    const { auth } = tab();
     await auth.signUp({ name: "Alice", email: "alice@example.com", password: PASSWORD });
     const computer = new Computer("Alice's Mac", "macos");
     const query = `${await computer.authorizeQuery()}&agentTools=offered`;
@@ -194,19 +162,18 @@ describe("the auth client in a native shell", () => {
     expect(exchanged.status).toBe(200);
   });
 
-  it("refuses to approve a pairing without a session", async () => {
-    const { auth } = shell();
-    const computer = new Computer("Alice's Mac", "macos", "urn:parlor:ipc");
-    const { redirectUri: _ipc, ...pairing } = await computer.pairing();
-    await expect(auth.authorizeHost(pairing)).rejects.toMatchObject({
-      name: "AuthClientError",
-      status: 401,
-    });
+  it("refuses to answer a connect request without a session", async () => {
+    const { auth } = tab();
+    const parsed = parseComputerConnection(`?${await new Computer().authorizeQuery()}`);
+    if (parsed?.step !== "confirm") throw new Error("expected a request to confirm");
+    await expect(
+      auth.answerComputerConnection(parsed.request, "connect"),
+    ).rejects.toMatchObject({ name: "AuthClientError", status: 401 });
   });
 
-  it("drops a token the server revoked", async () => {
+  it("signs out once the server revoked the session", async () => {
     const laptop = await signUp(server, "Alice");
-    const { auth, store } = shell();
+    const { auth } = tab();
     await auth.signIn({ email: "alice@example.com", password: PASSWORD });
     const sessions = (await laptop.account("sessions")).body.data as {
       id: string;
@@ -215,7 +182,6 @@ describe("the auth client in a native shell", () => {
     const phone = sessions.find((session) => !session.current)!;
     await laptop.account("revokeSession", { id: phone.id });
     expect(await settled(auth)).toEqual({ status: "signed-out" });
-    expect(store.token).toBeUndefined();
   });
 });
 

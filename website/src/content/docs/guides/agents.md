@@ -37,7 +37,7 @@ Parlor Host finds Claude Code and Codex on the login-shell `PATH`, and Codex ins
 
 A new thread's first prompt does not wait for the agent to start: while the sidebar shows a new thread, the computer starts the chosen agent and opens its session, and the first prompt runs in it. After Parlor Host restarts, the first thread with an app only starts the agent ahead, because a session opened before its turn answers the agent's handshake from what the app said in an earlier turn.
 
-Running `connect` again with a newer release updates Parlor Host on the computer: the running one hands its connections over, finishes the turns it has under way, and exits. One a desktop app installed is updated by that app instead. A Claude Code or Codex conversation keeps its app tools across the restart: its next call reaches the new Parlor Host.
+Running `connect` again with a newer release updates Parlor Host on the computer: the running one hands its connections over, finishes the turns it has under way, and exits. A Claude Code or Codex conversation keeps its app tools across the restart: its next call reaches the new Parlor Host.
 
 The connection ends in one place for both uses: **Disconnect** in the sidebar (`useChat().disconnect(hostId)`) or `npx @parlor/agent-host disconnect <app url>` revokes the grant and removes the app from the agents, and the computer posts a notification when the app was the one to end it. `npx @parlor/agent-host tools <app url> --off` stops only the agents outside the sidebar; without `--off` it hands the app to them again.
 
@@ -73,7 +73,7 @@ The screen tools describe every page, view and form the app shows. Past about 60
 
 ## The browser's own agent
 
-In a browser with [WebMCP](https://github.com/webmachinelearning/webmcp), an open page hands the same actions and screen to the browser's built-in agent: each action the signed-in user may see, and `ui_screen`, `ui_navigate`, `ui_set` and `ui_highlight` running in that page. Nothing is installed or connected. The page calls an action as an agent would, so a `confirm: true` action shows its approval card in that page and waits, and `ctx.source` is `"mcp"`. The ui_ tools act on the page itself and leave out what only matters across clients. Browsers without WebMCP, and the desktop and mobile apps, register nothing. Turn it off with `<FrameworkProvider webmcp={false}>`.
+In a browser with [WebMCP](https://github.com/webmachinelearning/webmcp), an open page hands the same actions and screen to the browser's built-in agent: each action the signed-in user may see, and `ui_screen`, `ui_navigate`, `ui_set` and `ui_highlight` running in that page. Nothing is installed or connected. The page calls an action as an agent would, so a `confirm: true` action shows its approval card in that page and waits, and `ctx.source` is `"mcp"`. The ui_ tools act on the page itself and leave out what only matters across clients. Browsers without WebMCP register nothing. Turn it off with `<FrameworkProvider webmcp={false}>`.
 
 ## What agents can and cannot do
 

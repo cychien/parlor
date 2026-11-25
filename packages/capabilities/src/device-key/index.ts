@@ -1,9 +1,6 @@
-import { platformAdapters } from "#adapters";
-
 import { defineCapability } from "../capability.js";
 import type { DeviceKey } from "./interface.js";
-
-export { capacitorDeviceKey, type CapacitorDeviceKeyModule } from "./capacitor.js";
+import { webDeviceKey } from "./web.js";
 
 export { PresenceSetupCancelled } from "./interface.js";
 export type {
@@ -14,10 +11,9 @@ export type {
   PresencePublicKey,
   PresenceSignature,
 } from "./interface.js";
-export { tauriDeviceKey, type TauriInvoke } from "./tauri.js";
 export { webDeviceKey, type WebDeviceKeyApis } from "./web.js";
 
 export const deviceKey = defineCapability<DeviceKey>({
   name: "deviceKey",
-  adapters: platformAdapters.deviceKey,
+  adapters: [webDeviceKey()],
 });

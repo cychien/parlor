@@ -144,6 +144,26 @@ const DIFFERENCES: Readonly<
     agreed: true,
     why: "`deviceSetup` says whether the first enrollment would create a passkey",
   },
+  "capabilities/src/device-key/index.ts CapacitorDeviceKeyModule missing": {
+    agreed: true,
+    why: "Parlor is web only: the native device key adapters are gone",
+  },
+  "capabilities/src/device-key/index.ts TauriInvoke missing": {
+    agreed: true,
+    why: "Parlor is web only: the native device key adapters are gone",
+  },
+  "capabilities/src/device-key/index.ts capacitorDeviceKey missing": {
+    agreed: true,
+    why: "Parlor is web only: the native device key adapters are gone",
+  },
+  "capabilities/src/device-key/index.ts tauriDeviceKey missing": {
+    agreed: true,
+    why: "Parlor is web only: the native device key adapters are gone",
+  },
+  "client/src/session.ts HostAuthorizer missing": {
+    agreed: true,
+    why: "Parlor is web only: only the desktop shell paired its own computer's host over IPC",
+  },
   "capabilities/src/device-key/index.ts PresenceSetupCancelled added": {
     agreed: true,
     why: "the first prompt on a browser explains the passkey before creating it; a cancel keeps nothing so it can be asked again, and skipping enrolls without a presence key",
@@ -319,27 +339,15 @@ const DIFFERENCES_6: Readonly<
   },
   "agent-host/src/control.ts ControlRequest changed": {
     agreed: true,
-    why: "spec 8.6: `handover` carries the binary and signature, `confirm_local_pairing` is new",
+    why: "spec 8.6: `handover` carries the binary and signature; the desktop shell's local pairing ops are gone with it",
   },
-  "agent-host/src/pairing.ts PairingChannel changed": {
+  "client/src/react/chat/runtime.ts ConnectOption changed": {
     agreed: true,
-    why: "connect asks once: the consent page approves a browser pairing, and only the ipc channel, which has no consent page, confirms in the shell's native dialog",
+    why: "Parlor is web only: a computer is always added with the command",
   },
-  "capabilities/src/device-key/capacitor.ts capacitorDeviceKey changed": {
+  "agent-host/src/pairing.ts PairingChannel missing": {
     agreed: true,
-    why: "the skeleton's default loader is a placeholder that rejects; this one loads `@parlor/capacitor-device-key`",
-  },
-  "capabilities/src/local-agent-host/interface.ts LocalConnectInput changed": {
-    agreed: true,
-    why: "spec 8.6: the optional `device` is pinned at pairing",
-  },
-  "capabilities/src/local-agent-host/interface.ts PairingDevice added": {
-    agreed: true,
-    why: "spec 8.6: the app's own device keys, carried by `LocalConnectInput` and the control protocol",
-  },
-  "capabilities/src/local-agent-host/interface.ts PairingPresenceKey added": {
-    agreed: true,
-    why: "spec 8.6: the registered presence key shape, so the capability needs no server import",
+    why: "Parlor is web only: the consent page is the one channel, so `pair` takes `open` itself",
   },
 };
 
@@ -364,19 +372,6 @@ describe("the phase 6 skeleton contract", () => {
       ]),
       ...drift6("packages/agent-host/src/pairing.ts", ["PairingChannel"]),
       ...drift6("packages/agent-host/src/daemon.ts", ["DaemonDeps", "HostDaemon"]),
-      ...drift6("packages/capabilities/src/device-key/capacitor.ts"),
-      ...drift6("packages/capabilities/src/device-key/tauri.ts"),
-      ...drift6("packages/capabilities/src/local-agent-host/capacitor.ts"),
-      ...drift6("packages/capabilities/src/local-agent-host/index.ts"),
-      ...drift6("packages/capabilities/src/local-agent-host/interface.ts"),
-      ...drift6("packages/capabilities/src/local-agent-host/tauri.ts"),
-      ...drift6("packages/capabilities/src/local-agent-host/web.ts"),
-      ...drift6("packages/shell-desktop/src/project.ts", [
-        "AGENT_HOST_SIDECAR",
-        "libRs",
-        "stageAgentHost",
-      ]),
-      ...drift6("packages/shell-mobile/src/project.ts", ["DEVICE_KEY_PLUGIN"]),
       ...drift6("packages/client/src/react/chat/runtime.ts", ["ConnectOption"]),
     ].map(
       ({ file, symbol, kind }) =>
@@ -385,7 +380,7 @@ describe("the phase 6 skeleton contract", () => {
     expect(found.sort()).toEqual(Object.keys(DIFFERENCES_6).sort());
   });
 
-  it("K6: use-chat.spec-d.ts still pins ConnectOption to command and here, under the type checker", () => {
+  it("K6: use-chat.spec-d.ts still pins ConnectOption to the command, under the type checker", () => {
     const client = join(REPOSITORY, "packages", "client");
     expect(() =>
       execFileSync(

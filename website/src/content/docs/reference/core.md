@@ -31,7 +31,7 @@ The error an action throws to answer with a code: `not_found`, `invalid_input`, 
 
 `defaultConfirmationPolicy` and the `ConfirmationPolicy` type decide what happens to a call before it runs; see [the confirmation policy](/parlor/reference/server/#confirmation-policy).
 
-Also exported: `asId` and the branded id types, `ANONYMOUS`, `isAuthenticated`, `userOf` and the principal types, `tableName`, `readTagsFor`, `writeTagsFor`, `tagsOverlap` (how reads and writes match), and `SHELL_ORIGINS` (the origins of the native shells).
+Also exported: `asId` and the branded id types, `ANONYMOUS`, `isAuthenticated`, `userOf` and the principal types, `tableName`, `readTagsFor`, `writeTagsFor`, and `tagsOverlap` (how reads and writes match).
 
 ## @parlor/core/registry
 

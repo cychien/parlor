@@ -23,11 +23,11 @@ An external agent can see what the user has on screen and move the app to anothe
 
 Preconditions:
 
-- An instance seeded with `baseline` (or `s30` for `ui-this`), doctor clean, and a page opened with `$H browser <id> open /` so a client is connected. For mac or iOS use `--target mac` or `--target ios`; the app window is the client.
+- An instance seeded with `baseline` (or `s30` for `ui-this`), doctor clean, and a page opened with `$H browser <id> open /` so a client is connected.
 - `claude` is on PATH and logged in.
 
 - **Catalog.** Run `$H mcp <id> resources` (one resource, `parlor://manifest`) and `$H mcp <id> resource parlor://manifest | jq -r '.contents[0].text | fromjson'` for the pages and views. Run `$H mcp <id> tools > $E/tools.json`. It lists every action plus `ui_screen`, `ui_navigate`, `ui_set` and `ui_highlight`; `ui_navigate`'s description names `/`, `/tasks/$taskId`, `/settings` with their descriptions and its `to` schema is an enum of exactly those three. `curl -s <web>/_parlor/manifest` has `ui.routes` with the same paths.
-- **Screen.** Run `$H mcp <id> call ui_screen '{}'`. `route.path` is `/`, `queries` includes `listTasks`, and `views.task.items` lists `Buy milk`, `Write report`, `Call Amy` in that order; `client.platform` is `web`, `tauri`, or `capacitor` by target.
+- **Screen.** Run `$H mcp <id> call ui_screen '{}'`. `route.path` is `/`, `queries` includes `listTasks`, and `views.task.items` lists `Buy milk`, `Write report`, `Call Amy` in that order; `client.platform` is `web`.
 - **This task.** Load `s30`, open `/`, then `$H browser <id> eval "document.querySelectorAll('li')[14].scrollIntoView({block:'center'})"` so `Task 15` is centered. Run `$H agent <id> --out $E/agent "mark this task as done"`. Read back with `$H mcp <id> call listTasks '{}'`: only `Task 15` is done, and the page shows it checked without a reload.
 - **Navigate.** Run `$H agent <id> --out $E/agent "where do I change the app settings? take me there"`. The transcript shows `mcp__hello__ui_navigate` with `to: "/settings"`; `$H browser <id> snapshot` shows heading `Settings` and the URL path `/settings`. For a param route ask "open the task Write report"; the URL path becomes `/tasks/seed-baseline-2`.
 - **Unreachable.** Use an instance where no page was opened (skip `$H browser <id> open`), then `$H mcp <id> call ui_navigate '{"to":"/settings"}'`. The result has `reachable: false`, `reason: "no_client"`, and an `href` on the web port; opening that href shows Settings.
@@ -45,7 +45,6 @@ Preconditions:
 - `focus off` changes `hasFocus` and fires `blur`, but `visibilityState` stays `visible` and `visibilitychange` never fires, so a hidden tab cannot be reproduced; `ui_screen` `visible` is always true for a browser tab here.
 - After a `click` or `fill` a tab keeps real input focus and `focus off` fails on it (exit 1); close the tab, `newpage <web url>`, then `focus off`.
 - The ui_ tools show the activity status for up to 3 s; the status is `position: fixed` and does not move the page, so a `click` or `fill` is safe, but wait for `data-state` `idle` before reading its text as quiet.
-- A mac window behind the terminal reports `visible: false`; the screenshot still captures it by window id.
 - Navigation to `/settings` finishes within one frame, so a `busy` activity status is only observable on a slowed page.
 - The Agent sidebar is non-modal: the page behind stays interactive while it is open, and `ui_navigate` and `click` both work.
 - The agent may answer in another language; assert on tool calls, results, and the stored state, not on its wording.

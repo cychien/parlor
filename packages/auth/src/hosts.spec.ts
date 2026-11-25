@@ -338,17 +338,14 @@ describe("pairing a computer", () => {
     );
   });
 
-  it("answers the code as JSON for an in-app pairing", async () => {
+  it("refuses a redirect that is not this computer's loopback listener", async () => {
     const alice = await signUp("Alice");
-    const computer = new Computer("Alice's Mac", "macos", "urn:parlor:ipc");
+    const computer = new Computer("Alice's Mac", "macos", "urn:example:other");
     const response = await alice.post("/_parlor/auth/hosts/authorize", {
       ...(await computer.pairing()),
       decision: "connect",
     });
-    expect(response.status).toBe(200);
-    const answer = (await response.json()) as { code: string; state: string };
-    expect(answer.state).toBe(computer.state);
-    expect((await computer.exchange(app.server, answer.code)).status).toBe(200);
+    expect(response.status).toBe(400);
   });
 });
 

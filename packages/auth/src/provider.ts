@@ -203,8 +203,8 @@ function hasCookie(request: Request, name: string): boolean {
 }
 
 /**
- * Sessions become user principals: a cookie on the same-origin web, a bearer token in
- * native shells. Access tokens Better Auth issued to MCP clients become agent principals
+ * Sessions become user principals: a cookie in the browser, a bearer token for an API
+ * client. Access tokens Better Auth issued to MCP clients become agent principals
  * without a turn, and the app's API keys, with `keys`, key principals.
  */
 export function betterAuthProvider(provided: BetterAuthProviderOptions): AuthProvider {

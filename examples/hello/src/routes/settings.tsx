@@ -39,12 +39,12 @@ function NotificationsPanel() {
       setStatus(`permission ${permission}`);
       return;
     }
-    await cap.api.show("Hello from Parlor", { body: `Running on ${cap.platform}` });
+    await cap.api.show("Hello from Parlor", { body: "Sent from this browser" });
     setStatus("sent");
   };
   return (
     <section className="stack">
-      <p data-testid="notifications">Notifications via {cap.platform}</p>
+      <p data-testid="notifications">Notifications: available</p>
       <button onClick={() => void notify()}>Notify</button> <output>{status}</output>
     </section>
   );
@@ -60,7 +60,9 @@ function DeepLinkPanel() {
   if (cap.resolving) return null;
   return (
     <section className="stack">
-      <p data-testid="deeplink">Deep links via {cap.available ? cap.platform : "none"}</p>
+      <p data-testid="deeplink">
+        {`Deep links: ${cap.available ? "available" : "not available"}`}
+      </p>
       <ul>
         {urls.map((url) => (
           <li key={url}>{url}</li>

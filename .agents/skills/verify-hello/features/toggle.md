@@ -16,7 +16,7 @@ Each task row is a checkbox. Clicking it flips the task between done and not don
 
 Preconditions:
 
-- A web instance seeded with `baseline`, doctor clean, page open.
+- An instance seeded with `baseline`, doctor clean, page open.
 
 - **Check.** Run `$H browser <id> click checkbox "Buy milk"`. The printed snapshot shows `checkbox "Buy milk" checked`; the others stay unchecked.
 - **Strike.** Run `$H browser <id> eval "getComputedStyle([...document.querySelectorAll('[data-testid=tasks] span')].find(s => s.textContent === 'Buy milk')).textDecorationLine"`. The result is `line-through`. Capture `$H browser <id> screenshot $E/toggle-done.png`.

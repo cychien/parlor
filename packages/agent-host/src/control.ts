@@ -1,7 +1,5 @@
 import { connect } from "node:net";
 
-import type { HostPairing, LocalHostStatus, PairingDevice } from "@parlor/capabilities";
-
 import { onLines } from "./lines.js";
 import type { HostRelease, ServiceClient } from "./service.js";
 
@@ -9,7 +7,7 @@ export const CONTROL_PROTOCOL = 1;
 
 /**
  * Newline-delimited JSON on a 0600 Unix socket (a named pipe on Windows), spoken by the
- * `parlor-host` CLI and the desktop shell's Rust side. No TCP listener exists.
+ * `parlor-host` CLI. No TCP listener exists.
  */
 export type ControlRequest =
   | { readonly op: "hello"; readonly client: ServiceClient }
@@ -18,18 +16,6 @@ export type ControlRequest =
   | { readonly op: "step_aside"; readonly release: HostRelease }
   | { readonly op: "status" }
   | { readonly op: "connect"; readonly appOrigin: string }
-  | { readonly op: "begin_local_pairing"; readonly appOrigin: string }
-  | {
-      readonly op: "finish_local_pairing";
-      readonly appOrigin: string;
-      readonly code: string;
-    }
-  | {
-      readonly op: "confirm_local_pairing";
-      readonly appOrigin: string;
-      readonly connect: boolean;
-      readonly device?: PairingDevice;
-    }
   | { readonly op: "disconnect"; readonly appOrigin: string }
   | { readonly op: "agent_tools"; readonly appOrigin: string; readonly on: boolean }
   | { readonly op: "dev_attach"; readonly appOrigin: string; readonly hostToken: string }
@@ -49,6 +35,15 @@ export interface AgentToolsSummary {
   readonly agents: string;
 }
 
+export type LocalHostStatus =
+  | { readonly state: "stopped" }
+  | {
+      readonly state: "running";
+      readonly version: string;
+      /** App origins this host holds a grant for. */
+      readonly apps: readonly string[];
+    };
+
 export type ControlFailure = { readonly ok: false; readonly error: string };
 
 interface ControlReplies {
@@ -65,16 +60,6 @@ interface ControlReplies {
     readonly grants: readonly GrantSummary[];
   };
   readonly connect: { readonly ok: true; readonly agentTools?: AgentToolsSummary };
-  readonly begin_local_pairing: { readonly ok: true; readonly pairing: HostPairing };
-  readonly finish_local_pairing: {
-    readonly ok: true;
-    readonly account: string;
-    readonly appName: string;
-    readonly matchingCode: string;
-  };
-  readonly confirm_local_pairing:
-    | { readonly ok: true }
-    | { readonly ok: false; readonly error: "declined_locally" };
   readonly disconnect: { readonly ok: true; readonly agentTools?: AgentToolsSummary };
   readonly agent_tools: { readonly ok: true; readonly agentTools?: AgentToolsSummary };
   readonly dev_attach: { readonly ok: true };

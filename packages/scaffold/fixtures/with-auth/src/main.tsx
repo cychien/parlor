@@ -7,7 +7,7 @@ import { StrictMode } from "react";
 import { auth } from "./auth/client.js";
 import { routeTree } from "./routeTree.gen.js";
 
-const client = createActionClient({ headers: auth.headers });
+const client = createActionClient();
 const router = createParlorRouter({ routeTree, client });
 
 declare module "@tanstack/react-router" {

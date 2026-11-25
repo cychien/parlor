@@ -21,13 +21,12 @@ afterEach(async () => {
 });
 
 describe("claimDevSession", () => {
-  it("records this parlor dev and its URLs, and removes the record on release", () => {
-    const claim = claimDevSession(root, ["web", "mac"]);
-    claim.update(["http://localhost:5174", "http://localhost:5176"]);
+  it("records this parlor dev and its URL, and removes the record on release", () => {
+    const claim = claimDevSession(root);
+    claim.update("http://localhost:5174");
     expect(JSON.parse(readFileSync(file(), "utf8"))).toEqual({
       pid: process.pid,
-      targets: ["web", "mac"],
-      urls: ["http://localhost:5174", "http://localhost:5176"],
+      url: "http://localhost:5174",
     });
     claim.release();
     expect(existsSync(file())).toBe(false);
@@ -39,14 +38,10 @@ describe("claimDevSession", () => {
       await mkdir(join(root, ".parlor"), { recursive: true });
       writeFileSync(
         file(),
-        JSON.stringify({
-          pid: other.pid,
-          targets: ["web"],
-          urls: ["http://localhost:5174"],
-        }),
+        JSON.stringify({ pid: other.pid, url: "http://localhost:5174" }),
       );
-      expect(() => claimDevSession(root, ["mac"])).toThrow(
-        `parlor dev is already running for this project (web at http://localhost:5174, pid ${other.pid}). A second one would open the same database. Stop it first, run every target from one: parlor dev --target web,mac, or give the second its own directory: PARLOR_GENERATED_DIR=.parlor/second parlor dev.`,
+      expect(() => claimDevSession(root)).toThrow(
+        `parlor dev is already running for this project (at http://localhost:5174, pid ${other.pid}). A second one would open the same database. Stop it first, or give the second its own directory: PARLOR_GENERATED_DIR=.parlor/second parlor dev.`,
       );
     } finally {
       other.kill();
@@ -54,17 +49,13 @@ describe("claimDevSession", () => {
   });
 
   it("lets a run with its own PARLOR_GENERATED_DIR start beside the one in .parlor", async () => {
-    const first = claimDevSession(root, ["web"]);
+    const first = claimDevSession(root);
     vi.stubEnv("PARLOR_GENERATED_DIR", ".parlor/e2e");
-    const second = claimDevSession(root, ["web"], process.pid + 1);
+    const second = claimDevSession(root, process.pid + 1);
     expect(existsSync(file())).toBe(true);
     expect(
       JSON.parse(readFileSync(join(root, ".parlor", "e2e", "dev.json"), "utf8")),
-    ).toEqual({
-      pid: process.pid + 1,
-      targets: ["web"],
-      urls: [],
-    });
+    ).toEqual({ pid: process.pid + 1 });
     second.release();
     vi.unstubAllEnvs();
     first.release();
@@ -74,14 +65,14 @@ describe("claimDevSession", () => {
     const gone = spawn(process.execPath, ["-e", ""]);
     await new Promise((resolve) => gone.once("exit", resolve));
     await mkdir(join(root, ".parlor"), { recursive: true });
-    writeFileSync(file(), JSON.stringify({ pid: gone.pid, targets: ["web"], urls: [] }));
-    claimDevSession(root, ["web"]).release();
+    writeFileSync(file(), JSON.stringify({ pid: gone.pid }));
+    claimDevSession(root).release();
     expect(existsSync(file())).toBe(false);
   });
 
   it("leaves a record it no longer owns in place on release", () => {
-    const claim = claimDevSession(root, ["web"]);
-    writeFileSync(file(), JSON.stringify({ pid: 1, targets: ["web"], urls: [] }));
+    const claim = claimDevSession(root);
+    writeFileSync(file(), JSON.stringify({ pid: 1 }));
     claim.release();
     expect(existsSync(file())).toBe(true);
   });

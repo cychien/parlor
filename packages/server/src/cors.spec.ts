@@ -23,9 +23,9 @@ function post(origin: string, body = "{}") {
 }
 
 describe("isAllowedOrigin", () => {
-  it("allows shell origins, local dev origins, and configured extras", () => {
-    expect(isAllowedOrigin("tauri://localhost")).toBe(true);
-    expect(isAllowedOrigin("capacitor://localhost")).toBe(true);
+  it("allows local dev origins and configured extras, and no native shell's", () => {
+    expect(isAllowedOrigin("tauri://localhost")).toBe(false);
+    expect(isAllowedOrigin("capacitor://localhost")).toBe(false);
     expect(isAllowedOrigin("http://localhost:5173")).toBe(true);
     expect(isAllowedOrigin("https://evil.test")).toBe(false);
     expect(isAllowedOrigin("https://app.example.com", ["https://app.example.com"])).toBe(
@@ -40,32 +40,33 @@ describe("isAllowedOrigin", () => {
 describe("cors", () => {
   const server = createServer({ actions });
 
-  it("answers preflight for a shell origin", async () => {
+  it("answers preflight for a local dev origin", async () => {
     const response = await server.fetch(
       new Request("http://app.test/_parlor/actions/hello", {
         method: "OPTIONS",
         headers: {
-          origin: "tauri://localhost",
+          origin: "http://localhost:5173",
           "access-control-request-method": "POST",
           "access-control-request-headers": "content-type,x-parlor-source",
         },
       }),
     );
     expect(response.status).toBe(204);
-    expect(response.headers.get("access-control-allow-origin")).toBe("tauri://localhost");
+    expect(response.headers.get("access-control-allow-origin")).toBe(
+      "http://localhost:5173",
+    );
     const allowed = response.headers.get("access-control-allow-headers")?.toLowerCase();
     expect(allowed).toContain("x-parlor-source");
     expect(allowed).toContain("x-parlor-client");
   });
 
   it("adds the allow-origin header to successful and error responses", async () => {
-    const ok = await server.fetch(post("capacitor://localhost"));
-    expect(ok.headers.get("access-control-allow-origin")).toBe("capacitor://localhost");
-    expect(ok.headers.get("access-control-expose-headers")).toContain("set-auth-token");
+    const ok = await server.fetch(post("http://localhost:5173"));
+    expect(ok.headers.get("access-control-allow-origin")).toBe("http://localhost:5173");
     expect(ok.headers.get("access-control-expose-headers")).toContain("x-parlor-build");
-    const bad = await server.fetch(post("capacitor://localhost", "{nope"));
+    const bad = await server.fetch(post("http://localhost:5173", "{nope"));
     expect(bad.status).toBe(400);
-    expect(bad.headers.get("access-control-allow-origin")).toBe("capacitor://localhost");
+    expect(bad.headers.get("access-control-allow-origin")).toBe("http://localhost:5173");
   });
 
   it("does not allow unknown origins", async () => {
@@ -75,7 +76,7 @@ describe("cors", () => {
 
   it("can be disabled", async () => {
     const plain = createServer({ actions, cors: false });
-    const response = await plain.fetch(post("tauri://localhost"));
+    const response = await plain.fetch(post("http://localhost:5173"));
     expect(response.headers.get("access-control-allow-origin")).toBeNull();
   });
 });

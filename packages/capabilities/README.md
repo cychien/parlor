@@ -1,6 +1,6 @@
 # @parlor/capabilities
 
-Platform features with one interface and an adapter for the web, Capacitor (iOS, Android) and Tauri (desktop): notifications, deep links, a session store, a device key.
+Browser features behind one interface with an availability query: notifications, deep links, files, a device key.
 
 ```sh
 pnpm add @parlor/capabilities

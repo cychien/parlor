@@ -25,8 +25,8 @@ export interface Files {
   /** Asks the user for files; an empty list when they cancel. */
   pick(options?: PickOptions): Promise<readonly PickedFile[]>;
   /**
-   * Asks the user where to keep `data`: a save dialog where there is one, a download in a
-   * browser without, the share sheet on a phone.
+   * Asks the user where to keep `data`: the browser's save dialog where there is one, a
+   * download otherwise.
    */
   save(data: Blob | Uint8Array | string, options: SaveOptions): Promise<SaveOutcome>;
 }

@@ -7,18 +7,12 @@ import {
   type ReadRequest,
   REFRESH_HEADER,
   type RefreshedRead,
-  SHELL_ORIGINS,
   type Tag,
 } from "@parlor/core";
 
 const DEFAULT_BASE_PATH = "/_parlor";
 const SOURCE_HEADER = "x-parlor-source";
 const CLIENT_HEADER = "x-parlor-client";
-
-function injectedServerUrl(): string {
-  const env = (import.meta as { env?: { PARLOR_SERVER_URL?: string } }).env;
-  return env?.PARLOR_SERVER_URL ?? "";
-}
 
 export function generateClientId(): string {
   return globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2);
@@ -138,27 +132,16 @@ export async function invokeAt<T extends ActionMap, K extends keyof T & string>(
 }
 
 export function resolveServerOrigin(): string {
-  return injectedServerUrl() || globalThis.location?.origin || "";
-}
-
-function injectedAppOrigin(): string {
-  const env = (import.meta as { env?: { PARLOR_APP_ORIGIN?: string } }).env;
-  return env?.PARLOR_APP_ORIGIN ?? "";
+  return globalThis.location?.origin ?? "";
 }
 
 /**
- * The one name of this app's backend on every surface: the page's own origin when it is
- * served over http(s) and is not a shell's webview origin, else the shell's `server.url`.
- * `parlor dev` running several targets names the web target's origin for all of them.
- * Statements are signed for it and the host is paired with it.
+ * The one name of this app's backend on every surface: the page's own origin, else
+ * `serverUrl` off a page. Statements are signed for it and the host is paired with it.
  */
-export function appOrigin(
-  serverUrl: string = resolveServerOrigin(),
-  injected: string = injectedAppOrigin(),
-): string {
-  if (injected) return new URL(injected).origin;
+export function appOrigin(serverUrl: string = resolveServerOrigin()): string {
   const page = globalThis.location?.origin ?? "";
-  if (/^https?:\/\//.test(page) && !SHELL_ORIGINS.includes(page)) return page;
+  if (/^https?:\/\//.test(page)) return page;
   try {
     return new URL(serverUrl).origin;
   } catch {
@@ -169,11 +152,7 @@ export function appOrigin(
 export function createActionClient<T extends ActionMap>(
   options: ActionClientOptions = {},
 ): ActionClient<T> {
-  const {
-    baseUrl = injectedServerUrl(),
-    basePath = DEFAULT_BASE_PATH,
-    headers,
-  } = options;
+  const { baseUrl = "", basePath = DEFAULT_BASE_PATH, headers } = options;
   // Drawn on first use: workerd allows no random values while a module loads.
   let clientId = options.clientId;
   const ownId = () => (clientId ??= generateClientId());

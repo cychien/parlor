@@ -1,5 +1,4 @@
 import type { AgentUiClient } from "@parlor/agent-ui/client";
-import { localAgentHost, resolveCapability } from "@parlor/capabilities";
 import type { ChatUserActionMap } from "@parlor/chat/server";
 
 import { type ActionClient, appOrigin } from "../../action-client.js";
@@ -32,7 +31,6 @@ export function createRootRuntime(input: RootRuntimeInput): ChatRuntime {
     onNegotiated: (listener) => sync.onNegotiated(listener),
     isHidden: () => globalThis.document?.visibilityState === "hidden",
     auth,
-    localHost: resolveCapability(localAgentHost),
     threadId,
   });
 }

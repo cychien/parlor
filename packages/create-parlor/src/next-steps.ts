@@ -31,10 +31,6 @@ export function nextSteps(project: CreatedProject, cwd: string): readonly string
     project.addons.deferred.includes("auth")
       ? []
       : [step(pm.exec("parlor", ["add", "auth"]), "sign-in with Better Auth")]),
-    step(
-      pm.exec("parlor", ["dev", "--target", "mac"]),
-      "the same app as a desktop window",
-    ),
     "",
     "Open http://localhost:5173 and press Agent to chat with your coding agent.",
     `AGENTS.md tells coding agents how this project works. Docs: ${DOCS_URL}/llms.txt`,

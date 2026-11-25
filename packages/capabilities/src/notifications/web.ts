@@ -15,7 +15,6 @@ export function webNotifications(
     (globalThis as { Notification?: NotificationApi }).Notification,
 ): CapabilityAdapter<Notifications> {
   return {
-    platform: "web",
     available: () => getApi() !== undefined,
     create: () => {
       const api = getApi();

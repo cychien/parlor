@@ -43,7 +43,7 @@ import { mount } from "@parlor/client/router";
 //       ^?
 ```
 
-Starts the app in the element: it hydrates a page the server rendered there, and renders from scratch otherwise, as for a page that does not render on the server and in the desktop and mobile apps. See [Server rendering](/parlor/guides/server-rendering/).
+Starts the app in the element: it hydrates a page the server rendered there, and renders from scratch otherwise, as for a page that does not render on the server. See [Server rendering](/parlor/guides/server-rendering/).
 
 ```ts
 import type { CreateParlorApp, ParlorApp } from "@parlor/client/router";

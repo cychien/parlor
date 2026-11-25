@@ -13,14 +13,13 @@ The Tasks section lists every task oldest first, each as a checkbox labelled wit
 ## How to get to it (user POV)
 
 - Open the app in a browser at the instance's web URL; the Tasks section is on the only page.
-- Open the macOS app or the iOS app; the same page is the whole window.
 - Press Enter in `New task` instead of clicking `Add` (it is a form).
 
 ## Driving it with hello.mjs
 
 Preconditions:
 
-- A web instance seeded with `baseline`, doctor clean.
+- An instance seeded with `baseline`, doctor clean.
 - No task titled `Pick up parcel`.
 
 - **List.** Run `$H browser <id> open /` and `$H browser <id> snapshot $E/list.aria.txt`. The snapshot has `checkbox "Buy milk"`, `checkbox "Write report"`, `checkbox "Call Amy"` in that order, none `checked`.
@@ -37,4 +36,3 @@ Preconditions:
 - The `Add` button is disabled while a create is pending; click once and wait for the title.
 - New tasks get the current time as `created_at`, so they sort after every seeded task, whose timestamps are in January 2026.
 - `$H sql` stops and restarts the instance. Run it after the browser steps, then reopen the page.
-- On the mac and iOS shells, create from the form with `$H webview <id> fill textbox "New task" ...` and `click button Add`, and prove the list with `$H webview <id> snapshot` and `$H screenshot`.

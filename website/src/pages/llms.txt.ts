@@ -4,7 +4,7 @@ import { getCollection } from "astro:content";
 import { type DocPage, llmsIndex } from "../llms.ts";
 
 export const SUMMARY =
-  "Parlor is a TypeScript framework for apps that agents can operate: every action is a UI hook, an HTTP endpoint and an MCP tool, and one React app ships to web, desktop and mobile.";
+  "Parlor is a TypeScript framework for apps that agents can operate: every action is a UI hook, an HTTP endpoint and an MCP tool, and one React app runs in the browser and installs as a PWA.";
 
 export async function docPages(): Promise<DocPage[]> {
   return (await getCollection("docs")).map((entry) => ({

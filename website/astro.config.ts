@@ -11,7 +11,7 @@ export default defineConfig({
     starlight({
       title: "Parlor",
       description:
-        "Build an app once for web, desktop and mobile, and let agents do everything its UI can.",
+        "A TypeScript framework for web apps that agents can operate as fully as people do.",
       sidebar: [
         { label: "Start here", items: ["getting-started"] },
         { label: "Guides", items: [{ autogenerate: { directory: "guides" } }] },

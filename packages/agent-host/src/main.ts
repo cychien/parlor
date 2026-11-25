@@ -188,7 +188,7 @@ const link = defineCommand({
     const origin = new URL(args.url).origin;
     const paths = kit.hostPaths();
     const grant = await kit.fileGrantStore(paths.grants).get(origin);
-    if (!grant || grant.declined) {
+    if (!grant) {
       fail(
         `This computer is not connected to ${origin}. Run \`npx @parlor/agent-host connect ${origin}\` first.`,
       );
@@ -243,7 +243,7 @@ const devices = defineCommand({
     const origin = new URL(args.url).origin;
     const paths = kit.hostPaths();
     const grant = await kit.fileGrantStore(paths.grants).get(origin);
-    if (!grant || grant.declined) {
+    if (!grant) {
       fail(`This computer is not connected to ${origin}.`);
       return;
     }
@@ -274,11 +274,8 @@ const connect = defineCommand({
   meta: { name: "connect", description: "Connect this computer to a Parlor app" },
   args: { url: { type: "positional", required: true, description: "The app's URL" } },
   async run({ args }) {
-    const [
-      kit,
-      { pair, UnrevokedGrant },
-      { computerName, platformName, unsupportedHostPlatform },
-    ] = await Promise.all([host(), import("./pairing.js"), import("./naming.js")]);
+    const [kit, { pair }, { computerName, platformName, unsupportedHostPlatform }] =
+      await Promise.all([host(), import("./pairing.js"), import("./naming.js")]);
     const unsupported = unsupportedHostPlatform();
     if (unsupported) {
       fail(unsupported);
@@ -288,47 +285,26 @@ const connect = defineCommand({
     const paths = kit.hostPaths();
     const grants = kit.fileGrantStore(paths.grants);
     let grant = await grants.get(origin);
-    const alreadyConnected = grant !== undefined && !grant.declined;
-    if (grant?.declined) {
-      try {
-        await kit.disconnectFrom(origin);
-      } catch (error) {
-        fail(errorText(error));
-        return;
-      }
-      grant = undefined;
-    }
+    const alreadyConnected = grant !== undefined;
     if (!grant) {
-      let outcome: Awaited<ReturnType<typeof pair>>;
-      try {
-        outcome = await pair({
-          appOrigin: origin,
-          hostName: computerName(),
-          platform: platformName(),
-          keys: kit.keychainHostKeys(KEYCHAIN_SERVICE),
-          workspaceRoot: paths.workspaces,
-          offerAgentTools: true,
-          channel: {
-            kind: "browser",
-            open: async (url) => {
-              process.stdout.write(
-                `Approve the connection in your browser. If it did not open, visit:\n${url}\n`,
-              );
-              spawn("open", [url], { stdio: "ignore", detached: true })
-                .on("error", () => undefined)
-                .unref();
-            },
-          },
-        });
-      } catch (error) {
-        if (!(error instanceof UnrevokedGrant)) throw error;
-        await grants.save(error.grant);
-        fail(`${error.message} Run \`parlor-host disconnect ${origin}\` to try again.`);
-        return;
-      }
+      const outcome = await pair({
+        appOrigin: origin,
+        hostName: computerName(),
+        platform: platformName(),
+        keys: kit.keychainHostKeys(KEYCHAIN_SERVICE),
+        workspaceRoot: paths.workspaces,
+        offerAgentTools: true,
+        open: async (url) => {
+          process.stdout.write(
+            `Approve the connection in your browser. If it did not open, visit:\n${url}\n`,
+          );
+          spawn("open", [url], { stdio: "ignore", detached: true })
+            .on("error", () => undefined)
+            .unref();
+        },
+      });
       if (!outcome.paired) {
         const why = {
-          declined_locally: "You did not confirm the connection.",
           declined_in_app: "The connection was cancelled in the browser.",
           timeout: "The connection was not approved within 10 minutes.",
         }[outcome.reason];

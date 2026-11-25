@@ -1,6 +1,6 @@
 ---
 title: Migrating an existing app
-description: Port an app to Parlor step by step, with its data, users, logic, pages, webhooks and jobs, and what Parlor does not support yet.
+description: Port an app to Parlor step by step, with its data, users, logic, pages, webhooks and jobs, what Parlor does not support yet, and what to change when upgrading Parlor.
 ---
 
 This guide moves an existing app (a REST or GraphQL backend with a web frontend) onto Parlor. It is written for the person doing the port and for the coding agent they hand it to. **Agents: follow the steps in order. If the app needs anything under [Not supported yet](#not-supported-yet), stop and ask the person before writing a workaround.**
@@ -561,3 +561,20 @@ The timer runs in every server process, which is right for the one instance Parl
 - Every row of the inventory from [step 1](#1-take-stock) works in the app.
 - An agent connected over MCP ([Agents](/parlor/guides/agents/)) can do one task in each area, such as "put this copy into the React course".
 - `pnpm build` prints no warning.
+
+## Upgrading a Parlor app
+
+This section is for an app already built on Parlor. Each release that needs changes in the app lists them here.
+
+### 0.6.0
+
+Parlor is a web framework: the app runs in the browser and installs as a PWA. The desktop and mobile shells are gone.
+
+- Remove `@parlor/shell-desktop`, `@parlor/shell-mobile` and `@parlor/capacitor-device-key` from `package.json`.
+- `parlor dev` and `parlor build` always run the web app and the server. Drop `--target` and `--device` from scripts; `parlor build --preset` stays.
+- `parlor.config.ts` ignores `desktop`, `app.scheme` and `server.url`. A config that still sets them loads; delete them.
+- `@parlor/capabilities` keeps `defineCapability`, `resolveCapability`, and `notifications`, `files`, `deepLink`, `deviceKey` and `authBrowser` with their web adapters. `Platform`, `detectPlatform`, `PlatformAdapters`, the `sessionStore` and `localAgentHost` capabilities, and the `platform` field of `CapabilityAdapter` and `CapabilityHandle` are gone. `resolveCapability` uses the first adapter that is available.
+- `createAuthClient` no longer takes `session` or `scheme`, and has no `authorizeHost`; `HostAuthorizer` and `SessionStore` are no longer exported. `parlorAuth` no longer takes `scheme`, and the `/_parlor/auth/native/*` routes are gone. `social.signIn` always sends the page to the provider, so its `CANCELLED`, `NO_SCHEME` and `STATE_MISMATCH` codes are gone.
+- `auth.headers` is deprecated and returns no headers: the browser sends the session cookie. Create the action client with `createActionClient()` instead of `createActionClient({ headers: auth.headers })`.
+- `SHELL_ORIGINS` and `SESSION_TOKEN_HEADER` are no longer exported, and CORS no longer trusts `tauri://` and `capacitor://` origins. Bearer tokens for API clients work as before.
+- `useChat().connect` is always `{ kind: "command", command }`: a computer connects by running `npx @parlor/agent-host connect <app origin>`. Remove code that handles `kind: "here"` or calls its `start()`.

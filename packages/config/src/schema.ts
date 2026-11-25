@@ -35,16 +35,11 @@ export const parlorConfigSchema = z.object({
       .string()
       .regex(/^\d+\.\d+\.\d+$/, "app.version must be semver like 1.0.0")
       .default("0.1.0"),
-    scheme: z
-      .string()
-      .regex(/^[a-z][a-z0-9+.-]*$/, "app.scheme must be a URL scheme such as hello")
-      .optional(),
   }),
   server: z
     .object({
       entry: z.string().default("server.ts"),
       port: z.number().int().positive().default(3000),
-      url: z.url().optional(),
       sync: z.object({ transport: z.enum(["sse", "poll"]).optional() }).optional(),
       /**
        * `one` when a single server serves the app: it then keeps live updates and liveness in
@@ -90,14 +85,6 @@ export const parlorConfigSchema = z.object({
        * default export builds the app for an action client, so the server builds one per request.
        */
       ssr: z.object({ app: z.string() }).optional(),
-    })
-    .prefault({}),
-  desktop: z
-    .object({
-      width: z.number().int().positive().default(1024),
-      height: z.number().int().positive().default(768),
-      /** Bundle Parlor Host as a sidecar so the chat can use this computer's agents. */
-      agentHost: z.boolean().optional(),
     })
     .prefault({}),
   database: z

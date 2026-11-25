@@ -10,7 +10,6 @@ Hello has accounts. A signed-out visitor lands on a sign-in page; once signed in
 - `oauth-connect` lets Claude Code authorize through the consent page and act as the person who allowed it.
 - `oauth-deny` returns `access_denied` to the agent when the person clicks Deny.
 - `revoke-agent` revokes a connected agent from settings; its token stops working at once.
-- `mac-sign-in` signs in inside the Mac app, which carries the session as a bearer token, and follows live updates.
 
 ## How to get to it (user POV)
 
@@ -31,7 +30,6 @@ Preconditions:
 - **Claude Code connects.** Follow "MCP through Claude Code's own OAuth" in SKILL.md: the consent page reads `Allow Claude Code to use Hello?` and `Published by claude.ai`; Allow ends the login with `Authenticated with "hello"`, `claude -p` creates a task, and `$H sql` shows it with `scope = 'alice'`. Settings lists Claude Code under Connected agents.
 - **Deny.** Start another login and click `button "Deny"`: the login ends with `access_denied - User denied access`.
 - **Revoke.** On `/settings` click `button "Revoke Claude Code"`; the next `claude -p` reports the server as `needs-auth`.
-- **Mac.** `$H up --target mac --seed baseline`, then type the credentials with System Events (SKILL.md, Signing in). The window shows the tasks, and a task created with `$H mcp <id> call createTask` appears in it.
 
 ## Gotchas
 

@@ -19,7 +19,6 @@ export interface UiAppInfo {
   readonly id: string;
   readonly name: string;
   readonly description?: string | undefined;
-  readonly scheme?: string | undefined;
 }
 
 export interface RouteEntry {

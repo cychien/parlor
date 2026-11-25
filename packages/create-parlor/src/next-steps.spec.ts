@@ -22,7 +22,7 @@ function created(overrides: Partial<CreatedProject> = {}): CreatedProject {
 }
 
 describe("next steps (D5)", () => {
-  it("prints cd, dev, parlor add auth, the mac target and the agent lines for pnpm", () => {
+  it("prints cd, dev, parlor add auth and the agent lines for pnpm", () => {
     const lines = nextSteps(created(), "/work");
     expect(lines).toEqual([
       "Created my-app with pnpm.",
@@ -30,7 +30,6 @@ describe("next steps (D5)", () => {
       "  cd my-app",
       "  pnpm dev                       web app on http://localhost:5173, API on :3000",
       "  pnpm parlor add auth           sign-in with Better Auth",
-      "  pnpm parlor dev --target mac   the same app as a desktop window",
       "",
       "Open http://localhost:5173 and press Agent to chat with your coding agent.",
       "AGENTS.md tells coding agents how this project works. Docs: https://cychien.github.io/parlor/llms.txt",

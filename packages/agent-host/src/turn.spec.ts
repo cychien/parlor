@@ -1689,7 +1689,7 @@ describe("runTurn taking answers only as the policy says", () => {
   describe("T6-06: a device that never prompted answers once it is linked", () => {
     it("T6-06: a phone a linked tab vouched for is pinned by its vouch, and its answer reaches the agent", async () => {
       const tab = await TestDevice.create();
-      const phone = await TestDevice.create("device-2", "iPhone", "capacitor");
+      const phone = await TestDevice.create("device-2", "iPhone", "web");
       let answers: Record<string, unknown>[] | undefined;
       const trust = memoryTrust();
       await trust.pin(APP, pinOf(tab));
@@ -1725,7 +1725,7 @@ describe("runTurn taking answers only as the policy says", () => {
       expect(await trust.get(APP, phone.id)).toMatchObject({
         deviceId: phone.id,
         name: "iPhone",
-        platform: "capacitor",
+        platform: "web",
         via: "vouched",
         voucher: tab.id,
         signingKey: phone.keys.signingKey,
@@ -1735,7 +1735,7 @@ describe("runTurn taking answers only as the policy says", () => {
 
     it("T6-06: an unlinked phone's answer is rejected with no dialog, the phone stays unpinned and the ask open", async () => {
       const tab = await TestDevice.create();
-      const phone = await TestDevice.create("device-2", "iPhone", "capacitor");
+      const phone = await TestDevice.create("device-2", "iPhone", "web");
       let answers: Record<string, unknown>[] | undefined;
       const trust = memoryTrust();
       await trust.pin(APP, pinOf(tab));
@@ -1764,7 +1764,7 @@ describe("runTurn taking answers only as the policy says", () => {
 
     it("T6-06: rejects the answer of an unpinned device the signals carry no keys for", async () => {
       const tab = await TestDevice.create();
-      const phone = await TestDevice.create("device-2", "iPhone", "capacitor");
+      const phone = await TestDevice.create("device-2", "iPhone", "web");
       let answers: Record<string, unknown>[] | undefined;
       const { trust, started: run } = await presenceAsk(
         () => run,
@@ -1788,8 +1788,8 @@ describe("runTurn taking answers only as the policy says", () => {
 
   it("T6-09: a mislabeled, wrong-app or key-swapped answer never reaches the agent, and an extra field does no harm", async () => {
     const tab = await TestDevice.create();
-    const phone = await TestDevice.create("device-2", "iPhone", "capacitor");
-    const impostor = await TestDevice.create("device-2", "iPhone", "capacitor");
+    const phone = await TestDevice.create("device-2", "iPhone", "web");
+    const impostor = await TestDevice.create("device-2", "iPhone", "web");
     const logFile = join(dir, "t609.log");
     const { openHostLog } = await import("./log.js");
     openHostLog(logFile);
