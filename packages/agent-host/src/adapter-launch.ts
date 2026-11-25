@@ -1,6 +1,4 @@
 import { ADAPTER_BINARY_ENV, ADAPTER_ENV, type AgentProfile } from "./agents.js";
-import { adapterKey, embeddedAdapters } from "./embedded.js";
-import { selfInvocation } from "./self.js";
 import { resolveBinary } from "./shell-path.js";
 
 export function commandOf(profile: AgentProfile): {
@@ -9,14 +7,6 @@ export function commandOf(profile: AgentProfile): {
 } {
   if (profile.launch.kind === "native") {
     return { command: profile.launch.command, args: profile.launch.args };
-  }
-  const embedded = embeddedAdapters.get(adapterKey(profile.launch));
-  if (embedded !== undefined) {
-    const self = selfInvocation(["adapter", embedded]);
-    return {
-      command: self.command,
-      args: [...self.args, ...(profile.launch.args ?? [])],
-    };
   }
   return {
     command: "npx",

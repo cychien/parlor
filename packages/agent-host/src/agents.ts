@@ -72,7 +72,7 @@ export const AGENT_PROFILES: readonly AgentProfile[] = [
   },
 ];
 
-/** Where each adapter looks for the agent CLI it drives; its own search does not survive a single executable. */
+/** Where each adapter looks for the agent CLI it drives, so it runs the one found here, even inside a desktop app. */
 export const ADAPTER_BINARY_ENV: Readonly<Record<string, string>> = {
   "@agentclientprotocol/claude-agent-acp": "CLAUDE_CODE_EXECUTABLE",
   "@agentclientprotocol/codex-acp": "CODEX_PATH",

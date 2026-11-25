@@ -459,42 +459,9 @@ const daemon = defineCommand({
     name: "daemon",
     description: "Run the background host for every connected app",
   },
-  args: {
-    ensure: {
-      type: "boolean",
-      description:
-        "Adopt, install or upgrade the per-user service, print one JSON line, exit",
-    },
-    app: { type: "string", description: "With --ensure: the app's bundle id" },
-    binary: { type: "string", description: "With --ensure: the bundled parlor-host" },
-    signature: { type: "string", description: "With --ensure: its parlor-host.sig" },
-  },
-  async run({ args }) {
+  async run() {
     const kit = await host();
     const paths = kit.hostPaths();
-    if (args.ensure) {
-      if (!args.app || !args.binary || !args.signature) {
-        fail("--ensure needs --app, --binary and --signature.");
-        return;
-      }
-      const started = performance.now();
-      const outcome = await kit.ensureService(paths, {
-        kind: "desktop-sidecar",
-        app: args.app,
-        release: kit.release,
-        binary: args.binary,
-        signature: args.signature,
-      });
-      process.stdout.write(
-        `${JSON.stringify({
-          event: "ensure",
-          outcome: outcome.kind,
-          ms: Math.round(performance.now() - started),
-          ...(outcome.kind === "refused" ? { reason: outcome.reason } : {}),
-        })}\n`,
-      );
-      return;
-    }
     const shutdown = shutdownSignal();
     const running = kit.daemonFor(
       paths,

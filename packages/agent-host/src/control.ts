@@ -11,8 +11,7 @@ export const CONTROL_PROTOCOL = 1;
  */
 export type ControlRequest =
   | { readonly op: "hello"; readonly client: ServiceClient }
-  | { readonly op: "handover"; readonly binary: string; readonly signature: string }
-  /** A newer CLI asks a service no app installed to hand over to it. */
+  /** A newer CLI asks the service to hand over to it. */
   | { readonly op: "step_aside"; readonly release: HostRelease }
   | { readonly op: "status" }
   | { readonly op: "connect"; readonly appOrigin: string }
@@ -48,12 +47,9 @@ export type ControlFailure = { readonly ok: false; readonly error: string };
 
 interface ControlReplies {
   readonly hello: { readonly ok: true; readonly release: HostRelease };
-  readonly handover:
-    | { readonly ok: true }
-    | { readonly ok: false; readonly error: "unsigned" | "downgrade" };
   readonly step_aside:
     | { readonly ok: true }
-    | { readonly ok: false; readonly error: "downgrade" | "installed" };
+    | { readonly ok: false; readonly error: "downgrade" };
   readonly status: {
     readonly ok: true;
     readonly status: LocalHostStatus;

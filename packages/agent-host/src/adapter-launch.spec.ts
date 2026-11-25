@@ -2,52 +2,24 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { commandOf, launchEnvironment } from "./adapter-launch.js";
 import { AGENT_PROFILES, type AgentProfile } from "./agents.js";
-import { adapterKey, embeddedAdapters } from "./embedded.js";
 import { agentPath, resolveBinary } from "./shell-path.js";
 
 const [claude, codex] = AGENT_PROFILES as [AgentProfile, AgentProfile];
-const adapterOf = (profile: AgentProfile) => {
-  if (profile.launch.kind !== "adapter") throw new Error("not an adapter");
-  return profile.launch;
-};
-
-afterEach(() => embeddedAdapters.clear());
 
 describe("how an adapter agent is launched", () => {
-  it("runs through npx at the pinned version when the build embeds no adapter", () => {
+  it("runs through npx at the pinned version", () => {
     expect(commandOf(claude)).toEqual({
       command: "npx",
       args: ["--yes", "@agentclientprotocol/claude-agent-acp@0.93.0"],
     });
-  });
-
-  it("C8: runs the embedded adapter by re-executing this program, with no npx", () => {
-    embeddedAdapters.set(adapterKey(adapterOf(claude)), "claude");
-    embeddedAdapters.set(adapterKey(adapterOf(codex)), "codex");
-    const first = commandOf(claude);
-    const second = commandOf(codex);
-    expect(first.command).toBe(process.execPath);
-    expect(first.args.slice(-2)).toEqual(["adapter", "claude"]);
-    expect(second.args.slice(-2)).toEqual(["adapter", "codex"]);
-    expect(first.command).not.toBe("npx");
-  });
-
-  it("does not run the embedded adapter for a profile that names another package or version", () => {
-    embeddedAdapters.set(adapterKey(adapterOf(claude)), "claude");
-    const mine: AgentProfile = {
-      ...claude,
-      launch: { kind: "adapter", package: "my-claude-adapter", version: "1.0.0" },
-    };
-    const newer: AgentProfile = {
-      ...claude,
-      launch: { ...adapterOf(claude), version: "0.94.0" },
-    };
-    expect(commandOf(mine).command).toBe("npx");
-    expect(commandOf(newer).command).toBe("npx");
+    expect(commandOf(codex)).toEqual({
+      command: "npx",
+      args: ["--yes", "@agentclientprotocol/codex-acp@2.2.2"],
+    });
   });
 
   it("launches a native agent by its own command", () => {
@@ -65,7 +37,7 @@ describe("where an adapter finds the agent CLI", () => {
   });
   afterAll(() => rm(dir, { recursive: true, force: true }));
 
-  it("C8: names the installed claude for the Claude adapter, because its own search fails in a single executable", async () => {
+  it("C8: names the installed claude for the Claude adapter", async () => {
     expect(await launchEnvironment(claude, { PATH: dir })).toEqual({
       PATH: dir,
       CLAUDE_CODE_EXECUTABLE: join(dir, "claude"),

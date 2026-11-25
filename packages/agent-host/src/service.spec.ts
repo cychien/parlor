@@ -1,16 +1,6 @@
 import { spawn } from "node:child_process";
-import { createHash, generateKeyPairSync, sign } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import {
-  mkdir,
-  mkdtemp,
-  readdir,
-  readlink,
-  realpath,
-  rm,
-  symlink,
-  writeFile,
-} from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -28,13 +18,11 @@ import { createMcpProxy } from "./mcp-proxy.js";
 import { hostPaths, type HostPaths } from "./paths.js";
 import { DEV_POLICY } from "./policy.js";
 import { createSessionPool } from "./pool.js";
-import { RELEASE_PLATFORM, releaseBytes, sha256File } from "./release.js";
 import {
   actionFor,
   type AdoptOutcome,
   ensureServiceWith,
   type HostRelease,
-  installLoginItem,
   type ServiceClient,
   type ServiceDeps,
 } from "./service.js";
@@ -47,17 +35,6 @@ import {
   stubApp,
 } from "./spec-kit.js";
 import { fileTrustStore } from "./trust.js";
-
-const trusted = vi.hoisted(async () => {
-  const crypto = await import("node:crypto");
-  const pair = crypto.generateKeyPairSync("ed25519");
-  return { pair, publicKey: pair.publicKey.export({ format: "jwk" }).x! };
-});
-
-vi.mock("./release.js", async (original) => ({
-  ...(await original<typeof import("./release.js")>()),
-  RELEASE_KEY: (await trusted).publicKey,
-}));
 
 const FAKE = fileURLToPath(new URL("../bin/fake-agent.mjs", import.meta.url));
 const release = (version: string): HostRelease => ({
@@ -121,49 +98,6 @@ const spawnDaemon =
     await startDaemon(version, { lockToken });
   };
 
-interface Bundle {
-  readonly binary: string;
-  readonly signature: string;
-}
-
-async function bundle(
-  name: string,
-  version: string,
-  options: { readonly key?: ReturnType<typeof generateKeyPairSync>["privateKey"] } = {},
-): Promise<Bundle> {
-  const dir = join(root, "bundles", name);
-  await mkdir(dir, { recursive: true });
-  const binary = join(dir, "parlor-host");
-  await writeFile(binary, `binary of ${name} ${version}`, { mode: 0o755 });
-  const body = {
-    v: 1 as const,
-    version,
-    platform: RELEASE_PLATFORM,
-    sha256: await sha256File(binary),
-  };
-  const signature = join(dir, "parlor-host.sig");
-  await writeFile(
-    signature,
-    JSON.stringify({
-      ...body,
-      signature: sign(
-        null,
-        releaseBytes(body),
-        options.key ?? (await trusted).pair.privateKey,
-      ).toString("base64url"),
-    }),
-  );
-  return { binary, signature };
-}
-
-const sidecar = (version: string, files: Bundle): ServiceClient => ({
-  kind: "desktop-sidecar",
-  app: "dev.parlor.hello",
-  release: release(version),
-  binary: files.binary,
-  signature: files.signature,
-});
-
 const cli = (version: string): ServiceClient => ({
   kind: "cli",
   release: release(version),
@@ -177,97 +111,33 @@ async function versionRunning(): Promise<string | undefined> {
 }
 
 const quick = (overrides: Partial<ServiceDeps> = {}): ServiceDeps => ({
-  releaseKey: undefined,
   readyMs: 20_000,
   pollMs: 50,
   ...overrides,
 });
 
-async function withTrust(overrides: Partial<ServiceDeps> = {}): Promise<ServiceDeps> {
-  return quick({ releaseKey: (await trusted).publicKey, ...overrides });
-}
-
 describe("the adopt decision", () => {
   const running = release("1.2.0");
-  const files = { binary: "b", signature: "s" };
   const table: [string, Parameters<typeof actionFor>[0], ServiceClient, string][] = [
-    [
-      "no service, nothing installed, a CLI",
-      { service: "absent", installed: false },
-      cli("1.0.0"),
-      "spawn_self",
-    ],
-    [
-      "no service, nothing installed, an app",
-      { service: "absent", installed: false },
-      sidecar("1.0.0", files),
-      "install_bundled",
-    ],
-    [
-      "no service, one installed, a CLI",
-      { service: "absent", installed: true },
-      cli("1.0.0"),
-      "start_installed",
-    ],
-    [
-      "no service, one installed, an app",
-      { service: "absent", installed: true },
-      sidecar("9.0.0", files),
-      "start_installed",
-    ],
-    [
-      "a daemon without hello",
-      { service: "legacy" },
-      sidecar("9.0.0", files),
-      "refuse_legacy",
-    ],
-    [
-      "a daemon without hello, a CLI",
-      { service: "legacy" },
-      cli("1.0.0"),
-      "refuse_legacy",
-    ],
+    ["no service", { service: "absent" }, cli("1.0.0"), "spawn_self"],
+    ["a daemon without hello", { service: "legacy" }, cli("1.0.0"), "refuse_legacy"],
     [
       "a running service, an older CLI",
-      { service: "running", running, installed: false },
+      { service: "running", running },
       cli("0.0.1"),
       "use",
     ],
     [
       "a running service, a CLI of the same release",
-      { service: "running", running, installed: false },
+      { service: "running", running },
       cli("1.2.0"),
       "use",
     ],
     [
-      "a running service no app installed, a newer CLI",
-      { service: "running", running, installed: false },
+      "a running service, a newer CLI",
+      { service: "running", running },
       cli("1.10.0"),
       "replace",
-    ],
-    [
-      "a running service an app installed, a newer CLI",
-      { service: "running", running, installed: true },
-      cli("1.10.0"),
-      "use",
-    ],
-    [
-      "a running service, an app of the same release",
-      { service: "running", running, installed: true },
-      sidecar("1.2.0", files),
-      "use",
-    ],
-    [
-      "a running service, an older app",
-      { service: "running", running, installed: true },
-      sidecar("1.1.9", files),
-      "refuse_downgrade",
-    ],
-    [
-      "a running service, a newer app",
-      { service: "running", running, installed: true },
-      sidecar("1.10.0", files),
-      "hand_over",
     ],
   ];
 
@@ -335,72 +205,16 @@ describe("starting a daemon outside ensureService", () => {
 });
 
 describe("a service already running", () => {
-  it("T6-03a: refuses a binary signed with another key, and leaves current and the running version alone", async () => {
+  it("adopts a service of its own release or a newer one", async () => {
     await startDaemon("1.0.0");
-    const forged = await bundle("forged", "2.0.0", {
-      key: generateKeyPairSync("ed25519").privateKey,
-    });
-    const outcome = await ensureServiceWith(
-      await withTrust(),
-      paths,
-      sidecar("2.0.0", forged),
-    );
-    expect(outcome).toMatchObject({ kind: "refused", reason: "unsigned" });
-    expect(existsSync(paths.current)).toBe(false);
-    expect(existsSync(paths.versions)).toBe(false);
-    expect(await versionRunning()).toBe("1.0.0");
-  }, 30_000);
-
-  it("T6-03a: refuses a correctly signed older release, and leaves current and the running version alone", async () => {
-    await startDaemon("1.0.0");
-    const older = await bundle("older", "0.9.0");
-    const outcome = await ensureServiceWith(
-      await withTrust(),
-      paths,
-      sidecar("0.9.0", older),
-    );
-    expect(outcome).toMatchObject({
-      kind: "refused",
-      reason: "downgrade",
-      running: { version: "1.0.0" },
-    });
-    expect(existsSync(paths.current)).toBe(false);
-    expect(await versionRunning()).toBe("1.0.0");
-  }, 30_000);
-
-  it("T6-03a: has the running service refuse a release that is not newer even when the client asks for it", async () => {
-    await startDaemon("1.0.0");
-    const same = await bundle("same", "1.0.0");
-    const control = (await connectControl(paths.control))!;
-    expect(await control.send({ op: "handover", ...same })).toEqual({
-      ok: false,
-      error: "downgrade",
-    });
-    const forged = await bundle("forged-handover", "3.0.0", {
-      key: generateKeyPairSync("ed25519").privateKey,
-    });
-    expect(await control.send({ op: "handover", ...forged })).toEqual({
-      ok: false,
-      error: "unsigned",
-    });
-    control.close();
-    expect(await versionRunning()).toBe("1.0.0");
-  }, 30_000);
-
-  it("adopts a service of the same release, and any CLI", async () => {
-    await startDaemon("1.0.0");
-    const same = await bundle("same-adopt", "1.0.0");
-    expect(
-      await ensureServiceWith(await withTrust(), paths, sidecar("1.0.0", same)),
-    ).toEqual({
+    expect(await ensureServiceWith(quick(), paths, cli("1.0.0"))).toEqual({
       kind: "using",
       running: release("1.0.0"),
     });
-    expect(await ensureServiceWith(await withTrust(), paths, cli("0.0.1"))).toMatchObject(
-      {
-        kind: "using",
-      },
-    );
+    expect(await ensureServiceWith(quick(), paths, cli("0.0.1"))).toEqual({
+      kind: "using",
+      running: release("1.0.0"),
+    });
   }, 30_000);
 
   it("refuses a daemon that has no hello op, as a legacy service", async () => {
@@ -412,7 +226,7 @@ describe("a service already running", () => {
     });
     await new Promise<void>((resolve) => legacy.listen(paths.control, resolve));
     try {
-      expect(await ensureServiceWith(await withTrust(), paths, cli("1.0.0"))).toEqual({
+      expect(await ensureServiceWith(quick(), paths, cli("1.0.0"))).toEqual({
         kind: "refused",
         reason: "legacy_service",
       });
@@ -420,44 +234,13 @@ describe("a service already running", () => {
       legacy.close();
     }
   });
-
-  it("T6-01: upgrades to a newer signed release: installs it, repoints current, hands over, and starts the new service", async () => {
-    const old = await startDaemon("1.0.0");
-    const next = await bundle("next", "1.1.0");
-    const outcome = await ensureServiceWith(
-      await withTrust({ start: spawnDaemon("1.1.0") }),
-      paths,
-      sidecar("1.1.0", next),
-    );
-    expect(outcome).toEqual({
-      kind: "upgraded",
-      from: release("1.0.0"),
-      to: release("1.1.0"),
-    });
-    expect(await readlink(paths.current)).toBe(join("versions", "1.1.0"));
-    expect(await realpath(join(paths.current, "parlor-host"))).toBe(
-      await realpath(join(paths.versions, "1.1.0", "parlor-host")),
-    );
-    expect(readFileSync(join(paths.versions, "1.1.0", "parlor-host"), "utf8")).toBe(
-      "binary of next 1.1.0",
-    );
-    expect(existsSync(join(paths.versions, "1.1.0", "parlor-host.sig"))).toBe(true);
-    expect(await versionRunning()).toBe("1.1.0");
-    await old.drained;
-    const plist = readFileSync(paths.launchAgent, "utf8");
-    expect(plist).toContain(join(paths.current, "parlor-host"));
-  }, 60_000);
 });
 
-describe("a newer CLI with a service running that no app installed", () => {
+describe("a newer CLI with a service running", () => {
   it("has the old service hand over to it and drain, and starts itself", async () => {
     const old = await startDaemon("1.0.0");
     const start = vi.fn(spawnDaemon("1.1.0"));
-    const outcome = await ensureServiceWith(
-      await withTrust({ start }),
-      paths,
-      cli("1.1.0"),
-    );
+    const outcome = await ensureServiceWith(quick({ start }), paths, cli("1.1.0"));
     expect(outcome).toEqual({
       kind: "upgraded",
       from: release("1.0.0"),
@@ -466,30 +249,6 @@ describe("a newer CLI with a service running that no app installed", () => {
     expect(start).toHaveBeenCalledTimes(1);
     expect(await versionRunning()).toBe("1.1.0");
     await old.drained;
-    expect(existsSync(paths.versions)).toBe(false);
-    expect(existsSync(paths.launchAgent)).toBe(false);
-  }, 60_000);
-
-  it("keeps using a service an app installed, which refuses to step aside for a CLI", async () => {
-    await startDaemon("1.0.0");
-    await mkdir(paths.versions, { recursive: true });
-    await writeFile(join(paths.versions, "parlor-host"), "installed", { mode: 0o755 });
-    await symlink("versions", paths.current);
-    const start = vi.fn(spawnDaemon("1.1.0"));
-    expect(
-      await ensureServiceWith(await withTrust({ start }), paths, cli("1.1.0")),
-    ).toEqual({
-      kind: "using",
-      running: release("1.0.0"),
-    });
-    const control = (await connectControl(paths.control))!;
-    expect(await control.send({ op: "step_aside", release: release("1.1.0") })).toEqual({
-      ok: false,
-      error: "installed",
-    });
-    control.close();
-    expect(start).not.toHaveBeenCalled();
-    expect(await versionRunning()).toBe("1.0.0");
   }, 60_000);
 
   it("is refused a step aside it asks with a release that is not newer", async () => {
@@ -524,7 +283,7 @@ describe("a newer CLI with a service running that no app installed", () => {
       await new Promise((resolve) => old.close(resolve));
     });
     const outcome = await ensureServiceWith(
-      await withTrust({ start: spawnDaemon("1.1.0"), stopOld }),
+      quick({ start: spawnDaemon("1.1.0"), stopOld }),
       paths,
       cli("1.1.0"),
     );
@@ -556,7 +315,7 @@ net.createServer((socket) => socket.on("data", (data) => {
     try {
       await new Promise<void>((resolve) => old.stdout.once("data", () => resolve()));
       const outcome = await ensureServiceWith(
-        await withTrust({ start: spawnDaemon("1.1.0") }),
+        quick({ start: spawnDaemon("1.1.0") }),
         paths,
         cli("1.1.0"),
       );
@@ -577,7 +336,7 @@ net.createServer((socket) => socket.on("data", (data) => {
     try {
       const start = vi.fn(spawnDaemon("1.1.0"));
       const outcome = await ensureServiceWith(
-        await withTrust({ start, stopOld: async () => undefined, readyMs: 500 }),
+        quick({ start, stopOld: async () => undefined, readyMs: 500 }),
         paths,
         cli("1.1.0"),
       );
@@ -590,125 +349,19 @@ net.createServer((socket) => socket.on("data", (data) => {
 });
 
 describe("no service running", () => {
-  it("T6-01: installs the bundled release from its own signature, links current, writes the login item and starts it", async () => {
-    const files = await bundle("first", "1.0.0");
-    const outcome = await ensureServiceWith(
-      await withTrust({ start: spawnDaemon("1.0.0") }),
-      paths,
-      sidecar("1.0.0", files),
-    );
-    expect(outcome).toEqual({ kind: "installed", release: release("1.0.0") });
-    expect(await readlink(paths.current)).toBe(join("versions", "1.0.0"));
-    expect(await readdir(paths.versions)).toEqual(["1.0.0"]);
-    const plist = readFileSync(paths.launchAgent, "utf8");
-    expect(plist).toContain("<string>dev.parlor.host</string>");
-    expect(plist).toContain(`<string>${join(paths.current, "parlor-host")}</string>`);
-    expect(plist).toContain("<string>daemon</string>");
-    expect(plist).toMatch(/<key>RunAtLoad<\/key>\s*<true\/>/);
-    expect(plist).toMatch(/<key>SuccessfulExit<\/key>\s*<false\/>/);
-    expect(plist).not.toContain(root + "/bundles");
-  }, 60_000);
-
-  it("T6-03a: installs nothing when the bundled binary is not signed by the release key", async () => {
-    const forged = await bundle("forged-first", "1.0.0", {
-      key: generateKeyPairSync("ed25519").privateKey,
-    });
-    const start = vi.fn(async () => undefined);
-    const outcome = await ensureServiceWith(
-      await withTrust({ start }),
-      paths,
-      sidecar("1.0.0", forged),
-    );
-    expect(outcome).toEqual({ kind: "refused", reason: "unsigned" });
-    expect(existsSync(paths.versions)).toBe(false);
-    expect(existsSync(paths.launchAgent)).toBe(false);
-    expect(start).not.toHaveBeenCalled();
-  });
-
-  it("T6-03a: installs nothing when the binary was changed after it was signed", async () => {
-    const files = await bundle("tampered", "1.0.0");
-    await writeFile(files.binary, "something else");
-    const outcome = await ensureServiceWith(
-      await withTrust({ start: vi.fn(async () => undefined) }),
-      paths,
-      sidecar("1.0.0", files),
-    );
-    expect(outcome).toEqual({ kind: "refused", reason: "unsigned" });
-    expect(existsSync(paths.current)).toBe(false);
-  });
-
-  it("T6-03a: installs nothing when the signature names another version than the bundle claims", async () => {
-    const files = await bundle("relabeled", "1.0.0");
-    const outcome = await ensureServiceWith(
-      await withTrust({ start: vi.fn(async () => undefined) }),
-      paths,
-      sidecar("5.0.0", files),
-    );
-    expect(outcome).toEqual({ kind: "refused", reason: "unsigned" });
-  });
-
-  it("T6-01: lets two apps start at once and starts the service once", async () => {
-    const files = await bundle("race", "1.0.0");
+  it("T6-01: lets two CLIs start at once and starts the service once", async () => {
     const start = vi.fn(spawnDaemon("1.0.0"));
-    const deps = await withTrust({ start });
+    const deps = quick({ start });
     const outcomes = await Promise.all([
-      ensureServiceWith(deps, paths, sidecar("1.0.0", files)),
-      ensureServiceWith(deps, paths, sidecar("1.0.0", files)),
+      ensureServiceWith(deps, paths, cli("1.0.0")),
+      ensureServiceWith(deps, paths, cli("1.0.0")),
     ]);
     expect(start).toHaveBeenCalledOnce();
     expect(outcomes.map((outcome: AdoptOutcome) => outcome.kind).sort()).toEqual([
-      "installed",
+      "started",
       "using",
     ]);
   }, 60_000);
-
-  it("converges on the same state when an earlier install stopped half way", async () => {
-    const files = await bundle("again", "1.0.0");
-    await mkdir(join(paths.versions, `.1.0.0.tmp-${process.pid}`), { recursive: true });
-    await writeFile(
-      join(paths.versions, `.1.0.0.tmp-${process.pid}`, "parlor-host"),
-      "partial",
-    );
-    const deps = await withTrust({
-      start: spawnDaemon("1.0.0"),
-    });
-    expect(await ensureServiceWith(deps, paths, sidecar("1.0.0", files))).toMatchObject({
-      kind: "installed",
-    });
-    expect(readFileSync(join(paths.versions, "1.0.0", "parlor-host"), "utf8")).toBe(
-      "binary of again 1.0.0",
-    );
-    expect(
-      createHash("sha256")
-        .update(readFileSync(join(paths.versions, "1.0.0", "parlor-host")))
-        .digest("hex"),
-    ).toBe(await sha256File(files.binary));
-  }, 60_000);
-
-  it("starts an installed release first, then lets a newer bundle take over from it", async () => {
-    const first = await bundle("installed-1", "1.0.0");
-    const deps = await withTrust({
-      start: spawnDaemon("1.0.0"),
-    });
-    await ensureServiceWith(deps, paths, sidecar("1.0.0", first));
-    await daemons.shift()!.stop();
-    expect(await versionRunning()).toBeUndefined();
-    const second = await bundle("installed-2", "1.1.0");
-    const starts: string[] = [];
-    const outcome = await ensureServiceWith(
-      await withTrust({
-        start: async (...args) => {
-          const version = starts.length === 0 ? "1.0.0" : "1.1.0";
-          starts.push(version);
-          await spawnDaemon(version)(...args);
-        },
-      }),
-      paths,
-      sidecar("1.1.0", second),
-    );
-    expect(starts).toEqual(["1.0.0", "1.1.0"]);
-    expect(outcome).toMatchObject({ kind: "upgraded", to: { version: "1.1.0" } });
-  }, 90_000);
 
   it("hands the service lock's token to the daemon it starts, while it holds that lock", async () => {
     const held: boolean[] = [];
@@ -716,34 +369,18 @@ describe("no service running", () => {
       held.push(await holdsLock(paths.lock, args[3]));
       await spawnDaemon("1.0.0")(...args);
     };
-    await ensureServiceWith(await withTrust({ start }), paths, cli("1.0.0"));
+    await ensureServiceWith(quick({ start }), paths, cli("1.0.0"));
     expect(held).toEqual([true]);
     expect(existsSync(paths.lock)).toBe(false);
   }, 60_000);
 
-  it("a CLI starts the service itself and installs nothing", async () => {
+  it("a CLI starts the service itself", async () => {
     const start = vi.fn(spawnDaemon("1.0.0"));
-    const outcome = await ensureServiceWith(
-      await withTrust({ start }),
-      paths,
-      cli("1.0.0"),
-    );
-    expect(outcome).toEqual({ kind: "installed", release: release("1.0.0") });
-    expect(existsSync(paths.versions)).toBe(false);
-    expect(existsSync(paths.launchAgent)).toBe(false);
+    const outcome = await ensureServiceWith(quick({ start }), paths, cli("1.0.0"));
+    expect(outcome).toEqual({ kind: "started", release: release("1.0.0") });
+    expect(start).toHaveBeenCalledOnce();
+    expect(await versionRunning()).toBe("1.0.0");
   }, 60_000);
-});
-
-describe("installLoginItem", () => {
-  it("writes a LaunchAgent that restarts the service only after a crash", async () => {
-    await installLoginItem(paths);
-    const plist = readFileSync(paths.launchAgent, "utf8");
-    expect(plist).toContain("<string>dev.parlor.host</string>");
-    expect(plist).toContain(`<string>${join(paths.current, "parlor-host")}</string>`);
-    expect(plist).toMatch(
-      /<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\/>/,
-    );
-  });
 });
 
 describe("handing over with a turn running", () => {
@@ -829,9 +466,10 @@ describe("handing over with a turn running", () => {
           expect(app.seen.some((seen) => seen.path.endsWith("/hostClaim"))).toBe(true),
         { timeout: 15_000 },
       );
-      const next = await bundle("drain-next", "1.1.0");
       const control = (await connectControl(paths.control))!;
-      expect(await control.send({ op: "handover", ...next })).toEqual({ ok: true });
+      expect(await control.send({ op: "step_aside", release: release("1.1.0") })).toEqual(
+        { ok: true },
+      );
       control.close();
       expect(await connectControl(paths.control)).toBeUndefined();
       expect(app.seen.some((seen) => seen.path.endsWith("/hostFinish"))).toBe(false);
@@ -846,7 +484,6 @@ describe("handing over with a turn running", () => {
         .filter((seen) => seen.path.endsWith("/hostReport"))
         .map((seen) => (JSON.parse(seen.body) as { online: boolean }).online);
       expect(reports).not.toContain(false);
-      expect(await readlink(paths.current)).toBe(join("versions", "1.1.0"));
     } finally {
       vi.unstubAllEnvs();
       await app.close();

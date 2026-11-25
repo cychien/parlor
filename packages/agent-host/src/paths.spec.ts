@@ -14,11 +14,8 @@ describe("hostPaths", () => {
       learned: "/Users/alice/.parlor/host/learned.json",
       control: "/Users/alice/.parlor/host/run/control.sock",
       proxy: "/Users/alice/.parlor/host/run/proxy.sock",
-      versions: "/Users/alice/.parlor/host/versions",
-      current: "/Users/alice/.parlor/host/current",
       lock: "/Users/alice/.parlor/host/service.lock",
       logs: "/Users/alice/.parlor/host/logs",
-      launchAgent: "/Users/alice/Library/LaunchAgents/dev.parlor.host.plist",
       workspaces: "/Users/alice/Parlor",
     });
   });
