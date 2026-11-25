@@ -17,7 +17,7 @@ pnpm parlor add auth
 | `schema/auth.ts`                       | New: `export * from "@parlor/auth/schema"`, the user, session, account and verification tables |
 | `src/auth/*`, `src/routes/sign-in.tsx` | New: the browser client, the sign-in gate, the sign-out button, the sign-in page               |
 | `server.ts`                            | `auth: createAuth(database)` passed to `createServer`                                          |
-| `src/main.tsx`                         | The action client sends the session; `FrameworkProvider` gets `auth`                           |
+| `src/main.tsx`                         | `FrameworkProvider` gets `auth`                                                                |
 | `src/routes/__root.tsx`                | The layout is wrapped in `withSignIn`                                                          |
 | `migrations/0001_auth.sql`             | The auth tables                                                                                |
 | `.env.example`                         | `PARLOR_ORIGIN` and `BETTER_AUTH_SECRET`                                                       |
@@ -33,7 +33,7 @@ When it cannot edit a file safely, for example a `server.ts` that builds its opt
 - A linked device with Face ID or Touch ID confirms it is still the user's every 18 hours: once that long has passed since its last check, the composer says "Sending will ask for Face ID or Touch ID", and the next message asks for it. A phone left unlocked on a desk stops working for a thief by the next day. The computer enforces it, whatever the app says, and sets the interval with `npx @parlor/agent-host config --prompt-presence <hours>`, or turns it off with `--prompt-presence off`. A browser on the computer itself, which has no passkey, is never asked.
 - A turn from the app runs in the agent's own safety review where it has one, Claude Code's Auto mode or Codex's Auto review: the agent acts on its own and asks only for what that review flags. An agent without one asks before every action. `npx @parlor/agent-host config --agent-mode ask` makes every agent ask before every action.
 - The agent's own permission prompts, such as running a command or writing a file, are answered in the sidebar with Face ID or Touch ID. The browser that approved `connect` answers its own conversation's prompts in the sidebar without them, since it is on the computer; any other device without Face ID or Touch ID leaves them to a dialog on the computer. `npx @parlor/agent-host config --answers computer` sends every prompt to that dialog.
-- The computer that runs the agents must be a Mac for now: `npx @parlor/agent-host connect` refuses on Windows and Linux before it pairs, because Parlor Host keeps its keys in the macOS Keychain. `parlor dev` works on every platform, and the app itself, with its sidebar, runs in any browser and on iPhone.
+- The computer that runs the agents must be a Mac for now: `npx @parlor/agent-host connect` refuses on Windows and Linux before it pairs, because Parlor Host keeps its keys in the macOS Keychain. `parlor dev` works on every platform, and the app itself, with its sidebar, runs in any browser, a phone's included.
 - MCP clients sign in through OAuth. See [Agents](/parlor/guides/agents/).
 
 ## Your own page for connecting a computer
@@ -117,13 +117,9 @@ if (await auth.social.available()) {
 }
 ```
 
-Both work the same in a browser and in the desktop and iPhone apps, where the session is a bearer token in the Keychain like a password sign-in's.
+`social.signIn` sends the page to Google, which returns to `callbackURL` signed in, so the promise never resolves. A failure returns to the sign-in page with `?error=`. A sign-in page opened by an MCP client's authorization (its URL carries `sig`) resumes that authorization after Google, as it does after a password. `social.available()` is true in every browser, and false only where there is no page to send, such as on the server.
 
-- **On the web**, `social.signIn` sends the page to Google, which returns to `callbackURL` signed in, so the promise never resolves. A failure returns to the sign-in page with `?error=`. A sign-in page opened by an MCP client's authorization (its URL carries `sig`) resumes that authorization after Google, as it does after a password.
-- **In the desktop and iPhone apps**, Google refuses the app's own webview, so `social.signIn` opens it in the system's sign-in browser (ASWebAuthenticationSession), which returns to the app through `app.scheme`. The promise resolves once the app is signed in, on the page that called it; navigate from there. Closing the browser throws `AuthClientError` with code `CANCELLED`. The system browser never keeps the session: the server hands the app a single-use code that expires after a minute, which only the app that started the sign-in can redeem, because it holds the PKCE verifier. `app.scheme` must be set in `parlor.config.ts`.
-- `social.available()` is false where the app has no sign-in browser, such as Android for now; hide the button there.
-
-In the Google Cloud console, create an OAuth client of type Web application with the redirect URI `https://<your origin>/_parlor/auth/callback/google`. The same client serves the web and the apps. Other providers in `socialProviders`, and `genericOAuth` providers, work the same way.
+In the Google Cloud console, create an OAuth client of type Web application with the redirect URI `https://<your origin>/_parlor/auth/callback/google`. Other providers in `socialProviders`, and `genericOAuth` providers, work the same way.
 
 ## Production
 

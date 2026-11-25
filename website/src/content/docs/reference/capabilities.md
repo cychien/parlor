@@ -1,13 +1,13 @@
 ---
 title: "@parlor/capabilities"
-description: One interface per platform feature, with a web, a Capacitor and a Tauri adapter.
+description: Browser features behind one interface, each with an availability query.
 ---
 
 ```sh
 pnpm add @parlor/capabilities
 ```
 
-A capability is what a browser cannot always do: notifications, files, deep links, a secure session store, a device key. Each has one interface and an adapter per platform, picked at build time, so app code never checks the platform.
+A capability is what a browser cannot always do: notifications, files, deep links, a device key. Each has one interface and a web adapter, and says whether this browser can run it, so app code checks `available` instead of the browser.
 
 ```ts
 import { notifications, resolveCapability } from "@parlor/capabilities";
@@ -26,14 +26,13 @@ import { resolveCapability } from "@parlor/capabilities";
 
 `available: false` carries a `reason`; render a fallback instead of an error. In React, `useCapability(notifications)` from `@parlor/client/react` does the same.
 
-| Capability      | What                                                                         |
-| --------------- | ---------------------------------------------------------------------------- |
-| `notifications` | permission, request, show                                                    |
-| `files`         | let the user pick files, and save a file where they choose                   |
-| `deepLink`      | receive the links that open the app through `app.scheme`                     |
-| `sessionStore`  | keep the session token: a cookie on the web, a secure store in native shells |
-| `deviceKey`     | a signing key bound to this device                                           |
-| `authBrowser`   | run a sign-in page outside the app's webview and get the URL it returned to  |
+| Capability      | Web adapter        | What                                                           |
+| --------------- | ------------------ | -------------------------------------------------------------- |
+| `notifications` | `webNotifications` | permission, request, show                                      |
+| `files`         | `webFiles`         | let the user pick files, and save a file where they choose     |
+| `deepLink`      | `webDeepLink`      | receive the URL that opened the app                            |
+| `deviceKey`     | `webDeviceKey`     | a signing key bound to this device, and a passkey for presence |
+| `authBrowser`   | `webAuthBrowser`   | send the page to a sign-in flow, such as a provider's          |
 
 ## Files
 
@@ -48,13 +47,7 @@ if (handle.available) {
 }
 ```
 
-`pick` resolves with the chosen files, or an empty list when the user cancels; each has `name`, `type` (`""` when unknown), `size`, `bytes()` and `text()`. `save` resolves `"saved"` or `"cancelled"`.
-
-| Where  | `pick`                                       | `save`                                                     |
-| ------ | -------------------------------------------- | ---------------------------------------------------------- |
-| Web    | the browser's file chooser                   | the save dialog where the browser has one, else a download |
-| macOS  | the native open dialog, filtered by `accept` | the native save dialog                                     |
-| iPhone | the system picker: photos, camera, Files     | the share sheet, with Save to Files                        |
+`pick` opens the browser's file chooser and resolves with the chosen files, or an empty list when the user cancels; each has `name`, `type` (`""` when unknown), `size`, `bytes()` and `text()`. `save` opens the save dialog where the browser has one, and downloads the file otherwise; it resolves `"saved"` or `"cancelled"`.
 
 ## Auth browser
 
@@ -63,22 +56,15 @@ import { authBrowser, resolveCapability } from "@parlor/capabilities";
 
 const handle = await resolveCapability(authBrowser);
 if (handle.available) {
-  const returned = await handle.api.open(
-    "https://app.example.com/_parlor/auth/native/sign-in/social?provider=google",
-    "myapp://_parlor/auth/callback",
+  await handle.api.open(
+    "https://accounts.example.com/authorize?client_id=app",
+    "https://app.example.com/signed-in",
   );
-  console.log(returned ?? "closed");
 }
 ```
 
-`open(url, callbackUrl)` resolves with the URL the flow ended at, or `undefined` when the user closed it. The auth client's `social.signIn` uses it; apps rarely call it directly.
+`open(url, callbackUrl)` sends the page itself to `url`, a flow that ends by redirecting to `callbackUrl`. The promise never settles: the flow comes back as a new page load. The auth client's `social.signIn` uses it; apps rarely call it directly.
 
-| Where  | `open`                                                                                |
-| ------ | ------------------------------------------------------------------------------------- |
-| Web    | the page itself goes to `url`; it never resolves, the flow returns as a page load     |
-| macOS  | ASWebAuthenticationSession over the app's window, returning to `callbackUrl`'s scheme |
-| iPhone | ASWebAuthenticationSession, returning to `callbackUrl`'s scheme                       |
+## Your own capability
 
-It is unavailable in a native shell without it, such as Android, and in a desktop project generated before it existed.
-
-`defineCapability` defines a new one from its adapters.
+`defineCapability({ name, adapters })` defines one. Each adapter has `available()` and `create()`, sync or async; `resolveCapability` uses the first adapter that is available, and otherwise answers `{ available: false, reason }` with the reason `Capability "<name>" is not available in this browser`.

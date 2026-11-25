@@ -1,11 +1,11 @@
 ---
 title: Server rendering
-description: Render public pages on the server on web, with their data, title and share card in the HTML.
+description: Render public pages on the server, with their data, title and share card in the HTML.
 ---
 
-A page normally reaches the browser as an empty `index.html` that fills in once the JavaScript runs. A public page that search engines index or people share, such as a home or sales page, needs its content, `<title>` and Open Graph tags in the HTML itself. Turn on server rendering for those routes: on web, the server runs their loaders and sends the rendered page, and the browser picks it up from there.
+A page normally reaches the browser as an empty `index.html` that fills in once the JavaScript runs. A public page that search engines index or people share, such as a home or sales page, needs its content, `<title>` and Open Graph tags in the HTML itself. Turn on server rendering for those routes: the server runs their loaders and sends the rendered page, and the browser picks it up from there.
 
-It is progressive. A route that does not opt in, every route in the desktop and mobile apps, and any page whose server render fails get `index.html` as before, and render in the browser.
+It is progressive. A route that does not opt in and any page whose server render fails get `index.html` as before, and render in the browser.
 
 ## Turn it on
 
@@ -181,4 +181,4 @@ If rendering throws, the server logs it and sends `index.html`, so the page stil
 
 ## In development
 
-`parlor dev` renders opted-in pages on the server too, so what you see is what the build serves. It runs the app's own code through Vite, with changes picked up on the next request. Its policy keeps allowing inline scripts for Vite's hot reload. The desktop and mobile dev servers do not render on the server, matching their builds.
+`parlor dev` renders opted-in pages on the server too, so what you see is what the build serves. It runs the app's own code through Vite, with changes picked up on the next request. Its policy keeps allowing inline scripts for Vite's hot reload.

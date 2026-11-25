@@ -1,9 +1,9 @@
 ---
 title: Parlor
-description: Build an app once for web, desktop and mobile, and let agents do everything its UI can.
+description: A TypeScript framework for web apps that agents can operate as fully as people do.
 template: splash
 hero:
-  tagline: One React app for web, desktop and mobile. Every action it has is also a tool your agents can call.
+  tagline: One React app that runs in any browser and installs as an app. Every action it has is also a tool your agents can call.
   actions:
     - text: Get started
       link: /parlor/getting-started/
@@ -24,9 +24,9 @@ import { Card, CardGrid } from "@astrojs/starlight/components";
     New apps ship a sidebar that drives the coding agent on your computer, Claude Code or
     Codex, with no setup.
   </Card>
-  <Card title="One source, many apps" icon="laptop">
-    `parlor dev --target mac` opens the same app as a desktop window. iOS and Android use
-    the same code.
+  <Card title="Installable" icon="laptop">
+    Every app is also a PWA: a manifest, icons and a service worker from
+    `parlor.config.ts`, so users can install it on their computer or phone.
   </Card>
   <Card title="Grows with commands" icon="add-document">
     `parlor add auth` adds sign-in by editing your files, and tells you exactly what to
