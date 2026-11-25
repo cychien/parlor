@@ -42,18 +42,13 @@ import type { HostPaths } from "./paths.js";
 import { DEV_POLICY, loadPolicy, presenceDueAt, type RemotePolicy } from "./policy.js";
 import type { SessionPool } from "./pool.js";
 import { type LocalPrompter, printable } from "./prompter.js";
-import { compareVersions, RELEASE_KEY, signedRelease } from "./release.js";
 import { revokeGrant } from "./revoke.js";
 import { selfEntry } from "./self.js";
-import {
-  hasInstalledRelease,
-  type HostRelease,
-  installLoginItem,
-  installRelease,
-} from "./service.js";
+import type { HostRelease } from "./service.js";
 import { agentEnvironment, rereadAgentPath } from "./shell-path.js";
 import type { TrustStore } from "./trust.js";
 import { runTurn } from "./turn.js";
+import { compareVersions } from "./version.js";
 import { warmAgent } from "./warm.js";
 
 export interface DaemonDeps {
@@ -878,26 +873,10 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
     })();
   };
 
-  const handOverTo = async (binary: string, signature: string): Promise<unknown> => {
-    const release = await signedRelease(binary, signature, RELEASE_KEY);
-    if (!release) return { ok: false, error: "unsigned" };
-    if (compareVersions(release.version, deps.release.version) <= 0) {
-      return { ok: false, error: "downgrade" };
-    }
-    if (!(await installRelease(paths, { binary, signature }, release))) {
-      return { ok: false, error: "unsigned" };
-    }
-    await installLoginItem(paths);
-    await daemon.handover();
-    setImmediate(settleHandover);
-    return { ok: true };
-  };
-
   const stepAside = async (release: HostRelease): Promise<unknown> => {
     if (compareVersions(release.version, deps.release.version) <= 0) {
       return { ok: false, error: "downgrade" };
     }
-    if (await hasInstalledRelease(paths)) return { ok: false, error: "installed" };
     await daemon.handover();
     setImmediate(settleHandover);
     return { ok: true };
@@ -908,8 +887,6 @@ export function createHostDaemon(deps: DaemonDeps): ServiceDaemon {
     switch (request.op) {
       case "hello":
         return { ok: true, release: deps.release };
-      case "handover":
-        return handOverTo(request.binary, request.signature);
       case "step_aside":
         return stepAside(request.release);
       case "status":

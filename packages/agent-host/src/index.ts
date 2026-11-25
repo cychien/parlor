@@ -95,7 +95,6 @@ export {
   type AdoptOutcome,
   ensureService,
   type HostRelease,
-  installLoginItem,
   type ServiceClient,
 } from "./service.js";
 export { fileTrustStore, type TrustedDevice, type TrustStore } from "./trust.js";

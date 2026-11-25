@@ -323,11 +323,15 @@ const DIFFERENCES_6: Readonly<
 > = {
   "agent-host/src/service.ts AdoptOutcome changed": {
     agreed: true,
-    why: "spec 8.6: a signature mismatch, a downgrade and a daemon without `hello` are outcomes, not throws",
+    why: "Parlor Host is CLI only: a CLI starts the service instead of installing a release, and a daemon without `hello` is an outcome, not a throw",
   },
   "agent-host/src/service.ts ServiceClient changed": {
     agreed: true,
-    why: "the `.sig` of a bundled binary lives in the app's resources, not beside it, so the client carries its path",
+    why: "Parlor Host is CLI only: the desktop sidecar client is gone",
+  },
+  "agent-host/src/service.ts installLoginItem missing": {
+    agreed: true,
+    why: "Parlor Host is CLI only: only the desktop app installed a release under a login item",
   },
   "agent-host/src/daemon.ts DaemonDeps changed": {
     agreed: true,
@@ -339,7 +343,7 @@ const DIFFERENCES_6: Readonly<
   },
   "agent-host/src/control.ts ControlRequest changed": {
     agreed: true,
-    why: "spec 8.6: `handover` carries the binary and signature; the desktop shell's local pairing ops are gone with it",
+    why: "Parlor Host is CLI only: a newer CLI's `step_aside` replaces the desktop app's `handover`, the desktop shell's local pairing ops are gone, and `agent_tools` turns agents' use of an app outside the sidebar on or off",
   },
   "client/src/react/chat/runtime.ts ConnectOption changed": {
     agreed: true,
