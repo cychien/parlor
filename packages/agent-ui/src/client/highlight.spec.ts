@@ -133,13 +133,30 @@ describe("highlightView", () => {
     expect(await run({ view: "form" })).toMatchObject({ code: "not_mounted" });
   });
 
+  it("names every view on screen when the one asked for is not", async () => {
+    const { mount, run } = setup();
+    mount(form);
+    mount(row, "a");
+    expect(await run({ view: "row", key: "zzz" })).toEqual({
+      code: "not_mounted",
+      message: "row zzz is not on screen. On screen now: form, row a.",
+      issues: [
+        { path: "view", message: "form" },
+        { path: "view", message: "row a" },
+      ],
+    });
+  });
+
   it("refuses a field the view does not have on screen, naming it", async () => {
     const { browser, mount, run } = setup();
     mount(form);
     expect(await run({ view: "form", field: "due" })).toEqual({
       code: "not_mounted",
-      message: expect.stringContaining("due"),
-      issues: [{ path: "field", message: "due" }],
+      message: "form has no field due on screen. Its fields: title, notes.",
+      issues: [
+        { path: "field", message: "title" },
+        { path: "field", message: "notes" },
+      ],
     });
     expect(browser.scrolled()).toEqual([]);
   });

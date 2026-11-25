@@ -262,7 +262,10 @@ describe("createAgentUiClient writes", () => {
         type: "reply",
         id: "w1",
         ok: false,
-        error: { code: "not_mounted", message: expect.any(String) },
+        error: {
+          code: "not_mounted",
+          message: "form is not on screen. On screen now: none.",
+        },
       },
     ]);
     expect(client.activity.get()).toEqual({
