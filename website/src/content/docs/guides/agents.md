@@ -51,6 +51,24 @@ The origin is `PARLOR_ORIGIN` in production, the web origin under `parlor dev`. 
 
 ## Large apps
 
+Every action is its own MCP tool. Claude Code loads tools on demand, but an agent that loads every tool up front pays for all of them on every turn. Mark the actions an agent rarely needs `agent: "searchable"`:
+
+```ts
+import { defineAction } from "@parlor/core";
+import { z } from "zod";
+
+export const refundOrder = defineAction({
+  description: "Refund an order to the buyer.",
+  input: z.object({ orderId: z.string() }),
+  writes: ["orders"],
+  confirm: true,
+  agent: "searchable",
+  run: ({ orderId }) => ({ orderId, refunded: true }),
+});
+```
+
+They leave the tool list, and the server adds two tools in their place: `search_actions` finds them by the words of their name and description and gives each one's input schema, and `call_action` runs one by name. A searchable action runs exactly as a listed one would, `confirm` included, and stays a hook, an HTTP endpoint and a sidebar tool as before. Parlor Host still lets a searchable action that only reads run without asking.
+
 The screen tools describe every page, view and form the app shows. Past about 6000 characters of those descriptions, `ui_navigate`, `ui_screen` and `ui_set` list names only, and a read-only `ui_pages` tool describes the pages that match a few words: what each shows, its params and search params, and the views on it with the fields an agent can fill. An app with 53 pages went from 8929 to 3623 tokens of screen tools this way; a small app keeps its full descriptions and gets no `ui_pages`.
 
 ## The browser's own agent

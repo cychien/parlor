@@ -16,7 +16,7 @@ import { defineAction } from "@parlor/core";
 //       ^?
 ```
 
-Defines an action. The config takes `description`, `input` (a zod schema), `run(input, ctx)`, and optionally `reads`, `writes`, `notifies`, `confirm` and `public`. `notifies: "user"` sends its writes only to the caller's own tabs and computers instead of everyone in the scope, for data that belongs to one user of a shared scope. `notifies: "account"` sends them to that user's tabs and computers in every scope, for data that belongs to the person rather than any scope, such as their connected computers. See [Actions](/parlor/guides/actions/).
+Defines an action. The config takes `description`, `input` (a zod schema), `run(input, ctx)`, and optionally `reads`, `writes`, `notifies`, `confirm`, `agent` and `public`. `notifies: "user"` sends its writes only to the caller's own tabs and computers instead of everyone in the scope, for data that belongs to one user of a shared scope. `notifies: "account"` sends them to that user's tabs and computers in every scope, for data that belongs to the person rather than any scope, such as their connected computers. `agent: "searchable"` leaves the action out of the MCP tool list; agents find it with `search_actions` and run it with `call_action` (see [Large apps](/parlor/guides/agents/#large-apps)). See [Actions](/parlor/guides/actions/).
 
 ```ts
 import { ActionError } from "@parlor/core";

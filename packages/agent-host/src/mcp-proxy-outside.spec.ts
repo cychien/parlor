@@ -46,7 +46,7 @@ beforeAll(async () => {
       const message = JSON.parse(body) as {
         id?: number | string;
         method: string;
-        params?: { name?: string };
+        params?: { name?: string; arguments?: { names?: string[] } };
       };
       received.push({
         headers: request.headers,
@@ -69,7 +69,17 @@ beforeAll(async () => {
             }
           : message.method === "tools/list"
             ? { tools: TOOLS }
-            : { content: [{ type: "text", text: `ran ${message.params?.name}` }] };
+            : message.params?.name === "search_actions"
+              ? {
+                  content: [{ type: "text", text: "found" }],
+                  structuredContent: {
+                    actions: (message.params.arguments?.names ?? []).map((name) => ({
+                      name,
+                      readOnly: name === "listOrders",
+                    })),
+                  },
+                }
+              : { content: [{ type: "text", text: `ran ${message.params?.name}` }] };
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
     });
@@ -212,6 +222,28 @@ describe("an agent outside any turn", () => {
     expect(textOf(await agent.next())).toBe("ran createCourse");
     expect(received.filter((request) => request.tool === "createCourse")).toHaveLength(2);
     expect(served!.askHere).not.toHaveBeenCalled();
+  }, 30_000);
+
+  it("runs a searchable action that only reads without asking, and asks before one that changes", async () => {
+    const agent = agentOutside(origin);
+    await agent.initialize(true);
+    agent.request("tools/call", {
+      name: "call_action",
+      arguments: { name: "listOrders" },
+    });
+    expect(textOf(await agent.next())).toBe("ran call_action");
+    agent.request("tools/call", {
+      name: "call_action",
+      arguments: { name: "refundOrder" },
+    });
+    const asked = await agent.next();
+    expect(asked).toMatchObject({ method: "elicitation/create" });
+    agent.send({ id: asked.id, result: { action: "decline" } });
+    expect(await agent.next()).toMatchObject({ result: { isError: true } });
+    expect(received.filter((request) => request.tool === "search_actions")).toHaveLength(
+      2,
+    );
+    expect(received.filter((request) => request.tool === "call_action")).toHaveLength(1);
   }, 30_000);
 
   it("changes nothing when the user declines, and asks again on the next change", async () => {
