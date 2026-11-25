@@ -105,88 +105,94 @@ function Devices() {
   return (
     <>
       <h3>Devices that can use your agents</h3>
-      <ul className="rows" aria-label="Devices" aria-busy={devices === undefined}>
-        {(devices ?? []).map((device) => {
-          const from = nameOf(device.linkedBy);
-          const failed =
-            (removal.step === "error" || removal.step === "on-computer") &&
-            removal.id === device.id
-              ? removal
-              : undefined;
-          return (
-            <li key={device.id}>
-              <div>
-                <p>{device.name}</p>
-                <p className="row-meta">
-                  {from
-                    ? `Linked from ${from}`
-                    : `Added ${when.format(new Date(device.createdAt))}`}
-                </p>
-                {confirming === device.id ? (
-                  <p>
-                    {device.current
-                      ? "Remove this device? It will need to be linked again to use your agents."
-                      : `Remove ${device.name}? It will no longer be able to use your agents.`}
+      {devices?.length === 0 ? (
+        <p className="row-meta">
+          No devices yet. Open the Agent sidebar on a device to link it to your computer.
+        </p>
+      ) : (
+        <ul className="rows" aria-label="Devices" aria-busy={devices === undefined}>
+          {(devices ?? []).map((device) => {
+            const from = nameOf(device.linkedBy);
+            const failed =
+              (removal.step === "error" || removal.step === "on-computer") &&
+              removal.id === device.id
+                ? removal
+                : undefined;
+            return (
+              <li key={device.id}>
+                <div>
+                  <p>{device.name}</p>
+                  <p className="row-meta">
+                    {from
+                      ? `Linked from ${from}`
+                      : `Added ${when.format(new Date(device.createdAt))}`}
                   </p>
-                ) : null}
-                {failed?.step === "error" ? (
-                  <p className="problem" role="alert">
-                    {failed.message}
-                  </p>
-                ) : failed?.step === "on-computer" ? (
-                  <>
+                  {confirming === device.id ? (
                     <p>
-                      This browser cannot confirm with Face ID or Touch ID. On your
-                      computer, run:
+                      {device.current
+                        ? "Remove this device? It will need to be linked again to use your agents."
+                        : `Remove ${device.name}? It will no longer be able to use your agents.`}
                     </p>
-                    <code className="connect-command">{failed.command}</code>
-                  </>
-                ) : null}
-              </div>
-              {confirming === device.id ? (
-                <span className="row-actions">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      reset();
-                      setConfirming(undefined);
-                    }}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    className="danger"
-                    disabled={removal.step === "removing"}
-                    onClick={() =>
-                      void remove(device.id).then((removed) => {
-                        if (removed) setConfirming(undefined);
-                      })
-                    }
-                  >
-                    Remove with Face ID or Touch ID
-                  </button>
-                </span>
-              ) : (
-                <span className="row-actions">
-                  {device.current ? <span className="tag">This device</span> : null}
-                  <button
-                    type="button"
-                    className="danger"
-                    aria-label={`Remove ${device.name}`}
-                    onClick={() => {
-                      reset();
-                      setConfirming(device.id);
-                    }}
-                  >
-                    Remove
-                  </button>
-                </span>
-              )}
-            </li>
-          );
-        })}
-      </ul>
+                  ) : null}
+                  {failed?.step === "error" ? (
+                    <p className="problem" role="alert">
+                      {failed.message}
+                    </p>
+                  ) : failed?.step === "on-computer" ? (
+                    <>
+                      <p>
+                        This browser cannot confirm with Face ID or Touch ID. On your
+                        computer, run:
+                      </p>
+                      <code className="connect-command">{failed.command}</code>
+                    </>
+                  ) : null}
+                </div>
+                {confirming === device.id ? (
+                  <span className="row-actions">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        reset();
+                        setConfirming(undefined);
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="danger"
+                      disabled={removal.step === "removing"}
+                      onClick={() =>
+                        void remove(device.id).then((removed) => {
+                          if (removed) setConfirming(undefined);
+                        })
+                      }
+                    >
+                      Remove with Face ID or Touch ID
+                    </button>
+                  </span>
+                ) : (
+                  <span className="row-actions">
+                    {device.current ? <span className="tag">This device</span> : null}
+                    <button
+                      type="button"
+                      className="danger"
+                      aria-label={`Remove ${device.name}`}
+                      onClick={() => {
+                        reset();
+                        setConfirming(device.id);
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </>
   );
 }
