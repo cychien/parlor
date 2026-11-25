@@ -73,7 +73,7 @@ The screen tools describe every page, view and form the app shows. Past about 60
 
 ## The browser's own agent
 
-In a browser with [WebMCP](https://github.com/webmachinelearning/webmcp), an open page hands the same actions and screen to the browser's built-in agent: each action the signed-in user may see, and `ui_screen`, `ui_navigate`, `ui_set` and `ui_highlight` running in that page. Nothing is installed or connected. The page calls an action as an agent would, so a `confirm: true` action shows its approval card in that page and waits, and `ctx.source` is `"mcp"`. The ui_ tools act on the page itself and leave out what only matters across clients. Browsers without WebMCP, and the desktop and mobile apps, register nothing. Turn it off with `<FrameworkProvider webmcp={false}>`.
+In a browser with [WebMCP](https://github.com/webmachinelearning/webmcp), an open page hands the same actions and screen to the browser's built-in agent: each action the signed-in user may see, and `ui_screen`, `ui_navigate`, `ui_set` and `ui_highlight` running in that page. Nothing is installed or connected. The page calls an action as an agent would, so a `confirm: true` action shows its approval card in that page and waits, and `ctx.source` is `"mcp"`. The ui_ tools act on the page itself and leave out what only matters across clients. Browsers without WebMCP register nothing. Turn it off with `<FrameworkProvider webmcp={false}>`.
 
 ## What agents can and cannot do
 
