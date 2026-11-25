@@ -451,7 +451,24 @@ function outsideSession(
   let asked = 0;
   const answers = new Map<string, (allowed: boolean) => void>();
 
+  // Each message is its own POST, so without this a request can reach the app before initialized.
+  let initialized: Promise<void> = Promise.resolve();
+
   const send = async (line: string, message: Message, onReply = reply) => {
+    if (message.method === "notifications/initialized") {
+      const sent = initialized.then(() => post(line, message, onReply));
+      initialized = sent.catch(() => undefined);
+      return sent;
+    }
+    await initialized;
+    return post(line, message, onReply);
+  };
+
+  const post = async (
+    line: string,
+    message: Message,
+    onReply: (line: string) => void,
+  ) => {
     let token: string;
     try {
       token = await answeredWithin(app.token(agent), tokenWaitMs);
