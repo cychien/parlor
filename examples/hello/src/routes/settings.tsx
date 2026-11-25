@@ -61,7 +61,7 @@ function DeepLinkPanel() {
   return (
     <section className="stack">
       <p data-testid="deeplink">
-        Deep links: {cap.available ? "available" : "not available"}
+        {`Deep links: ${cap.available ? "available" : "not available"}`}
       </p>
       <ul>
         {urls.map((url) => (
