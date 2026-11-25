@@ -29,10 +29,9 @@ Write down what the old app does before changing anything, and map each item:
 Parlor cannot do these yet. If the old app depends on one, decide with the person before porting it, and do not build a substitute inside the app:
 
 - **Storing uploaded files on the server**, such as images or attachments. The `files` capability lets a page pick and save files on the device; there is no server storage.
-- **Server-side rendering for public pages that need SEO.** A Parlor app is a single-page app.
 - **Serverless hosting other than Cloudflare.** Deploy one `node-server` or `bun` server, or use the `cloudflare-durable` preset; see [Deploy](/parlor/guides/deploy/).
 - **Background work spread over several server instances.** A plugin's timer runs in every process.
-- **Sign-in other than email and password.** Better Auth has other methods, set in `auth.ts`, but Parlor has not verified them.
+- **Sign-in other than email and password, email codes and Google.** Better Auth has other methods, set in `auth.ts`, but Parlor has not verified them; see [Auth](/parlor/guides/auth/#email-codes-and-google).
 
 ## 2. Create the project
 
