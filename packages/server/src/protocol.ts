@@ -1,4 +1,4 @@
-import type { UiManifest } from "@parlor/agent-ui";
+import type { PageToolSpec, UiManifest } from "@parlor/agent-ui";
 import type { ActionDescriptor } from "@parlor/core/registry";
 
 export const PROTOCOL_VERSION = 1;
@@ -12,4 +12,6 @@ export interface Manifest {
   readonly app?: { readonly name: string } | undefined;
   readonly actions: readonly ActionDescriptor[];
   readonly ui?: UiManifest | undefined;
+  /** The ui_ tools a page hands the browser's own agent through WebMCP. */
+  readonly uiTools?: readonly PageToolSpec[] | undefined;
 }

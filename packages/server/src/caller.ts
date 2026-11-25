@@ -68,6 +68,8 @@ export function sourceFor(
   const { principal } = caller;
   if (principal.kind === "anonymous" && !enforcing) return declared;
   if (principal.kind === "key") return surface === "mcp" ? "mcp" : "http";
+  // A page calling for an agent in the browser declares mcp: it only adds checks, so it is kept.
+  if (principal.kind === "user" && declared === "mcp") return "mcp";
   return sourceOfPrincipal(principal);
 }
 

@@ -1,11 +1,13 @@
 import { z } from "zod";
 
+import { findPages, type PagesResult } from "../catalog.js";
 import {
-  type JsonSchema,
-  routeHref,
-  type RouteEntry,
-  type UiManifest,
-} from "../manifest.js";
+  type CompactClient,
+  type CompactScreen,
+  compactClient,
+  compactScreen,
+} from "../compact.js";
+import { routeHref, type RouteEntry, type UiManifest } from "../manifest.js";
 import {
   type AgentOrigin,
   type ClientSummary,
@@ -15,14 +17,21 @@ import {
   type UiOpResults,
   uiOpReadOnly,
 } from "../protocol.js";
+import {
+  type AgentToolName,
+  UI_PAGES_TOOL,
+  uiToolDescriptions,
+  uiToolInputs,
+  type UiToolName,
+} from "../ui-tools.js";
 import { type UiBroker, UiFailure } from "./broker.js";
 import type { ClientDirectory, Selection } from "./directory.js";
-import { uiOpInputs } from "./schemas.js";
 
-export type UiToolName = `ui_${UiOp}`;
+export { type AgentToolName, UI_PAGES_TOOL, type UiToolName };
 
 const toolName = <O extends UiOp>(op: O): `ui_${O}` => `ui_${op}`;
 
+/** The tools that act on an open app client; {@link UI_PAGES_TOOL} joins them for a large app. */
 export const UI_TOOLS: readonly UiToolName[] = UI_OPS.map(toolName);
 
 export const UI_MANIFEST_RESOURCE = "parlor://manifest";
@@ -36,28 +45,49 @@ export interface AgentToolContext {
 }
 
 export interface AgentTool<I extends z.ZodObject = z.ZodObject> {
-  readonly name: UiToolName;
+  readonly name: AgentToolName;
   readonly description: string;
   readonly input: I;
   readonly readOnly: boolean;
   run(input: z.output<I>, ctx: AgentToolContext): Promise<unknown>;
 }
 
+/** @deprecated ui_screen returns {@link ScreenToolOutput}. */
 export interface ScreenToolResult extends ScreenSnapshot {
   readonly client: ClientSummary;
   readonly otherClients: readonly ClientSummary[];
   readonly tiedWith?: readonly string[] | undefined;
 }
 
+/** @deprecated ui_navigate returns {@link NavigateToolOutput}. */
 export interface NavigateToolResult {
   readonly client: ClientSummary;
   readonly screen: ScreenSnapshot;
 }
 
+/** @deprecated ui_set returns {@link SetToolOutput}. */
 export type SetToolResult = UiOpResults["set"] & { readonly client: ClientSummary };
 
+/** @deprecated ui_highlight returns {@link HighlightToolOutput}. */
 export type HighlightToolResult = UiOpResults["highlight"] & {
   readonly client: ClientSummary;
+};
+
+export interface ScreenToolOutput extends CompactScreen {
+  readonly client: CompactClient;
+  readonly otherClients?: readonly ClientSummary[];
+  readonly tiedWith?: readonly string[];
+}
+
+export interface NavigateToolOutput {
+  readonly client: CompactClient;
+  readonly screen: CompactScreen;
+}
+
+export type SetToolOutput = UiOpResults["set"] & { readonly client: CompactClient };
+
+export type HighlightToolOutput = UiOpResults["highlight"] & {
+  readonly client: CompactClient;
 };
 
 export interface UnreachableResult {
@@ -80,117 +110,17 @@ const clientIdInput = z
 
 const UNREACHABLE: UnreachableResult = { reachable: false, reason: "no_client" };
 
-function sentence(text: string): string {
-  const trimmed = text.trim();
-  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
-}
-
-function viewCatalog(manifest: UiManifest | undefined): string {
-  if (!manifest || manifest.views.length === 0) return "";
-  const lines = manifest.views.map(
-    (view) =>
-      `- ${view.name}${view.keyed ? " (keyed)" : ""}: ${sentence(view.description)}`,
-  );
-  return `\n\nViews this app can show:\n${lines.join("\n")}`;
-}
-
-function typeOf(schema: JsonSchema | undefined): string {
-  if (!schema) return "value";
-  if (Array.isArray(schema.enum))
-    return schema.enum.map((value) => JSON.stringify(value)).join(" | ");
-  if ("const" in schema) return JSON.stringify(schema.const);
-  const union = (schema.anyOf ?? schema.oneOf) as JsonSchema[] | undefined;
-  if (Array.isArray(union)) return union.map(typeOf).join(" | ");
-  if (schema.type === "array")
-    return `${typeOf(schema.items as JsonSchema | undefined)}[]`;
-  return typeof schema.type === "string" ? schema.type : "value";
-}
-
-/** `filter?: "all" | "done", page?: number`: what a page's search params take. */
-function searchOf(search: JsonSchema | undefined): string | undefined {
-  const properties = search?.properties as Record<string, JsonSchema> | undefined;
-  if (!properties || Object.keys(properties).length === 0) return undefined;
-  const required = new Set(Array.isArray(search?.required) ? search.required : []);
-  return Object.entries(properties)
-    .map(([name, schema]) => `${name}${required.has(name) ? "" : "?"}: ${typeOf(schema)}`)
-    .join(", ");
-}
-
-function routeCatalog(manifest: UiManifest | undefined): string {
-  if (!manifest || manifest.routes.length === 0) return "";
-  const lines = manifest.routes.map((route) => {
-    const parts = [`- ${route.path}`];
-    if (route.description) parts.push(` - ${sentence(route.description)}`);
-    const search = searchOf(route.search);
-    if (search) parts.push(` Search: ${search}.`);
-    if (route.views.length > 0) parts.push(` Views: ${route.views.join(", ")}.`);
-    return parts.join("");
-  });
-  return `\n\nPages:\n${lines.join("\n")}`;
-}
-
-function screenDescription(manifest: UiManifest | undefined): string {
-  return (
-    [
-      "Read what the user currently sees in the app: the route, the actions feeding the screen (name and input, never data), the views on screen with their values, and attention.",
-      "route is the page the url matched, with notFound: false, its path pattern, params, search and url; when the url matches no page and the app shows its not-found screen, route is notFound: true with only the url.",
-      "attention holds focus (the focused element), selection (the text the user selected and the view holding it; null unless the selection lies inside one view), lastInteracted (the view the user last clicked or focused), lastEntered (the view the user last scrolled into view; null until the user scrolls, since items already on screen when the page renders never count), and focal (the view nearest the middle of the viewport).",
-      "Keyed views list only the items inside the viewport, in screen order, plus an offscreen count.",
-      "The result names the app client it came from and every other open client.",
-      "Returns reachable: false when the app is not open anywhere.",
-    ].join(" ") + viewCatalog(manifest)
-  );
-}
-
-function navigateDescription(manifest: UiManifest | undefined): string {
-  return (
-    [
-      "Take the user's app to a page, filling $params in the path from params.",
-      "Waits for the page's data to load (up to 1.5 s) and returns the new screen in ui_screen's shape, so its route shows the page the app landed on.",
-      "Returns reachable: false with an href to hand the user when the app is not open.",
-    ].join(" ") + routeCatalog(manifest)
-  );
-}
-
-function writableCatalog(manifest: UiManifest | undefined): string {
-  const lines = (manifest?.views ?? [])
-    .filter((view) => view.writable.length > 0)
-    .map(
-      (view) =>
-        `- ${view.name}${view.keyed ? " (keyed)" : ""}: ${sentence(view.description)} Fields: ${view.writable.join(", ")}.`,
-    );
-  return lines.length === 0 ? "" : `\n\nForms you can fill:\n${lines.join("\n")}`;
-}
-
-function setDescription(manifest: UiManifest | undefined): string {
-  return (
-    [
-      "Fill fields of a form the user sees, as a proposal: the user reviews it and submits it themselves. Call the matching action instead only when the user explicitly asks you to submit.",
-      "value is merged into the view's current value field by field; fields you omit keep what the user typed.",
-      "Returns the view's value read back from the screen and agentFields, the fields that still hold what you wrote; a field missing from agentFields was changed by the user.",
-      "Refuses with not_mounted, not_writable, user_editing (the user is typing in that field: wait or ask), invalid_value (issues name the fields), or ambiguous_client.",
-      "Returns reachable: false when the app is not open.",
-    ].join(" ") + writableCatalog(manifest)
-  );
-}
-
-function highlightDescription(): string {
-  return [
-    "Point at something on the user's screen: scrolls a view (a keyed item by key) or one field inside it into the middle of the screen, focuses the field (not on a touch screen, where that opens the keyboard), and marks it for two seconds.",
-    "Use it to show the user what you mean or to ask which one they meant.",
-    "Returns shown, the visible fraction after scrolling, or not_mounted when it is not on screen, or reachable: false when the app is not open.",
-    "Refuses with user_editing when the user is typing in another field: wait or ask, and it moves nothing.",
-  ].join(" ");
-}
-
-function routeEnum(manifest: UiManifest | undefined) {
-  const paths = manifest?.routes.map((route) => route.path) ?? [];
-  const [first, ...rest] = paths;
-  return first === undefined ? z.string() : z.enum([first, ...rest]);
-}
-
 function defineTool<I extends z.ZodObject>(tool: AgentTool<I>): AgentTool {
   return tool as unknown as AgentTool;
+}
+
+function clientOf(
+  directory: ClientDirectory,
+  scope: string,
+  selection: Selection,
+): CompactClient {
+  const alone = directory.summaries(scope).length <= 1;
+  return compactClient(directory.summary(selection.target.client), alone);
 }
 
 function withClients(
@@ -198,13 +128,14 @@ function withClients(
   scope: string,
   selection: Selection,
   snapshot: ScreenSnapshot,
-): ScreenToolResult {
+): ScreenToolOutput {
   const chosen = selection.target.client;
+  const otherClients = directory.summaries(scope).filter((c) => c.id !== chosen.id);
   return {
-    client: directory.summary(chosen),
-    otherClients: directory.summaries(scope).filter((c) => c.id !== chosen.id),
+    client: clientOf(directory, scope, selection),
+    ...(otherClients.length > 0 ? { otherClients } : {}),
     ...(selection.tied.length > 0 ? { tiedWith: selection.tied.map((c) => c.id) } : {}),
-    ...snapshot,
+    ...compactScreen(snapshot),
   };
 }
 
@@ -286,10 +217,12 @@ export function createUiTools(
   };
 
   const build = (manifest: UiManifest | undefined): readonly AgentTool[] => {
+    const text = uiToolDescriptions(manifest, "remote");
+    const inputs = uiToolInputs(manifest);
     const screen = defineTool({
       name: "ui_screen",
-      description: screenDescription(manifest),
-      input: uiOpInputs.screen.extend({ clientId: clientIdInput }),
+      description: text.screen,
+      input: inputs.screen.extend({ clientId: clientIdInput }),
       readOnly: uiOpReadOnly.screen,
       async run({ clientId }, ctx) {
         const selection = select(ctx, clientId);
@@ -307,11 +240,8 @@ export function createUiTools(
 
     const navigate = defineTool({
       name: "ui_navigate",
-      description: navigateDescription(manifest),
-      input: uiOpInputs.navigate.extend({
-        to: routeEnum(manifest).describe("The page's route path, exactly as listed."),
-        clientId: clientIdInput,
-      }),
+      description: text.navigate,
+      input: inputs.navigate.extend({ clientId: clientIdInput }),
       readOnly: uiOpReadOnly.navigate,
       async run({ to, params, search, replace, clientId }, ctx) {
         const selection = select(ctx, clientId);
@@ -342,9 +272,9 @@ export function createUiTools(
           ctx.origin,
           ctx.signal,
         );
-        const navigated: NavigateToolResult = {
-          client: directory.summary(selection.target.client),
-          screen: result.screen,
+        const navigated: NavigateToolOutput = {
+          client: clientOf(directory, ctx.scope, selection),
+          screen: compactScreen(result.screen),
         };
         return navigated;
       },
@@ -352,8 +282,8 @@ export function createUiTools(
 
     const set = defineTool({
       name: toolName("set"),
-      description: setDescription(manifest),
-      input: uiOpInputs.set.extend({ clientId: clientIdInput }),
+      description: text.set,
+      input: inputs.set.extend({ clientId: clientIdInput }),
       readOnly: uiOpReadOnly.set,
       async run({ view, key, value, clientId }, ctx) {
         const selection = select(ctx, clientId);
@@ -367,8 +297,8 @@ export function createUiTools(
           ctx.origin,
           ctx.signal,
         );
-        const written: SetToolResult = {
-          client: directory.summary(selection.target.client),
+        const written: SetToolOutput = {
+          client: clientOf(directory, ctx.scope, selection),
           ...result,
         };
         return written;
@@ -377,8 +307,8 @@ export function createUiTools(
 
     const highlight = defineTool({
       name: toolName("highlight"),
-      description: highlightDescription(),
-      input: uiOpInputs.highlight.extend({ clientId: clientIdInput }),
+      description: text.highlight,
+      input: inputs.highlight.extend({ clientId: clientIdInput }),
       readOnly: uiOpReadOnly.highlight,
       async run({ view, key, field, clientId }, ctx) {
         const selection = select(ctx, clientId);
@@ -396,11 +326,21 @@ export function createUiTools(
           ctx.origin,
           ctx.signal,
         );
-        const pointed: HighlightToolResult = {
-          client: directory.summary(selection.target.client),
+        const pointed: HighlightToolOutput = {
+          client: clientOf(directory, ctx.scope, selection),
           ...result,
         };
         return pointed;
+      },
+    });
+
+    const pages = defineTool({
+      name: UI_PAGES_TOOL,
+      description: text.pages,
+      input: inputs.pages,
+      readOnly: true,
+      async run({ query, path }): Promise<PagesResult> {
+        return findPages(manifest, { query, path });
       },
     });
 
@@ -410,7 +350,8 @@ export function createUiTools(
       set,
       highlight,
     };
-    return UI_OPS.map((op) => byOp[op]);
+    const tools = UI_OPS.map((op) => byOp[op]);
+    return text.brief ? [...tools, pages] : tools;
   };
 
   let cachedFor: UiManifest | undefined;

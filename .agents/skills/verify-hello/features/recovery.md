@@ -19,10 +19,10 @@ Preconditions:
 
 - An instance seeded with `baseline`, doctor clean, a page opened with `$H browser <id> open /`, and `$H browser <id> emulate --viewport 1280x720x1`.
 - `$E` is the evidence directory. `jq` is on PATH.
-- Set up a helper that prints the connected client's id, or `none`:
+- Set up a helper that prints the connected client's id, or `none`. `ui_screen` leaves the id out while only one client is open, so ask for a client that does not exist: the `unknown_client` error lists every connected id.
 
   ```sh
-  cid() { $H mcp <id> call ui_screen '{}' 2>&1 | jq -r '.content[0].text | fromjson | .client.id // "none"' 2>/dev/null; }
+  cid() { $H mcp <id> call ui_screen '{"clientId":"none-such"}' 2>&1 | jq -r '.content[0].text | fromjson | .error.issues[0].message // "none"' 2>/dev/null; }
   ```
 
 - Mark the page so a reload is detectable: `$H browser <id> eval "() => { window.__kept = 1; return performance.timeOrigin }"` and note the number.

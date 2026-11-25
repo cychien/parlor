@@ -73,8 +73,9 @@ async function resolveHeaders(
   const headers = new Headers(
     typeof provider === "function" ? await provider() : provider,
   );
-  new Headers(extra).forEach((value, key) => headers.set(key, value));
-  headers.set(SOURCE_HEADER, "ui");
+  const own = new Headers(extra);
+  own.forEach((value, key) => headers.set(key, value));
+  if (!own.has(SOURCE_HEADER)) headers.set(SOURCE_HEADER, "ui");
   headers.set(CLIENT_HEADER, clientId);
   return headers;
 }

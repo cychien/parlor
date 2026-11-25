@@ -52,6 +52,21 @@ describe("createRegistry", () => {
     ]);
   });
 
+  it("says which actions an agent finds only through search_actions, and nothing for listed ones", () => {
+    const listed = defineAction({ ...hello, agent: "listed" });
+    const hidden = defineAction({ ...hello, agent: "searchable" });
+    expect(
+      createRegistry({ hello, listed, hidden })
+        .describe()
+        .map((d) => [d.name, d.agent]),
+    ).toEqual([
+      ["hello", undefined],
+      ["listed", undefined],
+      ["hidden", "searchable"],
+    ]);
+    expect(createRegistry({ listed }).describe()[0]).not.toHaveProperty("agent");
+  });
+
   it("says which actions ask the user to confirm", () => {
     const remove = defineAction({
       description: "Remove.",

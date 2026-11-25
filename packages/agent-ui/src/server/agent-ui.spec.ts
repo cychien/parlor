@@ -116,9 +116,9 @@ describe("contextFor with a chat turn", () => {
       ok: true,
       result: { screen: { route: null } },
     });
-    await expect(running).resolves.toMatchObject({
-      client: { id: "tab-1" },
-      screen: { route: null },
+    await expect(running).resolves.toEqual({
+      client: expect.objectContaining({ id: "tab-1" }),
+      screen: {},
     });
   });
 

@@ -2,6 +2,7 @@ import type { ServerChannel } from "@parlor/sync";
 
 import type { UiManifest } from "../manifest.js";
 import { type AgentOrigin, type ClientMessage, UI_CHANNEL } from "../protocol.js";
+import { type PageToolSpec, uiToolSpecs } from "../ui-tools.js";
 import { UiBroker, type UiReceipt } from "./broker.js";
 import {
   ConfirmationBoard,
@@ -40,6 +41,8 @@ export interface AgentUi {
   touch(clientId: string | undefined, audience: string): void;
   receive(clientId: string, audience: string, message: ClientMessage): UiReceipt;
   tools(surface: "mcp" | "agent"): readonly AgentTool[];
+  /** The ui_ tools a page hands the browser's own agent, under the same external policy. */
+  pageTools(): readonly PageToolSpec[];
   /** `chat` binds an inline agent's `ui_*` calls to the client its turn's prompt came from. */
   contextFor(
     request: Request | undefined,
@@ -116,6 +119,13 @@ export function createAgentUi(options: AgentUiOptions & AgentUiDependencies): Ag
       }
     },
     tools,
+    pageTools() {
+      if (external === false) return [];
+      const specs = uiToolSpecs(manifest(), "page").map(
+        ({ input: _input, ...spec }): PageToolSpec => spec,
+      );
+      return external === "read-only" ? specs.filter((spec) => spec.readOnly) : specs;
+    },
     async contextFor(request, origin, signal, chat) {
       return {
         scope: request ? await options.audience(request) : "default",

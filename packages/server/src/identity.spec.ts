@@ -315,14 +315,14 @@ describe("identity with an enforcing provider", () => {
     });
   });
 
-  it("ignores a forged source header: the credential decides", async () => {
+  it("ignores a source header that would lift a check: the credential decides", async () => {
     const server = serve();
     const asUser = await json(
       await post(
         server,
         "/_parlor/actions/whoami",
         {},
-        { token: "alice", source: "mcp" },
+        { token: "alice", source: "agent" },
       ),
     );
     expect(asUser.body).toMatchObject({ data: { source: "ui" } });
@@ -335,6 +335,31 @@ describe("identity with an enforcing provider", () => {
       ),
     );
     expect(asAgent.body).toMatchObject({ data: { source: "mcp" } });
+  });
+
+  it("keeps mcp for a user's call that declares it, as a page does for the browser's agent, so approval applies", async () => {
+    const server = serve();
+    const declared = await json(
+      await post(
+        server,
+        "/_parlor/actions/whoami",
+        {},
+        { token: "alice", source: "mcp" },
+      ),
+    );
+    expect(declared.body).toMatchObject({ data: { source: "mcp" } });
+    const confirmed = await json(
+      await post(
+        server,
+        "/_parlor/actions/deleteTask",
+        { id: "t1" },
+        { token: "alice", source: "mcp", clientId: "tab-without-ui" },
+      ),
+    );
+    expect(confirmed).toMatchObject({
+      status: 503,
+      body: { error: { code: "confirmation_unavailable" } },
+    });
   });
 
   it("still asks before an agent's confirm action runs when it claims to be the UI", async () => {

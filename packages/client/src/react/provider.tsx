@@ -23,6 +23,7 @@ import type {
   SessionSource,
 } from "../session.js";
 import { createAgentUiRuntime } from "./agent-ui/runtime.js";
+import { startWebMcp, type WebMcp } from "./agent-ui/webmcp.js";
 import { type FrameworkSync, SyncBridge } from "./sync-bridge.js";
 import {
   invalidateForEvents,
@@ -61,6 +62,11 @@ export interface FrameworkProviderProps {
    * server refused the last one; refreshing data read in the old scope stays with the app.
    */
   readonly scope?: ScopeSource | undefined;
+  /**
+   * Hand the app's actions and screen to the browser's own agent through WebMCP where the
+   * browser has it (the default). Its calls count as an agent's, so approvals still apply.
+   */
+  readonly webmcp?: boolean | undefined;
   readonly children: ReactNode;
 }
 
@@ -124,6 +130,7 @@ export function FrameworkProvider({
   router,
   auth,
   scope = NO_SCOPE,
+  webmcp = true,
   children,
 }: FrameworkProviderProps) {
   const [ownQueryClient] = useState(
@@ -143,6 +150,7 @@ export function FrameworkProvider({
   const epoch = useSettledIdentityEpoch(auth);
   const scoped = useSyncExternalStore(scope.subscribe, scope.current, NO_SCOPE.current);
   const appliedEpoch = useRef(epoch);
+  const webMcp = useRef<WebMcp | undefined>(undefined);
 
   useLayoutEffect(() => {
     if (appliedEpoch.current === epoch) return;
@@ -150,9 +158,20 @@ export function FrameworkProvider({
     void ownQueryClient.resetQueries();
     void router?.invalidate();
     value.agentUi.reset();
+    webMcp.current?.refresh();
   }, [epoch, ownQueryClient, router, value]);
 
   useEffect(() => value.agentUi.start(), [value]);
+
+  useEffect(() => {
+    if (!webmcp) return;
+    const handle = startWebMcp(value.client as ActionClient<never>, value.agentUi);
+    webMcp.current = handle;
+    return () => {
+      handle.stop();
+      webMcp.current = undefined;
+    };
+  }, [value, webmcp]);
 
   useEffect(() => {
     if (!import.meta.env.DEV) return;

@@ -253,6 +253,34 @@ describe("createAgentUiClient writes", () => {
     ]);
   });
 
+  it("performs an op for an agent in the page, answering the caller and sending nothing to the server", async () => {
+    const { client, sent } = setup();
+    let value = { title: "", notes: "" };
+    client.views
+      .track(form, {
+        get: () => value,
+        set: (next) => {
+          value = next as typeof value;
+        },
+      })
+      .mount(undefined);
+    const origin = { via: "mcp" as const, name: "Browser agent" };
+    await expect(
+      client.perform("set", { view: "form", value: { notes: "milk" } }, origin),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: { value: { title: "", notes: "milk" }, agentFields: ["notes"] },
+    });
+    await expect(
+      client.perform("set", { view: "nope", value: { notes: "x" } }, origin),
+    ).resolves.toMatchObject({ ok: false, error: { code: "not_mounted" } });
+    expect(sent.filter((message) => message.type === "reply")).toEqual([]);
+    expect(client.activity.get()).toMatchObject({
+      busy: false,
+      last: { op: "set", origin, outcome: { status: "refused", code: "not_mounted" } },
+    });
+  });
+
   it("answers a refused write with the error code and shows the agent as busy only while it runs", async () => {
     const { client, replies, answered } = setup();
     client.receive(request("w1", "set", { view: "form", value: { title: "x" } }));
@@ -262,7 +290,10 @@ describe("createAgentUiClient writes", () => {
         type: "reply",
         id: "w1",
         ok: false,
-        error: { code: "not_mounted", message: expect.any(String) },
+        error: {
+          code: "not_mounted",
+          message: "form is not on screen. On screen now: none.",
+        },
       },
     ]);
     expect(client.activity.get()).toEqual({

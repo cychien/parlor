@@ -589,7 +589,13 @@ function buildServer<T extends ActionMap>(
     } catch (error) {
       return errorResponse(error);
     }
-    return { ...summary, actions: visible.describe(), ...(ui ? { ui } : {}) };
+    const uiTools = ui ? agentUi?.pageTools() : undefined;
+    return {
+      ...summary,
+      actions: visible.describe(),
+      ...(ui ? { ui } : {}),
+      ...(uiTools?.length ? { uiTools } : {}),
+    };
   });
 
   app.post(`${basePath}/actions/:name`, async (event) => {

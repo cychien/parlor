@@ -34,14 +34,23 @@ export {
 } from "./routes.js";
 export { parseClientMessage, uiOpInputs } from "./schemas.js";
 export {
+  CATALOG_BUDGET,
+  type PageEntry,
+  type PagesResult,
+  type PageView,
+} from "../catalog.js";
+export {
   type AgentTool,
   type AgentToolContext,
+  type AgentToolName,
   type HighlightToolResult,
   type NavigateToolResult,
   type ScreenToolResult,
   type SetToolResult,
   UI_MANIFEST_RESOURCE,
+  UI_PAGES_TOOL,
   UI_TOOLS,
   type UiToolName,
   type UnreachableResult,
 } from "./tools.js";
+export { type PageToolSpec, type UiToolSpec, uiToolSpecs } from "../ui-tools.js";

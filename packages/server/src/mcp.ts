@@ -15,6 +15,7 @@ import {
   type ActionErrorCode,
   type ActionMap,
   ANONYMOUS,
+  agentDescription,
   type AnyAction,
   type ConfirmationDecision,
   type ConfirmationPolicy,
@@ -23,7 +24,9 @@ import {
   type Principal,
 } from "@parlor/core";
 import type { ActionRegistry } from "@parlor/core/registry";
+import { z } from "zod";
 
+import { CALL_ACTION_TOOL, SEARCH_ACTIONS_TOOL, searchActions } from "./action-search.js";
 import type { ActionRunner } from "./actions.js";
 import { type CallerResolver, sourceFor } from "./caller.js";
 import { McpCalls } from "./mcp-calls.js";
@@ -72,7 +75,7 @@ export function appIdentity(
 }
 
 function toolResult(result: unknown): CallToolResult {
-  const text = result === undefined ? "ok" : JSON.stringify(result, null, 2);
+  const text = result === undefined ? "ok" : JSON.stringify(result);
   return {
     content: [{ type: "text", text }],
     ...(result !== null && typeof result === "object" && !Array.isArray(result)
@@ -111,9 +114,7 @@ function errorBodyOf(error: unknown): ToolErrorBody {
 function toolError(error: unknown): CallToolResult {
   return {
     isError: true,
-    content: [
-      { type: "text", text: JSON.stringify({ error: errorBodyOf(error) }, null, 2) },
-    ],
+    content: [{ type: "text", text: JSON.stringify({ error: errorBodyOf(error) }) }],
   };
 }
 
@@ -127,14 +128,7 @@ function unvalidated(schema: StandardSchemaWithJSON): StandardSchemaWithJSON {
 }
 
 function actionDescription(action: AnyAction, decision: ConfirmationDecision): string {
-  switch (decision) {
-    case "ask":
-      return `${action.description} When an agent calls it, the user must approve it in the app first; the call waits for that answer and fails with declined, confirmation_timeout or confirmation_unavailable without running.`;
-    case "refuse":
-      return `${action.description} It needs a person's approval, which nobody can give for this caller, so a call fails with confirmation_unavailable without running.`;
-    case "proceed":
-      return action.description;
-  }
+  return agentDescription(action.description, decision);
 }
 
 export const PROGRESS_INTERVAL_MS = 10_000;
@@ -241,8 +235,14 @@ export function createMcpHandler<T extends ActionMap>(
       : "mcp";
     const screen = principal.kind === "key" ? undefined : agentUi;
     const registry = await registryFor(ctx.requestInfo);
+    const hidden = registry
+      .names()
+      .some((actionName) => registry.get(actionName)?.agent === "searchable");
     const instructions = [
       appIdentity(app, appOrigin(ctx.requestInfo), principal),
+      hidden
+        ? `Some of this app's actions are not listed as tools: find them with ${SEARCH_ACTIONS_TOOL} and run them with ${CALL_ACTION_TOOL}.`
+        : undefined,
       screen?.instructions("mcp"),
     ]
       .filter(Boolean)
@@ -256,35 +256,103 @@ export function createMcpHandler<T extends ActionMap>(
       if (ctx.requestInfo && requestId !== undefined)
         calls.cancel(ctx.requestInfo, requestId, reason);
     });
+    const describe = (actionName: string, action: AnyAction) =>
+      actionDescription(
+        action,
+        confirmation({ name: actionName, action, principal, source }),
+      );
+    const callAction = async (
+      actionName: string,
+      action: AnyAction,
+      args: unknown,
+      toolCtx: ServerContext,
+    ): Promise<CallToolResult> => {
+      try {
+        const origin = await verifiedOrigin(callers, ctx.requestInfo, toolCtx);
+        const result = await inCall(ctx, toolCtx, (signal) => {
+          const run = () =>
+            runner.run(actionName, args, ctx.requestInfo, "mcp", {
+              signal,
+              origin,
+              surface: "mcp",
+            });
+          return action.confirm ? withProgress(toolCtx, run) : run();
+        });
+        return toolResult(result.data);
+      } catch (error) {
+        return toolError(error);
+      }
+    };
+    const searchable: string[] = [];
     for (const actionName of registry.names()) {
       const action = registry.get(actionName);
       if (!action) continue;
+      if (action.agent === "searchable") {
+        searchable.push(actionName);
+        continue;
+      }
       server.registerTool(
         actionName,
         {
-          description: actionDescription(
-            action,
-            confirmation({ name: actionName, action, principal, source }),
-          ),
+          description: describe(actionName, action),
           inputSchema: unvalidated(action.input),
           annotations: { readOnlyHint: !isMutating(action) },
         },
+        (args, toolCtx) => callAction(actionName, action, args, toolCtx),
+      );
+    }
+    if (searchable.length > 0) {
+      const names = new Set(searchable);
+      server.registerTool(
+        SEARCH_ACTIONS_TOOL,
+        {
+          description: `Find this app's actions that are not listed as tools: their names, what they do, whether they only read, and the input each takes. query matches words in an action's name and description, best matches first; names gives those actions exactly; with neither it lists them all, ${searchable.length} in total. Run one with ${CALL_ACTION_TOOL}.`,
+          inputSchema: z.object({
+            query: z.string().optional().describe("Words for what the action should do."),
+            names: z.array(z.string()).optional().describe("Action names to describe."),
+          }),
+          annotations: { readOnlyHint: true },
+        },
+        ({ query, names: wanted }) =>
+          toolResult(
+            searchActions(
+              registry.describe().filter((descriptor) => names.has(descriptor.name)),
+              { query, names: wanted },
+              (descriptor) => describe(descriptor.name, registry.get(descriptor.name)!),
+            ),
+          ),
+      );
+      server.registerTool(
+        CALL_ACTION_TOOL,
+        {
+          description: `Run one of this app's actions by name with its input, as ${SEARCH_ACTIONS_TOOL} describes it. It runs exactly as a listed tool would, approval in the app included.`,
+          inputSchema: unvalidated(
+            z.object({
+              name: z.string().describe("The action's name."),
+              input: z
+                .record(z.string(), z.unknown())
+                .optional()
+                .describe("The action's input."),
+            }),
+          ),
+          annotations: { readOnlyHint: false },
+        },
         async (args, toolCtx) => {
-          try {
-            const origin = await verifiedOrigin(callers, ctx.requestInfo, toolCtx);
-            const result = await inCall(ctx, toolCtx, (signal) => {
-              const run = () =>
-                runner.run(actionName, args, ctx.requestInfo, "mcp", {
-                  signal,
-                  origin,
-                  surface: "mcp",
-                });
-              return action.confirm ? withProgress(toolCtx, run) : run();
-            });
-            return toolResult(result.data);
-          } catch (error) {
-            return toolError(error);
+          const { name: actionName, input = {} } = (args ?? {}) as {
+            name?: unknown;
+            input?: unknown;
+          };
+          const action =
+            typeof actionName === "string" ? registry.get(actionName) : undefined;
+          if (typeof actionName !== "string" || !action) {
+            return toolError(
+              new ActionError(
+                "not_found",
+                `No action ${String(actionName)}. Find one with ${SEARCH_ACTIONS_TOOL}.`,
+              ),
+            );
           }
+          return callAction(actionName, action, input, toolCtx);
         },
       );
     }
@@ -304,7 +372,7 @@ export function createMcpHandler<T extends ActionMap>(
             {
               uri: uri.href,
               mimeType: "application/json",
-              text: JSON.stringify(uiManifest, null, 2),
+              text: JSON.stringify(uiManifest),
             },
           ],
         }),
