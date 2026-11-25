@@ -1,11 +1,6 @@
 import { z } from "zod";
 
-import {
-  type JsonSchema,
-  routeHref,
-  type RouteEntry,
-  type UiManifest,
-} from "../manifest.js";
+import { routeHref, type RouteEntry, type UiManifest } from "../manifest.js";
 import {
   type AgentOrigin,
   type ClientSummary,
@@ -16,6 +11,7 @@ import {
   uiOpReadOnly,
 } from "../protocol.js";
 import { type UiBroker, UiFailure } from "./broker.js";
+import { type Catalogs, catalogsOf, findPages, type PagesResult } from "./catalog.js";
 import {
   type CompactClient,
   type CompactScreen,
@@ -27,8 +23,13 @@ import { uiOpInputs } from "./schemas.js";
 
 export type UiToolName = `ui_${UiOp}`;
 
+export const UI_PAGES_TOOL = "ui_pages";
+
+export type AgentToolName = UiToolName | typeof UI_PAGES_TOOL;
+
 const toolName = <O extends UiOp>(op: O): `ui_${O}` => `ui_${op}`;
 
+/** The tools that act on an open app client; {@link UI_PAGES_TOOL} joins them for a large app. */
 export const UI_TOOLS: readonly UiToolName[] = UI_OPS.map(toolName);
 
 export const UI_MANIFEST_RESOURCE = "parlor://manifest";
@@ -42,7 +43,7 @@ export interface AgentToolContext {
 }
 
 export interface AgentTool<I extends z.ZodObject = z.ZodObject> {
-  readonly name: UiToolName;
+  readonly name: AgentToolName;
   readonly description: string;
   readonly input: I;
   readonly readOnly: boolean;
@@ -107,56 +108,7 @@ const clientIdInput = z
 
 const UNREACHABLE: UnreachableResult = { reachable: false, reason: "no_client" };
 
-function sentence(text: string): string {
-  const trimmed = text.trim();
-  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
-}
-
-function viewCatalog(manifest: UiManifest | undefined): string {
-  if (!manifest || manifest.views.length === 0) return "";
-  const lines = manifest.views.map(
-    (view) =>
-      `- ${view.name}${view.keyed ? " (keyed)" : ""}: ${sentence(view.description)}`,
-  );
-  return `\n\nViews this app can show:\n${lines.join("\n")}`;
-}
-
-function typeOf(schema: JsonSchema | undefined): string {
-  if (!schema) return "value";
-  if (Array.isArray(schema.enum))
-    return schema.enum.map((value) => JSON.stringify(value)).join(" | ");
-  if ("const" in schema) return JSON.stringify(schema.const);
-  const union = (schema.anyOf ?? schema.oneOf) as JsonSchema[] | undefined;
-  if (Array.isArray(union)) return union.map(typeOf).join(" | ");
-  if (schema.type === "array")
-    return `${typeOf(schema.items as JsonSchema | undefined)}[]`;
-  return typeof schema.type === "string" ? schema.type : "value";
-}
-
-/** `filter?: "all" | "done", page?: number`: what a page's search params take. */
-function searchOf(search: JsonSchema | undefined): string | undefined {
-  const properties = search?.properties as Record<string, JsonSchema> | undefined;
-  if (!properties || Object.keys(properties).length === 0) return undefined;
-  const required = new Set(Array.isArray(search?.required) ? search.required : []);
-  return Object.entries(properties)
-    .map(([name, schema]) => `${name}${required.has(name) ? "" : "?"}: ${typeOf(schema)}`)
-    .join(", ");
-}
-
-function routeCatalog(manifest: UiManifest | undefined): string {
-  if (!manifest || manifest.routes.length === 0) return "";
-  const lines = manifest.routes.map((route) => {
-    const parts = [`- ${route.path}`];
-    if (route.description) parts.push(` - ${sentence(route.description)}`);
-    const search = searchOf(route.search);
-    if (search) parts.push(` Search: ${search}.`);
-    if (route.views.length > 0) parts.push(` Views: ${route.views.join(", ")}.`);
-    return parts.join("");
-  });
-  return `\n\nPages:\n${lines.join("\n")}`;
-}
-
-function screenDescription(manifest: UiManifest | undefined): string {
+function screenDescription(catalogs: Catalogs): string {
   return (
     [
       "Read what the user sees in the app: the route, the actions feeding the screen (name and input, never data), the views on screen with their values, and attention.",
@@ -166,31 +118,21 @@ function screenDescription(manifest: UiManifest | undefined): string {
       "Empty or default fields (null attention, zero offscreen, success status, full visibility) are left out; view values are always whole.",
       "The result names the app client it came from, with ids when several are open.",
       "Returns reachable: false when the app is not open anywhere.",
-    ].join(" ") + viewCatalog(manifest)
+    ].join(" ") + catalogs.views
   );
 }
 
-function navigateDescription(manifest: UiManifest | undefined): string {
+function navigateDescription(catalogs: Catalogs): string {
   return (
     [
       "Take the user's app to a page, filling $params in the path from params.",
       "Waits for the page's data to load (up to 1.5 s) and returns the new screen in ui_screen's shape, so its route shows the page the app landed on.",
       "Returns reachable: false with an href to hand the user when the app is not open.",
-    ].join(" ") + routeCatalog(manifest)
+    ].join(" ") + catalogs.routes
   );
 }
 
-function writableCatalog(manifest: UiManifest | undefined): string {
-  const lines = (manifest?.views ?? [])
-    .filter((view) => view.writable.length > 0)
-    .map(
-      (view) =>
-        `- ${view.name}${view.keyed ? " (keyed)" : ""}: ${sentence(view.description)} Fields: ${view.writable.join(", ")}.`,
-    );
-  return lines.length === 0 ? "" : `\n\nForms you can fill:\n${lines.join("\n")}`;
-}
-
-function setDescription(manifest: UiManifest | undefined): string {
+function setDescription(catalogs: Catalogs): string {
   return (
     [
       "Fill fields of a form the user sees, as a proposal: the user reviews it and submits it themselves. Call the matching action instead only when the user explicitly asks you to submit.",
@@ -198,8 +140,16 @@ function setDescription(manifest: UiManifest | undefined): string {
       "Returns the view's value read back from the screen and agentFields, the fields that still hold what you wrote; a field missing from agentFields was changed by the user.",
       "Refuses with not_mounted, not_writable, user_editing (the user is typing in that field: wait or ask), invalid_value (issues name the fields), or ambiguous_client.",
       "Returns reachable: false when the app is not open.",
-    ].join(" ") + writableCatalog(manifest)
+    ].join(" ") + catalogs.writable
   );
+}
+
+function pagesDescription(): string {
+  return [
+    "Find the app's pages for a task: what each page shows, its params and search params, and the views on it with the fields you can fill.",
+    "query matches words in a page's path, description and views, best matches first; path gives that one page; with neither it lists every page.",
+    "It reads the app's own page list, so it works whether or not the app is open.",
+  ].join(" ");
 }
 
 function highlightDescription(): string {
@@ -324,9 +274,10 @@ export function createUiTools(
   };
 
   const build = (manifest: UiManifest | undefined): readonly AgentTool[] => {
+    const catalogs = catalogsOf(manifest);
     const screen = defineTool({
       name: "ui_screen",
-      description: screenDescription(manifest),
+      description: screenDescription(catalogs),
       input: uiOpInputs.screen.extend({ clientId: clientIdInput }),
       readOnly: uiOpReadOnly.screen,
       async run({ clientId }, ctx) {
@@ -345,7 +296,7 @@ export function createUiTools(
 
     const navigate = defineTool({
       name: "ui_navigate",
-      description: navigateDescription(manifest),
+      description: navigateDescription(catalogs),
       input: uiOpInputs.navigate.extend({
         to: routeEnum(manifest).describe("The page's route path, exactly as listed."),
         clientId: clientIdInput,
@@ -390,7 +341,7 @@ export function createUiTools(
 
     const set = defineTool({
       name: toolName("set"),
-      description: setDescription(manifest),
+      description: setDescription(catalogs),
       input: uiOpInputs.set.extend({ clientId: clientIdInput }),
       readOnly: uiOpReadOnly.set,
       async run({ view, key, value, clientId }, ctx) {
@@ -442,13 +393,30 @@ export function createUiTools(
       },
     });
 
+    const pages = defineTool({
+      name: UI_PAGES_TOOL,
+      description: pagesDescription(),
+      input: z.object({
+        query: z.string().optional().describe("Words for what the page is for."),
+        path: z
+          .string()
+          .optional()
+          .describe("One page's route path, as ui_navigate takes it."),
+      }),
+      readOnly: true,
+      async run({ query, path }): Promise<PagesResult> {
+        return findPages(manifest, { query, path });
+      },
+    });
+
     const byOp: { readonly [O in UiOp]: AgentTool } = {
       screen,
       navigate,
       set,
       highlight,
     };
-    return UI_OPS.map((op) => byOp[op]);
+    const tools = UI_OPS.map((op) => byOp[op]);
+    return catalogs.brief ? [...tools, pages] : tools;
   };
 
   let cachedFor: UiManifest | undefined;
