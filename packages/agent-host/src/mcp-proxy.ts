@@ -451,7 +451,24 @@ function outsideSession(
   let asked = 0;
   const answers = new Map<string, (allowed: boolean) => void>();
 
+  // Each message is its own POST, so without this a request can reach the app before initialized.
+  let initialized: Promise<void> = Promise.resolve();
+
   const send = async (line: string, message: Message, onReply = reply) => {
+    if (message.method === "notifications/initialized") {
+      const sent = initialized.then(() => post(line, message, onReply));
+      initialized = sent.catch(() => undefined);
+      return sent;
+    }
+    await initialized;
+    return post(line, message, onReply);
+  };
+
+  const post = async (
+    line: string,
+    message: Message,
+    onReply: (line: string) => void,
+  ) => {
     let token: string;
     try {
       token = await answeredWithin(app.token(agent), tokenWaitMs);
@@ -472,7 +489,29 @@ function outsideSession(
     await forward(live, token, line, message, onReply);
   };
 
-  const readOnly = async (tool: string): Promise<boolean> => {
+  const readOnlyAction = async (name: unknown): Promise<boolean> => {
+    if (typeof name !== "string") return false;
+    const id = `parlor-search-${++asked}`;
+    const search = {
+      jsonrpc: "2.0",
+      id,
+      method: "tools/call",
+      params: { name: SEARCH_ACTIONS_TOOL, arguments: { names: [name] } },
+    };
+    let answer: string | undefined;
+    await send(JSON.stringify(search), search, (line) => (answer = line));
+    const found = (
+      parse(answer ?? "")?.result as
+        | { readonly structuredContent?: { readonly actions?: readonly FoundAction[] } }
+        | undefined
+    )?.structuredContent?.actions;
+    return found?.find((entry) => entry.name === name)?.readOnly === true;
+  };
+
+  const readOnly = async (tool: string, args: unknown): Promise<boolean> => {
+    if (tool === CALL_ACTION_TOOL) {
+      return readOnlyAction((args as { readonly name?: unknown } | undefined)?.name);
+    }
     if (live.tools === undefined) {
       const id = `parlor-tools-${++asked}`;
       const list = { jsonrpc: "2.0", id, method: "tools/list", params: {} };
@@ -528,10 +567,14 @@ function outsideSession(
       return;
     }
     if (message.method === "tools/call" && message.id !== undefined) {
-      const tool = (message as { readonly params?: { readonly name?: unknown } }).params
-        ?.name;
+      const params = (
+        message as {
+          readonly params?: { readonly name?: unknown; readonly arguments?: unknown };
+        }
+      ).params;
+      const tool = params?.name;
       void (async () => {
-        if (typeof tool === "string" && !(await readOnly(tool))) {
+        if (typeof tool === "string" && !(await readOnly(tool, params?.arguments))) {
           changesAllowed ??= askToChange().then((allowed) => {
             if (!allowed) changesAllowed = undefined;
             return allowed;
@@ -575,6 +618,15 @@ function answeredWithin<T>(pending: Promise<T>, ms: number): Promise<T> {
 
 const notAnsweringMessage = (app: OutsideApp) =>
   `${app.appName} (${app.appOrigin}) is not answering, so its tools are unavailable in this conversation. Start it, or stop its tools with \`parlor-host tools --off ${app.appOrigin}\`.`;
+
+/** The server's tools for actions it lists only on request: `@parlor/server` action-search. */
+const SEARCH_ACTIONS_TOOL = "search_actions";
+const CALL_ACTION_TOOL = "call_action";
+
+interface FoundAction {
+  readonly name: string;
+  readonly readOnly?: boolean;
+}
 
 interface ToolEntry {
   readonly name?: string;

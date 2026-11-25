@@ -169,6 +169,133 @@ describe("MCP surface", () => {
   });
 });
 
+describe("searchable actions", () => {
+  const searchable = createServer({
+    actions: createRegistry({
+      hello: defineAction({
+        description: "Say hello.",
+        input: z.object({ name: z.string().default("world") }),
+        run: ({ name }, ctx) => ({ message: `Hello, ${name}!`, source: ctx.source }),
+      }),
+      listCourseOrders: defineAction({
+        description: "List a course's orders, newest first.",
+        input: z.object({ courseId: z.string() }),
+        agent: "searchable",
+        run: ({ courseId }, ctx) => ({ courseId, source: ctx.source }),
+      }),
+      refundOrder: defineAction({
+        description: "Refund an order to the buyer.",
+        input: z.object({ orderId: z.string() }),
+        writes: ["orders"],
+        confirm: true,
+        agent: "searchable",
+        run: ({ orderId }) => ({ orderId }),
+      }),
+    }),
+    agentUi: false,
+  });
+  const connectTo = async () => {
+    client = new Client({ name: "test", version: "0.0.0" });
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL("http://app.test/_parlor/mcp"), {
+        fetch: (input, init) => searchable.fetch(new Request(input, init)),
+      }),
+    );
+    return client;
+  };
+  const errorOf = (result: { content?: unknown }) =>
+    JSON.parse(String((result.content as Array<{ text: string }>)[0]?.text)).error;
+
+  it("leaves them out of the tool list and adds search_actions and call_action", async () => {
+    const c = await connectTo();
+    const { tools } = await c.listTools();
+    expect(tools.map((t) => t.name)).toEqual(["hello", "search_actions", "call_action"]);
+    expect(
+      tools.find((t) => t.name === "search_actions")?.annotations?.readOnlyHint,
+    ).toBe(true);
+    expect(tools.find((t) => t.name === "call_action")?.annotations?.readOnlyHint).toBe(
+      false,
+    );
+    expect(c.getInstructions()).toContain(
+      "Some of this app's actions are not listed as tools: find them with search_actions and run them with call_action.",
+    );
+  });
+
+  it("finds them by the words of their name and description, worded as their tools would be", async () => {
+    const c = await connectTo();
+    const found = await c.callTool({
+      name: "search_actions",
+      arguments: { query: "refund an order" },
+    });
+    expect(found.structuredContent).toEqual({
+      actions: [
+        {
+          name: "refundOrder",
+          description:
+            "Refund an order to the buyer. When an agent calls it, the user must approve it in the app first; the call waits for that answer and fails with declined, confirmation_timeout or confirmation_unavailable without running.",
+          readOnly: false,
+          inputSchema: expect.objectContaining({
+            properties: { orderId: { type: "string" } },
+          }),
+        },
+        expect.objectContaining({ name: "listCourseOrders", readOnly: true }),
+      ],
+    });
+    const orders = await c.callTool({
+      name: "search_actions",
+      arguments: { query: "course orders" },
+    });
+    expect(
+      (orders.structuredContent as { actions: { name: string }[] }).actions.map(
+        (a) => a.name,
+      ),
+    ).toEqual(["listCourseOrders", "refundOrder"]);
+    const named = await c.callTool({
+      name: "search_actions",
+      arguments: { names: ["listCourseOrders", "hello"] },
+    });
+    expect(
+      (named.structuredContent as { actions: { name: string }[] }).actions.map(
+        (a) => a.name,
+      ),
+    ).toEqual(["listCourseOrders"]);
+  });
+
+  it("runs one by name as its own tool would, with the mcp source and the same checks", async () => {
+    const c = await connectTo();
+    const ran = await c.callTool({
+      name: "call_action",
+      arguments: { name: "listCourseOrders", input: { courseId: "c1" } },
+    });
+    expect(ran.structuredContent).toEqual({ courseId: "c1", source: "mcp" });
+    const invalid = await c.callTool({
+      name: "call_action",
+      arguments: { name: "listCourseOrders", input: {} },
+    });
+    expect(errorOf(invalid)).toMatchObject({ code: "invalid_input" });
+    const refused = await c.callTool({
+      name: "call_action",
+      arguments: { name: "refundOrder", input: { orderId: "o1" } },
+    });
+    expect(errorOf(refused)).toMatchObject({ code: "confirmation_unavailable" });
+    const unknown = await c.callTool({
+      name: "call_action",
+      arguments: { name: "nope" },
+    });
+    expect(errorOf(unknown)).toEqual({
+      code: "not_found",
+      message: "No action nope. Find one with search_actions.",
+    });
+  });
+
+  it("adds neither tool to an app whose actions are all listed", async () => {
+    const c = await connect();
+    const { tools } = await c.listTools();
+    expect(tools.map((t) => t.name)).not.toContain("search_actions");
+    expect(c.getInstructions()).not.toContain("search_actions");
+  });
+});
+
 describe("MCP progress while a call waits", () => {
   const ctxWith = (
     progressToken: string | undefined,
