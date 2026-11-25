@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { createServer, type Server } from "node:net";
+import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -262,9 +262,13 @@ describe("a newer CLI with a service running", () => {
     expect(await versionRunning()).toBe("1.1.0");
   }, 30_000);
 
-  async function serviceWithoutStepAside(): Promise<Server> {
+  /** A service from before step_aside; `stop` ends it the way its own SIGTERM would. */
+  async function serviceWithoutStepAside(): Promise<{ stop(): Promise<void> }> {
     await mkdir(join(paths.root, "run"), { recursive: true });
+    const sockets = new Set<Socket>();
     const old: Server = createServer((socket) => {
+      sockets.add(socket);
+      socket.on("close", () => sockets.delete(socket));
       socket.on("data", (data) => {
         const { op } = JSON.parse(String(data)) as { op: string };
         socket.write(
@@ -273,15 +277,17 @@ describe("a newer CLI with a service running", () => {
       });
     });
     await new Promise<void>((resolve) => old.listen(paths.control, resolve));
-    return old;
+    return {
+      stop: async () => {
+        for (const socket of sockets) socket.destroy();
+        await new Promise((resolve) => old.close(resolve));
+      },
+    };
   }
 
   it("stops a release from before step_aside itself, then starts", async () => {
     const old = await serviceWithoutStepAside();
-    const stopOld = vi.fn(async () => {
-      old.closeAllConnections?.();
-      await new Promise((resolve) => old.close(resolve));
-    });
+    const stopOld = vi.fn(() => old.stop());
     const outcome = await ensureServiceWith(
       quick({ start: spawnDaemon("1.1.0"), stopOld }),
       paths,
@@ -343,7 +349,7 @@ net.createServer((socket) => socket.on("data", (data) => {
       expect(outcome).toEqual({ kind: "using", running: release("1.0.0") });
       expect(start).not.toHaveBeenCalled();
     } finally {
-      old.close();
+      await old.stop();
     }
   }, 30_000);
 });
