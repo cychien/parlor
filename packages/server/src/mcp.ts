@@ -15,6 +15,7 @@ import {
   type ActionErrorCode,
   type ActionMap,
   ANONYMOUS,
+  agentDescription,
   type AnyAction,
   type ConfirmationDecision,
   type ConfirmationPolicy,
@@ -127,14 +128,7 @@ function unvalidated(schema: StandardSchemaWithJSON): StandardSchemaWithJSON {
 }
 
 function actionDescription(action: AnyAction, decision: ConfirmationDecision): string {
-  switch (decision) {
-    case "ask":
-      return `${action.description} When an agent calls it, the user must approve it in the app first; the call waits for that answer and fails with declined, confirmation_timeout or confirmation_unavailable without running.`;
-    case "refuse":
-      return `${action.description} It needs a person's approval, which nobody can give for this caller, so a call fails with confirmation_unavailable without running.`;
-    case "proceed":
-      return action.description;
-  }
+  return agentDescription(action.description, decision);
 }
 
 export const PROGRESS_INTERVAL_MS = 10_000;

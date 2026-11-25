@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import type { UiManifest } from "../manifest.js";
 import { catalogsOf, findPages, MAX_PAGES_LISTED } from "./catalog.js";
-import { createUiTools } from "./tools.js";
+import type { UiManifest } from "./manifest.js";
+import { createUiTools } from "./server/tools.js";
 
 const manifest: UiManifest = {
   protocol: 1,

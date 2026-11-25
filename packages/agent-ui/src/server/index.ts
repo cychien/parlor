@@ -38,7 +38,7 @@ export {
   type PageEntry,
   type PagesResult,
   type PageView,
-} from "./catalog.js";
+} from "../catalog.js";
 export {
   type AgentTool,
   type AgentToolContext,
@@ -53,3 +53,4 @@ export {
   type UiToolName,
   type UnreachableResult,
 } from "./tools.js";
+export { type PageToolSpec, type UiToolSpec, uiToolSpecs } from "../ui-tools.js";

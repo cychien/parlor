@@ -71,6 +71,10 @@ They leave the tool list, and the server adds two tools in their place: `search_
 
 The screen tools describe every page, view and form the app shows. Past about 6000 characters of those descriptions, `ui_navigate`, `ui_screen` and `ui_set` list names only, and a read-only `ui_pages` tool describes the pages that match a few words: what each shows, its params and search params, and the views on it with the fields an agent can fill. An app with 53 pages went from 8929 to 3623 tokens of screen tools this way; a small app keeps its full descriptions and gets no `ui_pages`.
 
+## The browser's own agent
+
+In a browser with [WebMCP](https://github.com/webmachinelearning/webmcp), an open page hands the same actions and screen to the browser's built-in agent: each action the signed-in user may see, and `ui_screen`, `ui_navigate`, `ui_set` and `ui_highlight` running in that page. Nothing is installed or connected. The page calls an action as an agent would, so a `confirm: true` action shows its approval card in that page and waits, and `ctx.source` is `"mcp"`. The ui_ tools act on the page itself and leave out what only matters across clients. Browsers without WebMCP, and the desktop and mobile apps, register nothing. Turn it off with `<FrameworkProvider webmcp={false}>`.
+
 ## What agents can and cannot do
 
 - An agent calls exactly the actions the app defines and lets it see, with the same validation as the UI.

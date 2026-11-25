@@ -25,6 +25,7 @@ export {
   type TagSource,
 } from "./action.js";
 export {
+  agentDescription,
   type ConfirmationCall,
   type ConfirmationDecision,
   type ConfirmationPolicy,

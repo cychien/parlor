@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { ClientSummary, ScreenSnapshot } from "../protocol.js";
 import { compactClient, compactScreen } from "./compact.js";
+import type { ClientSummary, ScreenSnapshot } from "./protocol.js";
 
 const empty: ScreenSnapshot = {
   route: { notFound: false, path: "/", params: {}, search: {}, url: "/" },
